@@ -65,6 +65,7 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 38 | [V3_PROJECTS_PLAN.md](./V3_PROJECTS_PLAN.md) | V3 projects backend plan: domain, schema, membership, RBAC, API/OpenAPI, validation, service, migration, tests, FE/Attendance/Reports implications |
 | 39 | [FRONTEND_F5_PROJECTS_REPORT.md](./FRONTEND_F5_PROJECTS_REPORT.md) | F5 projects frontend: contract-typed data layer, list/detail/create/edit/archive, member assignment, verification |
 | 40 | [V4_ATTENDANCE_REPORT.md](./V4_ATTENDANCE_REPORT.md) | V4 attendance backend: model, migration, endpoints, RBAC, minute calc, 83 tests, OpenAPI/Swagger |
+| 41 | [FRONTEND_F6_ATTENDANCE_REPORT.md](./FRONTEND_F6_ATTENDANCE_REPORT.md) | F6 attendance frontend: contract-typed data layer, list/detail/create/edit/delete, filters, verification |
 
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
