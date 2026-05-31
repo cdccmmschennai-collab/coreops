@@ -1,0 +1,39 @@
+# ---- Python (backend) ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / Next (frontend) ----
+node_modules/
+.next/
+out/
+next-env.d.ts
+npm-debug.log*
+yarn-error.log*
+
+# ---- Environment & secrets (commit ONLY *.example files) ----
+.env
+.env.*
+!.env.example
+!*.env.example
+!.env.local.example
+*.key
+*.pem
+secrets/
+
+# ---- Docker / data volumes ----
+**/pgdata/
+**/redisdata/
+
+# ---- OS / editor ----
+.DS_Store
+.idea/
+.vscode/
+*.swp

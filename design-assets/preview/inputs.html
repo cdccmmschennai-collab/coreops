@@ -1,0 +1,56 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Inputs</title><link rel="stylesheet" href="_card.css">
+<style>
+  .field {
+    display:flex; align-items:center; gap:8px;
+    height: 36px; padding: 0 12px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px; color: var(--fg-1);
+    width: 100%;
+  }
+  .field svg { color: var(--fg-3); }
+  .field-focus { border-color: var(--border-focus); box-shadow: var(--ring); }
+  .field-err   { border-color: var(--danger); box-shadow: var(--ring-danger); }
+  .lbl { font-size:12px; font-weight:500; color:var(--fg-2); margin-bottom:6px; display:block; }
+  .help { font-size:11px; color: var(--fg-3); margin-top:6px; }
+  .err  { font-size:11px; color: var(--danger); margin-top:6px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:14px;">Text fields</div>
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:18px;">
+    <div>
+      <label class="lbl">Project</label>
+      <div class="field">
+        <span style="color:var(--fg-1);">Cadence — Web</span>
+      </div>
+      <div class="help">Active project for this entry.</div>
+    </div>
+    <div>
+      <label class="lbl">Hours</label>
+      <div class="field field-focus">
+        <span class="mono" style="color:var(--fg-1);">2h 30m</span>
+        <span style="margin-left:auto; color:var(--fg-3); font-size:11px;">⌃H</span>
+      </div>
+      <div class="help">Focused state.</div>
+    </div>
+    <div>
+      <label class="lbl">Search</label>
+      <div class="field">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <span style="color: var(--fg-4);">Search reports, people…</span>
+        <span style="margin-left:auto; color:var(--fg-3); font-family:var(--font-mono); font-size:11px; background:var(--slate-100); padding:1px 5px; border-radius:3px;">⌘K</span>
+      </div>
+    </div>
+    <div>
+      <label class="lbl">Email</label>
+      <div class="field field-err">
+        <span style="color:var(--fg-1);">priya@</span>
+      </div>
+      <div class="err">Enter a valid work email.</div>
+    </div>
+  </div>
+</div>
+</body></html>

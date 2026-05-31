@@ -1,0 +1,647 @@
+openapi: 3.1.0
+info:
+  title: Workforce Management System API (v1)
+  version: 1.0.0
+  description: >
+    Design-time contract of record for WMS v1. Internal, single-tenant.
+    Brand-agnostic (codename CoreOps). REST + JSON, bearer-JWT auth.
+    Scope: auth, users, employees, attendance, projects, daily_reports, dashboard.
+    Excluded from v1: multi-tenant, AI, biometric, WhatsApp/SMS, SSO/MFA, event bus.
+servers:
+  - url: http://localhost:8100/api/v1
+    description: Local (Docker Compose)
+  - url: https://wms.cdccmms.com/api/v1
+    description: Production (subdomain placeholder, TBD)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+  - name: users
+  - name: employees
+  - name: attendance
+  - name: projects
+  - name: daily_reports
+  - name: dashboard
+  - name: system
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness/readiness
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Sign in with email + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke current token (Redis denylist)
+      responses:
+        "204": { description: Logged out }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Current user + employee profile
+      responses:
+        "200":
+          description: Current principal
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /users:
+    get:
+      tags: [users]
+      summary: List users (admin)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - { name: q, in: query, schema: { type: string }, description: email ILIKE filter }
+      responses:
+        "200":
+          description: Page of users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPage" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [users]
+      summary: Create user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserCreate" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/User" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /users/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [users]
+      summary: Get user (admin)
+      responses:
+        "200": { description: User, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [users]
+      summary: Update user (admin)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/UserUpdate" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /users/{id}/role:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    patch:
+      tags: [users]
+      summary: Change role (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/UserRole" }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /users/{id}/password:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    patch:
+      tags: [users]
+      summary: Set/reset password (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties:
+                new_password: { type: string, format: password, minLength: 8 }
+      responses:
+        "204": { description: Password set }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /employees:
+    get:
+      tags: [employees]
+      summary: List employees (admin=all, manager=team, employee=self, viewer=read)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - { name: q, in: query, schema: { type: string }, description: name/code ILIKE }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/EmployeeStatus" } }
+        - { name: manager_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Page of employees, content: { application/json: { schema: { $ref: "#/components/schemas/EmployeePage" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [employees]
+      summary: Create employee (admin)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EmployeeCreate" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Employee" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /employees/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [employees]
+      summary: Get employee (scope-checked)
+      responses:
+        "200": { description: Employee, content: { application/json: { schema: { $ref: "#/components/schemas/Employee" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [employees]
+      summary: Update employee (admin; self limited to profile fields)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/EmployeeUpdate" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Employee" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /employees/{id}/team:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [employees]
+      summary: Direct reports of an employee (manager scope)
+      responses:
+        "200": { description: Team, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Employee" } } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /attendance/check-in:
+    post:
+      tags: [attendance]
+      summary: Record check-in for current employee (today)
+      responses:
+        "201": { description: Checked in, content: { application/json: { schema: { $ref: "#/components/schemas/AttendanceLog" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /attendance/check-out:
+    post:
+      tags: [attendance]
+      summary: Record check-out for current employee (today)
+      responses:
+        "200": { description: Checked out, content: { application/json: { schema: { $ref: "#/components/schemas/AttendanceLog" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /attendance/me:
+    get:
+      tags: [attendance]
+      summary: Current employee attendance (month)
+      parameters: [ { name: month, in: query, schema: { type: string, example: "2026-05" } } ]
+      responses:
+        "200": { description: Logs, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/AttendanceLog" } } } } }
+  /attendance:
+    get:
+      tags: [attendance]
+      summary: Attendance by employee/month (admin=all, manager=team)
+      parameters:
+        - { name: employee_id, in: query, schema: { type: string, format: uuid } }
+        - { name: month, in: query, schema: { type: string, example: "2026-05" } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Page, content: { application/json: { schema: { $ref: "#/components/schemas/AttendancePage" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /projects:
+    get:
+      tags: [projects]
+      summary: List projects (all roles read)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ProjectStatus" } }
+        - { name: q, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Page, content: { application/json: { schema: { $ref: "#/components/schemas/ProjectPage" } } } }
+    post:
+      tags: [projects]
+      summary: Create project (admin)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectCreate" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /projects/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [projects]
+      summary: Get project
+      responses:
+        "200": { description: Project, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [projects]
+      summary: Update project (admin)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProjectUpdate" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Project" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /reports:
+    get:
+      tags: [daily_reports]
+      summary: List reports (admin=all, manager=team, employee=self)
+      parameters:
+        - { name: employee_id, in: query, schema: { type: string, format: uuid } }
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/ReportStatus" } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Page, content: { application/json: { schema: { $ref: "#/components/schemas/ReportPage" } } } }
+    post:
+      tags: [daily_reports]
+      summary: Create daily report (self)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReportCreate" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+  /reports/{id}:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    get:
+      tags: [daily_reports]
+      summary: Get report (owner or reviewer scope)
+      responses:
+        "200": { description: Report, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [daily_reports]
+      summary: Edit report (owner; only while draft/submitted & unreviewed & report_date not past)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReportUpdate" } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Locked (past date or already reviewed), content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /reports/{id}/submit:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [daily_reports]
+      summary: Submit report (owner)
+      responses:
+        "200": { description: Submitted, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /reports/{id}/review:
+    parameters: [ { $ref: "#/components/parameters/Id" } ]
+    post:
+      tags: [daily_reports]
+      summary: Approve/reject report (manager of author / admin; author != reviewer)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approved, rejected] }
+                review_note: { type: string }
+      responses:
+        "200": { description: Reviewed, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: KPI summary scoped to role (self/team/org)
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSummary" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid credentials
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Authenticated but not permitted
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Not found / soft-deleted
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: Uniqueness or state conflict
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ValidationError:
+      description: Invalid input / domain-rule violation
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: validation_error }
+            message: { type: string, example: "report_date is required" }
+            details: { type: object, additionalProperties: true }
+            request_id: { type: string }
+
+    UserRole: { type: string, enum: [admin, manager, employee, viewer] }
+    EmployeeStatus: { type: string, enum: [active, on_leave, exited] }
+    AttendanceStatus: { type: string, enum: [present, wfh, leave, holiday, weekend, absent] }
+    AttendanceSource: { type: string, enum: [web, manual, system] }
+    ProjectStatus: { type: string, enum: [active, on_hold, completed, archived] }
+    ReportStatus: { type: string, enum: [draft, submitted, approved, rejected] }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+    TokenResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, example: bearer }
+        expires_in: { type: integer, example: 3600 }
+    Me:
+      type: object
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        employee: { $ref: "#/components/schemas/Employee", nullable: true }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { $ref: "#/components/schemas/UserRole" }
+        is_active: { type: boolean }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    UserCreate:
+      type: object
+      required: [email, password, role]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
+        role: { $ref: "#/components/schemas/UserRole" }
+    UserUpdate:
+      type: object
+      properties:
+        is_active: { type: boolean }
+        role: { $ref: "#/components/schemas/UserRole" }
+    UserPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/User" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    Employee:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid, nullable: true }
+        employee_code: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        work_email: { type: string, format: email, nullable: true }
+        phone: { type: string, nullable: true }
+        department: { type: string, nullable: true }
+        designation: { type: string, nullable: true }
+        manager_id: { type: string, format: uuid, nullable: true }
+        date_of_joining: { type: string, format: date, nullable: true }
+        status: { $ref: "#/components/schemas/EmployeeStatus" }
+        created_at: { type: string, format: date-time }
+    EmployeeCreate:
+      type: object
+      required: [employee_code, first_name, last_name]
+      properties:
+        user_id: { type: string, format: uuid, nullable: true }
+        employee_code: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        work_email: { type: string, format: email }
+        phone: { type: string }
+        department: { type: string }
+        designation: { type: string }
+        manager_id: { type: string, format: uuid }
+        date_of_joining: { type: string, format: date }
+    EmployeeUpdate:
+      type: object
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        work_email: { type: string, format: email }
+        phone: { type: string }
+        department: { type: string }
+        designation: { type: string }
+        manager_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/EmployeeStatus" }
+    EmployeePage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Employee" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    AttendanceLog:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        employee_id: { type: string, format: uuid }
+        log_date: { type: string, format: date }
+        check_in_at: { type: string, format: date-time, nullable: true }
+        check_out_at: { type: string, format: date-time, nullable: true }
+        status: { $ref: "#/components/schemas/AttendanceStatus" }
+        source: { $ref: "#/components/schemas/AttendanceSource" }
+        total_minutes: { type: integer }
+        note: { type: string, nullable: true }
+    AttendancePage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/AttendanceLog" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ProjectStatus" }
+        owner_employee_id: { type: string, format: uuid, nullable: true }
+        start_date: { type: string, format: date, nullable: true }
+        end_date: { type: string, format: date, nullable: true }
+        allocated_hours: { type: number, nullable: true }
+        color: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    ProjectCreate:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        description: { type: string }
+        owner_employee_id: { type: string, format: uuid }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        allocated_hours: { type: number }
+        color: { type: string }
+    ProjectUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        status: { $ref: "#/components/schemas/ProjectStatus" }
+        owner_employee_id: { type: string, format: uuid }
+        end_date: { type: string, format: date }
+        allocated_hours: { type: number }
+        color: { type: string }
+    ProjectPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Project" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    Report:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        employee_id: { type: string, format: uuid }
+        report_date: { type: string, format: date }
+        project_id: { type: string, format: uuid, nullable: true }
+        hours: { type: number }
+        tasks_done: { type: integer }
+        tasks_open: { type: integer }
+        remarks: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ReportStatus" }
+        reviewed_by: { type: string, format: uuid, nullable: true }
+        reviewed_at: { type: string, format: date-time, nullable: true }
+        review_note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    ReportCreate:
+      type: object
+      required: [report_date]
+      properties:
+        report_date: { type: string, format: date }
+        project_id: { type: string, format: uuid }
+        hours: { type: number, minimum: 0, maximum: 24 }
+        tasks_done: { type: integer, minimum: 0 }
+        tasks_open: { type: integer, minimum: 0 }
+        remarks: { type: string }
+    ReportUpdate:
+      type: object
+      properties:
+        project_id: { type: string, format: uuid }
+        hours: { type: number, minimum: 0, maximum: 24 }
+        tasks_done: { type: integer, minimum: 0 }
+        tasks_open: { type: integer, minimum: 0 }
+        remarks: { type: string }
+    ReportPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Report" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    DashboardSummary:
+      type: object
+      properties:
+        scope: { type: string, enum: [self, team, org] }
+        hours_this_week: { type: number }
+        reports_submitted: { type: integer }
+        reports_pending_review: { type: integer }
+        present_today: { type: integer }
+        open_blockers: { type: integer }

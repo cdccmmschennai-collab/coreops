@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Avatars</title><link rel="stylesheet" href="_card.css">
+<style>
+  .av {
+    display:inline-flex; align-items:center; justify-content:center;
+    border-radius: var(--radius-full); color:#fff;
+    font-weight: 600; font-size: 12px; letter-spacing: 0;
+    border: 2px solid #fff;
+  }
+  .av-xs { width:20px; height:20px; font-size:9px; }
+  .av-sm { width:24px; height:24px; font-size:10px; }
+  .av-md { width:32px; height:32px; font-size:12px; }
+  .av-lg { width:40px; height:40px; font-size:14px; }
+  .stack { display:inline-flex; }
+  .stack .av + .av { margin-left: -8px; }
+  .b1 { background: #4F70E0; }
+  .b2 { background: #14B8A6; }
+  .b3 { background: #8B5CF6; }
+  .b4 { background: #F59E0B; }
+  .b5 { background: #EC4899; }
+  .badge-dot { position:relative; }
+  .badge-dot::after { content:''; position:absolute; right:-1px; bottom:-1px; width:8px; height:8px; background: var(--green-500); border: 1.5px solid #fff; border-radius:50%; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:14px;">Avatars — initials on slate · presence dot · stacked</div>
+  <div style="display:flex; gap:14px; align-items:center;">
+    <div class="av av-xs b1">PR</div>
+    <div class="av av-sm b2">JK</div>
+    <div class="av av-md b3">AN</div>
+    <div class="av av-lg b4">MV</div>
+    <div class="av av-md b5 badge-dot">CL</div>
+    <div class="stack" style="margin-left:14px;">
+      <div class="av av-md b1">PR</div>
+      <div class="av av-md b2">JK</div>
+      <div class="av av-md b3">AN</div>
+      <div class="av av-md" style="background:var(--slate-100); color:var(--fg-2);">+4</div>
+    </div>
+  </div>
+  <div class="mono" style="margin-top:14px; display:flex; gap:24px; font-size:11px; color:var(--fg-3);">
+    <span>20</span><span>24</span><span>32</span><span>40</span><span>32 · online</span><span>+overflow</span>
+  </div>
+</div>
+</body></html>

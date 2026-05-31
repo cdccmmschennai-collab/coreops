@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WorkTrack — Daily Reporting</title>
+  <link rel="stylesheet" href="app.css" />
+  <link rel="icon" type="image/svg+xml" href="../../assets/logo-mark.svg" />
+  <style>
+    .screen-enter { animation: screenIn var(--duration-page) var(--ease-out); }
+    @keyframes screenIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <!-- Shared components -->
+  <script type="text/babel" src="components.jsx"></script>
+  <script type="text/babel" src="toasts.jsx"></script>
+
+  <!-- Notifications module (drawer used by shell) -->
+  <script type="text/babel" src="screens/Notifications.jsx"></script>
+
+  <!-- Shell (uses NotificationDrawer + useMediaQuery) -->
+  <script type="text/babel" src="shell.jsx"></script>
+
+  <!-- Screens -->
+  <script type="text/babel" src="screens/Login.jsx"></script>
+  <script type="text/babel" src="screens/Dashboard.jsx"></script>
+  <script type="text/babel" src="screens/ReportForm.jsx"></script>
+  <script type="text/babel" src="screens/History.jsx"></script>
+  <script type="text/babel" src="screens/Attendance.jsx"></script>
+  <script type="text/babel" src="screens/Team.jsx"></script>
+  <script type="text/babel" src="screens/Analytics.jsx"></script>
+  <script type="text/babel" src="screens/Admin.jsx"></script>
+  <script type="text/babel" src="screens/ProjectDetail.jsx"></script>
+
+  <script type="text/babel">
+    const { useState } = React;
+
+    const CRUMBS = {
+      dashboard:     ["Workspace", "Home"],
+      report:        ["Workspace", "Today's report"],
+      history:       ["Workspace", "My reports"],
+      attendance:    ["Workspace", "Attendance"],
+      projects:      ["Workspace", "Projects", "WorkTrack Web · sprint 14"],
+      analytics:     ["Workspace", "Analytics"],
+      notifications: ["Workspace", "Notifications"],
+      team:          ["Manage",    "Team — Platform"],
+      admin:         ["Manage",    "Admin"],
+    };
+
+    function App() {
+      const [signedIn, setSignedIn] = useState(true);
+      const [route, setRoute] = useState("dashboard");
+      const [role] = useState("admin");
+      const { toasts, show, dismiss } = useToasts();
+
+      if (!signedIn) return (<>
+        <Login onSignIn={() => { setSignedIn(true); show({ title: "Welcome back, Priya", desc: "1 report due today.", variant: "info" }); }} />
+        <ToastStack toasts={toasts} dismiss={dismiss} />
+      </>);
+
+      const screen = (() => {
+        switch (route) {
+          case "dashboard":     return <Dashboard onNavigate={setRoute} />;
+          case "report":        return <ReportForm onNavigate={setRoute} showToast={show} />;
+          case "history":       return <History />;
+          case "attendance":    return <Attendance onNavigate={setRoute} />;
+          case "projects":      return <ProjectDetail onNavigate={setRoute} />;
+          case "analytics":     return <Analytics />;
+          case "notifications": return <NotificationCenter onNavigate={setRoute} />;
+          case "team":          return <Team onNavigate={setRoute} />;
+          case "admin":         return <Admin />;
+          default:              return <Dashboard onNavigate={setRoute} />;
+        }
+      })();
+
+      return (
+        <>
+          <AppShell route={route} onNavigate={setRoute} role={role} crumbs={CRUMBS[route] || ["Workspace"]}>
+            <div key={route} className="screen-enter">{screen}</div>
+          </AppShell>
+          <ToastStack toasts={toasts} dismiss={dismiss} />
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

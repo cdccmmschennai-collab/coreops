@@ -1,0 +1,24 @@
+/* Minimal base styles. The full design-system tokens (colors_and_type) are
+   re-authored in a later phase (decisions.md U-005). */
+:root {
+  --bg: #f7f8fa;
+  --fg: #141821;
+  --muted: #5b6472;
+  --brand: #2f4fcb;
+  --ok: #079455;
+  --err: #d92d20;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}

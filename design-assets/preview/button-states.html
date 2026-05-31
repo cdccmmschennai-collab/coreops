@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Button sizes &amp; states</title><link rel="stylesheet" href="_card.css">
+<style>
+  .btn {
+    display:inline-flex; align-items:center; gap:6px;
+    background: var(--brand); color:#fff; border:1px solid transparent;
+    border-radius: var(--radius-sm); font-weight:600; font-family:inherit;
+  }
+  .sm { height:26px; padding:0 10px; font-size:12px; }
+  .md { height:32px; padding:0 12px; font-size:13px; }
+  .lg { height:38px; padding:0 16px; font-size:14px; }
+  .sec { background:#fff; color: var(--fg-1); border-color: var(--border); box-shadow: var(--shadow-xs); }
+  .focused { box-shadow: var(--ring); border-color: var(--blue-500); }
+  .disabled { opacity:0.5; pointer-events:none; }
+  .hover { background: var(--brand-hover); }
+  .active { background: var(--brand-active); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div style="display:flex; flex-direction:column; gap:14px;">
+    <div>
+      <div class="label" style="margin-bottom:8px;">Sizes</div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn sm">Submit</button>
+        <button class="btn md">Submit</button>
+        <button class="btn lg">Submit</button>
+        <span class="mono" style="font-size:11px; color:var(--fg-3); margin-left:8px;">26 · 32 · 38</span>
+      </div>
+    </div>
+    <div>
+      <div class="label" style="margin-bottom:8px;">States</div>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn md">Default</button>
+        <button class="btn md hover">Hover</button>
+        <button class="btn md active">Active</button>
+        <button class="btn md focused">Focused</button>
+        <button class="btn md disabled">Disabled</button>
+      </div>
+    </div>
+    <div>
+      <div class="label" style="margin-bottom:8px;">Secondary states</div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn sec md">Default</button>
+        <button class="btn sec md" style="background: var(--slate-50);">Hover</button>
+        <button class="btn sec md focused" style="background:#fff;">Focused</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>

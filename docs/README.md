@@ -1,0 +1,47 @@
+# Documentation Index
+
+This `docs/` directory is the **single source of truth** for the platform (working codename: **CoreOps**). It was produced by consolidating everything under `design-assets/` (database schema, hi-fi UI kit, design-system deck, brand assets, screenshots).
+
+> **Naming:** the product has **no final name**. Docs are brand-agnostic ("the platform"). *CoreOps* = working codename, *WorkTrack* = design-system reference, *Cadence* = legacy. See the [Naming Decision Record](./architecture.md#14-naming-decision-record).
+>
+> **No code yet.** Implementation is gated on approval of this set — see [`implementation-plan.md`](./implementation-plan.md).
+
+## Read in this order
+
+| # | Document | What it covers |
+|---|---|---|
+| 1 | [documentation-review-report.md](./documentation-review-report.md) | Asset inventory, duplicates, outdated material, conflicts, gaps — start here |
+| 2 | [architecture.md](./architecture.md) | Vision, problem, goals, personas, context, high-level architecture, boundaries, deployment, security, scalability, observability, future, **Naming Decision Record**, glossary |
+| 3 | [databasedesign.md](./databasedesign.md) | ERD, entities, relationships, indexing, partitioning, audit, tenancy, retention, backup, migration, scaling (authoritative DB ref) |
+| 4 | [backenddesign.md](./backenddesign.md) | Service architecture, API surface, domain model, modules, workers/queue, authn/authz, audit, observability, errors, rate limiting, security, future decomposition |
+| 5 | [frontenddesign.md](./frontenddesign.md) | Design system (tokens/type/motion/voice), components, pages, journeys, navigation, state, API consumption, errors, accessibility, responsive, future |
+| 6 | [roadmap.md](./roadmap.md) | Phases 0–6 (objectives, deliverables, risks, dependencies, success criteria) |
+| 7 | [decisions.md](./decisions.md) | **Decided** ADRs · **Assumptions** · **Unresolved decisions** (three registers) |
+| 8 | [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) | Ideal repository/folder structure (no code) |
+| 9 | [implementation-plan.md](./implementation-plan.md) | Ordered, reviewable build plan + approval gate |
+
+### Domain Modeling phase
+
+| # | Document | What it covers |
+|---|---|---|
+| 10 | [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) | Bounded contexts, aggregates, entities, value objects, domain events, relationships (context map) |
+| 11 | [USER_ROLES_AND_PERMISSIONS.md](./USER_ROLES_AND_PERMISSIONS.md) | 7 roles (Super Admin → Viewer), permission catalog, detailed permission matrix |
+| 12 | [WORKFLOWS.md](./WORKFLOWS.md) | Attendance (check-in/punch/break/check-out), reporting, project, recruitment, approval, notification workflows |
+| 13 | [TENANCY_STRATEGY.md](./TENANCY_STRATEGY.md) | Single vs multi-tenant comparison + recommendation (`tenant_id`+RLS) |
+| 14 | [INTEGRATIONS.md](./INTEGRATIONS.md) | Biometric, Email, WhatsApp, SMS, LDAP/AD, Google Workspace, M365 |
+| 15 | [EVENT_ARCHITECTURE.md](./EVENT_ARCHITECTURE.md) | Event-driven backbone: catalog, envelope, outbox, consumption semantics |
+| 16 | [AI_ROADMAP.md](./AI_ROADMAP.md) | Anomaly detection, missing reports, project risk, recruitment insights, exec summaries, agentic automation |
+| 17 | [IMPLEMENTATION_SEQUENCE.md](./IMPLEMENTATION_SEQUENCE.md) | Safest dependency-ordered build sequence (S0–S13) |
+
+### v1 build (scoped, on existing stack)
+
+| # | Document | What it covers |
+|---|---|---|
+| 18 | [V1_IMPLEMENTATION_PLAN.md](./V1_IMPLEMENTATION_PLAN.md) | v1 scope validation, minimal roadmap, structures, port isolation from SPIR, dev & test sequences |
+| 19 | [V1_ARCHITECTURE_PACKAGE.md](./V1_ARCHITECTURE_PACKAGE.md) | **FROZEN build spec.** Resolved decisions, final DB schema, route/module maps, permission matrix, git + Docker architecture, migration plan |
+| 20 | [api/openapi-v1.yaml](./api/openapi-v1.yaml) | OpenAPI 3.1 contract of record for v1 (auth, users, employees, attendance, projects, reports, dashboard) |
+
+## Conventions
+- _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
+- Open questions are tracked as **U-0xx**, assumptions as **A-0xx**, decisions as **D-0xx** in `decisions.md`.
+- `design-assets/` is **read-only source material** and is not built.

@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Semantic colors</title><link rel="stylesheet" href="_card.css"></head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:12px;">Semantic — success · warning · danger</div>
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px;">
+    <!-- success -->
+    <div>
+      <div style="display:flex; gap:4px; height:36px; border-radius:6px; overflow:hidden;">
+        <div style="flex:1; background:var(--green-50);"></div>
+        <div style="flex:1; background:var(--green-100);"></div>
+        <div style="flex:1; background:var(--green-500);"></div>
+        <div style="flex:1; background:var(--green-600);"></div>
+        <div style="flex:1; background:var(--green-700);"></div>
+      </div>
+      <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:600; color:var(--green-700); font-size:13px;">Success</span>
+        <span class="mono" style="font-size:11px; color:var(--fg-3);">--success</span>
+      </div>
+      <div class="t-meta" style="margin-top:2px;">submitted · approved</div>
+    </div>
+    <!-- warning -->
+    <div>
+      <div style="display:flex; gap:4px; height:36px; border-radius:6px; overflow:hidden;">
+        <div style="flex:1; background:var(--amber-50);"></div>
+        <div style="flex:1; background:var(--amber-100);"></div>
+        <div style="flex:1; background:var(--amber-500);"></div>
+        <div style="flex:1; background:var(--amber-600);"></div>
+        <div style="flex:1; background:var(--amber-700);"></div>
+      </div>
+      <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:600; color:var(--amber-700); font-size:13px;">Warning</span>
+        <span class="mono" style="font-size:11px; color:var(--fg-3);">--warning</span>
+      </div>
+      <div class="t-meta" style="margin-top:2px;">due soon · in review</div>
+    </div>
+    <!-- danger -->
+    <div>
+      <div style="display:flex; gap:4px; height:36px; border-radius:6px; overflow:hidden;">
+        <div style="flex:1; background:var(--red-50);"></div>
+        <div style="flex:1; background:var(--red-100);"></div>
+        <div style="flex:1; background:var(--red-500);"></div>
+        <div style="flex:1; background:var(--red-600);"></div>
+        <div style="flex:1; background:var(--red-700);"></div>
+      </div>
+      <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+        <span style="font-weight:600; color:var(--red-700); font-size:13px;">Danger</span>
+        <span class="mono" style="font-size:11px; color:var(--fg-3);">--danger</span>
+      </div>
+      <div class="t-meta" style="margin-top:2px;">overdue · blocked · error</div>
+    </div>
+  </div>
+</div>
+</body></html>

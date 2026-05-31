@@ -1,0 +1,25 @@
+/* Shared base for preview cards. Each card is a 700-wide canvas. */
+@import url("../colors_and_type.css");
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+}
+.card {
+  width: 700px;
+  padding: 20px 24px;
+  background: var(--bg-surface);
+}
+.row { display: flex; align-items: center; gap: 12px; }
+.col { display: flex; flex-direction: column; gap: 12px; }
+.label {
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--fg-3);
+  font-weight: var(--weight-semibold);
+}
+.mono { font-family: var(--font-mono); }

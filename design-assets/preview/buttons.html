@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Buttons</title><link rel="stylesheet" href="_card.css">
+<style>
+  button { font-family: inherit; cursor: pointer; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 600;
+    border: 1px solid transparent; transition: background var(--duration-fast) var(--ease-out);
+  }
+  .btn-primary   { background: var(--brand); color: #fff; }
+  .btn-primary:hover { background: var(--brand-hover); }
+  .btn-secondary { background: #fff; color: var(--fg-1); border-color: var(--border); box-shadow: var(--shadow-xs); }
+  .btn-secondary:hover { background: var(--slate-50); }
+  .btn-ghost     { background: transparent; color: var(--fg-1); }
+  .btn-ghost:hover { background: var(--bg-subtle); }
+  .btn-danger    { background: var(--danger); color: #fff; }
+  .btn-danger:hover { background: var(--red-700); }
+  .btn-link      { background: transparent; color: var(--fg-link); padding: 0 4px; }
+  .btn-link:hover { color: var(--fg-link-hover); text-decoration: underline; text-underline-offset: 3px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:14px;">Buttons — variants</div>
+  <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+    <button class="btn btn-primary">Submit report</button>
+    <button class="btn btn-secondary">Save draft</button>
+    <button class="btn btn-ghost">Cancel</button>
+    <button class="btn btn-danger">Archive</button>
+    <button class="btn btn-link">Learn more →</button>
+  </div>
+  <div style="margin-top:14px; display:grid; grid-template-columns: repeat(5, 1fr); gap:8px; font-size:11px; color:var(--fg-3);" class="mono">
+    <span>primary</span><span>secondary</span><span>ghost</span><span>danger</span><span>link</span>
+  </div>
+</div>
+</body></html>

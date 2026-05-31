@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Search &amp; filters</title><link rel="stylesheet" href="_card.css">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<style>
+  .field { display:flex; align-items:center; gap:8px; padding: 0 12px; height: 32px; background:#fff; border:1px solid var(--border); border-radius: var(--radius-sm); font-size:13px; }
+  .filter { display:inline-flex; align-items:center; gap:6px; height:28px; padding: 0 10px; border-radius: var(--radius-full); background: #fff; border: 1px solid var(--border); font-size: 12px; color: var(--fg-1); }
+  .filter .v { color: var(--fg-2); }
+  .filter .x { margin-left: 2px; color: var(--fg-3); }
+  .filter.applied { background: var(--blue-50); border-color: var(--blue-100); color: var(--blue-700); }
+  .filter.applied .v { color: var(--blue-700); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:12px;">Search &amp; filter row</div>
+  <div style="display:flex; gap:8px; align-items:center; flex-wrap: wrap;">
+    <div class="field" style="width: 240px;">
+      <i data-lucide="search"></i>
+      <span style="color: var(--fg-4);">Search reports…</span>
+      <span style="margin-left:auto; font-family:var(--font-mono); font-size:11px; color: var(--fg-3); background: var(--slate-100); padding: 1px 5px; border-radius: 3px;">⌘K</span>
+    </div>
+    <div class="filter applied">
+      <i data-lucide="users"></i>
+      <span>Team:</span> <span class="v">Platform</span>
+      <span class="x">×</span>
+    </div>
+    <div class="filter applied">
+      <i data-lucide="calendar"></i>
+      <span>Date:</span> <span class="v">This week</span>
+      <span class="x">×</span>
+    </div>
+    <div class="filter">
+      <i data-lucide="folder-kanban"></i>
+      <span>Project</span>
+      <i data-lucide="chevron-down"></i>
+    </div>
+    <div class="filter">
+      <i data-lucide="circle"></i>
+      <span>Status</span>
+      <i data-lucide="chevron-down"></i>
+    </div>
+    <div class="filter" style="background: transparent; border-color: transparent; color: var(--fg-link); font-weight: 500;">
+      Clear all
+    </div>
+  </div>
+  <script>lucide.createIcons({ attrs: { width: 13, height: 13, 'stroke-width': 1.7 } });</script>
+</div>
+</body></html>

@@ -1,0 +1,38 @@
+"""FastAPI application factory.
+
+V0 wires configuration, CORS, the uniform error envelope, and the health
+router. Domain routers are registered in later phases.
+"""
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.health import router as health_router
+from app.shared.errors import register_error_handlers
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Workforce Management System API",
+        version="1.0.0",
+        docs_url=f"{settings.API_V1_PREFIX}/docs",
+        openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    register_error_handlers(app)
+
+    # Routers (one module per phase). Health is the only one in V0.
+    app.include_router(health_router, prefix=settings.API_V1_PREFIX)
+
+    return app
+
+
+app = create_app()

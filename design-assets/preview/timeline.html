@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Activity timeline</title><link rel="stylesheet" href="_card.css">
+<style>
+  .tl { position: relative; padding-left: 20px; }
+  .tl::before { content:''; position:absolute; left: 7px; top: 6px; bottom: 6px; width: 1px; background: var(--border); }
+  .tl-item { position: relative; padding: 6px 0; display:flex; align-items:center; gap:10px; }
+  .tl-dot { position: absolute; left: -19px; top: 11px; width: 10px; height: 10px; border-radius: 50%; background: #fff; border: 2px solid var(--slate-300); }
+  .tl-dot.blue { border-color: var(--blue-500); background: var(--blue-50); }
+  .tl-dot.green { border-color: var(--green-500); background: var(--green-50); }
+  .tl-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); width: 56px; }
+  .tl-text { font-size: 13px; color: var(--fg-1); }
+  .tl-text .who { font-weight: 500; }
+  .tl-text .what { color: var(--fg-2); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:14px;">Activity timeline</div>
+  <div class="tl">
+    <div class="tl-item">
+      <span class="tl-dot green"></span>
+      <span class="tl-time">4:32 PM</span>
+      <span class="tl-text"><span class="who">Priya</span> <span class="what">submitted</span> <span style="color:var(--fg-link);">May 24 daily</span></span>
+    </div>
+    <div class="tl-item">
+      <span class="tl-dot blue"></span>
+      <span class="tl-time">3:48 PM</span>
+      <span class="tl-text"><span class="who">Jordan</span> <span class="what">requested review on</span> <span style="color:var(--fg-link);">Mobile · sprint 14</span></span>
+    </div>
+    <div class="tl-item">
+      <span class="tl-dot"></span>
+      <span class="tl-time">2:10 PM</span>
+      <span class="tl-text"><span class="who">Ana</span> <span class="what">opened</span> <span style="color:var(--fg-link);">Project Cadence Web</span></span>
+    </div>
+    <div class="tl-item">
+      <span class="tl-dot"></span>
+      <span class="tl-time">11:42 AM</span>
+      <span class="tl-text"><span class="who">Marco</span> <span class="what">reassigned 2 reports to</span> <span class="who">Lin</span></span>
+    </div>
+  </div>
+</div>
+</body></html>

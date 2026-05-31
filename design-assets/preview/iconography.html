@@ -1,0 +1,39 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Iconography</title><link rel="stylesheet" href="_card.css">
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<style>
+  .grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 12px; }
+  .ico { display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .ico svg { color: var(--fg-1); }
+  .ico-label { font-size: 10px; color: var(--fg-3); font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="label" style="margin-bottom:14px;">Iconography — Lucide · stroke 1.5 · 16/20/24</div>
+  <div class="grid">
+    <div class="ico"><i data-lucide="home"></i><span class="ico-label">home</span></div>
+    <div class="ico"><i data-lucide="layout-dashboard"></i><span class="ico-label">dashboard</span></div>
+    <div class="ico"><i data-lucide="file-text"></i><span class="ico-label">report</span></div>
+    <div class="ico"><i data-lucide="clock"></i><span class="ico-label">hours</span></div>
+    <div class="ico"><i data-lucide="users"></i><span class="ico-label">team</span></div>
+    <div class="ico"><i data-lucide="folder-kanban"></i><span class="ico-label">project</span></div>
+    <div class="ico"><i data-lucide="bar-chart-3"></i><span class="ico-label">analytics</span></div>
+    <div class="ico"><i data-lucide="calendar"></i><span class="ico-label">calendar</span></div>
+    <div class="ico"><i data-lucide="search"></i><span class="ico-label">search</span></div>
+    <div class="ico"><i data-lucide="bell"></i><span class="ico-label">notify</span></div>
+    <div class="ico"><i data-lucide="check-circle-2"></i><span class="ico-label">done</span></div>
+    <div class="ico"><i data-lucide="circle-alert"></i><span class="ico-label">alert</span></div>
+    <div class="ico"><i data-lucide="settings"></i><span class="ico-label">settings</span></div>
+    <div class="ico"><i data-lucide="filter"></i><span class="ico-label">filter</span></div>
+    <div class="ico"><i data-lucide="download"></i><span class="ico-label">export</span></div>
+    <div class="ico"><i data-lucide="plus"></i><span class="ico-label">add</span></div>
+    <div class="ico"><i data-lucide="more-horizontal"></i><span class="ico-label">more</span></div>
+    <div class="ico"><i data-lucide="chevron-down"></i><span class="ico-label">expand</span></div>
+    <div class="ico"><i data-lucide="arrow-up-right"></i><span class="ico-label">open</span></div>
+    <div class="ico"><i data-lucide="log-out"></i><span class="ico-label">sign-out</span></div>
+  </div>
+  <script>
+    lucide.createIcons({ attrs: { width: 18, height: 18, 'stroke-width': 1.5 } });
+  </script>
+</div>
+</body></html>

@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Tabs &amp; segmented</title><link rel="stylesheet" href="_card.css">
+<style>
+  .tabs { display:flex; gap: 24px; border-bottom: 1px solid var(--border); }
+  .tab { padding: 10px 0; font-size: 13px; font-weight: 500; color: var(--fg-2); border-bottom: 2px solid transparent; margin-bottom: -1px; cursor:pointer; }
+  .tab:hover { color: var(--fg-1); }
+  .tab.active { color: var(--fg-1); border-color: var(--blue-600); }
+  .tab .count { display:inline-block; margin-left:6px; font-size: 10px; color: var(--fg-3); background: var(--slate-100); padding: 1px 6px; border-radius: 9999px; font-weight: 500; }
+  .seg { display:inline-flex; padding: 3px; background: var(--slate-100); border-radius: 8px; }
+  .seg-item { padding: 5px 12px; font-size: 12px; font-weight: 500; color: var(--fg-2); border-radius: 6px; cursor: pointer; }
+  .seg-item.active { background: #fff; color: var(--fg-1); box-shadow: var(--shadow-xs); }
+</style>
+</head>
+<body>
+<div class="card">
+  <div style="display:flex; flex-direction:column; gap:18px;">
+    <div>
+      <div class="tabs">
+        <div class="tab active">My reports <span class="count">12</span></div>
+        <div class="tab">Drafts <span class="count">2</span></div>
+        <div class="tab">Archive</div>
+        <div class="tab">All activity</div>
+      </div>
+    </div>
+    <div>
+      <div class="label" style="margin-bottom:8px;">Segmented control</div>
+      <div class="seg">
+        <div class="seg-item active">Day</div>
+        <div class="seg-item">Week</div>
+        <div class="seg-item">Month</div>
+        <div class="seg-item">Quarter</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>
