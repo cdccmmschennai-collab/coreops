@@ -60,7 +60,8 @@ def _clean_state():
     with SessionLocal() as db:
         db.execute(
             text(
-                "TRUNCATE TABLE attendance_records, project_members, projects, "
+                "TRUNCATE TABLE work_report_tasks, daily_work_reports, "
+                "attendance_records, project_members, projects, "
                 "employees, users RESTART IDENTITY CASCADE"
             )
         )
