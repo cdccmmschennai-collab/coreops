@@ -24,6 +24,7 @@ from app.core.database import SessionLocal  # noqa: E402
 from app.core.redis import get_redis  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
+from app.modules.employees.models import Employee, EmployeeStatus  # noqa: E402
 from app.modules.users.models import User, UserRole  # noqa: E402
 
 
@@ -48,9 +49,9 @@ def _prepare_database():
 
 @pytest.fixture(autouse=True)
 def _clean_state():
-    # Clean slate per test: empty users, clear redis (throttle/denylist keys).
+    # Clean slate per test: empty tables, clear redis (throttle/denylist keys).
     with SessionLocal() as db:
-        db.execute(text("TRUNCATE TABLE users RESTART IDENTITY CASCADE"))
+        db.execute(text("TRUNCATE TABLE employees, users RESTART IDENTITY CASCADE"))
         db.commit()
     get_redis().flushdb()
     yield
@@ -99,3 +100,48 @@ def auth_header(client, make_user):
         return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
     return _login
+
+
+@pytest.fixture()
+def login(client):
+    """Log in an EXISTING user; returns the auth header."""
+
+    def _login(email: str, password: str = "password123") -> dict:
+        res = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+        assert res.status_code == 200, res.text
+        return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+    return _login
+
+
+@pytest.fixture()
+def make_employee(db):
+    def _make(
+        *,
+        employee_code: str,
+        first_name: str = "Test",
+        last_name: str = "User",
+        user_id=None,
+        manager_id=None,
+        status: EmployeeStatus = EmployeeStatus.active,
+        department: str | None = None,
+        designation: str | None = None,
+        work_email: str | None = None,
+    ) -> Employee:
+        emp = Employee(
+            employee_code=employee_code,
+            first_name=first_name,
+            last_name=last_name,
+            user_id=user_id,
+            manager_id=manager_id,
+            status=status,
+            department=department,
+            designation=designation,
+            work_email=work_email,
+        )
+        db.add(emp)
+        db.commit()
+        db.refresh(emp)
+        return emp
+
+    return _make
