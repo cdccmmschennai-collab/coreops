@@ -88,6 +88,9 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+      # Isolate the container's dev build output so a host `npm run build`
+      # (which writes ./frontend/.next) can't corrupt the running dev server.
+      - /app/.next
     command: ["npm", "run", "dev"]
 
 volumes:

@@ -9,7 +9,8 @@ export type Capability =
   | "employee.manage" // admin: create/edit employees
   | "project.manage" // admin: create/edit/archive projects
   | "report.review" // manager/admin: approve/reject reports
-  | "attendance.viewTeam"; // manager/admin: team attendance
+  | "attendance.viewTeam" // manager/admin: team attendance
+  | "attendance.manage"; // admin: create/edit/delete attendance records
 
 const MATRIX: Record<Capability, Role[]> = {
   "user.manage": ["admin"],
@@ -17,6 +18,7 @@ const MATRIX: Record<Capability, Role[]> = {
   "project.manage": ["admin"],
   "report.review": ["admin", "manager"],
   "attendance.viewTeam": ["admin", "manager"],
+  "attendance.manage": ["admin"],
 };
 
 export function can(role: Role | undefined, capability: Capability): boolean {
