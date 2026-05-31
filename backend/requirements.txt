@@ -9,8 +9,8 @@ alembic==1.13.3
 redis==5.1.1
 celery==5.4.0
 
-# Auth (used from V1 onward; declared now to keep the image stable)
-passlib[bcrypt]==1.7.4
+# Auth — bcrypt used directly (no passlib; audit F7 / decision D-V1-1)
+bcrypt==4.2.1
 PyJWT==2.9.0
 python-multipart==0.0.12
 
