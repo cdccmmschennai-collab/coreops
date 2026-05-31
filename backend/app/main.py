@@ -8,6 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.health import router as health_router
+from app.modules.attendance.router import (
+    employee_router as attendance_employee_router,
+    router as attendance_router,
+)
 from app.modules.auth.router import router as auth_router
 from app.modules.employees.router import router as employees_router
 from app.modules.projects.router import router as projects_router
@@ -39,6 +43,8 @@ def create_app() -> FastAPI:
     app.include_router(users_router, prefix=settings.API_V1_PREFIX)
     app.include_router(employees_router, prefix=settings.API_V1_PREFIX)
     app.include_router(projects_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(attendance_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(attendance_employee_router, prefix=settings.API_V1_PREFIX)
 
     return app
 
