@@ -37,3 +37,4 @@ secrets/
 .idea/
 .vscode/
 *.swp
+.Rhistory
