@@ -7,7 +7,10 @@ WORKDIR /app
 
 # System deps kept minimal; psycopg[binary] needs no build toolchain.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Resilient install: upgrade pip, add retries/timeout (build-network can truncate
+# the package index on flaky links).
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --retries 8 --timeout 180 -r requirements.txt
 
 COPY . .
 
