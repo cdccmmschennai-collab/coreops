@@ -6,10 +6,14 @@ Record, D-001); nothing else names the product.
 """
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _INSECURE_SECRET_DEFAULT = "change-me-in-production"
+_MIN_SECRET_LENGTH = 32
+# Only these environments may run with the insecure dev default secret.
+_DEV_ENVS = frozenset({"local", "test"})
+_ALLOWED_ENVS = frozenset({"local", "test", "staging", "production"})
 
 
 class Settings(BaseSettings):
@@ -20,7 +24,9 @@ class Settings(BaseSettings):
     )
 
     # Runtime
-    ENV: str = "local"
+    # Fail-closed default: an unset or mistyped ENV is treated as production,
+    # so the SECRET_KEY guard below applies unless ENV is explicitly local/test.
+    ENV: str = "production"
     API_V1_PREFIX: str = "/api/v1"
     PRODUCT_NAME: str = "CoreOps"
 
@@ -41,13 +47,26 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
+    @field_validator("ENV")
+    @classmethod
+    def _validate_env(cls, value: str) -> str:
+        if value not in _ALLOWED_ENVS:
+            raise ValueError(
+                f"ENV must be one of {sorted(_ALLOWED_ENVS)}; got {value!r}."
+            )
+        return value
+
     @model_validator(mode="after")
     def _guard_secret_key(self) -> "Settings":
-        # Outside local, a strong, non-default SECRET_KEY is mandatory (F6).
-        if self.ENV != "local":
-            if self.SECRET_KEY == _INSECURE_SECRET_DEFAULT or len(self.SECRET_KEY) < 32:
+        # Fail closed: only dev/test envs may use the insecure default secret.
+        if self.ENV not in _DEV_ENVS:
+            if (
+                self.SECRET_KEY == _INSECURE_SECRET_DEFAULT
+                or len(self.SECRET_KEY) < _MIN_SECRET_LENGTH
+            ):
                 raise ValueError(
-                    "SECRET_KEY must be set to a strong value (>=32 chars) when ENV is not 'local'."
+                    f"SECRET_KEY must be a strong, non-default value "
+                    f"(>= {_MIN_SECRET_LENGTH} chars) when ENV is {self.ENV!r}."
                 )
         return self
 
