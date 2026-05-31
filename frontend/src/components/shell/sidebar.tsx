@@ -28,7 +28,7 @@ interface NavItem {
 
 const WORKSPACE: NavItem[] = [
   { label: "Home", href: "/dashboard", icon: Home },
-  { label: "Employees", href: "/employees", icon: Users, soon: true },
+  { label: "Employees", href: "/employees", icon: Users },
   { label: "Projects", href: "/projects", icon: FolderKanban, soon: true },
   { label: "Attendance", href: "/attendance", icon: CalendarDays, soon: true },
   { label: "Reports", href: "/reports", icon: FileText, soon: true },
