@@ -20,6 +20,7 @@ if config.config_file_name is not None:
 
 # Import models so autogenerate sees their metadata. Add new modules here.
 import app.modules.users.models  # noqa: E402,F401
+import app.modules.employees.models  # noqa: E402,F401
 
 target_metadata = Base.metadata
 
