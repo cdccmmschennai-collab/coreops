@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.health import router as health_router
 from app.modules.auth.router import router as auth_router
 from app.modules.employees.router import router as employees_router
+from app.modules.projects.router import router as projects_router
 from app.modules.users.router import router as users_router
 from app.shared.errors import register_error_handlers
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
     app.include_router(users_router, prefix=settings.API_V1_PREFIX)
     app.include_router(employees_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(projects_router, prefix=settings.API_V1_PREFIX)
 
     return app
 
