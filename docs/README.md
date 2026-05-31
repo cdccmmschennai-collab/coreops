@@ -45,6 +45,20 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 23 | [V1_AUTHENTICATION_PLAN.md](./V1_AUTHENTICATION_PLAN.md) | V1 auth plan: JWT, login/logout, current-user, role enforcement, hashing, admin bootstrap |
 | 24 | [V1_AUTHENTICATION_REPORT.md](./V1_AUTHENTICATION_REPORT.md) | V1 auth completion report: steps, decisions, 25 tests, e2e smoke, endpoints |
 
+### Frontend architecture & UX review (pre-build, no code)
+
+| # | Document | What it covers |
+|---|---|---|
+| 25 | [FRONTEND_ARCHITECTURE.md](./FRONTEND_ARCHITECTURE.md) | Rendering strategy, folder structure, state (React Query), auth/token handling, RBAC on client, V0 validation, open decisions FD-1..4 |
+| 26 | [FRONTEND_DESIGN_SYSTEM.md](./FRONTEND_DESIGN_SYSTEM.md) | Tokens (color/type/spacing/radii/shadow/motion), component catalog + states, status mapping, voice, a11y |
+| 27 | [FRONTEND_ROUTE_MAP.md](./FRONTEND_ROUTE_MAP.md) | Route tree, layouts/groups, guards, role visibility matrix, URL-state, redirects |
+| 28 | [DASHBOARD_SCREEN_SPEC.md](./DASHBOARD_SCREEN_SPEC.md) | Dashboard spec + ASCII wireframes (desktop/mobile) |
+| 29 | [EMPLOYEES_SCREEN_SPEC.md](./EMPLOYEES_SCREEN_SPEC.md) | Employees list/detail spec + wireframes |
+| 30 | [PROJECTS_SCREEN_SPEC.md](./PROJECTS_SCREEN_SPEC.md) | Projects list/detail spec + wireframes |
+| 31 | [ATTENDANCE_SCREEN_SPEC.md](./ATTENDANCE_SCREEN_SPEC.md) | Attendance calendar/history/team spec + wireframes |
+| 32 | [REPORTS_SCREEN_SPEC.md](./REPORTS_SCREEN_SPEC.md) | Reports list/new/detail-review spec + wireframes |
+| 33 | [SETTINGS_SCREEN_SPEC.md](./SETTINGS_SCREEN_SPEC.md) | Settings (profile/security/users & roles) spec + wireframes + API gap FD-3 |
+
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
 - Open questions are tracked as **U-0xx**, assumptions as **A-0xx**, decisions as **D-0xx** in `decisions.md`.
