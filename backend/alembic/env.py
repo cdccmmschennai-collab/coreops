@@ -23,6 +23,7 @@ import app.modules.users.models  # noqa: E402,F401
 import app.modules.employees.models  # noqa: E402,F401
 import app.modules.projects.models  # noqa: E402,F401
 import app.modules.attendance.models  # noqa: E402,F401
+import app.modules.work_reports.models  # noqa: E402,F401
 
 target_metadata = Base.metadata
 
