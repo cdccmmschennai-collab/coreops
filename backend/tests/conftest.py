@@ -24,6 +24,7 @@ from app.core.database import SessionLocal  # noqa: E402
 from app.core.redis import get_redis  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
+from app.modules.attendance.models import AttendanceRecord, AttendanceStatus  # noqa: E402
 from app.modules.employees.models import Employee, EmployeeStatus  # noqa: E402
 from app.modules.projects.models import (  # noqa: E402
     Project,
@@ -59,8 +60,8 @@ def _clean_state():
     with SessionLocal() as db:
         db.execute(
             text(
-                "TRUNCATE TABLE project_members, projects, employees, users "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE attendance_records, project_members, projects, "
+                "employees, users RESTART IDENTITY CASCADE"
             )
         )
         db.commit()
@@ -197,5 +198,34 @@ def make_project_member(db):
         db.commit()
         db.refresh(member)
         return member
+
+    return _make
+
+
+@pytest.fixture()
+def make_attendance(db):
+    def _make(
+        *,
+        employee_id,
+        attendance_date,
+        status: AttendanceStatus = AttendanceStatus.present,
+        total_minutes: int = 0,
+        overtime_minutes: int = 0,
+        check_in_at=None,
+        check_out_at=None,
+    ) -> AttendanceRecord:
+        record = AttendanceRecord(
+            employee_id=employee_id,
+            attendance_date=attendance_date,
+            status=status,
+            total_minutes=total_minutes,
+            overtime_minutes=overtime_minutes,
+            check_in_at=check_in_at,
+            check_out_at=check_out_at,
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record
 
     return _make
