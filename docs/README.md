@@ -59,6 +59,7 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 32 | [REPORTS_SCREEN_SPEC.md](./REPORTS_SCREEN_SPEC.md) | Reports list/new/detail-review spec + wireframes |
 | 33 | [SETTINGS_SCREEN_SPEC.md](./SETTINGS_SCREEN_SPEC.md) | Settings (profile/security/users & roles) spec + wireframes + API gap FD-3 |
 | 34 | [FRONTEND_IMPLEMENTATION_PLAN.md](./FRONTEND_IMPLEMENTATION_PLAN.md) | **Build roadmap.** Stack (Tailwind/shadcn/TanStack/RHF/Zod), folder structure, state, API client, auth flow, page & component build order, testing, phases F0–F8 |
+| 35 | [FRONTEND_F0_F1_REPORT.md](./FRONTEND_F0_F1_REPORT.md) | F0+F1 completion report: files, dependencies, routes, verification, remaining work |
 
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
