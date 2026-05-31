@@ -25,6 +25,12 @@ from app.core.redis import get_redis  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
 from app.modules.employees.models import Employee, EmployeeStatus  # noqa: E402
+from app.modules.projects.models import (  # noqa: E402
+    Project,
+    ProjectMember,
+    ProjectMemberRole,
+    ProjectStatus,
+)
 from app.modules.users.models import User, UserRole  # noqa: E402
 
 
@@ -51,7 +57,12 @@ def _prepare_database():
 def _clean_state():
     # Clean slate per test: empty tables, clear redis (throttle/denylist keys).
     with SessionLocal() as db:
-        db.execute(text("TRUNCATE TABLE employees, users RESTART IDENTITY CASCADE"))
+        db.execute(
+            text(
+                "TRUNCATE TABLE project_members, projects, employees, users "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
         db.commit()
     get_redis().flushdb()
     yield
@@ -143,5 +154,48 @@ def make_employee(db):
         db.commit()
         db.refresh(emp)
         return emp
+
+    return _make
+
+
+@pytest.fixture()
+def make_project(db):
+    def _make(
+        *,
+        code: str,
+        name: str = "Test Project",
+        client: str | None = None,
+        status: ProjectStatus = ProjectStatus.planning,
+        start_date=None,
+        end_date=None,
+    ) -> Project:
+        project = Project(
+            code=code,
+            name=name,
+            client=client,
+            status=status,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        db.add(project)
+        db.commit()
+        db.refresh(project)
+        return project
+
+    return _make
+
+
+@pytest.fixture()
+def make_project_member(db):
+    def _make(
+        *, project_id, employee_id, role: ProjectMemberRole = ProjectMemberRole.member
+    ) -> ProjectMember:
+        member = ProjectMember(
+            project_id=project_id, employee_id=employee_id, role=role
+        )
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+        return member
 
     return _make
