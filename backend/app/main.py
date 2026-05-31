@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.health import router as health_router
+from app.modules.auth.router import router as auth_router
+from app.modules.users.router import router as users_router
 from app.shared.errors import register_error_handlers
 
 
@@ -29,8 +31,10 @@ def create_app() -> FastAPI:
 
     register_error_handlers(app)
 
-    # Routers (one module per phase). Health is the only one in V0.
+    # Routers (one module per phase).
     app.include_router(health_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(users_router, prefix=settings.API_V1_PREFIX)
 
     return app
 
