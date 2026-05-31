@@ -30,10 +30,3 @@ export interface ApiErrorBody {
     request_id?: string | null;
   };
 }
-
-export interface Page<T> {
-  items: T[];
-  total: number;
-  limit: number;
-  offset: number;
-}
