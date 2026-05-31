@@ -40,6 +40,9 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 18 | [V1_IMPLEMENTATION_PLAN.md](./V1_IMPLEMENTATION_PLAN.md) | v1 scope validation, minimal roadmap, structures, port isolation from SPIR, dev & test sequences |
 | 19 | [V1_ARCHITECTURE_PACKAGE.md](./V1_ARCHITECTURE_PACKAGE.md) | **FROZEN build spec.** Resolved decisions, final DB schema, route/module maps, permission matrix, git + Docker architecture, migration plan |
 | 20 | [api/openapi-v1.yaml](./api/openapi-v1.yaml) | OpenAPI 3.1 contract of record for v1 (auth, users, employees, attendance, projects, reports, dashboard) |
+| 21 | [V0_FOUNDATIONS_REPORT.md](./V0_FOUNDATIONS_REPORT.md) | V0 build report: files created, security review, env vars, Docker, startup |
+| 22 | [V0_AUDIT_REPORT.md](./V0_AUDIT_REPORT.md) | Architecture/implementation audit of V0 (10 areas, findings F1–F12, verdict) |
+| 23 | [V1_AUTHENTICATION_PLAN.md](./V1_AUTHENTICATION_PLAN.md) | V1 auth plan: JWT, login/logout, current-user, role enforcement, hashing, admin bootstrap |
 
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
