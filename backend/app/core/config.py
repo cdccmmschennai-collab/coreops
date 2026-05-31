@@ -6,7 +6,10 @@ Record, D-001); nothing else names the product.
 """
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_INSECURE_SECRET_DEFAULT = "change-me-in-production"
 
 
 class Settings(BaseSettings):
@@ -37,6 +40,16 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _guard_secret_key(self) -> "Settings":
+        # Outside local, a strong, non-default SECRET_KEY is mandatory (F6).
+        if self.ENV != "local":
+            if self.SECRET_KEY == _INSECURE_SECRET_DEFAULT or len(self.SECRET_KEY) < 32:
+                raise ValueError(
+                    "SECRET_KEY must be set to a strong value (>=32 chars) when ENV is not 'local'."
+                )
+        return self
 
 
 @lru_cache
