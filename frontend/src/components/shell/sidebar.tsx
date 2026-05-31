@@ -30,7 +30,7 @@ const WORKSPACE: NavItem[] = [
   { label: "Home", href: "/dashboard", icon: Home },
   { label: "Employees", href: "/employees", icon: Users },
   { label: "Projects", href: "/projects", icon: FolderKanban },
-  { label: "Attendance", href: "/attendance", icon: CalendarDays, soon: true },
+  { label: "Attendance", href: "/attendance", icon: CalendarDays },
   { label: "Reports", href: "/reports", icon: FileText, soon: true },
   { label: "Analytics", href: "/analytics", icon: BarChart3, soon: true },
 ];
