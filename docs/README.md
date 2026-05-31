@@ -43,6 +43,7 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 21 | [V0_FOUNDATIONS_REPORT.md](./V0_FOUNDATIONS_REPORT.md) | V0 build report: files created, security review, env vars, Docker, startup |
 | 22 | [V0_AUDIT_REPORT.md](./V0_AUDIT_REPORT.md) | Architecture/implementation audit of V0 (10 areas, findings F1–F12, verdict) |
 | 23 | [V1_AUTHENTICATION_PLAN.md](./V1_AUTHENTICATION_PLAN.md) | V1 auth plan: JWT, login/logout, current-user, role enforcement, hashing, admin bootstrap |
+| 24 | [V1_AUTHENTICATION_REPORT.md](./V1_AUTHENTICATION_REPORT.md) | V1 auth completion report: steps, decisions, 25 tests, e2e smoke, endpoints |
 
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
