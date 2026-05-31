@@ -68,6 +68,7 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 41 | [FRONTEND_F6_ATTENDANCE_REPORT.md](./FRONTEND_F6_ATTENDANCE_REPORT.md) | F6 attendance frontend: contract-typed data layer, list/detail/create/edit/delete, filters, verification |
 | 42 | [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) | Security audit: findings (C1-C3/H1-H5/M1-M8), strengths, prioritized fixes, enterprise readiness 58/100 |
 | 43 | [PRODUCTION_HARDENING_PLAN.md](./PRODUCTION_HARDENING_PLAN.md) | Hardening plan for C1/C2/C3/H2/H3: files to change, order, impact, rollback, verification, risk |
+| 44 | [REMAINING_ROADMAP.md](./REMAINING_ROADMAP.md) | Remaining sidebar items: state inventory, missing routes/modules, dependency graph, order, risk, effort |
 
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
