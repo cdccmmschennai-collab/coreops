@@ -2,117 +2,80 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Download, Plus } from "lucide-react";
+import { toast } from "sonner";
 
+import { EmptyState } from "@/components/feedback/empty-state";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
+import { Tabs } from "@/components/ui/tabs";
 import { useAuth } from "@/features/auth/auth-provider";
 import { can } from "@/lib/rbac";
 
-import { AttendanceFilters, type AttendanceFilterValues } from "./attendance-filters";
-import { AttendanceTable } from "./attendance-table";
-import { DeleteDialog } from "./delete-dialog";
-import { useAttendanceList } from "../hooks";
-import { ATTENDANCE_STATUSES } from "../schemas";
-import type { Attendance, AttendanceListParams, AttendanceStatus } from "../types";
+import { AttendanceCalendar } from "./attendance-calendar";
+import { AttendanceHistory } from "./attendance-history";
+import { AttendanceKpis } from "./attendance-kpis";
+import { CorrectionsPreview } from "./corrections-preview";
+import { LeaveBalancesPreview } from "./leave-balances-preview";
 
-const LIMIT = 20;
-
-function parseStatus(value: string | null): AttendanceStatus | "" {
-  return value && (ATTENDANCE_STATUSES as readonly string[]).includes(value)
-    ? (value as AttendanceStatus)
-    : "";
-}
+type TabKey = "calendar" | "history" | "balances" | "corrections";
 
 export function AttendanceView() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const { role } = useAuth();
+  const { role, employeeId } = useAuth();
   const canManage = can(role, "attendance.manage");
+  const [tab, setTab] = React.useState<TabKey>("calendar");
 
-  const params: AttendanceListParams = {
-    employee_id: searchParams.get("employee_id") ?? "",
-    status: parseStatus(searchParams.get("status")),
-    from: searchParams.get("from") ?? "",
-    to: searchParams.get("to") ?? "",
-    limit: LIMIT,
-    offset: Math.max(0, Number(searchParams.get("offset") ?? "0") || 0),
-  };
-
-  const query = useAttendanceList(params);
-  const [deleteTarget, setDeleteTarget] = React.useState<Attendance | null>(null);
-
-  function commit(next: URLSearchParams) {
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname);
-  }
-
-  function onFilterChange(patch: Partial<AttendanceFilterValues>) {
-    const next = new URLSearchParams(searchParams.toString());
-    for (const [key, value] of Object.entries(patch)) {
-      if (value) next.set(key, value);
-      else next.delete(key);
-    }
-    next.delete("offset");
-    commit(next);
-  }
-
-  function onPageChange(offset: number) {
-    const next = new URLSearchParams(searchParams.toString());
-    if (offset > 0) next.set("offset", String(offset));
-    else next.delete("offset");
-    commit(next);
-  }
-
-  const addButton = canManage ? (
-    <Button asChild>
-      <Link href="/attendance/new">
-        <Plus className="h-4 w-4" />
-        Record attendance
-      </Link>
-    </Button>
-  ) : null;
-
-  const count = query.data?.total;
+  const actions = (
+    <>
+      <Button variant="secondary" onClick={() => toast.info("Export — coming soon")}>
+        <Download className="h-4 w-4" />
+        Export
+      </Button>
+      {canManage && (
+        <Button asChild>
+          <Link href="/attendance/new">
+            <Plus className="h-4 w-4" />
+            Record attendance
+          </Link>
+        </Button>
+      )}
+    </>
+  );
 
   return (
     <>
       <PageHeader
         title="Attendance"
-        subtitle={
-          count !== undefined ? `${count} ${count === 1 ? "record" : "records"}` : undefined
-        }
-        actions={addButton}
+        subtitle="Track presence, shifts, and leave balances. Corrections can be requested up to 7 days back."
+        actions={actions}
       />
-      <div className="mb-4">
-        <AttendanceFilters
-          values={{
-            employee_id: params.employee_id,
-            status: params.status,
-            from: params.from,
-            to: params.to,
-          }}
-          onChange={onFilterChange}
-        />
-      </div>
-      <AttendanceTable
-        data={query.data}
-        isLoading={query.isLoading}
-        isError={query.isError}
-        onRetry={() => void query.refetch()}
-        onPageChange={onPageChange}
-        canManage={canManage}
-        onRequestDelete={setDeleteTarget}
-        emptyAction={addButton}
+
+      {employeeId && <AttendanceKpis employeeId={employeeId} />}
+
+      <Tabs
+        className="mb-4"
+        value={tab}
+        onChange={(v) => setTab(v as TabKey)}
+        items={[
+          { value: "calendar", label: "Calendar" },
+          { value: "history", label: "History" },
+          { value: "balances", label: "Leave balances" },
+          { value: "corrections", label: "Corrections", count: 3 },
+        ]}
       />
-      <DeleteDialog
-        record={deleteTarget}
-        onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
-        }}
-      />
+
+      {tab === "calendar" &&
+        (employeeId ? (
+          <AttendanceCalendar employeeId={employeeId} />
+        ) : (
+          <EmptyState
+            title="No personal calendar"
+            description="Your account isn't linked to an employee profile, so there's no personal attendance calendar. Use the History tab to browse records."
+          />
+        ))}
+      {tab === "history" && <AttendanceHistory />}
+      {tab === "balances" && <LeaveBalancesPreview />}
+      {tab === "corrections" && <CorrectionsPreview />}
     </>
   );
 }
