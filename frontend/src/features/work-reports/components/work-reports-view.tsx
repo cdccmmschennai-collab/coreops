@@ -26,7 +26,7 @@ function parseStatus(value: string | null): WorkReportStatus | "" {
     : "";
 }
 
-export function WorkReportsView() {
+export function WorkReportsView({ title = "Today's Report" }: { title?: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -82,7 +82,7 @@ export function WorkReportsView() {
   return (
     <>
       <PageHeader
-        title="Work Reports"
+        title={title}
         subtitle={
           count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined
         }
