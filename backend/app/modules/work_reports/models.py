@@ -1,15 +1,14 @@
 """Daily Work Report ORM models (mirrors employees/projects/attendance conventions).
 
 A work report is a *header* — one row per (employee, report_date) — composed of one
-or more *task lines* (work_report_tasks), each attributing minutes to a project.
+or more *task lines* (work_report_tasks), each attributing time/counts to a project.
 
 Operational records: no soft-delete. Only `draft` reports are hard-deletable (enforced
 in the service layer); submitted/approved/rejected reports are retained. `total_minutes`
-on the header is derived (sum of task minutes), set server-side like attendance minutes.
+on the header is derived (sum of non-null task minutes), set server-side.
 
-Relationships follow the codebase convention: FK columns with ondelete semantics, no
-ORM `relationship()` objects (mirrors Project / ProjectMember). Task lines are owned by
-the header via ON DELETE CASCADE; project/employee references use RESTRICT.
+Extended in migration 0006 to carry the fields from the company's existing Google Form
+daily report (day_status, location, counts, remarks, query_text, etc.).
 """
 import enum
 import uuid
@@ -42,6 +41,21 @@ class WorkReportStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class DayStatus(str, enum.Enum):
+    on_duty = "on_duty"
+    half_day = "half_day"
+    on_leave = "on_leave"
+    wfh = "wfh"
+    permission = "permission"
+    comp_off = "comp_off"
+
+
+class WorkLocation(str, enum.Enum):
+    hyderabad = "hyderabad"
+    chennai = "chennai"
+    qatar = "qatar"
+
+
 class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "daily_work_reports"
 
@@ -58,6 +72,32 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
         nullable=False,
         server_default=WorkReportStatus.draft.value,
     )
+    # Google Form fields (migration 0006)
+    day_status: Mapped[DayStatus | None] = mapped_column(
+        SAEnum(DayStatus, name="day_status", values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+    location: Mapped[WorkLocation | None] = mapped_column(
+        SAEnum(WorkLocation, name="work_location", values_callable=lambda e: [m.value for m in e]),
+        nullable=True,
+    )
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    well_head_no: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pm_plant: Mapped[str | None] = mapped_column(Text, nullable=True)
+    task_list_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default=text("0")
+    )
+    task_list_op_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default=text("0")
+    )
+    maintenance_item_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default=text("0")
+    )
+    maintenance_plan_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, server_default=text("0")
+    )
+    # Legacy field — kept for backward compat; new UI writes to `remarks` instead
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     total_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     submitted_at: Mapped[datetime | None] = mapped_column(
@@ -94,15 +134,21 @@ class WorkReportTask(UUIDMixin, Base):
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    minutes_spent: Mapped[int] = mapped_column(Integer, nullable=False)
-    # Lines are replaced wholesale on edit; only creation time is tracked (no updated_at).
+    # minutes_spent is optional — the Google Form has no time field
+    minutes_spent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    activity_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    spares_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     __table_args__ = (
         CheckConstraint(
-            "minutes_spent >= 1 AND minutes_spent <= 1440", name="work_report_tasks_minutes_range"
+            "minutes_spent IS NULL OR (minutes_spent >= 0 AND minutes_spent <= 1440)",
+            name="work_report_tasks_minutes_range",
         ),
         Index("work_report_tasks_report_idx", "report_id"),
         Index("work_report_tasks_project_idx", "project_id"),

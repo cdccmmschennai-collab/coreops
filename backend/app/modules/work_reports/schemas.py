@@ -1,30 +1,37 @@
-"""Daily Work Report pydantic schemas (mirrors attendance/projects).
+"""Daily Work Report pydantic schemas.
 
-Field-level validation lives here (lengths, minutes bounds, >=1 task). Cross-field
-and business rules — future-date, edit window, duplicate (employee, date), project
-membership/active, daily sum <= 1440, and workflow transitions — are enforced in the
-service layer (and the DB constraints). total_minutes is derived server-side and is
-read-only output; it is never accepted on create/update.
+Extended in migration 0006 with Google Form fields (day_status, location,
+remarks, query_text, counts, well_head_no, pm_plant) and optional minutes_spent.
+
+Field-level validation lives here. Cross-field and business rules are enforced
+in the service layer. total_minutes is derived server-side and never accepted
+from the client.
 """
 import uuid
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.work_reports.models import WorkReportStatus
+from app.modules.work_reports.models import DayStatus, WorkLocation, WorkReportStatus
 
-# Bounds from DAILY_WORK_REPORTS_SPEC.md §6.
 _SUMMARY_MAX = 2000
+_REMARKS_MAX = 2000
+_QUERY_MAX = 2000
 _DESCRIPTION_MAX = 2000
 _REVIEW_NOTE_MAX = 1000
-_MIN_TASK_MINUTES = 1
 _MAX_DAY_MINUTES = 1440
 
 
 class WorkReportTaskIn(BaseModel):
     project_id: uuid.UUID
     description: str = Field(min_length=1, max_length=_DESCRIPTION_MAX)
-    minutes_spent: int = Field(ge=_MIN_TASK_MINUTES, le=_MAX_DAY_MINUTES)
+    # minutes_spent is optional — Google Form has no time field
+    minutes_spent: int | None = Field(default=None, ge=0, le=_MAX_DAY_MINUTES)
+    activity_type: str | None = Field(default=None, max_length=200)
+    tags_count: int = Field(default=0, ge=0)
+    docs_count: int = Field(default=0, ge=0)
+    bom_count: int = Field(default=0, ge=0)
+    spares_count: int = Field(default=0, ge=0)
 
 
 class WorkReportTaskOut(BaseModel):
@@ -33,16 +40,43 @@ class WorkReportTaskOut(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
     description: str
-    minutes_spent: int
+    minutes_spent: int | None = None
+    activity_type: str | None = None
+    tags_count: int = 0
+    docs_count: int = 0
+    bom_count: int = 0
+    spares_count: int = 0
 
 
 class WorkReportCreate(BaseModel):
     report_date: date
+    # Google Form fields
+    day_status: DayStatus | None = None
+    location: WorkLocation | None = None
+    remarks: str | None = Field(default=None, max_length=_REMARKS_MAX)
+    query_text: str | None = Field(default=None, max_length=_QUERY_MAX)
+    well_head_no: str | None = Field(default=None, max_length=500)
+    pm_plant: str | None = Field(default=None, max_length=500)
+    task_list_count: int | None = Field(default=None, ge=0)
+    task_list_op_count: int | None = Field(default=None, ge=0)
+    maintenance_item_count: int | None = Field(default=None, ge=0)
+    maintenance_plan_count: int | None = Field(default=None, ge=0)
+    # Legacy field kept for backward compat; new UI sends remarks instead
     summary: str | None = Field(default=None, max_length=_SUMMARY_MAX)
     tasks: list[WorkReportTaskIn] = Field(min_length=1)
 
 
 class WorkReportUpdate(BaseModel):
+    day_status: DayStatus | None = None
+    location: WorkLocation | None = None
+    remarks: str | None = Field(default=None, max_length=_REMARKS_MAX)
+    query_text: str | None = Field(default=None, max_length=_QUERY_MAX)
+    well_head_no: str | None = Field(default=None, max_length=500)
+    pm_plant: str | None = Field(default=None, max_length=500)
+    task_list_count: int | None = Field(default=None, ge=0)
+    task_list_op_count: int | None = Field(default=None, ge=0)
+    maintenance_item_count: int | None = Field(default=None, ge=0)
+    maintenance_plan_count: int | None = Field(default=None, ge=0)
     summary: str | None = Field(default=None, max_length=_SUMMARY_MAX)
     tasks: list[WorkReportTaskIn] | None = Field(default=None, min_length=1)
 
@@ -58,6 +92,18 @@ class WorkReportOut(BaseModel):
     employee_id: uuid.UUID
     report_date: date
     status: WorkReportStatus
+    # Google Form fields
+    day_status: DayStatus | None = None
+    location: WorkLocation | None = None
+    remarks: str | None = None
+    query_text: str | None = None
+    well_head_no: str | None = None
+    pm_plant: str | None = None
+    task_list_count: int | None = None
+    task_list_op_count: int | None = None
+    maintenance_item_count: int | None = None
+    maintenance_plan_count: int | None = None
+    # Legacy
     summary: str | None = None
     total_minutes: int
     tasks: list[WorkReportTaskOut] = []

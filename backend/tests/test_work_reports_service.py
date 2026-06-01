@@ -150,6 +150,32 @@ def test_total_minutes_over_1440_422(db, author):
     assert ei.value.status_code == 422
 
 
+def test_total_minutes_skips_null_tasks(db, author):
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
+    tasks = [
+        WorkReportTaskIn(project_id=p.id, description="timed", minutes_spent=60),
+        WorkReportTaskIn(project_id=p.id, description="no time", minutes_spent=None),
+    ]
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=tasks))
+    assert r.total_minutes == 60  # null task minutes not counted
+
+
+def test_create_with_day_status_and_location_persists(db, author):
+    from app.modules.work_reports.models import DayStatus, WorkLocation
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
+    create = WorkReportCreate(
+        report_date=TODAY,
+        day_status=DayStatus.wfh,
+        location=WorkLocation.chennai,
+        remarks="WFH today",
+        tasks=[_task(p.id)],
+    )
+    r = svc.create_work_report(db, u, create)
+    assert r.day_status == DayStatus.wfh
+    assert r.location == WorkLocation.chennai
+    assert r.remarks == "WFH today"
+
+
 def test_inactive_project_422(db, author):
     u, e, p = author(
         email="a@x.com", code="E-1", proj_code="P-ARCH", proj_status=ProjectStatus.archived

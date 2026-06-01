@@ -86,9 +86,72 @@ def test_create_future_date_422(client, setup_author):
 
 
 def test_create_invalid_minutes_422(client, setup_author):
+    # minutes_spent=0 is now valid; -1 is still invalid
+    a = setup_author()
+    res = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, minutes=-1))
+    assert res.status_code == 422
+
+
+def test_create_with_zero_minutes_succeeds(client, setup_author):
     a = setup_author()
     res = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, minutes=0))
-    assert res.status_code == 422
+    assert res.status_code == 201
+    assert res.json()["total_minutes"] == 0
+
+
+def test_create_with_null_minutes_succeeds(client, setup_author):
+    a = setup_author()
+    payload = {
+        "report_date": TODAY,
+        "tasks": [{"project_id": str(a["project"].id), "description": "work", "minutes_spent": None}],
+    }
+    res = client.post(BASE, headers=a["header"], json=payload)
+    assert res.status_code == 201
+    assert res.json()["total_minutes"] == 0
+    assert res.json()["tasks"][0]["minutes_spent"] is None
+
+
+def test_create_with_day_status_and_location(client, setup_author):
+    a = setup_author()
+    payload = {
+        "report_date": TODAY,
+        "day_status": "wfh",
+        "location": "chennai",
+        "remarks": "Working from home today",
+        "query_text": "Need access to the server",
+        "tasks": [{"project_id": str(a["project"].id), "description": "work", "minutes_spent": 60}],
+    }
+    res = client.post(BASE, headers=a["header"], json=payload)
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["day_status"] == "wfh"
+    assert body["location"] == "chennai"
+    assert body["remarks"] == "Working from home today"
+    assert body["query_text"] == "Need access to the server"
+
+
+def test_create_with_task_counts(client, setup_author):
+    a = setup_author()
+    payload = {
+        "report_date": TODAY,
+        "tasks": [{
+            "project_id": str(a["project"].id),
+            "description": "maintenance",
+            "activity_type": "Inspection",
+            "tags_count": 5,
+            "docs_count": 2,
+            "bom_count": 1,
+            "spares_count": 3,
+        }],
+    }
+    res = client.post(BASE, headers=a["header"], json=payload)
+    assert res.status_code == 201, res.text
+    task = res.json()["tasks"][0]
+    assert task["activity_type"] == "Inspection"
+    assert task["tags_count"] == 5
+    assert task["docs_count"] == 2
+    assert task["bom_count"] == 1
+    assert task["spares_count"] == 3
 
 
 # ---------- list: pagination + filters -------------------------------------

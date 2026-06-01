@@ -107,7 +107,7 @@ def _validate_tasks(db: Session, author_id: uuid.UUID, tasks) -> int:
             raise AppError(
                 "validation_error", "You are not assigned to this project.", 422
             )
-        total += task.minutes_spent
+        total += (task.minutes_spent or 0)
     if total > MAX_DAY_MINUTES:
         raise AppError(
             "validation_error", "Total minutes cannot exceed 1440 for a single day.", 422
@@ -260,6 +260,16 @@ def create_work_report(
         employee_id=me.id,
         report_date=data.report_date,
         status=WorkReportStatus.draft,
+        day_status=data.day_status,
+        location=data.location,
+        remarks=data.remarks,
+        query_text=data.query_text,
+        well_head_no=data.well_head_no,
+        pm_plant=data.pm_plant,
+        task_list_count=data.task_list_count,
+        task_list_op_count=data.task_list_op_count,
+        maintenance_item_count=data.maintenance_item_count,
+        maintenance_plan_count=data.maintenance_plan_count,
         summary=data.summary,
         total_minutes=total,
         created_by=actor.id,
@@ -274,6 +284,11 @@ def create_work_report(
                 project_id=task.project_id,
                 description=task.description,
                 minutes_spent=task.minutes_spent,
+                activity_type=task.activity_type,
+                tags_count=task.tags_count,
+                docs_count=task.docs_count,
+                bom_count=task.bom_count,
+                spares_count=task.spares_count,
             )
         )
     try:
@@ -315,12 +330,24 @@ def update_work_report(
                     project_id=task.project_id,
                     description=task.description,
                     minutes_spent=task.minutes_spent,
+                    activity_type=task.activity_type,
+                    tags_count=task.tags_count,
+                    docs_count=task.docs_count,
+                    bom_count=task.bom_count,
+                    spares_count=task.spares_count,
                 )
             )
         report.total_minutes = total
 
-    if "summary" in fields:
-        report.summary = data.summary
+    # Scalar header fields: update if explicitly provided
+    _HEADER_FIELDS = (
+        "summary", "day_status", "location", "remarks", "query_text",
+        "well_head_no", "pm_plant", "task_list_count", "task_list_op_count",
+        "maintenance_item_count", "maintenance_plan_count",
+    )
+    for field_name in _HEADER_FIELDS:
+        if field_name in fields:
+            setattr(report, field_name, getattr(data, field_name))
 
     # Editing a rejected report returns it to draft and clears the prior review.
     if report.status == WorkReportStatus.rejected:
