@@ -1,0 +1,100 @@
+"use client";
+
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
+import { PageHeader } from "@/components/shell/page-header";
+import { useAuth } from "@/features/auth/auth-provider";
+import { isManagerial } from "@/lib/rbac";
+
+import {
+  WorkReportsFilters,
+  type WorkReportFilterValues,
+} from "./work-reports-filters";
+import { WorkReportsTable } from "./work-reports-table";
+import { useWorkReportList } from "../hooks";
+import { WORK_REPORT_STATUSES } from "../schemas";
+import type { WorkReportListParams, WorkReportStatus } from "../types";
+
+const LIMIT = 20;
+
+function parseStatus(value: string | null): WorkReportStatus | "" {
+  return value && (WORK_REPORT_STATUSES as readonly string[]).includes(value)
+    ? (value as WorkReportStatus)
+    : "";
+}
+
+export function WorkReportsView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { role } = useAuth();
+  const showEmployee = isManagerial(role);
+
+  const params: WorkReportListParams = {
+    employee_id: showEmployee ? searchParams.get("employee_id") ?? "" : "",
+    project_id: searchParams.get("project_id") ?? "",
+    status: parseStatus(searchParams.get("status")),
+    from: searchParams.get("from") ?? "",
+    to: searchParams.get("to") ?? "",
+    limit: LIMIT,
+    offset: Math.max(0, Number(searchParams.get("offset") ?? "0") || 0),
+  };
+
+  const query = useWorkReportList(params);
+
+  function commit(next: URLSearchParams) {
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+  }
+
+  function onFilterChange(patch: Partial<WorkReportFilterValues>) {
+    const next = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(patch)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    next.delete("offset");
+    commit(next);
+  }
+
+  function onPageChange(offset: number) {
+    const next = new URLSearchParams(searchParams.toString());
+    if (offset > 0) next.set("offset", String(offset));
+    else next.delete("offset");
+    commit(next);
+  }
+
+  const count = query.data?.total;
+
+  return (
+    <>
+      <PageHeader
+        title="Work Reports"
+        subtitle={
+          count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined
+        }
+      />
+      <div className="mb-4">
+        <WorkReportsFilters
+          values={{
+            employee_id: params.employee_id,
+            project_id: params.project_id,
+            status: params.status,
+            from: params.from,
+            to: params.to,
+          }}
+          showEmployee={showEmployee}
+          onChange={onFilterChange}
+        />
+      </div>
+      <WorkReportsTable
+        data={query.data}
+        isLoading={query.isLoading}
+        isError={query.isError}
+        onRetry={() => void query.refetch()}
+        onPageChange={onPageChange}
+        showEmployee={showEmployee}
+      />
+    </>
+  );
+}
