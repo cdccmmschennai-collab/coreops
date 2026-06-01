@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   CalendarDays,
+  ClipboardList,
   FolderKanban,
   Home,
   Users,
@@ -31,6 +32,7 @@ const WORKSPACE: NavItem[] = [
   { label: "Employees", href: "/employees", icon: Users },
   { label: "Projects", href: "/projects", icon: FolderKanban },
   { label: "Attendance", href: "/attendance", icon: CalendarDays },
+  { label: "Work Reports", href: "/work-reports", icon: ClipboardList },
   { label: "Reports", href: "/reports", icon: FileText, soon: true },
   { label: "Analytics", href: "/analytics", icon: BarChart3, soon: true },
 ];
