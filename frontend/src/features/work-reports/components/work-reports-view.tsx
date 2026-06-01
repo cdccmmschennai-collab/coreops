@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
-import { isManagerial } from "@/lib/rbac";
+import { can, isManagerial } from "@/lib/rbac";
 
 import {
   WorkReportsFilters,
@@ -29,6 +32,7 @@ export function WorkReportsView() {
   const searchParams = useSearchParams();
   const { role } = useAuth();
   const showEmployee = isManagerial(role);
+  const canCreate = can(role, "report.submit");
 
   const params: WorkReportListParams = {
     employee_id: showEmployee ? searchParams.get("employee_id") ?? "" : "",
@@ -66,6 +70,15 @@ export function WorkReportsView() {
 
   const count = query.data?.total;
 
+  const addButton = canCreate ? (
+    <Button asChild>
+      <Link href="/work-reports/new">
+        <Plus className="h-4 w-4" />
+        New report
+      </Link>
+    </Button>
+  ) : null;
+
   return (
     <>
       <PageHeader
@@ -73,6 +86,7 @@ export function WorkReportsView() {
         subtitle={
           count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined
         }
+        actions={addButton}
       />
       <div className="mb-4">
         <WorkReportsFilters
@@ -94,6 +108,7 @@ export function WorkReportsView() {
         onRetry={() => void query.refetch()}
         onPageChange={onPageChange}
         showEmployee={showEmployee}
+        emptyAction={addButton}
       />
     </>
   );
