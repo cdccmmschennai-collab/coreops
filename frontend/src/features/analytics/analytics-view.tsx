@@ -61,7 +61,7 @@ function aggregateByProject(reports: WorkReport[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const r of reports) {
     for (const t of r.tasks) {
-      map.set(t.project_id, (map.get(t.project_id) ?? 0) + t.minutes_spent);
+      map.set(t.project_id, (map.get(t.project_id) ?? 0) + (t.minutes_spent ?? 0));
     }
   }
   return map;

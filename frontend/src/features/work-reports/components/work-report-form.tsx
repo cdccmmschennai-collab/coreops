@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
 import { formatMinutes } from "@/lib/format";
@@ -32,7 +33,11 @@ import { formatMinutes } from "@/lib/format";
 import { useCreateWorkReport, useUpdateWorkReport } from "../hooks";
 import { useProjectOptions } from "../project-options";
 import {
+  DAY_STATUS_LABEL,
+  DAY_STATUSES,
   EMPTY_TASK_ROW,
+  WORK_LOCATION_LABEL,
+  WORK_LOCATIONS,
   toCreateBody,
   toUpdateBody,
   workReportFormSchema,
@@ -44,6 +49,8 @@ interface WorkReportFormProps {
   defaultValues: WorkReportFormValues;
   reportId?: string;
 }
+
+const ALL_NONE = "__none__";
 
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
@@ -66,7 +73,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const watchedTasks = form.watch("tasks");
   const totalMinutes = (watchedTasks ?? []).reduce((sum, t) => {
     const n = Number(t?.minutes_spent);
-    return sum + (Number.isFinite(n) ? n : 0);
+    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
   }, 0);
 
   const tasksError = form.formState.errors.tasks?.message;
@@ -100,7 +107,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         )}
         <Form {...form}>
           <form className="space-y-6" onSubmit={form.handleSubmit(onSubmit)} noValidate>
-            <div className="grid gap-4 sm:grid-cols-2">
+
+            {/* ── Row 1: Date, Day Status, Location ── */}
+            <div className="grid gap-4 sm:grid-cols-3">
               <FormField
                 control={form.control}
                 name="report_date"
@@ -114,95 +123,245 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                   </FormItem>
                 )}
               />
+              <FormField
+                control={form.control}
+                name="day_status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Day Status</FormLabel>
+                    <Select
+                      value={field.value ?? ALL_NONE}
+                      onValueChange={(v) => field.onChange(v === ALL_NONE ? undefined : v)}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value={ALL_NONE}>— Not specified —</SelectItem>
+                        {DAY_STATUSES.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {DAY_STATUS_LABEL[s]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="location"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Office Location</FormLabel>
+                    <Select
+                      value={field.value ?? ALL_NONE}
+                      onValueChange={(v) => field.onChange(v === ALL_NONE ? undefined : v)}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select location" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value={ALL_NONE}>— Not specified —</SelectItem>
+                        {WORK_LOCATIONS.map((l) => (
+                          <SelectItem key={l} value={l}>
+                            {WORK_LOCATION_LABEL[l]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
 
-            <FormField
-              control={form.control}
-              name="summary"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Summary (optional)</FormLabel>
-                  <FormControl>
-                    <Textarea rows={3} placeholder="Overall note for the day" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {/* ── Row 2: Well Head, PM Plant ── */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                control={form.control}
+                name="well_head_no"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Well Head No. <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Input placeholder="If worked on well head" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="pm_plant"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>PM Plant <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Input placeholder="PM plant identifier" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
+            {/* ── Row 3: Maintenance Counters ── */}
+            <div>
+              <p className="mb-2 text-sm font-medium">Maintenance counts</p>
+              <div className="grid gap-3 sm:grid-cols-4">
+                {(
+                  [
+                    ["task_list_count",        "Task List"],
+                    ["task_list_op_count",     "Task List Ops"],
+                    ["maintenance_item_count", "Maint. Items"],
+                    ["maintenance_plan_count", "Maint. Plans"],
+                  ] as const
+                ).map(([name, label]) => (
+                  <FormField
+                    key={name}
+                    control={form.control}
+                    name={name}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">{label}</FormLabel>
+                        <FormControl>
+                          <Input type="number" min={0} placeholder="0" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* ── Project Tasks ── */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium">Tasks</h3>
-                <span className="text-sm text-muted-foreground">
-                  Total: <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
-                </span>
+                <h3 className="text-sm font-medium">Project activities</h3>
+                {totalMinutes > 0 && (
+                  <span className="text-sm text-muted-foreground">
+                    Total: <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
+                  </span>
+                )}
               </div>
 
               {fields.map((field, index) => (
                 <div
                   key={field.id}
-                  className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_8rem_auto] sm:items-start"
+                  className="space-y-2 rounded-lg border border-border p-3"
                 >
-                  <FormField
-                    control={form.control}
-                    name={`tasks.${index}.project_id`}
-                    render={({ field: f }) => (
-                      <FormItem>
-                        <FormLabel className="sr-only">Project</FormLabel>
-                        <Select value={f.value} onValueChange={f.onChange}>
+                  {/* Row A: Project | Description | Minutes | Remove */}
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_7rem_auto] sm:items-start">
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.project_id`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="sr-only">Project</FormLabel>
+                          <Select value={f.value} onValueChange={f.onChange}>
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Project" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {projects.map((p) => (
+                                <SelectItem key={p.id} value={p.id}>
+                                  {p.code} — {p.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.description`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="sr-only">Description</FormLabel>
                           <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder="Project" />
-                            </SelectTrigger>
+                            <Input placeholder="What did you work on?" {...f} />
                           </FormControl>
-                          <SelectContent>
-                            {projects.map((p) => (
-                              <SelectItem key={p.id} value={p.id}>
-                                {p.name} · {p.code}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name={`tasks.${index}.description`}
-                    render={({ field: f }) => (
-                      <FormItem>
-                        <FormLabel className="sr-only">Description</FormLabel>
-                        <FormControl>
-                          <Input placeholder="What did you work on?" {...f} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={form.control}
-                    name={`tasks.${index}.minutes_spent`}
-                    render={({ field: f }) => (
-                      <FormItem>
-                        <FormLabel className="sr-only">Minutes</FormLabel>
-                        <FormControl>
-                          <Input type="number" min={1} max={1440} placeholder="Min" {...f} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => remove(index)}
-                    disabled={fields.length === 1}
-                    aria-label="Remove task"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.minutes_spent`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="sr-only">Minutes (opt.)</FormLabel>
+                          <FormControl>
+                            <Input type="number" min={0} max={1440} placeholder="Min (opt.)" {...f} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => remove(index)}
+                      disabled={fields.length === 1}
+                      aria-label="Remove activity"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  {/* Row B: Activity Type | Tags | Docs | BOM | Spares */}
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_repeat(4,5rem)]">
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.activity_type`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">Activity type</FormLabel>
+                          <FormControl>
+                            <Input placeholder="e.g. Inspection, Testing…" {...f} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    {(
+                      [
+                        ["tags_count",   "Tags"],
+                        ["docs_count",   "Docs"],
+                        ["bom_count",    "BOM"],
+                        ["spares_count", "Spares"],
+                      ] as const
+                    ).map(([name, label]) => (
+                      <FormField
+                        key={name}
+                        control={form.control}
+                        name={`tasks.${index}.${name}`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground">{label}</FormLabel>
+                            <FormControl>
+                              <Input type="number" min={0} placeholder="0" {...f} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    ))}
+                  </div>
                 </div>
               ))}
 
@@ -216,8 +375,40 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 onClick={() => append({ ...EMPTY_TASK_ROW })}
               >
                 <Plus className="h-4 w-4" />
-                Add task
+                Add activity
               </Button>
+            </div>
+
+            <Separator />
+
+            {/* ── Remarks & Query ── */}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                control={form.control}
+                name="remarks"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Day Remarks <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Textarea rows={3} placeholder="What did you accomplish today?" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="query_text"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Query / Issues <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormControl>
+                      <Textarea rows={3} placeholder="Any blockers or questions?" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
 
             <div className="flex justify-end gap-2 pt-2">

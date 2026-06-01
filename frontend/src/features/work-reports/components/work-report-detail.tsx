@@ -30,13 +30,14 @@ import { RejectDialog } from "./reject-dialog";
 import { StatusBadge } from "./status-badge";
 import { useApproveWorkReport, useSubmitWorkReport, useWorkReport } from "../hooks";
 import { useProjectOptions } from "../project-options";
+import { DAY_STATUS_LABEL, WORK_LOCATION_LABEL, type DayStatus, type WorkLocation } from "../schemas";
 import type { WorkReport } from "../types";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 py-2 text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <span className="text-right font-medium">{value}</span>
+      <span className="text-right font-medium">{value ?? "—"}</span>
     </div>
   );
 }
@@ -71,7 +72,7 @@ export function WorkReportDetail({ id }: { id: string }) {
         title={notFound ? "Report not found" : "Couldn't load report"}
         message={
           notFound
-            ? "This work report may have been deleted, or you don't have access to it."
+            ? "This report may have been deleted, or you don't have access to it."
             : "Please try again."
         }
         onRetry={notFound ? undefined : () => void query.refetch()}
@@ -83,8 +84,23 @@ export function WorkReportDetail({ id }: { id: string }) {
   const isAuthor = !!employeeId && report.employee_id === employeeId;
   const isEditable = report.status === "draft" || report.status === "rejected";
   const canAuthorAct = isAuthor && can(role, "report.submit");
-  const canReview =
-    !isAuthor && report.status === "submitted" && can(role, "report.review");
+  const canReview = !isAuthor && report.status === "submitted" && can(role, "report.review");
+
+  const dayStatusLabel =
+    report.day_status
+      ? (DAY_STATUS_LABEL as Record<string, string>)[report.day_status] ?? report.day_status
+      : null;
+
+  const locationLabel =
+    report.location
+      ? (WORK_LOCATION_LABEL as Record<string, string>)[report.location] ?? report.location
+      : null;
+
+  const hasCounters =
+    (report.task_list_count ?? 0) > 0 ||
+    (report.task_list_op_count ?? 0) > 0 ||
+    (report.maintenance_item_count ?? 0) > 0 ||
+    (report.maintenance_plan_count ?? 0) > 0;
 
   async function onSubmit() {
     try {
@@ -144,7 +160,7 @@ export function WorkReportDetail({ id }: { id: string }) {
   return (
     <>
       <Link href="/work-reports" className="text-sm text-primary hover:underline">
-        ← Work Reports
+        ← Today&apos;s Report
       </Link>
       <PageHeader
         className="mt-2"
@@ -162,6 +178,7 @@ export function WorkReportDetail({ id }: { id: string }) {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_1fr]">
+        {/* Details card */}
         <Card>
           <CardHeader>
             <CardTitle>Details</CardTitle>
@@ -170,7 +187,11 @@ export function WorkReportDetail({ id }: { id: string }) {
             <Row label="Employee" value={employeeName} />
             <Row label="Date" value={report.report_date} />
             <Row label="Status" value={<StatusBadge status={report.status} />} />
-            <Row label="Total" value={formatMinutes(report.total_minutes)} />
+            {dayStatusLabel && <Row label="Day Status" value={dayStatusLabel} />}
+            {locationLabel && <Row label="Location" value={locationLabel} />}
+            {report.well_head_no && <Row label="Well Head No." value={report.well_head_no} />}
+            {report.pm_plant && <Row label="PM Plant" value={report.pm_plant} />}
+            <Row label="Total" value={report.total_minutes > 0 ? formatMinutes(report.total_minutes) : "—"} />
             <Row label="Submitted" value={formatDateTime(report.submitted_at)} />
             {(report.status === "approved" || report.status === "rejected") && (
               <Row label="Reviewed" value={formatDateTime(report.reviewed_at)} />
@@ -179,7 +200,37 @@ export function WorkReportDetail({ id }: { id: string }) {
         </Card>
 
         <div className="space-y-6">
-          {report.summary && (
+          {/* Maintenance counters (shown if any > 0) */}
+          {hasCounters && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Maintenance counts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-x-8 gap-y-1">
+                  <Row label="Task List" value={report.task_list_count ?? 0} />
+                  <Row label="Task List Ops" value={report.task_list_op_count ?? 0} />
+                  <Row label="Maint. Items" value={report.maintenance_item_count ?? 0} />
+                  <Row label="Maint. Plans" value={report.maintenance_plan_count ?? 0} />
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Remarks (new field) */}
+          {report.remarks && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Day Remarks</CardTitle>
+              </CardHeader>
+              <CardContent className="whitespace-pre-wrap text-sm text-muted-foreground">
+                {report.remarks}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Legacy summary — shown only for old reports that have it */}
+          {report.summary && !report.remarks && (
             <Card>
               <CardHeader>
                 <CardTitle>Summary</CardTitle>
@@ -190,16 +241,34 @@ export function WorkReportDetail({ id }: { id: string }) {
             </Card>
           )}
 
+          {/* Query / Issues */}
+          {report.query_text && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Query / Issues</CardTitle>
+              </CardHeader>
+              <CardContent className="whitespace-pre-wrap text-sm text-muted-foreground">
+                {report.query_text}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Activities table */}
           <Card>
             <CardHeader>
-              <CardTitle>Tasks</CardTitle>
+              <CardTitle>Project activities</CardTitle>
             </CardHeader>
             <CardContent className="px-0">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Project</TableHead>
+                    <TableHead>Activity</TableHead>
                     <TableHead>Description</TableHead>
+                    <TableHead className="text-right">Tags</TableHead>
+                    <TableHead className="text-right">Docs</TableHead>
+                    <TableHead className="text-right">BOM</TableHead>
+                    <TableHead className="text-right">Spares</TableHead>
                     <TableHead className="text-right">Time</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -209,11 +278,18 @@ export function WorkReportDetail({ id }: { id: string }) {
                       <TableCell className="font-medium">
                         {projById.get(t.project_id) ?? "—"}
                       </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {t.activity_type ?? "—"}
+                      </TableCell>
                       <TableCell className="whitespace-pre-wrap text-muted-foreground">
                         {t.description}
                       </TableCell>
+                      <TableCell className="text-right tabular">{t.tags_count ?? 0}</TableCell>
+                      <TableCell className="text-right tabular">{t.docs_count ?? 0}</TableCell>
+                      <TableCell className="text-right tabular">{t.bom_count ?? 0}</TableCell>
+                      <TableCell className="text-right tabular">{t.spares_count ?? 0}</TableCell>
                       <TableCell className="text-right tabular">
-                        {formatMinutes(t.minutes_spent)}
+                        {t.minutes_spent != null ? formatMinutes(t.minutes_spent) : "—"}
                       </TableCell>
                     </TableRow>
                   ))}

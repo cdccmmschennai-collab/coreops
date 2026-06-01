@@ -506,6 +506,11 @@ export interface components {
             /** Check Out At */
             check_out_at?: string | null;
         };
+        /**
+         * DayStatus
+         * @enum {string}
+         */
+        DayStatus: "on_duty" | "half_day" | "on_leave" | "wfh" | "permission" | "comp_off";
         /** EmployeeCreate */
         EmployeeCreate: {
             /** Employee Code */
@@ -826,6 +831,11 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /**
+         * WorkLocation
+         * @enum {string}
+         */
+        WorkLocation: "hyderabad" | "chennai" | "qatar";
         /** WorkReportCreate */
         WorkReportCreate: {
             /**
@@ -833,6 +843,24 @@ export interface components {
              * Format: date
              */
             report_date: string;
+            day_status?: components["schemas"]["DayStatus"] | null;
+            location?: components["schemas"]["WorkLocation"] | null;
+            /** Remarks */
+            remarks?: string | null;
+            /** Query Text */
+            query_text?: string | null;
+            /** Well Head No */
+            well_head_no?: string | null;
+            /** Pm Plant */
+            pm_plant?: string | null;
+            /** Task List Count */
+            task_list_count?: number | null;
+            /** Task List Op Count */
+            task_list_op_count?: number | null;
+            /** Maintenance Item Count */
+            maintenance_item_count?: number | null;
+            /** Maintenance Plan Count */
+            maintenance_plan_count?: number | null;
             /** Summary */
             summary?: string | null;
             /** Tasks */
@@ -856,6 +884,24 @@ export interface components {
              */
             report_date: string;
             status: components["schemas"]["WorkReportStatus"];
+            day_status?: components["schemas"]["DayStatus"] | null;
+            location?: components["schemas"]["WorkLocation"] | null;
+            /** Remarks */
+            remarks?: string | null;
+            /** Query Text */
+            query_text?: string | null;
+            /** Well Head No */
+            well_head_no?: string | null;
+            /** Pm Plant */
+            pm_plant?: string | null;
+            /** Task List Count */
+            task_list_count?: number | null;
+            /** Task List Op Count */
+            task_list_op_count?: number | null;
+            /** Maintenance Item Count */
+            maintenance_item_count?: number | null;
+            /** Maintenance Plan Count */
+            maintenance_plan_count?: number | null;
             /** Summary */
             summary?: string | null;
             /** Total Minutes */
@@ -910,7 +956,29 @@ export interface components {
             /** Description */
             description: string;
             /** Minutes Spent */
-            minutes_spent: number;
+            minutes_spent?: number | null;
+            /** Activity Type */
+            activity_type?: string | null;
+            /**
+             * Tags Count
+             * @default 0
+             */
+            tags_count: number;
+            /**
+             * Docs Count
+             * @default 0
+             */
+            docs_count: number;
+            /**
+             * Bom Count
+             * @default 0
+             */
+            bom_count: number;
+            /**
+             * Spares Count
+             * @default 0
+             */
+            spares_count: number;
         };
         /** WorkReportTaskOut */
         WorkReportTaskOut: {
@@ -927,10 +995,50 @@ export interface components {
             /** Description */
             description: string;
             /** Minutes Spent */
-            minutes_spent: number;
+            minutes_spent?: number | null;
+            /** Activity Type */
+            activity_type?: string | null;
+            /**
+             * Tags Count
+             * @default 0
+             */
+            tags_count: number;
+            /**
+             * Docs Count
+             * @default 0
+             */
+            docs_count: number;
+            /**
+             * Bom Count
+             * @default 0
+             */
+            bom_count: number;
+            /**
+             * Spares Count
+             * @default 0
+             */
+            spares_count: number;
         };
         /** WorkReportUpdate */
         WorkReportUpdate: {
+            day_status?: components["schemas"]["DayStatus"] | null;
+            location?: components["schemas"]["WorkLocation"] | null;
+            /** Remarks */
+            remarks?: string | null;
+            /** Query Text */
+            query_text?: string | null;
+            /** Well Head No */
+            well_head_no?: string | null;
+            /** Pm Plant */
+            pm_plant?: string | null;
+            /** Task List Count */
+            task_list_count?: number | null;
+            /** Task List Op Count */
+            task_list_op_count?: number | null;
+            /** Maintenance Item Count */
+            maintenance_item_count?: number | null;
+            /** Maintenance Plan Count */
+            maintenance_plan_count?: number | null;
             /** Summary */
             summary?: string | null;
             /** Tasks */
