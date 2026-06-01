@@ -65,4 +65,5 @@ class UserPage(BaseModel):
 
 class Me(BaseModel):
     user: UserOut
-    employee: None = None  # employees table arrives in the next phase
+    employee: None = None  # reserved for a future embedded employee object
+    employee_id: uuid.UUID | None = None  # linked employee profile, if any

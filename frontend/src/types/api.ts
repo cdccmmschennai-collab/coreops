@@ -13,7 +13,8 @@ export interface User {
 
 export interface Me {
   user: User;
-  employee: null; // employees table arrives in a later phase
+  employee: null; // reserved for a future embedded employee object
+  employee_id: string | null; // linked employee profile, if any
 }
 
 export interface TokenResponse {

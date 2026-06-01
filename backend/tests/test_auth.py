@@ -39,6 +39,15 @@ def test_me_returns_current_user(client, auth_header):
     assert body["user"]["email"] == "me@example.com"
     assert body["user"]["role"] == "manager"
     assert body["employee"] is None
+    assert body["employee_id"] is None
+
+
+def test_me_includes_linked_employee_id(client, make_user, make_employee, login):
+    user = make_user("linked@example.com", "password123", UserRole.employee)
+    emp = make_employee(employee_code="E-100", user_id=user.id)
+    headers = login("linked@example.com")
+    body = client.get("/api/v1/auth/me", headers=headers).json()
+    assert body["employee_id"] == str(emp.id)
 
 
 def test_me_without_token_401(client):

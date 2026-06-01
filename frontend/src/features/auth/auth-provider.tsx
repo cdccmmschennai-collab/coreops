@@ -14,6 +14,7 @@ interface AuthContextValue {
   status: AuthStatus;
   user: User | undefined;
   role: Role | undefined;
+  employeeId: string | null;
   login: (accessToken: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -72,6 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     status,
     user,
     role: user?.role,
+    employeeId: meQuery.data?.employee_id ?? null,
     login,
     logout,
   };

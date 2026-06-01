@@ -620,6 +620,8 @@ export interface components {
             user: components["schemas"]["UserOut"];
             /** Employee */
             employee?: null;
+            /** Employee Id */
+            employee_id?: string | null;
         };
         /** PasswordUpdate */
         PasswordUpdate: {

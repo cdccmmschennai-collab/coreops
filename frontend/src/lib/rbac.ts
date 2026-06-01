@@ -8,6 +8,7 @@ export type Capability =
   | "user.manage" // admin: Settings → Users & Roles
   | "employee.manage" // admin: create/edit employees
   | "project.manage" // admin: create/edit/archive projects
+  | "report.submit" // admin/manager/employee: create/edit/submit/delete own reports
   | "report.review" // manager/admin: approve/reject reports
   | "attendance.viewTeam" // manager/admin: team attendance
   | "attendance.manage"; // admin: create/edit/delete attendance records
@@ -16,6 +17,7 @@ const MATRIX: Record<Capability, Role[]> = {
   "user.manage": ["admin"],
   "employee.manage": ["admin"],
   "project.manage": ["admin"],
+  "report.submit": ["admin", "manager", "employee"],
   "report.review": ["admin", "manager"],
   "attendance.viewTeam": ["admin", "manager"],
   "attendance.manage": ["admin"],

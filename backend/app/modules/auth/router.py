@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_claims, get_current_user
 from app.core.security import revoke_token
 from app.modules.auth import service
+from app.modules.employees.service import _current_employee
 from app.modules.users.models import User
 from app.modules.users.schemas import LoginRequest, Me, TokenResponse, UserOut
 
@@ -26,5 +27,12 @@ def logout(claims: dict = Depends(get_current_claims)) -> Response:
 
 
 @router.get("/me", response_model=Me)
-def me(current: User = Depends(get_current_user)) -> Me:
-    return Me(user=UserOut.model_validate(current))
+def me(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Me:
+    employee = _current_employee(db, current)
+    return Me(
+        user=UserOut.model_validate(current),
+        employee_id=employee.id if employee else None,
+    )
