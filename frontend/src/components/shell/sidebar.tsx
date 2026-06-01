@@ -16,7 +16,7 @@ import {
 
 import { Brand } from "@/components/shell/brand";
 import { useAuth } from "@/features/auth/auth-provider";
-import { isManagerial } from "@/lib/rbac";
+import { can } from "@/lib/rbac";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -34,11 +34,11 @@ const WORKSPACE: NavItem[] = [
   { label: "Attendance", href: "/attendance", icon: CalendarDays },
   { label: "Work Reports", href: "/work-reports", icon: ClipboardList },
   { label: "Reports", href: "/reports", icon: FileText, soon: true },
-  { label: "Analytics", href: "/analytics", icon: BarChart3, soon: true },
+  { label: "Analytics", href: "/analytics", icon: BarChart3 },
 ];
 
 const MANAGE: NavItem[] = [
-  { label: "Settings", href: "/settings", icon: Settings, soon: true },
+  { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 function NavLink({ item, active }: { item: NavItem; active: boolean }) {
@@ -100,7 +100,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         />
       ))}
 
-      {isManagerial(role) && (
+      {can(role, "user.manage") && (
         <>
           <p className="px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Manage

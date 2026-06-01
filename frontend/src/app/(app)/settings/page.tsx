@@ -1,14 +1,5 @@
-import { Suspense } from "react";
-
-import { RequireCapability } from "@/components/auth/require-capability";
-import { UsersView } from "@/features/users/components/users-view";
+import { SettingsView } from "@/features/settings/settings-view";
 
 export default function SettingsPage() {
-  return (
-    <RequireCapability capability="user.manage">
-      <Suspense>
-        <UsersView />
-      </Suspense>
-    </RequireCapability>
-  );
+  return <SettingsView />;
 }

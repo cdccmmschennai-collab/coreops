@@ -21,7 +21,7 @@ function parseRole(value: string | null): UserRole | "" {
   return value && (USER_ROLES as readonly string[]).includes(value) ? (value as UserRole) : "";
 }
 
-export function UsersView() {
+export function UsersView({ hideHeader = false }: { hideHeader?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -82,11 +82,13 @@ export function UsersView() {
 
   return (
     <>
-      <PageHeader
-        title="Users & Roles"
-        subtitle={count !== undefined ? `${count} ${count === 1 ? "user" : "users"}` : undefined}
-        actions={addButton}
-      />
+      {!hideHeader && (
+        <PageHeader
+          title="Users & Roles"
+          subtitle={count !== undefined ? `${count} ${count === 1 ? "user" : "users"}` : undefined}
+          actions={addButton}
+        />
+      )}
       <div className="mb-4">
         <UsersFilters values={{ q, role: roleFilter }} onChange={onFilterChange} />
       </div>
