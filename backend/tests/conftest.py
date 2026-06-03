@@ -26,6 +26,7 @@ from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus  # noqa: E402
 from app.modules.employees.models import Employee, EmployeeStatus  # noqa: E402
+from app.modules.offices.models import Office  # noqa: E402
 from app.modules.projects.models import (  # noqa: E402
     Project,
     ProjectMember,
@@ -62,7 +63,7 @@ def _clean_state():
             text(
                 "TRUNCATE TABLE work_report_tasks, daily_work_reports, "
                 "attendance_records, project_members, projects, "
-                "employees, users RESTART IDENTITY CASCADE"
+                "employees, offices, users RESTART IDENTITY CASCADE"
             )
         )
         db.commit()
@@ -199,6 +200,36 @@ def make_project_member(db):
         db.commit()
         db.refresh(member)
         return member
+
+    return _make
+
+
+@pytest.fixture()
+def make_office(db):
+    def _make(
+        *,
+        name: str = "Test Office",
+        timezone: str = "Asia/Kolkata",
+        shift_start: str = "09:00",
+        shift_end: str = "17:30",
+        break_minutes: int = 30,
+        is_active: bool = True,
+    ) -> Office:
+        from datetime import time as dtime
+        h_s, m_s = map(int, shift_start.split(":"))
+        h_e, m_e = map(int, shift_end.split(":"))
+        office = Office(
+            name=name,
+            timezone=timezone,
+            shift_start=dtime(h_s, m_s),
+            shift_end=dtime(h_e, m_e),
+            break_minutes=break_minutes,
+            is_active=is_active,
+        )
+        db.add(office)
+        db.commit()
+        db.refresh(office)
+        return office
 
     return _make
 

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.schemas import EmployeeCreate, EmployeeUpdate
+from app.modules.offices.models import Office
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
@@ -119,6 +120,14 @@ def _validate_manager(
         raise AppError("validation_error", "Manager not found.", 422)
 
 
+def _validate_office(db: Session, office_id: uuid.UUID | None) -> None:
+    if office_id is None:
+        return
+    office = db.get(Office, office_id)
+    if office is None:
+        raise AppError("validation_error", "Office not found.", 422)
+
+
 def create_employee(db: Session, actor: User, data: EmployeeCreate) -> Employee:
     if db.execute(
         select(Employee).where(
@@ -146,6 +155,7 @@ def create_employee(db: Session, actor: User, data: EmployeeCreate) -> Employee:
             raise AppError("conflict", "This user is already linked to an employee.", 409)
 
     _validate_manager(db, data.manager_id)
+    _validate_office(db, data.office_id)
 
     emp = Employee(**data.model_dump(), created_by=actor.id, updated_by=actor.id)
     db.add(emp)
@@ -166,6 +176,8 @@ def update_employee(
 
     if "manager_id" in fields:
         _validate_manager(db, fields["manager_id"], self_id=emp.id)
+    if "office_id" in fields:
+        _validate_office(db, fields["office_id"])
 
     if fields.get("work_email"):
         clash = db.execute(

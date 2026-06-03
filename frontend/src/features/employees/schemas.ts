@@ -27,6 +27,7 @@ export const employeeFormSchema = z.object({
   date_of_joining: z.string(),
   status: z.enum(EMPLOYEE_STATUSES),
   manager_id: z.string(),
+  office_id: z.string(),
   user_id: z.string(),
 });
 
@@ -43,6 +44,7 @@ export const EMPTY_EMPLOYEE_FORM: EmployeeFormValues = {
   date_of_joining: "",
   status: "active",
   manager_id: "",
+  office_id: "",
   user_id: "",
 };
 
@@ -60,6 +62,7 @@ export function toCreateBody(v: EmployeeFormValues): EmployeeCreateBody {
     designation: orNull(v.designation),
     date_of_joining: orNull(v.date_of_joining),
     manager_id: orNull(v.manager_id),
+    office_id: orNull(v.office_id),
     user_id: orNull(v.user_id),
   };
 }
@@ -76,5 +79,6 @@ export function toUpdateBody(v: EmployeeFormValues): EmployeeUpdateBody {
     designation: orNull(v.designation),
     date_of_joining: orNull(v.date_of_joining),
     manager_id: orNull(v.manager_id),
+    office_id: orNull(v.office_id),
   };
 }

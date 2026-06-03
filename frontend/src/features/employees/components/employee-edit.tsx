@@ -46,6 +46,7 @@ export function EmployeeEdit({ id }: { id: string }) {
     date_of_joining: emp.date_of_joining ?? "",
     status: emp.status,
     manager_id: emp.manager_id ?? "",
+    office_id: emp.office_id ?? "",
     user_id: emp.user_id ?? "",
   };
 

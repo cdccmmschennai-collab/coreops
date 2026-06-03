@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useOffices } from "@/features/offices/hooks";
 import { useUser } from "@/features/users/hooks";
 import { AppError } from "@/lib/api-client";
 import { can } from "@/lib/rbac";
@@ -42,6 +43,10 @@ export function EmployeeDetail({ id }: { id: string }) {
     enabled: Boolean(emp?.manager_id),
   });
   const linkedUserQuery = useUser(emp?.user_id, canManage && Boolean(emp?.user_id));
+  const officesQuery = useOffices(canManage && Boolean(emp?.office_id));
+  const officeName = emp?.office_id
+    ? (officesQuery.data?.items.find((o) => o.id === emp.office_id)?.name ?? emp.office_id)
+    : null;
 
   const [confirm, setConfirm] = React.useState<Employee | null>(null);
 
@@ -110,6 +115,7 @@ export function EmployeeDetail({ id }: { id: string }) {
             <Row label="Department" value={emp.department ?? "—"} />
             <Row label="Designation" value={emp.designation ?? "—"} />
             <Row label="Join date" value={emp.date_of_joining ?? "—"} />
+            <Row label="Office" value={officeName ?? "—"} />
             <Row label="Status" value={<StatusBadge status={emp.status} />} />
           </CardContent>
         </Card>

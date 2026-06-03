@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useOffices } from "@/features/offices/hooks";
 import { useUsers } from "@/features/users/hooks";
 import { AppError } from "@/lib/api-client";
 
@@ -70,6 +71,10 @@ export function EmployeeForm({ mode, defaultValues, employeeId }: EmployeeFormPr
   const managerOptions = (managersQuery.data?.items ?? []).filter(
     (e) => e.id !== employeeId,
   );
+
+  // Office options.
+  const officesQuery = useOffices();
+  const officeOptions = (officesQuery.data?.items ?? []).filter((o) => o.is_active);
 
   // User-account options (create mode only — admin).
   const usersQuery = useUsers(mode === "create");
@@ -265,6 +270,34 @@ export function EmployeeForm({ mode, defaultValues, employeeId }: EmployeeFormPr
                         {managerOptions.map((m) => (
                           <SelectItem key={m.id} value={m.id}>
                             {m.full_name} · {m.employee_code}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="office_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Office / Branch</FormLabel>
+                    <Select
+                      value={field.value === "" ? NONE : field.value}
+                      onValueChange={(v) => field.onChange(v === NONE ? "" : v)}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="No office assigned" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value={NONE}>No office assigned</SelectItem>
+                        {officeOptions.map((o) => (
+                          <SelectItem key={o.id} value={o.id}>
+                            {o.name} · {o.timezone}
                           </SelectItem>
                         ))}
                       </SelectContent>
