@@ -159,8 +159,8 @@ export function WorkReportDetail({ id }: { id: string }) {
 
   return (
     <>
-      <Link href="/work-reports" className="text-sm text-primary hover:underline">
-        ← Today&apos;s Report
+      <Link href="/reports" className="text-sm text-primary hover:underline">
+        ← Reports
       </Link>
       <PageHeader
         className="mt-2"
@@ -310,7 +310,7 @@ export function WorkReportDetail({ id }: { id: string }) {
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-        onDone={() => router.push("/work-reports")}
+        onDone={() => router.push("/reports")}
       />
     </>
   );

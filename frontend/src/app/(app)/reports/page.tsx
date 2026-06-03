@@ -5,7 +5,7 @@ import { WorkReportsView } from "@/features/work-reports/components/work-reports
 export default function MyReportsPage() {
   return (
     <Suspense>
-      <WorkReportsView title="My Reports" />
+      <WorkReportsView title="Reports" />
     </Suspense>
   );
 }

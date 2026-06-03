@@ -85,7 +85,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         mode === "create"
           ? await createMutation.mutateAsync(toCreateBody(values))
           : await updateMutation.mutateAsync(toUpdateBody(values));
-      toast.success(mode === "create" ? "Draft report created" : "Changes saved");
+      toast.success(mode === "create" ? "Draft saved" : "Changes saved");
       router.push(`/work-reports/${result.id}`);
     } catch (error) {
       setFormError(
@@ -421,7 +421,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 Cancel
               </Button>
               <Button type="submit" loading={isPending}>
-                {mode === "create" ? "Create draft" : "Save changes"}
+                {mode === "create" ? "Save Draft" : "Save changes"}
               </Button>
             </div>
           </form>

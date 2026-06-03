@@ -26,7 +26,13 @@ function parseStatus(value: string | null): WorkReportStatus | "" {
     : "";
 }
 
-export function WorkReportsView({ title = "Today's Report" }: { title?: string }) {
+function roleSubtitle(role: ReturnType<typeof useAuth>["role"]): string | undefined {
+  if (role === "admin") return "All employees";
+  if (role === "manager") return "Your team";
+  return undefined;
+}
+
+export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -69,6 +75,9 @@ export function WorkReportsView({ title = "Today's Report" }: { title?: string }
   }
 
   const count = query.data?.total;
+  const scopeLabel = roleSubtitle(role);
+  const countLabel = count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined;
+  const subtitle = [scopeLabel, countLabel].filter(Boolean).join(" · ") || undefined;
 
   const addButton = canCreate ? (
     <Button asChild>
@@ -83,9 +92,7 @@ export function WorkReportsView({ title = "Today's Report" }: { title?: string }
     <>
       <PageHeader
         title={title}
-        subtitle={
-          count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined
-        }
+        subtitle={subtitle}
         actions={addButton}
       />
       <div className="mb-4">
