@@ -26,6 +26,7 @@ from app.core.security import hash_password  # noqa: E402
 from app.main import app  # noqa: E402
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus  # noqa: E402
 from app.modules.employees.models import Employee, EmployeeStatus  # noqa: E402
+from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType  # noqa: E402
 from app.modules.offices.models import Office  # noqa: E402
 from app.modules.projects.models import (  # noqa: E402
     Project,
@@ -62,7 +63,7 @@ def _clean_state():
         db.execute(
             text(
                 "TRUNCATE TABLE work_report_tasks, daily_work_reports, "
-                "attendance_records, project_members, projects, "
+                "attendance_records, leave_requests, project_members, projects, "
                 "employees, offices, users RESTART IDENTITY CASCADE"
             )
         )
@@ -230,6 +231,38 @@ def make_office(db):
         db.commit()
         db.refresh(office)
         return office
+
+    return _make
+
+
+@pytest.fixture()
+def make_leave_request(db):
+    def _make(
+        *,
+        employee_id,
+        leave_type: LeaveType = LeaveType.casual,
+        start_date,
+        end_date,
+        reason: str | None = "Test reason",
+        status: LeaveStatus = LeaveStatus.pending,
+        manager_id=None,
+        created_by=None,
+    ) -> LeaveRequest:
+        req = LeaveRequest(
+            employee_id=employee_id,
+            leave_type=leave_type,
+            start_date=start_date,
+            end_date=end_date,
+            reason=reason,
+            status=status,
+            manager_id=manager_id,
+            created_by=created_by,
+            updated_by=created_by,
+        )
+        db.add(req)
+        db.commit()
+        db.refresh(req)
+        return req
 
     return _make
 

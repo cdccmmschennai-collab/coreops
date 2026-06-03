@@ -14,6 +14,7 @@ from app.modules.attendance.router import (
 )
 from app.modules.auth.router import router as auth_router
 from app.modules.employees.router import router as employees_router
+from app.modules.leave.router import router as leave_router
 from app.modules.offices.router import router as offices_router
 from app.modules.projects.router import router as projects_router
 from app.modules.users.router import router as users_router
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(attendance_employee_router, prefix=settings.API_V1_PREFIX)
     app.include_router(work_reports_router, prefix=settings.API_V1_PREFIX)
     app.include_router(offices_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(leave_router, prefix=settings.API_V1_PREFIX)
 
     return app
 

@@ -2,28 +2,31 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Download, Plus } from "lucide-react";
+import { CalendarOff, Download, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs } from "@/components/ui/tabs";
 import { useAuth } from "@/features/auth/auth-provider";
+import { LeaveRequestDialog } from "@/features/leave/components/leave-request-dialog";
+import { LeaveTab } from "@/features/leave/components/leave-tab";
 import { can } from "@/lib/rbac";
 
 import { AttendanceCalendar } from "./attendance-calendar";
 import { AttendanceHistory } from "./attendance-history";
 import { AttendanceKpis } from "./attendance-kpis";
 import { CorrectionsPreview } from "./corrections-preview";
-import { LeaveBalancesPreview } from "./leave-balances-preview";
 
-type TabKey = "calendar" | "history" | "balances" | "corrections";
+type TabKey = "calendar" | "history" | "leave" | "corrections";
 
 export function AttendanceView() {
   const { role, employeeId } = useAuth();
   const canManage = can(role, "attendance.manage");
   const [tab, setTab] = React.useState<TabKey>("calendar");
+  const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
 
   const actions = (
     <>
@@ -31,6 +34,13 @@ export function AttendanceView() {
         <Download className="h-4 w-4" />
         Export
       </Button>
+      {/* Any user with an employee profile can request leave */}
+      {employeeId && (
+        <Button variant="secondary" onClick={() => setLeaveDialogOpen(true)}>
+          <CalendarOff className="h-4 w-4" />
+          Request Leave
+        </Button>
+      )}
       {canManage && (
         <Button asChild>
           <Link href="/attendance/new">
@@ -46,7 +56,7 @@ export function AttendanceView() {
     <>
       <PageHeader
         title="Attendance"
-        subtitle="Track presence, shifts, and leave balances. Corrections can be requested up to 7 days back."
+        subtitle="Track presence, shifts, and leave. Corrections can be requested up to 7 days back."
         actions={actions}
       />
 
@@ -59,8 +69,8 @@ export function AttendanceView() {
         items={[
           { value: "calendar", label: "Calendar" },
           { value: "history", label: "History" },
-          { value: "balances", label: "Leave balances" },
-          { value: "corrections", label: "Corrections", count: 3 },
+          { value: "leave", label: "Leave" },
+          { value: "corrections", label: "Corrections" },
         ]}
       />
 
@@ -74,8 +84,27 @@ export function AttendanceView() {
           />
         ))}
       {tab === "history" && <AttendanceHistory />}
-      {tab === "balances" && <LeaveBalancesPreview />}
+      {tab === "leave" && <LeaveTab />}
       {tab === "corrections" && <CorrectionsPreview />}
+
+      {/* Request Leave modal */}
+      {leaveDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-foreground/40"
+            onClick={() => setLeaveDialogOpen(false)}
+            aria-hidden
+          />
+          <Card className="relative z-10 w-full max-w-md shadow-xl">
+            <CardHeader className="border-b border-border px-5 py-3.5">
+              <CardTitle className="text-base">Request Leave</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-5">
+              <LeaveRequestDialog onClose={() => setLeaveDialogOpen(false)} />
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </>
   );
 }
