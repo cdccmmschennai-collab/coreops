@@ -216,7 +216,7 @@ export function DashboardView() {
           <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
             <CardTitle className="text-base">Recent work reports</CardTitle>
             <Button variant="ghost" size="sm" asChild>
-              <Link href="/work-reports">View all <ArrowRight className="ml-1 h-3 w-3" /></Link>
+              <Link href="/reports">View all <ArrowRight className="ml-1 h-3 w-3" /></Link>
             </Button>
           </CardHeader>
           {recentReports.isLoading ? (
@@ -341,7 +341,7 @@ export function DashboardView() {
                       report{teamPending !== 1 ? "s" : ""} waiting for your review.
                     </p>
                     <Button asChild className="w-full">
-                      <Link href="/work-reports?status=submitted">Review queue</Link>
+                      <Link href="/reports?status=submitted">Review queue</Link>
                     </Button>
                   </>
                 )}
@@ -357,7 +357,7 @@ export function DashboardView() {
                   <Link href="/attendance"><ArrowRight className="h-4 w-4" /> View attendance</Link>
                 </Button>
                 <Button asChild className="justify-start" variant="secondary">
-                  <Link href="/work-reports"><ArrowRight className="h-4 w-4" /> All my reports</Link>
+                  <Link href="/reports"><ArrowRight className="h-4 w-4" /> All my reports</Link>
                 </Button>
               </div>
             )}

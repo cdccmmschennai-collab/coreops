@@ -15,24 +15,26 @@ import {
 
 import { Brand } from "@/components/shell/brand";
 import { useAuth } from "@/features/auth/auth-provider";
-import { can } from "@/lib/rbac";
+import { can, type Capability } from "@/lib/rbac";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** Capability required to see this item. If absent, all authenticated users see it. */
+  capability?: Capability;
   /** Page not built yet (F2+). Rendered disabled so the shell looks complete. */
   soon?: boolean;
 }
 
 const WORKSPACE: NavItem[] = [
-  { label: "Home", href: "/dashboard", icon: Home },
-  { label: "Employees", href: "/employees", icon: Users },
-  { label: "Projects", href: "/projects", icon: FolderKanban },
+  { label: "Home",       href: "/dashboard", icon: Home },
+  { label: "Employees",  href: "/employees", icon: Users,         capability: "employee.view" },
+  { label: "Projects",   href: "/projects",  icon: FolderKanban,  capability: "project.view" },
   { label: "Attendance", href: "/attendance", icon: CalendarDays },
-  { label: "Reports", href: "/reports", icon: FileText },
-  { label: "Analytics", href: "/analytics", icon: BarChart3 },
+  { label: "Reports",    href: "/reports",   icon: FileText },
+  { label: "Analytics",  href: "/analytics", icon: BarChart3,     capability: "analytics.view" },
 ];
 
 const MANAGE: NavItem[] = [
@@ -78,6 +80,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { role } = useAuth();
 
+  const visibleWorkspace = WORKSPACE.filter(
+    (item) => !item.capability || can(role, item.capability),
+  );
+
   return (
     <nav
       className="flex h-full flex-col gap-1 border-r border-border bg-secondary/40 p-3"
@@ -90,7 +96,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Workspace
       </p>
-      {WORKSPACE.map((item) => (
+      {visibleWorkspace.map((item) => (
         <NavLink
           key={item.href}
           item={item}
