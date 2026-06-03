@@ -31,7 +31,11 @@ const MATRIX: Record<Capability, Role[]> = {
 
 export function can(role: Role | undefined, capability: Capability): boolean {
   if (!role) return false;
-  return MATRIX[capability].includes(role);
+  const allowed = MATRIX[capability];
+  // Fail-closed: unknown capability → deny. Guards against stale bundles and
+  // future callers passing a capability not yet added to MATRIX.
+  if (!allowed) return false;
+  return allowed.includes(role);
 }
 
 export function isManagerial(role: Role | undefined): boolean {
