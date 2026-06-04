@@ -39,3 +39,12 @@ secrets/
 .vscode/
 *.swp
 .Rhistory
+
+Datas/
+rbac_evidence/
+verify_rbac.js
+
+*.log
+*.tmp
+.env
+.env.local
