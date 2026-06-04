@@ -57,7 +57,7 @@ def list_projects(
 @router.post("", response_model=ProjectOut, status_code=201)
 def create_project(
     body: ProjectCreate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> ProjectOut:
     return ProjectOut.model_validate(service.create_project(db, admin, body))
@@ -76,7 +76,7 @@ def get_project(
 def update_project(
     project_id: uuid.UUID,
     body: ProjectUpdate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> ProjectOut:
     return ProjectOut.model_validate(service.update_project(db, admin, project_id, body))
@@ -85,7 +85,7 @@ def update_project(
 @router.delete("/{project_id}", status_code=204)
 def archive_project(
     project_id: uuid.UUID,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> Response:
     service.archive_project(db, admin, project_id)
@@ -108,7 +108,7 @@ def list_members(
 def assign_member(
     project_id: uuid.UUID,
     body: ProjectMemberCreate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> ProjectMemberOut:
     return ProjectMemberOut.model_validate(
@@ -123,7 +123,7 @@ def update_member_role(
     project_id: uuid.UUID,
     employee_id: uuid.UUID,
     body: ProjectMemberRoleUpdate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> ProjectMemberOut:
     return ProjectMemberOut.model_validate(
@@ -135,7 +135,7 @@ def update_member_role(
 def unassign_member(
     project_id: uuid.UUID,
     employee_id: uuid.UUID,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> Response:
     service.remove_member(db, admin, project_id, employee_id)

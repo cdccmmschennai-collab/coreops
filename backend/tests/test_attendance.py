@@ -1,4 +1,4 @@
-"""API tests for the attendance module: CRUD, minute calc, RBAC, filters."""
+﻿"""API tests for the attendance module: CRUD, minute calc, RBAC, filters."""
 import uuid
 from datetime import date
 
@@ -23,7 +23,7 @@ def _payload(employee_id, **over):
 
 # ---------- admin CRUD + calculations ----------
 def test_create_computes_total_and_overtime(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-1")
     res = client.post(
         "/api/v1/attendance",
@@ -37,7 +37,7 @@ def test_create_computes_total_and_overtime(client, auth_header, make_employee):
 
 
 def test_create_without_times_is_zero(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-2")
     res = client.post("/api/v1/attendance", headers=h, json=_payload(e.id, status="leave"))
     assert res.status_code == 201
@@ -46,20 +46,20 @@ def test_create_without_times_is_zero(client, auth_header, make_employee):
 
 
 def test_duplicate_employee_date_409(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-3")
     assert client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).status_code == 201
     assert client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).status_code == 409
 
 
 def test_create_unknown_employee_422(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post("/api/v1/attendance", headers=h, json=_payload(uuid.uuid4()))
     assert res.status_code == 422
 
 
 def test_checkout_before_checkin_422(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-4")
     res = client.post(
         "/api/v1/attendance",
@@ -70,7 +70,7 @@ def test_checkout_before_checkin_422(client, auth_header, make_employee):
 
 
 def test_update_recomputes_minutes(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-5")
     created = client.post(
         "/api/v1/attendance",
@@ -86,7 +86,7 @@ def test_update_recomputes_minutes(client, auth_header, make_employee):
 
 
 def test_update_status(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-6")
     created = client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).json()
     res = client.patch(
@@ -97,7 +97,7 @@ def test_update_status(client, auth_header, make_employee):
 
 
 def test_delete(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-7")
     created = client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).json()
     assert client.delete(f"/api/v1/attendance/{created['id']}", headers=h).status_code == 204
@@ -105,13 +105,13 @@ def test_delete(client, auth_header, make_employee):
 
 
 def test_get_unknown_404(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     assert client.get(f"/api/v1/attendance/{uuid.uuid4()}", headers=h).status_code == 404
 
 
 # ---------- list / filter ----------
 def test_list_pagination(client, auth_header, make_employee, make_attendance):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-L")
     for d in (date(2026, 5, 1), date(2026, 5, 2), date(2026, 5, 3)):
         make_attendance(employee_id=e.id, attendance_date=d)
@@ -121,7 +121,7 @@ def test_list_pagination(client, auth_header, make_employee, make_attendance):
 
 
 def test_filter_by_status(client, auth_header, make_employee, make_attendance):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-S")
     make_attendance(employee_id=e.id, attendance_date=date(2026, 5, 1), status=AttendanceStatus.present)
     make_attendance(employee_id=e.id, attendance_date=date(2026, 5, 2), status=AttendanceStatus.absent)
@@ -131,7 +131,7 @@ def test_filter_by_status(client, auth_header, make_employee, make_attendance):
 
 
 def test_filter_by_date_range(client, auth_header, make_employee, make_attendance):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     e = make_employee(employee_code="E-D")
     for d in (date(2026, 5, 1), date(2026, 5, 5), date(2026, 5, 10)):
         make_attendance(employee_id=e.id, attendance_date=d)
@@ -144,7 +144,7 @@ def test_filter_by_date_range(client, auth_header, make_employee, make_attendanc
 def test_viewer_reads_cannot_create(client, auth_header, make_employee, make_attendance):
     e = make_employee(employee_code="E-V")
     make_attendance(employee_id=e.id, attendance_date=date(2026, 5, 1))
-    h = auth_header("viewer@example.com", role=UserRole.viewer)
+    h = auth_header("viewer@example.com", role=UserRole.employee)
     assert client.get("/api/v1/attendance", headers=h).status_code == 200
     assert client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).status_code == 403
 
@@ -174,10 +174,10 @@ def test_employee_get_other_403(
     assert client.get(f"/api/v1/attendance/{rec.id}", headers=h).status_code == 403
 
 
-def test_manager_sees_team_and_cannot_create(
+def test_project_manager_sees_all_and_can_create(
     client, make_user, make_employee, make_attendance, login
 ):
-    user = make_user("mgr@example.com", role=UserRole.manager)
+    user = make_user("mgr@example.com", role=UserRole.project_manager)
     mgr = make_employee(employee_code="MGR", user_id=user.id)
     report = make_employee(employee_code="R1", manager_id=mgr.id)
     outsider = make_employee(employee_code="X1")
@@ -185,9 +185,11 @@ def test_manager_sees_team_and_cannot_create(
     make_attendance(employee_id=outsider.id, attendance_date=date(2026, 5, 1))
     h = login("mgr@example.com")
     res = client.get("/api/v1/attendance", headers=h).json()
-    assert res["total"] == 1
-    assert res["items"][0]["employee_id"] == str(report.id)
-    assert client.post("/api/v1/attendance", headers=h, json=_payload(report.id)).status_code == 403
+    # project_manager sees ALL attendance records (no team scoping)
+    assert res["total"] == 2
+    # project_manager can create attendance records (use a different date to avoid duplicate)
+    new_record = _payload(report.id, **{"attendance_date": "2026-05-02"})
+    assert client.post("/api/v1/attendance", headers=h, json=new_record).status_code == 201
 
 
 def test_employee_attendance_endpoint_scoped(
@@ -201,5 +203,5 @@ def test_employee_attendance_endpoint_scoped(
     h = login("emp@example.com")
     assert client.get(f"/api/v1/employees/{me.id}/attendance", headers=h).status_code == 200
     assert client.get(f"/api/v1/employees/{other.id}/attendance", headers=h).status_code == 403
-    admin = auth_header("admin@example.com", role=UserRole.admin)
+    admin = auth_header("admin@example.com", role=UserRole.project_manager)
     assert client.get(f"/api/v1/employees/{other.id}/attendance", headers=admin).status_code == 200

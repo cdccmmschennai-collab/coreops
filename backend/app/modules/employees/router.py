@@ -59,7 +59,7 @@ def list_employees(
 @router.post("", response_model=EmployeeOut, status_code=201)
 def create_employee(
     body: EmployeeCreate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> EmployeeOut:
     return EmployeeOut.model_validate(service.create_employee(db, admin, body))
@@ -78,7 +78,7 @@ def get_employee(
 def update_employee(
     employee_id: uuid.UUID,
     body: EmployeeUpdate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> EmployeeOut:
     return EmployeeOut.model_validate(service.update_employee(db, admin, employee_id, body))
@@ -87,7 +87,7 @@ def update_employee(
 @router.delete("/{employee_id}", status_code=204)
 def deactivate_employee(
     employee_id: uuid.UUID,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> Response:
     service.deactivate_employee(db, admin, employee_id)
@@ -97,7 +97,7 @@ def deactivate_employee(
 @router.get("/{employee_id}/team", response_model=list[EmployeeOut])
 def employee_team(
     employee_id: uuid.UUID,
-    current: User = Depends(require_role("admin", "manager")),
+    current: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> list[EmployeeOut]:
     return [EmployeeOut.model_validate(e) for e in service.get_team(db, current, employee_id)]

@@ -158,7 +158,7 @@ export function AnalyticsView() {
   const projMinutes = aggregateByProject(reports);
   const burnEntries: BurnEntry[] = [...projMinutes.entries()]
     .map(([pid, minutes]) => ({
-      name:      projById.get(pid) ?? "Unknown project",
+      name:      projById.get(pid)?.name ?? "Unknown project",
       allocated: 9600, // 160h — placeholder allocated (no budget field yet)
       logged:    minutes,
     }))

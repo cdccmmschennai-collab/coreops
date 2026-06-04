@@ -27,8 +27,7 @@ function parseStatus(value: string | null): WorkReportStatus | "" {
 }
 
 function roleSubtitle(role: ReturnType<typeof useAuth>["role"]): string | undefined {
-  if (role === "admin") return "All employees";
-  if (role === "manager") return "Your team";
+  if (role === "project_manager") return "All employees";
   return undefined;
 }
 

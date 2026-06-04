@@ -1,10 +1,8 @@
-"""Project service: RBAC-scoped reads + admin writes + membership.
+"""Project service: RBAC-scoped reads + project_manager writes + membership.
 
 RBAC (this module):
-  admin    full access
-  manager  read access, scoped to projects they are assigned to
-  employee read access, scoped to projects they are assigned to
-  viewer   read access, all
+  project_manager  full access
+  employee         read access, scoped to assigned projects only
 """
 import uuid
 from datetime import date
@@ -15,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
+from app.modules.job_codes.models import JobCode
 from app.modules.projects.models import (
     Project,
     ProjectMember,
@@ -25,7 +24,18 @@ from app.modules.projects.schemas import ProjectCreate, ProjectUpdate
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
-# Allowed PATCH status transitions. `archived` is reached only via DELETE.
+
+def _push_notification(db: Session, user_id: uuid.UUID, type_: str, title: str,
+                       message: str, entity_id: uuid.UUID | None = None) -> None:
+    try:
+        from app.modules.notifications.service import create_notification
+        create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
+                            entity_type="project", entity_id=entity_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 _ALLOWED_TRANSITIONS: dict[ProjectStatus, set[ProjectStatus]] = {
     ProjectStatus.planning: {ProjectStatus.active, ProjectStatus.on_hold, ProjectStatus.completed},
     ProjectStatus.active: {ProjectStatus.on_hold, ProjectStatus.completed},
@@ -34,14 +44,11 @@ _ALLOWED_TRANSITIONS: dict[ProjectStatus, set[ProjectStatus]] = {
     ProjectStatus.archived: {ProjectStatus.active},
 }
 
-_SCOPED_ROLES = {UserRole.manager, UserRole.employee}
-
 
 def _alive():
     return select(Project).where(Project.deleted_at.is_(None))
 
 
-# ---------- reads ----------------------------------------------------------
 def list_projects(
     db: Session,
     actor: User,
@@ -54,7 +61,7 @@ def list_projects(
 ) -> tuple[list[Project], int]:
     stmt = _alive()
 
-    if actor.role in _SCOPED_ROLES:
+    if actor.role == UserRole.employee:
         me = _current_employee(db, actor)
         if me is None:
             return [], 0
@@ -63,6 +70,7 @@ def list_projects(
                 select(ProjectMember.project_id).where(ProjectMember.employee_id == me.id)
             )
         )
+    # project_manager: full access, no scope filter
 
     if status is not None:
         stmt = stmt.where(Project.status == status)
@@ -97,7 +105,26 @@ def list_projects(
     )
     projects = list(rows)
     _attach_member_counts(db, projects)
+    _attach_job_codes(db, projects)
     return projects, total
+
+
+def _attach_job_codes(db: Session, projects: list[Project]) -> None:
+    """Bulk-fetch job codes and attach code/name to project instances."""
+    jc_ids = {p.job_code_id for p in projects if p.job_code_id}
+    if not jc_ids:
+        for p in projects:
+            p.job_code_code = None   # type: ignore[attr-defined]
+            p.job_code_name = None   # type: ignore[attr-defined]
+        return
+    rows = db.execute(
+        select(JobCode).where(JobCode.id.in_(jc_ids))
+    ).scalars().all()
+    by_id = {jc.id: jc for jc in rows}
+    for p in projects:
+        jc = by_id.get(p.job_code_id) if p.job_code_id else None
+        p.job_code_code = jc.code if jc else None   # type: ignore[attr-defined]
+        p.job_code_name = jc.name if jc else None   # type: ignore[attr-defined]
 
 
 def _attach_member_counts(db: Session, projects: list[Project]) -> None:
@@ -115,9 +142,9 @@ def _attach_member_counts(db: Session, projects: list[Project]) -> None:
 
 
 def _assert_can_read(db: Session, actor: User, project: Project) -> None:
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return
-    if actor.role in _SCOPED_ROLES:
+    if actor.role == UserRole.employee:
         me = _current_employee(db, actor)
         if me is not None and db.execute(
             select(ProjectMember.id).where(
@@ -145,10 +172,10 @@ def get_project(db: Session, actor: User, project_id: uuid.UUID) -> Project:
             ProjectMember.project_id == project.id
         )
     ).scalar_one()
+    _attach_job_codes(db, [project])
     return project
 
 
-# ---------- writes (admin) -------------------------------------------------
 def _validate_dates(start: date | None, end: date | None) -> None:
     if start is not None and end is not None and end < start:
         raise AppError("validation_error", "End date cannot be before start date.", 422)
@@ -170,6 +197,7 @@ def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
         raise AppError("conflict", "Project violates a uniqueness constraint.", 409)
     db.refresh(project)
     project.member_count = 0  # type: ignore[attr-defined]
+    _attach_job_codes(db, [project])
     return project
 
 
@@ -177,9 +205,7 @@ def _validate_status_transition(current: ProjectStatus, new: ProjectStatus) -> N
     if new == current:
         return
     if new == ProjectStatus.archived:
-        raise AppError(
-            "validation_error", "Use delete to archive a project.", 422
-        )
+        raise AppError("validation_error", "Use delete to archive a project.", 422)
     if new not in _ALLOWED_TRANSITIONS[current]:
         raise AppError(
             "validation_error",
@@ -212,6 +238,7 @@ def update_project(
             ProjectMember.project_id == project.id
         )
     ).scalar_one()
+    _attach_job_codes(db, [project])
     return project
 
 
@@ -223,7 +250,6 @@ def archive_project(db: Session, actor: User, project_id: uuid.UUID) -> None:
     db.commit()
 
 
-# ---------- membership -----------------------------------------------------
 def list_members(db: Session, actor: User, project_id: uuid.UUID) -> list[ProjectMember]:
     project = _fetch(db, project_id)
     _assert_can_read(db, actor, project)
@@ -246,13 +272,13 @@ def _demote_existing_lead(
     leads = db.execute(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
-            ProjectMember.role == ProjectMemberRole.lead,
+            ProjectMember.role == ProjectMemberRole.team_lead,
         )
     ).scalars().all()
     for lead in leads:
         if except_id is not None and lead.id == except_id:
             continue
-        lead.role = ProjectMemberRole.member
+        lead.role = ProjectMemberRole.contributor
         db.add(lead)
 
 
@@ -281,7 +307,7 @@ def add_member(
     ).scalar_one_or_none():
         raise AppError("conflict", "Employee is already assigned to this project.", 409)
 
-    if role == ProjectMemberRole.lead:
+    if role == ProjectMemberRole.team_lead:
         _demote_existing_lead(db, project_id)
 
     member = ProjectMember(
@@ -291,6 +317,13 @@ def add_member(
     db.commit()
     db.refresh(member)
     member.employee_name = employee.full_name  # type: ignore[attr-defined]
+    if employee.user_id is not None:
+        _push_notification(
+            db, employee.user_id, "project_assigned",
+            f"You were assigned to {project.name}",
+            f"You have been added to project {project.name} ({project.code}) as {role.value}.",
+            project.id,
+        )
     return member
 
 
@@ -310,7 +343,7 @@ def update_member_role(
     if member is None:
         raise AppError("not_found", "Membership not found.", 404)
 
-    if role == ProjectMemberRole.lead:
+    if role == ProjectMemberRole.team_lead:
         _demote_existing_lead(db, project_id, except_id=member.id)
     member.role = role
     db.add(member)

@@ -1,4 +1,4 @@
-"""API tests for the offices module: CRUD and RBAC."""
+﻿"""API tests for the offices module: CRUD and RBAC."""
 from app.modules.users.models import UserRole
 
 
@@ -22,9 +22,10 @@ def test_non_admin_list_403(client, auth_header):
     assert client.get("/api/v1/offices", headers=h).status_code == 403
 
 
-def test_manager_list_403(client, auth_header):
-    h = auth_header("mgr@example.com", role=UserRole.manager)
-    assert client.get("/api/v1/offices", headers=h).status_code == 403
+def test_project_manager_can_list_offices(client, auth_header):
+    h = auth_header("mgr@example.com", role=UserRole.project_manager)
+    # project_manager has full access including offices
+    assert client.get("/api/v1/offices", headers=h).status_code == 200
 
 
 def test_non_admin_create_403(client, auth_header):
@@ -35,7 +36,7 @@ def test_non_admin_create_403(client, auth_header):
 # ---------- Admin CRUD ----------
 
 def test_admin_create_and_get(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post("/api/v1/offices", headers=h, json=_office_payload())
     assert res.status_code == 201, res.text
     body = res.json()
@@ -52,7 +53,7 @@ def test_admin_create_and_get(client, auth_header):
 
 
 def test_admin_list(client, auth_header, make_office):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     make_office(name="Office A")
     make_office(name="Office B")
     res = client.get("/api/v1/offices", headers=h).json()
@@ -64,7 +65,7 @@ def test_admin_list(client, auth_header, make_office):
 
 
 def test_admin_update(client, auth_header, make_office):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     office = make_office(name="Before Update")
     res = client.patch(
         f"/api/v1/offices/{office.id}",
@@ -79,25 +80,25 @@ def test_admin_update(client, auth_header, make_office):
 
 def test_get_nonexistent_404(client, auth_header):
     import uuid
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     assert client.get(f"/api/v1/offices/{uuid.uuid4()}", headers=h).status_code == 404
 
 
 def test_duplicate_name_409(client, auth_header, make_office):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     make_office(name="Unique Office")
     res = client.post("/api/v1/offices", headers=h, json=_office_payload(name="Unique Office"))
     assert res.status_code == 409
 
 
 def test_create_missing_required_422(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post("/api/v1/offices", headers=h, json={"name": "Incomplete"})
     assert res.status_code == 422
 
 
 def test_break_minutes_out_of_range_422(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post(
         "/api/v1/offices",
         headers=h,
@@ -109,7 +110,7 @@ def test_break_minutes_out_of_range_422(client, auth_header):
 # ---------- Employee office assignment ----------
 
 def test_create_employee_with_office(client, auth_header, make_office):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     office = make_office(name="Chennai")
     res = client.post(
         "/api/v1/employees",
@@ -126,7 +127,7 @@ def test_create_employee_with_office(client, auth_header, make_office):
 
 
 def test_update_employee_office(client, auth_header, make_employee, make_office):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     emp = make_employee(employee_code="EMP-O2")
     office = make_office(name="Qatar")
 
@@ -140,7 +141,7 @@ def test_update_employee_office(client, auth_header, make_employee, make_office)
 
 
 def test_update_employee_clear_office(client, auth_header, make_employee, make_office):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     office = make_office(name="Hyderabad")
     emp = make_employee(employee_code="EMP-O3")
     # First assign
@@ -153,7 +154,7 @@ def test_update_employee_clear_office(client, auth_header, make_employee, make_o
 
 def test_employee_invalid_office_id_422(client, auth_header):
     import uuid
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post(
         "/api/v1/employees",
         headers=h,
@@ -169,7 +170,7 @@ def test_employee_invalid_office_id_422(client, auth_header):
 
 def test_existing_employee_no_office_valid(client, auth_header, make_employee):
     """Existing employees without office_id remain valid (nullable FK)."""
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     emp = make_employee(employee_code="EMP-O5")
     res = client.get(f"/api/v1/employees/{emp.id}", headers=h)
     assert res.status_code == 200

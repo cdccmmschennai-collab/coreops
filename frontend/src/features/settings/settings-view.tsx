@@ -7,6 +7,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { RequireCapability } from "@/components/auth/require-capability";
 import { PageHeader } from "@/components/shell/page-header";
 import { Tabs } from "@/components/ui/tabs";
+import { ActivityTypesManager } from "@/features/activity-types/components/activity-types-manager";
 import { UsersView } from "@/features/users/components/users-view";
 
 import { AdminCorrectionsPreview } from "./components/admin-corrections-preview";
@@ -15,15 +16,16 @@ import { LeaveApprovalsPreview } from "./components/leave-approvals-preview";
 import { RolesTab } from "./components/roles-tab";
 import { SsoPreview } from "./components/sso-preview";
 
-type TabKey = "users" | "roles" | "leave" | "corrections" | "audit" | "sso";
+type TabKey = "users" | "roles" | "activity-types" | "leave" | "corrections" | "audit" | "sso";
 
 const TABS = [
-  { value: "users",       label: "Users & Roles" },
-  { value: "roles",       label: "Roles" },
-  { value: "leave",       label: "Leave approvals",         count: 4 },
-  { value: "corrections", label: "Attendance corrections",  count: 2 },
-  { value: "audit",       label: "Audit log" },
-  { value: "sso",         label: "SSO" },
+  { value: "users",          label: "Users & Roles" },
+  { value: "roles",          label: "Roles" },
+  { value: "activity-types", label: "Activity Types" },
+  { value: "leave",          label: "Leave approvals",         count: 4 },
+  { value: "corrections",    label: "Attendance corrections",  count: 2 },
+  { value: "audit",          label: "Audit log" },
+  { value: "sso",            label: "SSO" },
 ];
 
 function SettingsContent() {
@@ -47,12 +49,13 @@ function SettingsContent() {
       />
       <Tabs className="mb-4" value={tab} onChange={setTab} items={TABS} />
 
-      {tab === "users"       && <Suspense><UsersView hideHeader /></Suspense>}
-      {tab === "roles"       && <RolesTab />}
-      {tab === "leave"       && <LeaveApprovalsPreview />}
-      {tab === "corrections" && <AdminCorrectionsPreview />}
-      {tab === "audit"       && <AuditLogPreview />}
-      {tab === "sso"         && <SsoPreview />}
+      {tab === "users"          && <Suspense><UsersView hideHeader /></Suspense>}
+      {tab === "roles"          && <RolesTab />}
+      {tab === "activity-types" && <ActivityTypesManager />}
+      {tab === "leave"          && <LeaveApprovalsPreview />}
+      {tab === "corrections"    && <AdminCorrectionsPreview />}
+      {tab === "audit"          && <AuditLogPreview />}
+      {tab === "sso"            && <SsoPreview />}
     </RequireCapability>
   );
 }

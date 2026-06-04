@@ -14,6 +14,9 @@ bcrypt==4.2.1
 PyJWT==2.9.0
 python-multipart==0.0.12
 
+# Excel import
+openpyxl==3.1.5
+
 # Tests
 pytest==8.3.3
 httpx==0.27.2

@@ -10,13 +10,13 @@ import { EMPTY_WORK_REPORT_FORM } from "@/features/work-reports/schemas";
 export default function NewWorkReportPage() {
   return (
     <RequireCapability capability="report.submit">
-      <Link href="/work-reports" className="text-sm text-primary hover:underline">
-        ← Today's Report
+      <Link href="/reports" className="text-sm text-primary hover:underline">
+        ← Reports
       </Link>
       <PageHeader
         className="mt-2"
-        title="New daily report"
-        subtitle="Log what you worked on today."
+        title="New report"
+        subtitle="Log your project activities."
       />
       <WorkReportForm mode="create" defaultValues={EMPTY_WORK_REPORT_FORM} />
     </RequireCapability>

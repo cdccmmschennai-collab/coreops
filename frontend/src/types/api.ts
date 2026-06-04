@@ -1,6 +1,6 @@
 /** TypeScript types mirroring api/openapi-v1.yaml (hand-authored for v1). */
 
-export type Role = "admin" | "manager" | "employee" | "viewer";
+export type Role = "project_manager" | "employee";
 
 export interface User {
   id: string;

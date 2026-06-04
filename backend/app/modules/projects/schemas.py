@@ -1,4 +1,4 @@
-"""Project pydantic schemas (mirrors employees/schemas.py)."""
+"""Project pydantic schemas."""
 import uuid
 from datetime import date, datetime
 
@@ -13,6 +13,9 @@ class ProjectOut(BaseModel):
     id: uuid.UUID
     code: str
     name: str
+    job_code_id: uuid.UUID | None = None
+    job_code_code: str | None = None   # populated by service join
+    job_code_name: str | None = None   # populated by service join
     client: str | None = None
     description: str | None = None
     status: ProjectStatus
@@ -25,6 +28,7 @@ class ProjectOut(BaseModel):
 class ProjectCreate(BaseModel):
     code: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    job_code_id: uuid.UUID | None = None
     client: str | None = None
     description: str | None = None
     status: ProjectStatus = ProjectStatus.planning
@@ -34,6 +38,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1)
+    job_code_id: uuid.UUID | None = None
     client: str | None = None
     description: str | None = None
     status: ProjectStatus | None = None
@@ -61,7 +66,7 @@ class ProjectMemberOut(BaseModel):
 
 class ProjectMemberCreate(BaseModel):
     employee_id: uuid.UUID
-    role: ProjectMemberRole = ProjectMemberRole.member
+    role: ProjectMemberRole = ProjectMemberRole.contributor
 
 
 class ProjectMemberRoleUpdate(BaseModel):

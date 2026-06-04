@@ -62,8 +62,9 @@ def _clean_state():
     with SessionLocal() as db:
         db.execute(
             text(
-                "TRUNCATE TABLE work_report_tasks, daily_work_reports, "
-                "attendance_records, leave_requests, project_members, projects, "
+                "TRUNCATE TABLE notifications, work_report_tasks, daily_work_reports, "
+                "attendance_records, leave_requests, project_managers, project_members, "
+                "projects, company_calendar_events, activity_types, job_codes, "
                 "employees, offices, users RESTART IDENTITY CASCADE"
             )
         )
@@ -192,7 +193,7 @@ def make_project(db):
 @pytest.fixture()
 def make_project_member(db):
     def _make(
-        *, project_id, employee_id, role: ProjectMemberRole = ProjectMemberRole.member
+        *, project_id, employee_id, role: ProjectMemberRole = ProjectMemberRole.contributor
     ) -> ProjectMember:
         member = ProjectMember(
             project_id=project_id, employee_id=employee_id, role=role

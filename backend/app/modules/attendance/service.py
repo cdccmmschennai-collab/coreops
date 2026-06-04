@@ -21,9 +21,6 @@ from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
 STANDARD_WORKDAY_MINUTES = 480  # 8 hours; anything beyond counts as overtime
-_SCOPED_ROLES = {UserRole.manager, UserRole.employee}
-
-
 def _compute_minutes(
     check_in: datetime | None, check_out: datetime | None
 ) -> tuple[int, int]:
@@ -44,14 +41,11 @@ def _team_ids(db: Session, manager_employee_id: uuid.UUID):
 # ---------- reads ----------------------------------------------------------
 def _apply_scope(db: Session, actor: User, stmt):
     """Return (stmt, allowed). allowed=False short-circuits to an empty page."""
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return stmt, True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
-    if actor.role == UserRole.manager:
-        return stmt.where(AttendanceRecord.employee_id.in_(_team_ids(db, me.id))), True
-    # employee
     return stmt.where(AttendanceRecord.employee_id == me.id), True
 
 
@@ -94,16 +88,11 @@ def list_attendance(
 
 
 def _assert_can_read(db: Session, actor: User, record: AttendanceRecord) -> None:
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)
     if me is None:
         raise AppError("forbidden", "Not permitted.", 403)
-    if actor.role == UserRole.manager:
-        emp = db.get(Employee, record.employee_id)
-        if emp is not None and emp.manager_id == me.id:
-            return
-        raise AppError("forbidden", "You can only view your team's attendance.", 403)
     if record.employee_id == me.id:
         return
     raise AppError("forbidden", "You can only view your own attendance.", 403)
@@ -123,14 +112,12 @@ def get_attendance(db: Session, actor: User, record_id: uuid.UUID) -> Attendance
 
 
 def _assert_can_read_employee(db: Session, actor: User, employee: Employee) -> None:
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)
     if me is None:
         raise AppError("forbidden", "Not permitted.", 403)
-    if actor.role == UserRole.manager and employee.manager_id == me.id:
-        return
-    if actor.role == UserRole.employee and employee.id == me.id:
+    if employee.id == me.id:
         return
     raise AppError("forbidden", "Not permitted.", 403)
 

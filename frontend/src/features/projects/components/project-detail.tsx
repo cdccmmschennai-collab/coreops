@@ -98,6 +98,16 @@ export function ProjectDetail({ id }: { id: string }) {
           </CardHeader>
           <CardContent className="divide-y divide-border">
             <Row label="Code" value={<span className="font-mono">{project.code}</span>} />
+            <Row
+              label="Job Code"
+              value={
+                project.job_code_code ? (
+                  <span className="font-mono">{project.job_code_code}</span>
+                ) : (
+                  "—"
+                )
+              }
+            />
             <Row label="Client" value={project.client ?? "—"} />
             <Row label="Status" value={<StatusBadge status={project.status} />} />
             <Row label="Start date" value={project.start_date ?? "—"} />

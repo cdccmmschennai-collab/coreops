@@ -35,8 +35,8 @@ from app.modules.work_reports.schemas import (
 router = APIRouter(prefix="/work-reports", tags=["work-reports"])
 
 # Capability gates (USER_ROLES → DWR capabilities, see spec §3).
-require_submit = require_role("admin", "manager", "employee")
-require_review = require_role("admin", "manager")
+require_submit = require_role("project_manager", "employee")
+require_review = require_role("project_manager")
 
 
 @router.get("", response_model=WorkReportPage)

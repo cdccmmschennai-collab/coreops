@@ -39,8 +39,37 @@ from app.modules.work_reports.schemas import (
 from app.shared.errors import AppError
 
 MAX_DAY_MINUTES = 1440
+
+
+def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
+          entity_id: uuid.UUID | None = None) -> None:
+    try:
+        from app.modules.notifications.service import create_notification
+        create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
+                            entity_type="daily_work_report", entity_id=entity_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _notify_manager(db: Session, author: Employee, type_: str, title: str,
+                    message: str, entity_id: uuid.UUID | None = None) -> None:
+    if author.manager_id is None:
+        return
+    mgr = db.get(Employee, author.manager_id)
+    if mgr is None or mgr.user_id is None:
+        return
+    _push(db, mgr.user_id, type_, title, message, entity_id)
+
+
+def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
+                   message: str) -> None:
+    author = db.get(Employee, report.employee_id)
+    if author is None or author.user_id is None:
+        return
+    _push(db, author.user_id, type_, title, message, report.id)
 _EDITABLE = {WorkReportStatus.draft, WorkReportStatus.rejected}
-_REVIEW_ROLES = {UserRole.admin, UserRole.manager}
+_REVIEW_ROLES = {UserRole.project_manager}
 
 
 # ---------- helpers --------------------------------------------------------
@@ -142,20 +171,11 @@ def _load(db: Session, report: DailyWorkReport) -> DailyWorkReport:
 # ---------- reads ----------------------------------------------------------
 def _apply_scope(db: Session, actor: User, stmt):
     """Return (stmt, allowed). allowed=False short-circuits to an empty page."""
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return stmt, True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
-    if actor.role == UserRole.manager:
-        return (
-            stmt.where(
-                (DailyWorkReport.employee_id == me.id)
-                | (DailyWorkReport.employee_id.in_(_team_ids(me.id)))
-            ),
-            True,
-        )
-    # employee
     return stmt.where(DailyWorkReport.employee_id == me.id), True
 
 
@@ -209,18 +229,13 @@ def list_work_reports(
 
 
 def _assert_can_read(db: Session, actor: User, report: DailyWorkReport) -> None:
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)
     if me is None:
         raise AppError("forbidden", "Not permitted.", 403)
     if report.employee_id == me.id:
         return
-    if actor.role == UserRole.manager:
-        author = db.get(Employee, report.employee_id)
-        if author is not None and author.manager_id == me.id:
-            return
-        raise AppError("forbidden", "You can only view your team's reports.", 403)
     raise AppError("forbidden", "You can only view your own reports.", 403)
 
 
@@ -388,21 +403,20 @@ def submit_work_report(
     db.add(report)
     db.commit()
     db.refresh(report)
+    author = db.get(Employee, report.employee_id)
+    if author:
+        _notify_manager(
+            db, author, "report_submitted",
+            f"{author.full_name} submitted a work report",
+            f"{author.full_name} submitted their work report for {report.report_date}.",
+            report.id,
+        )
     return _load(db, report)
 
 
 def _assert_can_review(db: Session, actor: User, report: DailyWorkReport) -> None:
     if actor.role not in _REVIEW_ROLES:
         raise AppError("forbidden", "You are not permitted to review reports.", 403)
-    if actor.role == UserRole.admin:
-        return
-    me = _current_employee(db, actor)
-    if me is None:
-        raise AppError("forbidden", "Not permitted.", 403)
-    author = db.get(Employee, report.employee_id)
-    if author is not None and author.manager_id == me.id:
-        return
-    raise AppError("forbidden", "You can only review your team's reports.", 403)
 
 
 def approve_work_report(
@@ -421,6 +435,11 @@ def approve_work_report(
     db.add(report)
     db.commit()
     db.refresh(report)
+    _notify_author(
+        db, report, "report_approved",
+        "Your work report was approved",
+        f"Your work report for {report.report_date} has been approved.",
+    )
     return _load(db, report)
 
 
@@ -440,6 +459,12 @@ def reject_work_report(
     db.add(report)
     db.commit()
     db.refresh(report)
+    _notify_author(
+        db, report, "report_rejected",
+        "Your work report was sent back",
+        f"Your work report for {report.report_date} was not approved."
+        + (f" Note: {data.review_note}" if data.review_note else ""),
+    )
     return _load(db, report)
 
 

@@ -15,12 +15,14 @@ import { LeaveRequestDialog } from "@/features/leave/components/leave-request-di
 import { LeaveTab } from "@/features/leave/components/leave-tab";
 import { can } from "@/lib/rbac";
 
+import { HolidayManager } from "@/features/calendar/components/holiday-manager";
+
 import { AttendanceCalendar } from "./attendance-calendar";
 import { AttendanceHistory } from "./attendance-history";
 import { AttendanceKpis } from "./attendance-kpis";
 import { CorrectionsPreview } from "./corrections-preview";
 
-type TabKey = "calendar" | "history" | "leave" | "corrections";
+type TabKey = "calendar" | "history" | "leave" | "corrections" | "holidays";
 
 export function AttendanceView() {
   const { role, employeeId } = useAuth();
@@ -34,8 +36,7 @@ export function AttendanceView() {
         <Download className="h-4 w-4" />
         Export
       </Button>
-      {/* Any user with an employee profile can request leave */}
-      {employeeId && (
+      {employeeId && can(role, "leave.request") && (
         <Button variant="secondary" onClick={() => setLeaveDialogOpen(true)}>
           <CalendarOff className="h-4 w-4" />
           Request Leave
@@ -71,6 +72,7 @@ export function AttendanceView() {
           { value: "history", label: "History" },
           { value: "leave", label: "Leave" },
           { value: "corrections", label: "Corrections" },
+          { value: "holidays", label: "Holidays" },
         ]}
       />
 
@@ -86,6 +88,7 @@ export function AttendanceView() {
       {tab === "history" && <AttendanceHistory />}
       {tab === "leave" && <LeaveTab />}
       {tab === "corrections" && <CorrectionsPreview />}
+      {tab === "holidays" && <HolidayManager />}
 
       {/* Request Leave modal */}
       {leaveDialogOpen && (

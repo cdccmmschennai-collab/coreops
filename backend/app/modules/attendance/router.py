@@ -61,7 +61,7 @@ def list_attendance(
 @router.post("", response_model=AttendanceOut, status_code=201)
 def create_attendance(
     body: AttendanceCreate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> AttendanceOut:
     return AttendanceOut.model_validate(service.create_attendance(db, admin, body))
@@ -80,7 +80,7 @@ def get_attendance(
 def update_attendance(
     record_id: uuid.UUID,
     body: AttendanceUpdate,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> AttendanceOut:
     return AttendanceOut.model_validate(
@@ -91,7 +91,7 @@ def update_attendance(
 @router.delete("/{record_id}", status_code=204)
 def delete_attendance(
     record_id: uuid.UUID,
-    admin: User = Depends(require_role("admin")),
+    admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> Response:
     service.delete_attendance(db, admin, record_id)

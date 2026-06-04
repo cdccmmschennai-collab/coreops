@@ -262,37 +262,44 @@ export function WorkReportDetail({ id }: { id: string }) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Project</TableHead>
-                    <TableHead>Activity</TableHead>
+                    <TableHead>Project Name</TableHead>
+                    <TableHead>Job Code</TableHead>
+                    <TableHead>Activity Type</TableHead>
                     <TableHead>Description</TableHead>
                     <TableHead className="text-right">Tags</TableHead>
                     <TableHead className="text-right">Docs</TableHead>
                     <TableHead className="text-right">BOM</TableHead>
                     <TableHead className="text-right">Spares</TableHead>
-                    <TableHead className="text-right">Time</TableHead>
+                    <TableHead className="text-right">Duration</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {report.tasks.map((t) => (
-                    <TableRow key={t.id}>
-                      <TableCell className="font-medium">
-                        {projById.get(t.project_id) ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {t.activity_type ?? "—"}
-                      </TableCell>
-                      <TableCell className="whitespace-pre-wrap text-muted-foreground">
-                        {t.description}
-                      </TableCell>
-                      <TableCell className="text-right tabular">{t.tags_count ?? 0}</TableCell>
-                      <TableCell className="text-right tabular">{t.docs_count ?? 0}</TableCell>
-                      <TableCell className="text-right tabular">{t.bom_count ?? 0}</TableCell>
-                      <TableCell className="text-right tabular">{t.spares_count ?? 0}</TableCell>
-                      <TableCell className="text-right tabular">
-                        {t.minutes_spent != null ? formatMinutes(t.minutes_spent) : "—"}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {report.tasks.map((t) => {
+                    const proj = projById.get(t.project_id);
+                    return (
+                      <TableRow key={t.id}>
+                        <TableCell className="font-medium">
+                          {proj?.name ?? "—"}
+                        </TableCell>
+                        <TableCell className="font-mono text-muted-foreground">
+                          {proj?.job_code_code ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {t.activity_type ?? "—"}
+                        </TableCell>
+                        <TableCell className="whitespace-pre-wrap text-muted-foreground">
+                          {t.description}
+                        </TableCell>
+                        <TableCell className="text-right tabular">{t.tags_count ?? 0}</TableCell>
+                        <TableCell className="text-right tabular">{t.docs_count ?? 0}</TableCell>
+                        <TableCell className="text-right tabular">{t.bom_count ?? 0}</TableCell>
+                        <TableCell className="text-right tabular">{t.spares_count ?? 0}</TableCell>
+                        <TableCell className="text-right tabular">
+                          {t.minutes_spent != null ? formatMinutes(t.minutes_spent) : "—"}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>

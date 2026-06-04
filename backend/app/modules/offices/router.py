@@ -18,7 +18,7 @@ from app.modules.users.models import User
 
 router = APIRouter(prefix="/offices", tags=["offices"])
 
-AdminUser = Depends(require_role("admin"))
+AdminUser = Depends(require_role("project_manager"))
 
 
 @router.get("", response_model=OfficePage)

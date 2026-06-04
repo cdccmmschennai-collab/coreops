@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
 
+import { useCalendarEvents } from "@/features/calendar/hooks";
+
 import { useAttendanceList } from "../hooks";
 import {
   DOW,
@@ -49,11 +51,19 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     offset: 0,
   });
 
+  const holidayQuery = useCalendarEvents({ from, to, event_type: "holiday", limit: 100 });
+
   const byDate = React.useMemo(() => {
     const map = new Map<string, Attendance>();
     for (const r of query.data?.items ?? []) map.set(r.attendance_date, r);
     return map;
   }, [query.data]);
+
+  const holidayByDate = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ev of holidayQuery.data?.items ?? []) map.set(ev.event_date, ev.title);
+    return map;
+  }, [holidayQuery.data]);
 
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
   const todayRecord = byDate.get(todayIso);
@@ -116,8 +126,11 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                 if (day == null) return <div key={i} className="min-h-[86px]" />;
                 const iso = isoDate(view.y, view.m, day);
                 const record = byDate.get(iso);
+                const holidayTitle = holidayByDate.get(iso);
                 const status: StatusKey | undefined =
-                  record?.status ?? (isWeekend(view.y, view.m, day) ? "weekend" : undefined);
+                  record?.status ??
+                  (holidayTitle ? "holiday" : undefined) ??
+                  (isWeekend(view.y, view.m, day) ? "weekend" : undefined);
                 const s = status ? STATUS[status] : null;
                 const isToday = iso === todayIso;
                 return (
@@ -146,6 +159,11 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                         </span>
                       )}
                     </div>
+                    {holidayTitle && !record && (
+                      <p className="mt-1 text-[10px] font-medium text-violet-700 leading-tight line-clamp-2">
+                        {holidayTitle}
+                      </p>
+                    )}
                     {s && (
                       <div className={cn("mt-auto flex items-center gap-1.5 text-[11px] font-medium", s.text)}>
                         <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />

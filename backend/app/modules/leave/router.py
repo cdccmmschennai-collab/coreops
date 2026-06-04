@@ -29,7 +29,7 @@ from app.modules.users.models import User
 
 router = APIRouter(prefix="/leave-requests", tags=["leave"])
 
-require_reviewer = require_role("admin", "manager")
+require_reviewer = require_role("project_manager")
 
 
 @router.get("", response_model=LeaveRequestPage)

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
+  Bell,
   CalendarDays,
   FolderKanban,
   Home,
@@ -15,6 +16,7 @@ import {
 
 import { Brand } from "@/components/shell/brand";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useUnreadCount } from "@/features/notifications/hooks";
 import { can, type Capability } from "@/lib/rbac";
 import { cn } from "@/lib/utils";
 
@@ -22,19 +24,19 @@ interface NavItem {
   label: string;
   href: string;
   icon: LucideIcon;
-  /** Capability required to see this item. If absent, all authenticated users see it. */
   capability?: Capability;
-  /** Page not built yet (F2+). Rendered disabled so the shell looks complete. */
   soon?: boolean;
+  count?: number;
 }
 
 const WORKSPACE: NavItem[] = [
-  { label: "Home",       href: "/dashboard", icon: Home },
-  { label: "Employees",  href: "/employees", icon: Users,         capability: "employee.view" },
-  { label: "Projects",   href: "/projects",  icon: FolderKanban,  capability: "project.view" },
-  { label: "Attendance", href: "/attendance", icon: CalendarDays },
-  { label: "Reports",    href: "/reports",   icon: FileText },
-  { label: "Analytics",  href: "/analytics", icon: BarChart3,     capability: "analytics.view" },
+  { label: "Home",          href: "/dashboard",     icon: Home },
+  { label: "Employees",     href: "/employees",     icon: Users,        capability: "employee.view" },
+  { label: "Projects",      href: "/projects",      icon: FolderKanban, capability: "project.view" },
+  { label: "Attendance",    href: "/attendance",    icon: CalendarDays },
+  { label: "Reports",       href: "/reports",       icon: FileText },
+  { label: "Analytics",     href: "/analytics",     icon: BarChart3,    capability: "analytics.view" },
+  { label: "Notifications", href: "/notifications", icon: Bell },
 ];
 
 const MANAGE: NavItem[] = [
@@ -72,6 +74,11 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
     >
       <Icon className="h-4 w-4" strokeWidth={1.75} />
       <span>{item.label}</span>
+      {item.count != null && item.count > 0 && (
+        <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold leading-none text-primary-foreground">
+          {item.count > 99 ? "99+" : item.count}
+        </span>
+      )}
     </Link>
   );
 }
@@ -79,9 +86,13 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { role } = useAuth();
+  const { data: unreadData } = useUnreadCount();
+  const unreadCount = unreadData?.count ?? 0;
 
   const visibleWorkspace = WORKSPACE.filter(
     (item) => !item.capability || can(role, item.capability),
+  ).map((item) =>
+    item.href === "/notifications" ? { ...item, count: unreadCount } : item
   );
 
   return (

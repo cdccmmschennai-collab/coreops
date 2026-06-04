@@ -1,4 +1,4 @@
-"""Service-level unit tests for Daily Work Reports (Phase B4).
+﻿"""Service-level unit tests for Daily Work Reports (Phase B4).
 
 Routers do not exist yet; these call the service functions directly with the `db`
 fixture and constructed actors. Covers workflow transitions, validation rules
@@ -65,7 +65,7 @@ def test_transition_draft_to_submitted(db, author):
 
 def test_transition_submitted_to_approved(db, author, make_user):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.admin)
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
 
@@ -77,7 +77,7 @@ def test_transition_submitted_to_approved(db, author, make_user):
 
 def test_transition_submitted_to_rejected(db, author, make_user):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.admin)
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
 
@@ -89,7 +89,7 @@ def test_transition_submitted_to_rejected(db, author, make_user):
 
 def test_transition_rejected_to_submitted(db, author, make_user):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.admin)
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
     svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="redo"))
@@ -101,7 +101,7 @@ def test_transition_rejected_to_submitted(db, author, make_user):
 
 def test_invalid_transition_approve_draft_is_422(db, author, make_user):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.admin)
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     with pytest.raises(AppError) as ei:
         svc.approve_work_report(db, admin, r.id)
@@ -110,7 +110,7 @@ def test_invalid_transition_approve_draft_is_422(db, author, make_user):
 
 def test_edit_rejected_returns_to_draft(db, author, make_user):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.admin)
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
     svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="redo"))
@@ -273,14 +273,13 @@ def test_edit_submitted_is_403(db, author):
     assert ei.value.status_code == 403
 
 
-# ---------- RBAC: manager team scope ---------------------------------------
-def test_manager_reviews_team_but_not_outsiders(
+# ---------- RBAC: project_manager global access ----------------------------
+def test_any_project_manager_can_review_any_report(
     db, make_user, make_employee, make_project, make_project_member
 ):
-    # manager M1 over employee E; manager M2 unrelated
-    m1 = make_user("m1@x.com", role=UserRole.manager)
+    m1 = make_user("m1@x.com", role=UserRole.project_manager)
     m1_emp = make_employee(employee_code="M-1", user_id=m1.id)
-    m2 = make_user("m2@x.com", role=UserRole.manager)
+    m2 = make_user("m2@x.com", role=UserRole.project_manager)
     make_employee(employee_code="M-2", user_id=m2.id)
 
     emp_user = make_user("e@x.com", role=UserRole.employee)
@@ -291,25 +290,20 @@ def test_manager_reviews_team_but_not_outsiders(
     r = svc.create_work_report(db, emp_user, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, emp_user, r.id)
 
-    # M2 (not the manager) cannot approve
-    with pytest.raises(AppError) as ei:
-        svc.approve_work_report(db, m2, r.id)
-    assert ei.value.status_code == 403
-
-    # M1 (direct manager) can approve
-    approved = svc.approve_work_report(db, m1, r.id)
+    # ANY project_manager can approve (no team scoping)
+    approved = svc.approve_work_report(db, m2, r.id)
     assert approved.status == WorkReportStatus.approved
 
 
-def test_manager_list_scope_includes_team(
+def test_project_manager_list_scope_sees_all(
     db, make_user, make_employee, make_project, make_project_member
 ):
-    m1 = make_user("m1@x.com", role=UserRole.manager)
+    m1 = make_user("m1@x.com", role=UserRole.project_manager)
     m1_emp = make_employee(employee_code="M-1", user_id=m1.id)
     emp_user = make_user("e@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="E-1", user_id=emp_user.id, manager_id=m1_emp.id)
     outsider = make_user("o@x.com", role=UserRole.employee)
-    out_emp = make_employee(employee_code="E-2", user_id=outsider.id)  # no manager link
+    out_emp = make_employee(employee_code="E-2", user_id=outsider.id)
 
     p = make_project(code="P-1", status=ProjectStatus.active)
     make_project_member(project_id=p.id, employee_id=emp.id)
@@ -323,14 +317,15 @@ def test_manager_list_scope_includes_team(
         db, m1, employee_id=None, project_id=None, status=None,
         date_from=None, date_to=None, limit=50, offset=0,
     )
-    assert total == 1  # only the team member's report, not the outsider's
+    # project_manager sees ALL reports (no team scope)
+    assert total == 2
 
 
 # ---------- RBAC: admin ----------------------------------------------------
 def test_admin_sees_all_and_can_approve(db, author, make_user):
     a_user, a_emp, a_proj = author(email="a@x.com", code="E-1", proj_code="P-1")
     b_user, b_emp, b_proj = author(email="b@x.com", code="E-2", proj_code="P-2")
-    admin = make_user("admin@x.com", role=UserRole.admin)
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
 
     ra = svc.create_work_report(db, a_user, WorkReportCreate(report_date=TODAY, tasks=[_task(a_proj.id)]))
     svc.create_work_report(db, b_user, WorkReportCreate(report_date=TODAY, tasks=[_task(b_proj.id)]))

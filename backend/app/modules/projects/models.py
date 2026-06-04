@@ -34,6 +34,12 @@ class ProjectStatus(str, enum.Enum):
 
 
 class ProjectMemberRole(str, enum.Enum):
+    # Active roles
+    team_lead = "team_lead"
+    contributor = "contributor"
+    qc = "qc"
+    # Deprecated — kept so SQLAlchemy can load pre-migration rows without crashing.
+    # No member should have these values after migration 0013. Removed in 0018.
     lead = "lead"
     member = "member"
 
@@ -56,6 +62,9 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    job_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_codes.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -71,6 +80,7 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index("projects_status_idx", "status", postgresql_where=text("deleted_at IS NULL")),
+        Index("projects_job_code_idx", "job_code_id", postgresql_where=text("deleted_at IS NULL")),
     )
 
 
@@ -90,7 +100,7 @@ class ProjectMember(UUIDMixin, TimestampMixin, Base):
             values_callable=lambda e: [m.value for m in e],
         ),
         nullable=False,
-        server_default=ProjectMemberRole.member.value,
+        server_default=ProjectMemberRole.contributor.value,
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -98,4 +108,24 @@ class ProjectMember(UUIDMixin, TimestampMixin, Base):
         UniqueConstraint("project_id", "employee_id", name="project_members_uq"),
         Index("project_members_project_idx", "project_id"),
         Index("project_members_employee_idx", "employee_id"),
+    )
+
+
+class ProjectManager(UUIDMixin, TimestampMixin, Base):
+    """Explicit PM→project assignment. PMs have global read regardless of this table;
+    this is used for routing notifications and for the assignment UI."""
+    __tablename__ = "project_managers"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="project_managers_uq"),
+        Index("project_managers_project_idx", "project_id"),
+        Index("project_managers_user_idx", "user_id"),
     )

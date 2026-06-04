@@ -19,8 +19,7 @@ from app.modules.users.schemas import (
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-# Every endpoint here requires the admin role.
-AdminUser = Depends(require_role("admin"))
+AdminUser = Depends(require_role("project_manager"))
 
 
 @router.get("", response_model=UserPage)

@@ -639,6 +639,8 @@ export interface components {
             code: string;
             /** Name */
             name: string;
+            /** Job Code Id */
+            job_code_id?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -657,7 +659,7 @@ export interface components {
              * Format: uuid
              */
             employee_id: string;
-            /** @default member */
+            /** @default contributor */
             role: components["schemas"]["ProjectMemberRole"];
         };
         /** ProjectMemberOut */
@@ -690,7 +692,7 @@ export interface components {
          * ProjectMemberRole
          * @enum {string}
          */
-        ProjectMemberRole: "lead" | "member";
+        ProjectMemberRole: "team_lead" | "contributor" | "qc";
         /** ProjectMemberRoleUpdate */
         ProjectMemberRoleUpdate: {
             role: components["schemas"]["ProjectMemberRole"];
@@ -706,6 +708,12 @@ export interface components {
             code: string;
             /** Name */
             name: string;
+            /** Job Code Id */
+            job_code_id?: string | null;
+            /** Job Code Code — J-code string e.g. "J-615-2" */
+            job_code_code?: string | null;
+            /** Job Code Name — full label e.g. "EPIC FOR DUKHAN..." */
+            job_code_name?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -746,6 +754,8 @@ export interface components {
         ProjectUpdate: {
             /** Name */
             name?: string | null;
+            /** Job Code Id */
+            job_code_id?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -815,7 +825,7 @@ export interface components {
          * UserRole
          * @enum {string}
          */
-        UserRole: "admin" | "manager" | "employee" | "viewer";
+        UserRole: "project_manager" | "employee";
         /** UserUpdate */
         UserUpdate: {
             /** Is Active */

@@ -29,6 +29,35 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
+          entity_id: uuid.UUID | None = None) -> None:
+    try:
+        from app.modules.notifications.service import create_notification
+        create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
+                            entity_type="leave_request", entity_id=entity_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _notify_manager(db: Session, employee: Employee, type_: str, title: str,
+                    message: str, entity_id: uuid.UUID | None = None) -> None:
+    if employee.manager_id is None:
+        return
+    mgr = db.get(Employee, employee.manager_id)
+    if mgr is None or mgr.user_id is None:
+        return
+    _push(db, mgr.user_id, type_, title, message, entity_id)
+
+
+def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
+                     message: str, entity_id: uuid.UUID | None = None) -> None:
+    emp = db.get(Employee, employee_id)
+    if emp is None or emp.user_id is None:
+        return
+    _push(db, emp.user_id, type_, title, message, entity_id)
+
+
 def _team_ids(manager_employee_id: uuid.UUID):
     return select(Employee.id).where(
         Employee.manager_id == manager_employee_id, Employee.deleted_at.is_(None)
@@ -38,51 +67,28 @@ def _team_ids(manager_employee_id: uuid.UUID):
 # ---------- scope helpers --------------------------------------------------
 
 def _apply_scope(db: Session, actor: User, stmt):
-    if actor.role == UserRole.admin:
+    if actor.role == UserRole.project_manager:
         return stmt, True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
-    if actor.role == UserRole.manager:
-        return (
-            stmt.where(
-                (LeaveRequest.employee_id == me.id)
-                | (LeaveRequest.employee_id.in_(_team_ids(me.id)))
-            ),
-            True,
-        )
-    # employee
     return stmt.where(LeaveRequest.employee_id == me.id), True
 
 
 def _assert_can_read(db: Session, actor: User, req: LeaveRequest) -> None:
-    if actor.role == UserRole.admin:
+    if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)
     if me is None:
         raise AppError("forbidden", "Not permitted.", 403)
     if req.employee_id == me.id:
         return
-    if actor.role == UserRole.manager:
-        emp = db.get(Employee, req.employee_id)
-        if emp is not None and emp.manager_id == me.id:
-            return
-        raise AppError("forbidden", "You can only view your team's leave requests.", 403)
     raise AppError("forbidden", "You can only view your own leave requests.", 403)
 
 
 def _assert_can_review(db: Session, actor: User, req: LeaveRequest) -> None:
-    if actor.role == UserRole.admin:
-        return
-    if actor.role != UserRole.manager:
-        raise AppError("forbidden", "Only managers and admins can review leave requests.", 403)
-    me = _current_employee(db, actor)
-    if me is None:
-        raise AppError("forbidden", "Not permitted.", 403)
-    emp = db.get(Employee, req.employee_id)
-    if emp is not None and emp.manager_id == me.id:
-        return
-    raise AppError("forbidden", "You can only review your team's leave requests.", 403)
+    if actor.role != UserRole.project_manager:
+        raise AppError("forbidden", "Only project managers can review leave requests.", 403)
 
 
 def _fetch(db: Session, req_id: uuid.UUID) -> LeaveRequest:
@@ -171,6 +177,12 @@ def create_leave_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+    _notify_manager(
+        db, me, "leave_submitted",
+        f"{me.full_name} submitted a leave request",
+        f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
+        req.id,
+    )
     return req
 
 
@@ -212,6 +224,12 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
     db.add(req)
     db.commit()
     db.refresh(req)
+    _notify_manager(
+        db, me, "leave_cancelled",
+        f"{me.full_name} cancelled a leave request",
+        f"{me.full_name} cancelled their leave request ({req.start_date} to {req.end_date}).",
+        req.id,
+    )
     return req
 
 
@@ -233,6 +251,12 @@ def approve_leave_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+    _notify_employee(
+        db, req.employee_id, "leave_approved",
+        "Your leave request was approved",
+        f"Your leave request ({req.start_date} to {req.end_date}) has been approved.",
+        req.id,
+    )
     return req
 
 
@@ -252,4 +276,11 @@ def reject_leave_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+    _notify_employee(
+        db, req.employee_id, "leave_rejected",
+        "Your leave request was rejected",
+        f"Your leave request ({req.start_date} to {req.end_date}) was not approved."
+        + (f" Note: {data.comment}" if data.comment else ""),
+        req.id,
+    )
     return req

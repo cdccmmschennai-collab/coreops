@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Form,
   FormControl,
@@ -27,8 +28,12 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { useActivityTypeOptions, useCreateActivityType } from "@/features/activity-types/hooks";
+import { useAuth } from "@/features/auth/auth-provider";
+import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 import { formatMinutes } from "@/lib/format";
+import { can } from "@/lib/rbac";
 
 import { useCreateWorkReport, useUpdateWorkReport } from "../hooks";
 import { useProjectOptions } from "../project-options";
@@ -55,7 +60,53 @@ const ALL_NONE = "__none__";
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
-  const { items: projects } = useProjectOptions();
+
+  const { employeeId, role } = useAuth();
+  const { byId: empById } = useEmployeeOptions();
+  const { items: projects, byId: projById } = useProjectOptions();
+  const { items: activityTypes } = useActivityTypeOptions();
+  const createActivityType = useCreateActivityType();
+
+  const employeeName = employeeId ? (empById.get(employeeId) ?? "—") : "—";
+  const canCreateActivityType = can(role, "masterdata.manage");
+
+  // Project combobox options — show name + code + client for easy identification
+  const projectOptions = React.useMemo(
+    () =>
+      projects.map((p) => ({
+        value: p.id,
+        label: p.name,
+        sublabel: p.code,
+        description: p.client ?? undefined,
+        keywords: [p.code, p.name, p.client ?? "", p.job_code_code ?? ""],
+      })),
+    [projects],
+  );
+
+  // Activity type combobox options — code shown on the right
+  const activityOptions = React.useMemo(
+    () =>
+      activityTypes.map((a) => ({
+        value: a.name,   // stored as TEXT in work_report_tasks.activity_type
+        label: a.name,
+        sublabel: a.code ?? undefined,
+        keywords: [a.code ?? "", a.name, a.category],
+      })),
+    [activityTypes],
+  );
+
+  async function handleCreateActivityType(inputName: string) {
+    try {
+      await createActivityType.mutateAsync({
+        name: inputName,
+        category: "GENERAL",
+        requires_project: false,
+      });
+      toast.success(`Activity type "${inputName}" created`);
+    } catch (err) {
+      toast.error(err instanceof AppError ? err.message : "Could not create activity type.");
+    }
+  }
 
   const form = useForm<WorkReportFormValues>({
     resolver: zodResolver(workReportFormSchema),
@@ -107,6 +158,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         )}
         <Form {...form}>
           <form className="space-y-6" onSubmit={form.handleSubmit(onSubmit)} noValidate>
+
+            {/* ── Employee (read-only) ── */}
+            <div className="flex items-center gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Submitting as:</span>
+              <span className="font-medium">{employeeName}</span>
+            </div>
 
             {/* ── Row 1: Date, Day Status, Location ── */}
             <div className="grid gap-4 sm:grid-cols-3">
@@ -188,7 +245,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="well_head_no"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Well Head No. <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormLabel>
+                      Well Head No.{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FormLabel>
                     <FormControl>
                       <Input placeholder="If worked on well head" {...field} />
                     </FormControl>
@@ -201,7 +261,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="pm_plant"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>PM Plant <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormLabel>
+                      PM Plant{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FormLabel>
                     <FormControl>
                       <Input placeholder="PM plant identifier" {...field} />
                     </FormControl>
@@ -243,127 +306,184 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
             <Separator />
 
-            {/* ── Project Tasks ── */}
+            {/* ── Project Task Rows ── */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-medium">Project activities</h3>
                 {totalMinutes > 0 && (
                   <span className="text-sm text-muted-foreground">
-                    Total: <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
+                    Total:{" "}
+                    <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
                   </span>
                 )}
               </div>
 
-              {fields.map((field, index) => (
-                <div
-                  key={field.id}
-                  className="space-y-2 rounded-lg border border-border p-3"
-                >
-                  {/* Row A: Project | Description | Minutes | Remove */}
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_7rem_auto] sm:items-start">
-                    <FormField
-                      control={form.control}
-                      name={`tasks.${index}.project_id`}
-                      render={({ field: f }) => (
-                        <FormItem>
-                          <FormLabel className="sr-only">Project</FormLabel>
-                          <Select value={f.value} onValueChange={f.onChange}>
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Project" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              {projects.map((p) => (
-                                <SelectItem key={p.id} value={p.id}>
-                                  {p.code} — {p.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name={`tasks.${index}.description`}
-                      render={({ field: f }) => (
-                        <FormItem>
-                          <FormLabel className="sr-only">Description</FormLabel>
-                          <FormControl>
-                            <Input placeholder="What did you work on?" {...f} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name={`tasks.${index}.minutes_spent`}
-                      render={({ field: f }) => (
-                        <FormItem>
-                          <FormLabel className="sr-only">Minutes (opt.)</FormLabel>
-                          <FormControl>
-                            <Input type="number" min={0} max={1440} placeholder="Min (opt.)" {...f} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => remove(index)}
-                      disabled={fields.length === 1}
-                      aria-label="Remove activity"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
+              {fields.map((field, index) => {
+                const selectedProjectId = watchedTasks?.[index]?.project_id;
+                const selectedProject = selectedProjectId
+                  ? projById.get(selectedProjectId)
+                  : undefined;
+                const jobCodeLabel = selectedProject?.job_code_code ?? "—";
 
-                  {/* Row B: Activity Type | Tags | Docs | BOM | Spares */}
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_repeat(4,5rem)]">
-                    <FormField
-                      control={form.control}
-                      name={`tasks.${index}.activity_type`}
-                      render={({ field: f }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs text-muted-foreground">Activity type</FormLabel>
-                          <FormControl>
-                            <Input placeholder="e.g. Inspection, Testing…" {...f} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    {(
-                      [
-                        ["tags_count",   "Tags"],
-                        ["docs_count",   "Docs"],
-                        ["bom_count",    "BOM"],
-                        ["spares_count", "Spares"],
-                      ] as const
-                    ).map(([name, label]) => (
+                return (
+                  <div
+                    key={field.id}
+                    className="space-y-2 rounded-lg border border-border p-3"
+                  >
+                    {/* Row A: Project (searchable) | Job Code (read-only) | Duration | Remove */}
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_7rem_auto] sm:items-start">
+
+                      {/* Project — searchable combobox with name + code + client */}
                       <FormField
-                        key={name}
                         control={form.control}
-                        name={`tasks.${index}.${name}`}
+                        name={`tasks.${index}.project_id`}
                         render={({ field: f }) => (
                           <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">{label}</FormLabel>
+                            <FormLabel className="text-xs text-muted-foreground">
+                              Project Name
+                            </FormLabel>
                             <FormControl>
-                              <Input type="number" min={0} placeholder="0" {...f} />
+                              <Combobox
+                                value={f.value}
+                                onValueChange={f.onChange}
+                                options={projectOptions}
+                                placeholder="Select project…"
+                                searchPlaceholder="Search by name, code, or client…"
+                                emptyMessage="No matching projects."
+                                allowClear={false}
+                              />
                             </FormControl>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
-                    ))}
+
+                      {/* Job Code — read-only display from selected project */}
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Job Code
+                        </span>
+                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm">
+                          {jobCodeLabel}
+                        </div>
+                      </div>
+
+                      {/* Duration */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.minutes_spent`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground">
+                              Duration (min)
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min={0}
+                                max={1440}
+                                placeholder="0"
+                                {...f}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="mt-6"
+                        onClick={() => remove(index)}
+                        disabled={fields.length === 1}
+                        aria-label="Remove activity"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    {/* Row B: Activity Type (searchable) | Description | Tags | Docs | BOM | Spares */}
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)_repeat(4,5rem)]">
+
+                      {/* Activity Type — searchable combobox; PM can create inline */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.activity_type`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground">
+                              Activity Type
+                            </FormLabel>
+                            <FormControl>
+                              <Combobox
+                                value={f.value || ""}
+                                onValueChange={(v) => f.onChange(v)}
+                                options={activityOptions}
+                                placeholder="Select activity type…"
+                                searchPlaceholder="Search by name or code…"
+                                emptyMessage="No matching activity types."
+                                allowClear
+                                allowCreate={canCreateActivityType}
+                                onCreateNew={async (name) => {
+                                  await handleCreateActivityType(name);
+                                  f.onChange(name);
+                                }}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Description */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.description`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="text-xs text-muted-foreground">
+                              Description
+                            </FormLabel>
+                            <FormControl>
+                              <Input placeholder="What did you work on?" {...f} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Count fields */}
+                      {(
+                        [
+                          ["tags_count",   "Tags"],
+                          ["docs_count",   "Docs"],
+                          ["bom_count",    "BOM"],
+                          ["spares_count", "Spares"],
+                        ] as const
+                      ).map(([name, label]) => (
+                        <FormField
+                          key={name}
+                          control={form.control}
+                          name={`tasks.${index}.${name}`}
+                          render={({ field: f }) => (
+                            <FormItem>
+                              <FormLabel className="text-xs text-muted-foreground">
+                                {label}
+                              </FormLabel>
+                              <FormControl>
+                                <Input type="number" min={0} placeholder="0" {...f} />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
 
               {tasksError && (
                 <p className="text-xs font-medium text-destructive">{tasksError}</p>
@@ -388,9 +508,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="remarks"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Day Remarks <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormLabel>
+                      Day Remarks{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FormLabel>
                     <FormControl>
-                      <Textarea rows={3} placeholder="What did you accomplish today?" {...field} />
+                      <Textarea
+                        rows={3}
+                        placeholder="What did you accomplish today?"
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -401,9 +528,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="query_text"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Query / Issues <span className="text-muted-foreground font-normal">(optional)</span></FormLabel>
+                    <FormLabel>
+                      Query / Issues{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FormLabel>
                     <FormControl>
-                      <Textarea rows={3} placeholder="Any blockers or questions?" {...field} />
+                      <Textarea
+                        rows={3}
+                        placeholder="Any blockers or questions?"
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

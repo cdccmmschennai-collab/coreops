@@ -1,4 +1,4 @@
-"""API tests for the leave module: CRUD, workflow, and RBAC."""
+﻿"""API tests for the leave module: CRUD, workflow, and RBAC."""
 from datetime import date, timedelta
 
 from app.modules.leave.models import LeaveStatus, LeaveType
@@ -64,8 +64,8 @@ def test_employee_sees_only_own(client, make_user, make_employee, make_leave_req
     assert res["items"][0]["employee_id"] == str(e1.id)
 
 
-def test_manager_sees_team_and_self(client, make_user, make_employee, make_leave_request, login):
-    mu = make_user("mgr@x.com", role=UserRole.manager)
+def test_project_manager_sees_all_leave_requests(client, make_user, make_employee, make_leave_request, login):
+    mu = make_user("mgr@x.com", role=UserRole.project_manager)
     me = make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="EMP", user_id=eu.id, manager_id=me.id)
@@ -76,13 +76,12 @@ def test_manager_sees_team_and_self(client, make_user, make_employee, make_leave
     make_leave_request(employee_id=other.id, start_date=date.today(), end_date=date.today())
     h = login("mgr@x.com")
     res = client.get("/api/v1/leave-requests", headers=h).json()
-    assert res["total"] == 2  # own + team; not other
-    emp_ids = {r["employee_id"] for r in res["items"]}
-    assert str(other.id) not in emp_ids
+    # project_manager sees ALL leave requests
+    assert res["total"] == 3
 
 
 def test_admin_sees_all(client, make_user, make_employee, make_leave_request, login):
-    make_user("adm@x.com", role=UserRole.admin)
+    make_user("adm@x.com", role=UserRole.project_manager)
     for i in range(3):
         eu = make_user(f"e{i}@x.com", role=UserRole.employee)
         emp = make_employee(employee_code=f"E{i}", user_id=eu.id)
@@ -145,7 +144,7 @@ def test_cannot_cancel_approved(client, make_user, make_employee, make_leave_req
 # ---------- approve / reject ----------
 
 def test_manager_approves_team_request(client, make_user, make_employee, make_leave_request, login):
-    mu = make_user("mgr@x.com", role=UserRole.manager)
+    mu = make_user("mgr@x.com", role=UserRole.project_manager)
     me = make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="EMP", user_id=eu.id, manager_id=me.id)
@@ -161,7 +160,7 @@ def test_manager_approves_team_request(client, make_user, make_employee, make_le
 
 
 def test_manager_rejects_team_request(client, make_user, make_employee, make_leave_request, login):
-    mu = make_user("mgr@x.com", role=UserRole.manager)
+    mu = make_user("mgr@x.com", role=UserRole.project_manager)
     me = make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="EMP", user_id=eu.id, manager_id=me.id)
@@ -174,8 +173,8 @@ def test_manager_rejects_team_request(client, make_user, make_employee, make_lea
     assert res.json()["status"] == "rejected"
 
 
-def test_manager_cannot_approve_non_team(client, make_user, make_employee, make_leave_request, login):
-    mu = make_user("mgr@x.com", role=UserRole.manager)
+def test_project_manager_can_approve_any_leave(client, make_user, make_employee, make_leave_request, login):
+    mu = make_user("mgr@x.com", role=UserRole.project_manager)
     make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     other_emp = make_employee(employee_code="EMP")  # no manager_id set
@@ -183,8 +182,9 @@ def test_manager_cannot_approve_non_team(client, make_user, make_employee, make_
     req = make_leave_request(employee_id=other_emp.id, start_date=date.today() + timedelta(days=3),
                               end_date=date.today() + timedelta(days=5))
     h = login("mgr@x.com")
+    # project_manager can approve ANY leave request (global access)
     res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
-    assert res.status_code == 403
+    assert res.status_code == 200
 
 
 def test_employee_cannot_approve(client, make_user, make_employee, make_leave_request, login):
@@ -198,7 +198,7 @@ def test_employee_cannot_approve(client, make_user, make_employee, make_leave_re
 
 
 def test_double_approve_422(client, make_user, make_employee, make_leave_request, login):
-    mu = make_user("mgr@x.com", role=UserRole.manager)
+    mu = make_user("mgr@x.com", role=UserRole.project_manager)
     me = make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="EMP", user_id=eu.id, manager_id=me.id)
@@ -215,7 +215,7 @@ def test_admin_can_approve_any(client, make_user, make_employee, make_leave_requ
     emp = make_employee(employee_code="E1", user_id=eu.id)
     req = make_leave_request(employee_id=emp.id, start_date=date.today() + timedelta(days=1),
                               end_date=date.today() + timedelta(days=2))
-    make_user("adm@x.com", role=UserRole.admin)
+    make_user("adm@x.com", role=UserRole.project_manager)
     h = login("adm@x.com")
     res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
     assert res.status_code == 200

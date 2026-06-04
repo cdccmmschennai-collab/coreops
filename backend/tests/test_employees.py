@@ -1,4 +1,4 @@
-"""API tests for the employees module: CRUD, search/filter/pagination, RBAC."""
+﻿"""API tests for the employees module: CRUD, search/filter/pagination, RBAC."""
 import uuid
 
 from app.modules.employees.models import EmployeeStatus
@@ -19,7 +19,7 @@ def _emp_payload(**over):
 
 # ---------- admin CRUD ----------
 def test_admin_create_and_get(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post("/api/v1/employees", headers=h, json=_emp_payload())
     assert res.status_code == 201, res.text
     body = res.json()
@@ -32,20 +32,20 @@ def test_admin_create_and_get(client, auth_header):
 
 
 def test_create_duplicate_code_409(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     assert client.post("/api/v1/employees", headers=h, json=_emp_payload()).status_code == 201
     dup = client.post("/api/v1/employees", headers=h, json=_emp_payload(first_name="Other"))
     assert dup.status_code == 409
 
 
 def test_create_missing_fields_422(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post("/api/v1/employees", headers=h, json={"first_name": "X"})
     assert res.status_code == 422
 
 
 def test_create_invalid_manager_422(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post(
         "/api/v1/employees",
         headers=h,
@@ -55,7 +55,7 @@ def test_create_invalid_manager_422(client, auth_header):
 
 
 def test_update_employee(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     emp = make_employee(employee_code="EMP-100")
     res = client.patch(
         f"/api/v1/employees/{emp.id}",
@@ -68,7 +68,7 @@ def test_update_employee(client, auth_header, make_employee):
 
 
 def test_update_self_manager_422(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     emp = make_employee(employee_code="EMP-200")
     res = client.patch(
         f"/api/v1/employees/{emp.id}", headers=h, json={"manager_id": str(emp.id)}
@@ -77,7 +77,7 @@ def test_update_self_manager_422(client, auth_header, make_employee):
 
 
 def test_deactivate_removes_from_list(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     emp = make_employee(employee_code="EMP-300")
     assert client.delete(f"/api/v1/employees/{emp.id}", headers=h).status_code == 204
     listed = client.get("/api/v1/employees", headers=h).json()
@@ -86,14 +86,14 @@ def test_deactivate_removes_from_list(client, auth_header, make_employee):
 
 
 def test_get_unknown_404(client, auth_header):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.get(f"/api/v1/employees/{uuid.uuid4()}", headers=h)
     assert res.status_code == 404
 
 
 # ---------- pagination / search / filter ----------
 def test_list_pagination(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     for i in range(3):
         make_employee(employee_code=f"E-{i}", first_name=f"Name{i}")
     page = client.get("/api/v1/employees?limit=2&offset=0", headers=h).json()
@@ -103,7 +103,7 @@ def test_list_pagination(client, auth_header, make_employee):
 
 
 def test_search_by_name(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     make_employee(employee_code="E-a", first_name="Alice", last_name="Wong")
     make_employee(employee_code="E-b", first_name="Bob", last_name="Singh")
     res = client.get("/api/v1/employees?q=alice", headers=h).json()
@@ -112,7 +112,7 @@ def test_search_by_name(client, auth_header, make_employee):
 
 
 def test_filter_by_status(client, auth_header, make_employee):
-    h = auth_header("admin@example.com", role=UserRole.admin)
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
     make_employee(employee_code="E-act", status=EmployeeStatus.active)
     make_employee(employee_code="E-exit", status=EmployeeStatus.exited)
     res = client.get("/api/v1/employees?status=exited", headers=h).json()
@@ -123,7 +123,7 @@ def test_filter_by_status(client, auth_header, make_employee):
 # ---------- RBAC ----------
 def test_viewer_can_read_cannot_create(client, auth_header, make_employee):
     make_employee(employee_code="E-v")
-    h = auth_header("viewer@example.com", role=UserRole.viewer)
+    h = auth_header("viewer@example.com", role=UserRole.employee)
     assert client.get("/api/v1/employees", headers=h).status_code == 200
     assert client.post("/api/v1/employees", headers=h, json=_emp_payload()).status_code == 403
 
@@ -146,35 +146,38 @@ def test_employee_cannot_view_other_403(client, make_user, make_employee, login)
     assert client.get(f"/api/v1/employees/{other.id}", headers=h).status_code == 403
 
 
-def test_manager_sees_team_only(client, make_user, make_employee, login):
-    mgr_user = make_user("mgr@example.com", role=UserRole.manager)
+def test_project_manager_sees_all_employees(client, make_user, make_employee, login):
+    mgr_user = make_user("mgr@example.com", role=UserRole.project_manager)
     mgr = make_employee(employee_code="MGR", user_id=mgr_user.id, first_name="Mgr")
     report = make_employee(employee_code="R1", first_name="Report", manager_id=mgr.id)
     make_employee(employee_code="X1", first_name="Outsider")
     h = login("mgr@example.com")
     res = client.get("/api/v1/employees", headers=h).json()
     codes = {item["employee_code"] for item in res["items"]}
-    assert codes == {"R1"}
+    # project_manager sees ALL employees
+    assert "MGR" in codes and "R1" in codes and "X1" in codes
     assert client.get(f"/api/v1/employees/{report.id}", headers=h).status_code == 200
 
 
-def test_manager_get_nonteam_403(client, make_user, make_employee, login):
-    mgr_user = make_user("mgr@example.com", role=UserRole.manager)
+def test_project_manager_can_view_any_employee(client, make_user, make_employee, login):
+    mgr_user = make_user("mgr@example.com", role=UserRole.project_manager)
     make_employee(employee_code="MGR", user_id=mgr_user.id)
     outsider = make_employee(employee_code="X1")
     h = login("mgr@example.com")
-    assert client.get(f"/api/v1/employees/{outsider.id}", headers=h).status_code == 403
+    # project_manager has full read access
+    assert client.get(f"/api/v1/employees/{outsider.id}", headers=h).status_code == 200
 
 
-def test_manager_cannot_create_403(client, make_user, make_employee, login):
-    mgr_user = make_user("mgr@example.com", role=UserRole.manager)
+def test_project_manager_can_create_employee(client, make_user, make_employee, login):
+    mgr_user = make_user("mgr@example.com", role=UserRole.project_manager)
     make_employee(employee_code="MGR", user_id=mgr_user.id)
     h = login("mgr@example.com")
-    assert client.post("/api/v1/employees", headers=h, json=_emp_payload()).status_code == 403
+    # project_manager has full employee management access
+    assert client.post("/api/v1/employees", headers=h, json=_emp_payload()).status_code == 201
 
 
 def test_team_endpoint_returns_reports(client, make_user, make_employee, login):
-    mgr_user = make_user("mgr@example.com", role=UserRole.manager)
+    mgr_user = make_user("mgr@example.com", role=UserRole.project_manager)
     mgr = make_employee(employee_code="MGR", user_id=mgr_user.id)
     make_employee(employee_code="R1", manager_id=mgr.id)
     make_employee(employee_code="R2", manager_id=mgr.id)

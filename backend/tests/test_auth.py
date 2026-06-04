@@ -1,9 +1,9 @@
-"""API tests for the auth flow (login, logout, me) + throttling."""
+﻿"""API tests for the auth flow (login, logout, me) + throttling."""
 from app.modules.users.models import UserRole
 
 
 def test_login_success_returns_token(client, make_user):
-    make_user("a@example.com", "password123", UserRole.admin)
+    make_user("a@example.com", "password123", UserRole.project_manager)
     res = client.post("/api/v1/auth/login", json={"email": "a@example.com", "password": "password123"})
     assert res.status_code == 200, res.text
     body = res.json()
@@ -32,12 +32,12 @@ def test_login_email_is_case_insensitive(client, make_user):
 
 
 def test_me_returns_current_user(client, auth_header):
-    headers = auth_header("me@example.com", role=UserRole.manager)
+    headers = auth_header("me@example.com", role=UserRole.project_manager)
     res = client.get("/api/v1/auth/me", headers=headers)
     assert res.status_code == 200
     body = res.json()
     assert body["user"]["email"] == "me@example.com"
-    assert body["user"]["role"] == "manager"
+    assert body["user"]["role"] == "project_manager"
     assert body["employee"] is None
     assert body["employee_id"] is None
 

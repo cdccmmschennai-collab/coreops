@@ -15,9 +15,13 @@ from app.shared.base import SoftDeleteMixin, TimestampMixin, UUIDMixin
 
 
 class UserRole(str, enum.Enum):
+    # Active roles
+    project_manager = "project_manager"
+    employee = "employee"
+    # Deprecated — kept so SQLAlchemy can load pre-migration rows without crashing.
+    # No user should have these values after migration 0013. Removed in 0018.
     admin = "admin"
     manager = "manager"
-    employee = "employee"
     viewer = "viewer"
 
 
@@ -33,7 +37,7 @@ class User(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             values_callable=lambda e: [m.value for m in e],
         ),
         nullable=False,
-        server_default=UserRole.employee.value,
+        server_default=UserRole.employee.value,  # new users default to employee
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("true")

@@ -45,6 +45,9 @@ class Employee(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     manager_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="RESTRICT"), nullable=True
     )
+    reporting_pm_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     office_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("offices.id", ondelete="SET NULL"), nullable=True
     )
@@ -84,6 +87,7 @@ class Employee(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
             postgresql_where=text("user_id IS NOT NULL AND deleted_at IS NULL"),
         ),
         Index("employees_manager_idx", "manager_id", postgresql_where=text("deleted_at IS NULL")),
+        Index("employees_reporting_pm_idx", "reporting_pm_id", postgresql_where=text("deleted_at IS NULL")),
         Index("employees_office_idx", "office_id", postgresql_where=text("deleted_at IS NULL")),
         Index("employees_status_idx", "status", postgresql_where=text("deleted_at IS NULL")),
     )

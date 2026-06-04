@@ -1,10 +1,8 @@
-"""Employee service: RBAC-scoped reads + admin writes.
+"""Employee service: RBAC-scoped reads + project_manager writes.
 
 RBAC (this module):
-  admin    full access
-  manager  read access, scoped to their team (employees where manager_id = self)
-  employee read access, own record only
-  viewer   read access, all
+  project_manager  full access
+  employee         read access, own record only
 """
 import uuid
 
@@ -42,15 +40,9 @@ def list_employees(
 ) -> tuple[list[Employee], int]:
     stmt = _alive()
 
-    # Role scoping
     if actor.role == UserRole.employee:
         stmt = stmt.where(Employee.user_id == actor.id)
-    elif actor.role == UserRole.manager:
-        me = _current_employee(db, actor)
-        if me is None:
-            return [], 0
-        stmt = stmt.where(Employee.manager_id == me.id)
-    # admin / viewer: no extra scope
+    # project_manager: no extra scope — full access
 
     if q:
         like = f"%{q}%"
@@ -81,13 +73,8 @@ def list_employees(
 
 
 def _assert_can_read(db: Session, actor: User, emp: Employee) -> None:
-    if actor.role in (UserRole.admin, UserRole.viewer):
+    if actor.role == UserRole.project_manager:
         return
-    if actor.role == UserRole.manager:
-        me = _current_employee(db, actor)
-        if me is not None and (emp.manager_id == me.id or emp.id == me.id):
-            return
-        raise AppError("forbidden", "You can only view your team.", 403)
     if actor.role == UserRole.employee:
         if emp.user_id == actor.id:
             return
@@ -211,13 +198,8 @@ def deactivate_employee(db: Session, actor: User, emp_id: uuid.UUID) -> None:
 
 
 def get_team(db: Session, actor: User, emp_id: uuid.UUID) -> list[Employee]:
-    if actor.role == UserRole.manager:
-        me = _current_employee(db, actor)
-        if me is None or me.id != emp_id:
-            raise AppError("forbidden", "You can only view your own team.", 403)
-    elif actor.role != UserRole.admin:
+    if actor.role != UserRole.project_manager:
         raise AppError("forbidden", "Not permitted.", 403)
-
     rows = (
         db.execute(_alive().where(Employee.manager_id == emp_id).order_by(Employee.first_name))
         .scalars()

@@ -1,4 +1,4 @@
-"""User administration service (admin-only). Includes last-admin guards."""
+"""User administration service (project_manager only). Includes last-PM guards."""
 import uuid
 
 from sqlalchemy import func, select
@@ -10,21 +10,21 @@ from app.modules.users.schemas import UserCreate, UserUpdate
 from app.shared.errors import AppError
 
 
-def _active_admin_count(db: Session) -> int:
+def _active_pm_count(db: Session) -> int:
     return db.execute(
         select(func.count())
         .select_from(User)
         .where(
-            User.role == UserRole.admin,
+            User.role == UserRole.project_manager,
             User.is_active.is_(True),
             User.deleted_at.is_(None),
         )
     ).scalar_one()
 
 
-def _guard_not_last_admin(db: Session, user: User) -> None:
-    if user.role == UserRole.admin and _active_admin_count(db) <= 1:
-        raise AppError("conflict", "Cannot remove the last active admin.", 409)
+def _guard_not_last_pm(db: Session, user: User) -> None:
+    if user.role == UserRole.project_manager and _active_pm_count(db) <= 1:
+        raise AppError("conflict", "Cannot remove the last active project manager.", 409)
 
 
 def get_user(db: Session, user_id: uuid.UUID) -> User:
@@ -76,15 +76,15 @@ def update_user(
     if data.is_active is not None and data.is_active is False:
         if user.id == acting_user.id:
             raise AppError("conflict", "You cannot deactivate yourself.", 409)
-        _guard_not_last_admin(db, user)
+        _guard_not_last_pm(db, user)
         user.is_active = False
     elif data.is_active is True:
         user.is_active = True
 
     if data.role is not None and data.role != user.role:
-        if user.id == acting_user.id and user.role == UserRole.admin:
-            raise AppError("conflict", "You cannot change your own admin role.", 409)
-        _guard_not_last_admin(db, user)
+        if user.id == acting_user.id and user.role == UserRole.project_manager:
+            raise AppError("conflict", "You cannot change your own role.", 409)
+        _guard_not_last_pm(db, user)
         user.role = data.role
 
     db.add(user)

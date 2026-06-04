@@ -4,7 +4,6 @@ import * as React from "react";
 import { useSearchParams, usePathname, useRouter } from "next/navigation";
 
 import { useAuth } from "@/features/auth/auth-provider";
-import { isManagerial } from "@/lib/rbac";
 
 import { useLeaveList } from "../hooks";
 import { LEAVE_TYPE_LABEL } from "../types";
@@ -138,27 +137,8 @@ function AdminLeaveList() {
 export function LeaveTab() {
   const { role, employeeId } = useAuth();
 
-  if (role === "admin") {
-    return (
-      <div className="space-y-6">
-        <LeaveReviewPanel />
-        <AdminLeaveList />
-      </div>
-    );
-  }
-
-  if (role === "manager") {
-    return (
-      <div className="space-y-6">
-        <LeaveReviewPanel employeeId={employeeId ?? undefined} />
-        <div>
-          <h3 className="mb-3 text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            My leave history
-          </h3>
-          <LeaveHistory employeeId={employeeId ?? undefined} />
-        </div>
-      </div>
-    );
+  if (role === "project_manager") {
+    return <LeaveReviewPanel employeeId={employeeId ?? undefined} />;
   }
 
   return <LeaveHistory employeeId={employeeId ?? undefined} />;

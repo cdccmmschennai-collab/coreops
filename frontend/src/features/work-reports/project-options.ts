@@ -1,16 +1,15 @@
 import { useProjects } from "@/features/projects/hooks";
 
 /**
- * RBAC-scoped project list used to resolve names + populate the task-row selects
- * on the work-report screens. Mirrors `useEmployeeOptions`. Archived projects are
- * filtered out (the backend rejects tasks against non-active projects), while
- * `byId` keeps every project so existing reports referencing an archived project
- * still render its name. Shares the TanStack Query cache with other callers.
+ * RBAC-scoped project list used to populate the task-row project selects on
+ * work-report screens. Archived projects are excluded (backend rejects them).
+ * Exposes job_code_id and job_code_code per project so the form can auto-fill
+ * the Job Code field when a project is selected.
  */
 export function useProjectOptions() {
-  const query = useProjects({ q: "", status: "", limit: 100, offset: 0 });
+  const query = useProjects({ q: "", status: "", limit: 200, offset: 0 });
   const all = query.data?.items ?? [];
   const items = all.filter((p) => p.status !== "archived");
-  const byId = new Map(all.map((p) => [p.id, p.name]));
+  const byId = new Map(all.map((p) => [p.id, p]));
   return { items, byId, isLoading: query.isLoading };
 }

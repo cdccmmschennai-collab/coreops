@@ -67,7 +67,7 @@ export function WorkReportEdit({ id }: { id: string }) {
         href={`/work-reports/${report.id}`}
         className="text-sm text-primary hover:underline"
       >
-        ← Work report
+        ← Report
       </Link>
       <PageHeader className="mt-2" title="Edit report" subtitle={report.report_date} />
       <WorkReportForm mode="edit" reportId={report.id} defaultValues={toFormValues(report)} />

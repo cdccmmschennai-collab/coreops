@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
+import { NotificationBell } from "@/features/notifications/components/notification-bell";
 
 function initials(email: string): string {
   const name = email.split("@")[0] ?? email;
@@ -46,6 +47,7 @@ export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </Button>
 
       <div className="ml-auto flex items-center gap-2">
+        {user && <NotificationBell />}
         {user && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

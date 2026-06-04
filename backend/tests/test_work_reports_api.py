@@ -1,4 +1,4 @@
-"""API tests for the Daily Work Reports module (Phase B5).
+﻿"""API tests for the Daily Work Reports module (Phase B5).
 
 Focus: routing, HTTP status codes, the coarse RBAC gate (require_role), response
 serialization (incl. task lines), pagination, filtering, and the workflow over
@@ -65,11 +65,12 @@ def test_create_requires_auth_401(client, setup_author):
     assert res.status_code == 401
 
 
-def test_viewer_cannot_create_403(client, make_user, login, make_project):
-    make_user("viewer@x.com", role=UserRole.viewer)
+def test_employee_without_profile_gets_422(client, make_user, login, make_project):
+    # An employee user with no linked employee profile cannot file a report
+    make_user("noprofile@x.com", role=UserRole.employee)
     p = make_project(code="P-1", status=ProjectStatus.active)
-    res = client.post(BASE, headers=login("viewer@x.com"), json=_payload(p.id))
-    assert res.status_code == 403
+    res = client.post(BASE, headers=login("noprofile@x.com"), json=_payload(p.id))
+    assert res.status_code == 422
 
 
 def test_create_duplicate_409(client, setup_author):
@@ -197,7 +198,7 @@ def test_get_cross_employee_403_and_missing_404(client, setup_author):
 # ---------- workflow over HTTP ----------------------------------------------
 def test_full_workflow_create_submit_approve(client, setup_author, make_user, login):
     a = setup_author()
-    make_user("admin@x.com", role=UserRole.admin)
+    make_user("admin@x.com", role=UserRole.project_manager)
     admin_h = login("admin@x.com")
 
     r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
@@ -212,7 +213,7 @@ def test_full_workflow_create_submit_approve(client, setup_author, make_user, lo
 
 def test_reject_requires_note_then_resubmit(client, setup_author, make_user, login):
     a = setup_author()
-    make_user("admin@x.com", role=UserRole.admin)
+    make_user("admin@x.com", role=UserRole.project_manager)
     admin_h = login("admin@x.com")
     r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
     client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
@@ -236,13 +237,13 @@ def test_employee_cannot_approve_403(client, setup_author):
     assert client.post(f"{BASE}/{r['id']}/approve", headers=a["header"]).status_code == 403
 
 
-def test_manager_approves_team_not_outsider(
+def test_any_project_manager_can_approve(
     client, make_user, make_employee, make_project, make_project_member, login
 ):
-    m1 = make_user("m1@x.com", role=UserRole.manager)
+    m1 = make_user("m1@x.com", role=UserRole.project_manager)
     m1_emp = make_employee(employee_code="M-1", user_id=m1.id)
-    m2 = make_user("m2@x.com", role=UserRole.manager)
-    make_employee(employee_code="M-2", user_id=m2.id)  # a manager, but not emp's manager
+    m2 = make_user("m2@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="M-2", user_id=m2.id)
 
     emp_user = make_user("e@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="E-1", user_id=emp_user.id, manager_id=m1_emp.id)
@@ -252,8 +253,8 @@ def test_manager_approves_team_not_outsider(
     r = client.post(BASE, headers=login("e@x.com"), json=_payload(p.id)).json()
     client.post(f"{BASE}/{r['id']}/submit", headers=login("e@x.com"))
 
-    assert client.post(f"{BASE}/{r['id']}/approve", headers=login("m2@x.com")).status_code == 403
-    assert client.post(f"{BASE}/{r['id']}/approve", headers=login("m1@x.com")).status_code == 200
+    # ANY project_manager can approve (no team scoping)
+    assert client.post(f"{BASE}/{r['id']}/approve", headers=login("m2@x.com")).status_code == 200
 
 
 # ---------- edit + delete ---------------------------------------------------
