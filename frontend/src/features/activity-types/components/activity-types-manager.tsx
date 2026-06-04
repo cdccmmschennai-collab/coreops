@@ -80,7 +80,7 @@ function ActivityTypeForm({
     resolver: zodResolver(formSchema),
     defaultValues: editing
       ? {
-          code: editing.code,
+          code: editing.code ?? "",
           name: editing.name,
           category: editing.category as (typeof CATEGORIES)[number],
           requires_project: editing.requires_project,
@@ -120,7 +120,9 @@ function ActivityTypeForm({
     <Card className="mb-4">
       <CardHeader className="pb-3">
         <CardTitle className="text-base">
-          {editing ? `Edit: ${editing.code} — ${editing.name}` : "New Activity Type"}
+          {editing
+            ? `Edit: ${editing.code ? `${editing.code} — ` : ""}${editing.name}`
+            : "New Activity Type"}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -204,7 +206,7 @@ export function ActivityTypesManager() {
   const items = query.data?.items ?? [];
   const filtered = items.filter(
     (a) =>
-      a.code.toLowerCase().includes(search.toLowerCase()) ||
+      (a.code ?? "").toLowerCase().includes(search.toLowerCase()) ||
       a.name.toLowerCase().includes(search.toLowerCase()) ||
       a.category.toLowerCase().includes(search.toLowerCase()),
   );
@@ -279,7 +281,7 @@ export function ActivityTypesManager() {
             )}
             {filtered.map((at) => (
               <TableRow key={at.id} className={!at.is_active ? "opacity-50" : ""}>
-                <TableCell className="font-mono text-sm">{at.code}</TableCell>
+                <TableCell className="font-mono text-sm">{at.code ?? "—"}</TableCell>
                 <TableCell className="font-medium">{at.name}</TableCell>
                 <TableCell>
                   <Badge variant="secondary" className="text-xs">
