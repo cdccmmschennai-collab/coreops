@@ -76,3 +76,75 @@ def test_login_validation_error_422(client):
     res = client.post("/api/v1/auth/login", json={"email": "not-an-email", "password": "x"})
     assert res.status_code == 422
     assert res.json()["error"]["code"] == "validation_error"
+
+
+# --- change password (self-service) ---------------------------------------
+
+def test_change_password_success_rotates_credentials(client, auth_header):
+    headers = auth_header("cp@example.com", "password123")
+    res = client.post(
+        "/api/v1/auth/change-password",
+        headers=headers,
+        json={"current_password": "password123", "new_password": "newpassword123"},
+    )
+    assert res.status_code == 204, res.text
+    # old password rejected, new password accepted
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"email": "cp@example.com", "password": "password123"},
+    ).status_code == 401
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"email": "cp@example.com", "password": "newpassword123"},
+    ).status_code == 200
+
+
+def test_change_password_keeps_current_session_active(client, auth_header):
+    headers = auth_header("cp@example.com", "password123")
+    res = client.post(
+        "/api/v1/auth/change-password",
+        headers=headers,
+        json={"current_password": "password123", "new_password": "newpassword123"},
+    )
+    assert res.status_code == 204
+    # the existing token is NOT revoked
+    assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
+
+
+def test_change_password_wrong_current_400(client, auth_header):
+    headers = auth_header("cp@example.com", "password123")
+    res = client.post(
+        "/api/v1/auth/change-password",
+        headers=headers,
+        json={"current_password": "wrongpassword", "new_password": "newpassword123"},
+    )
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "invalid_credentials"
+
+
+def test_change_password_same_as_current_422(client, auth_header):
+    headers = auth_header("cp@example.com", "password123")
+    res = client.post(
+        "/api/v1/auth/change-password",
+        headers=headers,
+        json={"current_password": "password123", "new_password": "password123"},
+    )
+    assert res.status_code == 422
+
+
+def test_change_password_too_short_422(client, auth_header):
+    headers = auth_header("cp@example.com", "password123")
+    res = client.post(
+        "/api/v1/auth/change-password",
+        headers=headers,
+        json={"current_password": "password123", "new_password": "short"},
+    )
+    assert res.status_code == 422
+
+
+def test_change_password_requires_auth_401(client):
+    res = client.post(
+        "/api/v1/auth/change-password",
+        json={"current_password": "password123", "new_password": "newpassword123"},
+    )
+    assert res.status_code == 401

@@ -20,6 +20,7 @@ class EmployeeOut(BaseModel):
     last_name: str
     full_name: str
     work_email: str | None = None
+    personal_email: str | None = None
     phone: str | None = None
     department: str | None = None
     designation: str | None = None
@@ -36,6 +37,7 @@ class EmployeeCreate(BaseModel):
     last_name: str = Field(min_length=1)
     user_id: uuid.UUID | None = None
     work_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
+    personal_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
     phone: str | None = None
     department: str | None = None
     designation: str | None = None
@@ -49,6 +51,7 @@ class EmployeeUpdate(BaseModel):
     first_name: str | None = Field(default=None, min_length=1)
     last_name: str | None = Field(default=None, min_length=1)
     work_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
+    personal_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
     phone: str | None = None
     department: str | None = None
     designation: str | None = None
@@ -80,3 +83,29 @@ class AccountPasswordReset(BaseModel):
 
 class AccountStatusUpdate(BaseModel):
     is_active: bool
+
+
+# ---------- self-service profile ----------
+
+class EmployeeProfile(BaseModel):
+    """Business-identity view embedded in /auth/me.
+
+    Manager and office are resolved to display names server-side so that an
+    employee (who may not read other employee/office rows) still sees them.
+    """
+    id: uuid.UUID
+    employee_code: str
+    first_name: str
+    last_name: str
+    full_name: str
+    work_email: str | None = None
+    personal_email: str | None = None
+    phone: str | None = None
+    department: str | None = None
+    designation: str | None = None
+    manager_id: uuid.UUID | None = None
+    manager_name: str | None = None
+    office_id: uuid.UUID | None = None
+    office_name: str | None = None
+    date_of_joining: date | None = None
+    status: EmployeeStatus

@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LogOut, Menu, User as UserIcon } from "lucide-react";
+import { LogOut, Menu, Settings, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -15,31 +16,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
-import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { USER_ROLE_LABEL } from "@/features/users/schemas";
 import { NotificationBell } from "@/features/notifications/components/notification-bell";
-
-function nameInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  const letters = parts.length >= 2
-    ? `${parts[0][0]}${parts[parts.length - 1][0]}`
-    : name.slice(0, 2);
-  return letters.toUpperCase();
-}
-
-function emailInitials(email: string): string {
-  const name = email.split("@")[0] ?? email;
-  const parts = name.split(/[.\-_]/).filter(Boolean);
-  const letters = parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}` : name.slice(0, 2);
-  return letters.toUpperCase();
-}
+import { emailInitials, nameInitials } from "@/lib/initials";
 
 export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
-  const { user, employeeId, role, logout } = useAuth();
-  const { items: allEmployees } = useEmployeeOptions();
-  const employee = employeeId
-    ? (allEmployees.find((e) => e.id === employeeId) ?? null)
-    : null;
+  const { user, employee, role, logout } = useAuth();
   const router = useRouter();
 
   async function handleLogout() {
@@ -78,37 +60,55 @@ export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 </Avatar>
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[220px]">
-              <DropdownMenuLabel className="flex flex-col gap-0.5">
+            <DropdownMenuContent align="end" className="min-w-[256px]">
+              <DropdownMenuLabel className="font-normal">
                 {employee ? (
-                  <>
-                    <span className="truncate text-sm font-semibold">
-                      {employee.full_name}
-                    </span>
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {employee.designation ?? employee.employee_code}
-                    </span>
-                    <span className="truncate text-xs font-normal text-muted-foreground">
-                      {employee.work_email ?? user.email}
-                    </span>
-                  </>
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback>{nameInitials(employee.full_name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">
+                        {employee.full_name}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {[employee.employee_code, employee.designation]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                  </div>
                 ) : (
-                  <>
-                    <span className="truncate text-sm">{user.email}</span>
-                    <span className="text-xs font-normal capitalize text-muted-foreground">
-                      {role ? (USER_ROLE_LABEL[role] ?? role) : "—"}
-                    </span>
-                  </>
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback>{emailInitials(user.email)}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{user.email}</p>
+                      <p className="truncate text-xs capitalize text-muted-foreground">
+                        {role ? (USER_ROLE_LABEL[role] ?? role) : "—"}
+                      </p>
+                    </div>
+                  </div>
                 )}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem disabled>
-                <UserIcon className="h-4 w-4" />
-                Profile (soon)
+              <DropdownMenuItem asChild>
+                <Link href="/profile">
+                  <UserIcon className="h-4 w-4" />
+                  My Profile
+                </Link>
               </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link href="/account">
+                  <Settings className="h-4 w-4" />
+                  Account Settings
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={handleLogout}>
                 <LogOut className="h-4 w-4" />
-                Sign out
+                Logout
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

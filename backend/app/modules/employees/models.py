@@ -39,6 +39,8 @@ class Employee(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     first_name: Mapped[str] = mapped_column(Text, nullable=False)
     last_name: Mapped[str] = mapped_column(Text, nullable=False)
     work_email: Mapped[str | None] = mapped_column(CITEXT, nullable=True)
+    # Informational only — never used for authentication (see Phase 1 ADR).
+    personal_email: Mapped[str | None] = mapped_column(CITEXT, nullable=True)
     phone: Mapped[str | None] = mapped_column(Text, nullable=True)
     department: Mapped[str | None] = mapped_column(Text, nullable=True)
     designation: Mapped[str | None] = mapped_column(Text, nullable=True)

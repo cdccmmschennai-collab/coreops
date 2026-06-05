@@ -16,6 +16,7 @@ from app.modules.employees.schemas import (
     AccountPasswordReset,
     AccountStatusUpdate,
     EmployeeCreate,
+    EmployeeProfile,
     EmployeeUpdate,
 )
 from app.modules.offices.models import Office
@@ -31,6 +32,41 @@ def _current_employee(db: Session, user: User) -> Employee | None:
 
 def _alive():
     return select(Employee).where(Employee.deleted_at.is_(None))
+
+
+def build_profile(db: Session, emp: Employee) -> EmployeeProfile:
+    """Serialize an employee's business identity with manager/office names
+    resolved server-side (the caller may not have read access to those rows)."""
+    manager_name: str | None = None
+    if emp.manager_id is not None:
+        mgr = db.get(Employee, emp.manager_id)
+        if mgr is not None and mgr.deleted_at is None:
+            manager_name = mgr.full_name
+
+    office_name: str | None = None
+    if emp.office_id is not None:
+        office = db.get(Office, emp.office_id)
+        if office is not None:
+            office_name = office.name
+
+    return EmployeeProfile(
+        id=emp.id,
+        employee_code=emp.employee_code,
+        first_name=emp.first_name,
+        last_name=emp.last_name,
+        full_name=emp.full_name,
+        work_email=emp.work_email,
+        personal_email=emp.personal_email,
+        phone=emp.phone,
+        department=emp.department,
+        designation=emp.designation,
+        manager_id=emp.manager_id,
+        manager_name=manager_name,
+        office_id=emp.office_id,
+        office_name=office_name,
+        date_of_joining=emp.date_of_joining,
+        status=emp.status,
+    )
 
 
 def list_employees(

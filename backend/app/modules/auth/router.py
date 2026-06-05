@@ -6,9 +6,15 @@ from app.core.database import get_db
 from app.core.deps import get_current_claims, get_current_user
 from app.core.security import revoke_token
 from app.modules.auth import service
-from app.modules.employees.service import _current_employee
+from app.modules.employees.service import _current_employee, build_profile
 from app.modules.users.models import User
-from app.modules.users.schemas import LoginRequest, Me, TokenResponse, UserOut
+from app.modules.users.schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    Me,
+    TokenResponse,
+    UserOut,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -26,6 +32,16 @@ def logout(claims: dict = Depends(get_current_claims)) -> Response:
     return Response(status_code=204)
 
 
+@router.post("/change-password", status_code=204)
+def change_password(
+    body: ChangePasswordRequest,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    service.change_password(db, current, body.current_password, body.new_password)
+    return Response(status_code=204)
+
+
 @router.get("/me", response_model=Me)
 def me(
     current: User = Depends(get_current_user),
@@ -34,5 +50,6 @@ def me(
     employee = _current_employee(db, current)
     return Me(
         user=UserOut.model_validate(current),
+        employee=build_profile(db, employee) if employee else None,
         employee_id=employee.id if employee else None,
     )

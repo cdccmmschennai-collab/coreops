@@ -18,7 +18,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/features/auth/auth-provider";
-import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList } from "@/features/work-reports/hooks";
@@ -84,14 +83,10 @@ function ProjectDot({ i }: { i: number }) {
 // ── main view ────────────────────────────────────────────────────────────────
 
 export function EmployeeDashboard() {
-  const { user, employeeId } = useAuth();
-  const { items: employeeOptions } = useEmployeeOptions();
+  const { user, employee, employeeId } = useAuth();
 
   // Greet by employee full name — never the username/email/login id.
-  // Resolution order: Employee.full_name → username fallback.
-  const employee = employeeId
-    ? employeeOptions.find((e) => e.id === employeeId)
-    : undefined;
+  // Resolution order: Employee.full_name (from /auth/me) → username fallback.
   const displayName =
     employee?.full_name?.trim() || user?.email.split("@")[0] || "there";
   const today     = React.useMemo(todayISO, []);

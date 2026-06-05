@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.redis import get_redis
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, hash_password, verify_password
 from app.modules.users.models import User
 from app.shared.errors import AppError
 
@@ -47,3 +47,31 @@ def authenticate(db: Session, email: str, password: str, ip: str) -> tuple[str, 
     db.commit()
 
     return create_access_token(user_id=str(user.id), role=user.role.value)
+
+
+def change_password(
+    db: Session, user: User, current_password: str, new_password: str
+) -> None:
+    """Self-service password change.
+
+    Verifies the caller's current password, enforces the existing policy via
+    hash_password, and stores the new hash. The current session/token is kept
+    active (no revocation) per Phase 2 requirements.
+    """
+    if not verify_password(current_password, user.password_hash):
+        raise AppError("invalid_credentials", "Current password is incorrect.", 400)
+
+    if verify_password(new_password, user.password_hash):
+        raise AppError(
+            "validation_error",
+            "New password must be different from the current password.",
+            422,
+        )
+
+    try:
+        user.password_hash = hash_password(new_password)
+    except ValueError as exc:
+        raise AppError("validation_error", str(exc), 422)
+
+    db.add(user)
+    db.commit()
