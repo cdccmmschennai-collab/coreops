@@ -284,7 +284,7 @@ export function ActivityTypesManager() {
                 <TableCell className="font-mono text-sm">{at.code ?? "—"}</TableCell>
                 <TableCell className="font-medium">{at.name}</TableCell>
                 <TableCell>
-                  <Badge variant="secondary" className="text-xs">
+                  <Badge variant="outline" className="text-xs">
                     {CATEGORY_LABEL[at.category] ?? at.category}
                   </Badge>
                 </TableCell>

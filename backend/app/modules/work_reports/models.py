@@ -141,6 +141,10 @@ class WorkReportTask(UUIDMixin, Base):
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     spares_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # Snapshot fields (migration 0017) — frozen at save time for historical accuracy.
+    project_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_job_code_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

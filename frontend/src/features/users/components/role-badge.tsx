@@ -4,10 +4,8 @@ import { USER_ROLE_LABEL } from "../schemas";
 import type { UserRole } from "../types";
 
 const VARIANT: Record<UserRole, "info" | "success" | "neutral"> = {
-  admin: "info",
-  manager: "success",
+  project_manager: "info",
   employee: "neutral",
-  viewer: "neutral",
 };
 
 export function RoleBadge({ role }: { role: UserRole }) {

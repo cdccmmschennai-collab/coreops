@@ -1002,6 +1002,12 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /** Project Name — snapshot frozen at save time (null for pre-0017 rows) */
+            project_name?: string | null;
+            /** Project Code — snapshot frozen at save time (null for pre-0017 rows) */
+            project_code?: string | null;
+            /** Project Job Code Code — snapshot frozen at save time */
+            project_job_code_code?: string | null;
             /** Description */
             description: string;
             /** Minutes Spent */

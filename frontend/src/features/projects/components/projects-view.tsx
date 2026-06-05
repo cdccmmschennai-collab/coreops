@@ -31,6 +31,11 @@ export function ProjectsView() {
   const searchParams = useSearchParams();
   const { role } = useAuth();
   const canManage = can(role, "project.manage");
+  const isEmployee = role === "employee";
+  const emptyTitle = isEmployee ? "No projects assigned" : undefined;
+  const emptyDescription = isEmployee
+    ? "You haven't been assigned to any projects yet. Contact your project manager."
+    : undefined;
 
   const params: ProjectListParams = {
     q: searchParams.get("q") ?? "",
@@ -96,6 +101,8 @@ export function ProjectsView() {
         canManage={canManage}
         onRequestArchive={setArchiveTarget}
         emptyAction={addButton}
+        emptyTitle={emptyTitle}
+        emptyDescription={emptyDescription}
       />
       <ArchiveDialog
         project={archiveTarget}

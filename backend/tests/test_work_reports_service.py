@@ -186,8 +186,9 @@ def test_inactive_project_422(db, author):
 
 
 def test_non_member_project_422(db, author, make_project):
+    """Employees can only log time to projects they are assigned to."""
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    other = make_project(code="P-OTHER", status=ProjectStatus.active)  # author not a member
+    other = make_project(code="P-OTHER", status=ProjectStatus.active)  # not a member
     with pytest.raises(AppError) as ei:
         svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(other.id)]))
     assert ei.value.status_code == 422
@@ -338,3 +339,125 @@ def test_admin_sees_all_and_can_approve(db, author, make_user):
     assert total == 2
     assert svc.get_work_report(db, admin, ra.id).id == ra.id
     assert svc.approve_work_report(db, admin, ra.id).status == WorkReportStatus.approved
+
+
+# ── project snapshot tests (migration 0017) ──────────────────────────────────
+
+def test_task_snapshot_populated_on_create(db, author):
+    """project_name / project_code / project_job_code_code are snapshotted at create."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="SNAP-1")
+    # Give the project a name so we can verify the snapshot
+    p.name = "Snapshot Project"
+    db.add(p)
+    db.commit()
+
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    assert len(r.tasks) == 1
+    t = r.tasks[0]
+    assert t.project_name == "Snapshot Project"
+    assert t.project_code == "SNAP-1"
+    assert t.project_job_code_code is None   # no job code linked
+
+
+def test_task_snapshot_populated_on_update(db, author):
+    """Snapshot is refreshed when tasks are replaced via update."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-UPDATE")
+    p.name = "Original Name"
+    db.add(p); db.commit()
+
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    # Rename the project and update the report — snapshot should reflect new name
+    p.name = "Renamed Project"
+    db.add(p); db.commit()
+
+    r = svc.update_work_report(db, u, r.id, WorkReportUpdate(tasks=[_task(p.id, 90)]))
+    t = r.tasks[0]
+    assert t.project_name == "Renamed Project"
+    assert t.project_code == "P-UPDATE"
+    assert r.total_minutes == 90
+
+
+def test_task_snapshot_includes_job_code(db, author, db_with_job_code):
+    """project_job_code_code is snapshotted from the linked job code."""
+    u, e, p, jc = db_with_job_code(
+        email="a@x.com", code="E-1", proj_code="JC-1", jc_code="J-001"
+    )
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    assert r.tasks[0].project_job_code_code == "J-001"
+
+
+def test_snapshot_survives_project_rename(db, author):
+    """Snapshot does NOT change when the project is renamed after saving."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-RENAME")
+    p.name = "Original Name"
+    db.add(p); db.commit()
+
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    assert r.tasks[0].project_name == "Original Name"
+
+    # Rename after save — existing report must be unaffected
+    p.name = "Renamed After Save"
+    db.add(p); db.commit()
+
+    reloaded = svc.get_work_report(db, u, r.id)
+    assert reloaded.tasks[0].project_name == "Original Name"   # snapshot unchanged
+
+
+def test_snapshot_readable_after_project_archived(db, author):
+    """Snapshot allows reading project info even when the project is archived."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-ARCH")
+    p.name = "Will Be Archived"
+    db.add(p); db.commit()
+
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+
+    # Archive the project after the report is saved
+    p.status = ProjectStatus.archived
+    db.add(p); db.commit()
+
+    reloaded = svc.get_work_report(db, u, r.id)
+    assert reloaded.tasks[0].project_name == "Will Be Archived"
+    assert reloaded.tasks[0].project_code == "P-ARCH"
+
+
+def test_snapshot_readable_after_membership_removed(db, author):
+    """Snapshot is readable even after the employee is removed from the project."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-MEMBER")
+    p.name = "Membership Project"
+    db.add(p); db.commit()
+
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+
+    # Remove the membership
+    from sqlalchemy import delete as sa_delete
+    from app.modules.projects.models import ProjectMember
+    db.execute(sa_delete(ProjectMember).where(ProjectMember.employee_id == e.id))
+    db.commit()
+
+    # Employee can still read their own existing report — snapshot intact
+    admin = make_user_helper(db, "admin@x.com", role=UserRole.project_manager)
+    reloaded = svc.get_work_report(db, admin, r.id)
+    assert reloaded.tasks[0].project_name == "Membership Project"
+
+
+@pytest.fixture()
+def db_with_job_code(db, author):
+    """Factory: user + employee + project linked to a job code."""
+    from app.modules.job_codes.models import JobCode
+
+    def _make(*, email, code, proj_code, jc_code):
+        jc = JobCode(code=jc_code, name=f"Job {jc_code}", is_active=True)
+        db.add(jc); db.commit(); db.refresh(jc)
+        u, e, p = author(email=email, code=code, proj_code=proj_code)
+        p.job_code_id = jc.id; db.add(p); db.commit()
+        return u, e, p, jc
+
+    return _make
+
+
+def make_user_helper(db, email, role=UserRole.project_manager):
+    from app.core.security import hash_password
+    from app.modules.users.models import User
+    u = User(email=email, password_hash=hash_password("pw"), role=role, is_active=True)
+    db.add(u); db.commit(); db.refresh(u)
+    return u

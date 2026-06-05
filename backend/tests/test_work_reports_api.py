@@ -287,3 +287,54 @@ def test_openapi_exposes_work_reports_paths(client):
     assert "/api/v1/work-reports/{report_id}/submit" in paths
     assert "/api/v1/work-reports/{report_id}/approve" in paths
     assert "/api/v1/work-reports/{report_id}/reject" in paths
+
+
+# ---------- project snapshot (migration 0017) --------------------------------
+def test_create_response_includes_project_snapshot(client, setup_author):
+    """POST /work-reports response must include project_name and project_code on each task."""
+    a = setup_author()
+    res = client.post(BASE, headers=a["header"], json=_payload(a["project"].id))
+    assert res.status_code == 201, res.text
+    task = res.json()["tasks"][0]
+    assert task["project_name"] == a["project"].name
+    assert task["project_code"] == a["project"].code
+    assert "project_job_code_code" in task   # present even when null
+
+
+def test_update_refreshes_project_snapshot(client, setup_author):
+    """PATCH tasks replace rows; new snapshot must reflect the project at update time."""
+    a = setup_author()
+    r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
+    patch = client.patch(
+        f"{BASE}/{r['id']}",
+        headers=a["header"],
+        json={"tasks": [{"project_id": str(a["project"].id), "description": "updated", "minutes_spent": 90}]},
+    )
+    assert patch.status_code == 200, patch.text
+    task = patch.json()["tasks"][0]
+    assert task["project_name"] == a["project"].name
+    assert task["project_code"] == a["project"].code
+
+
+def test_get_report_returns_snapshot_fields(client, setup_author):
+    """GET /work-reports/{id} always returns snapshot fields on each task."""
+    a = setup_author()
+    created = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
+    fetched = client.get(f"{BASE}/{created['id']}", headers=a["header"]).json()
+    task = fetched["tasks"][0]
+    assert task["project_name"] == a["project"].name
+    assert task["project_code"] == a["project"].code
+
+
+def test_snapshot_present_for_project_manager_reviewer(client, setup_author, make_user, login):
+    """Project manager reviewer sees snapshot fields without needing RBAC project access."""
+    a = setup_author()
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    pm_header = login("pm@x.com")
+
+    r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
+    client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
+    fetched = client.get(f"{BASE}/{r['id']}", headers=pm_header).json()
+    task = fetched["tasks"][0]
+    assert task["project_name"] == a["project"].name
+    assert task["project_code"] == a["project"].code

@@ -43,6 +43,7 @@ import {
   EMPTY_TASK_ROW,
   WORK_LOCATION_LABEL,
   WORK_LOCATIONS,
+  hoursToMinutes,
   toCreateBody,
   toUpdateBody,
   workReportFormSchema,
@@ -54,8 +55,6 @@ interface WorkReportFormProps {
   defaultValues: WorkReportFormValues;
   reportId?: string;
 }
-
-const ALL_NONE = "__none__";
 
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
@@ -70,18 +69,35 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const employeeName = employeeId ? (empById.get(employeeId) ?? "—") : "—";
   const canCreateActivityType = can(role, "masterdata.manage");
 
-  // Project combobox options — show name + code + client for easy identification
-  const projectOptions = React.useMemo(
-    () =>
-      projects.map((p) => ({
-        value: p.id,
-        label: p.name,
-        sublabel: p.code,
-        description: p.client ?? undefined,
-        keywords: [p.code, p.name, p.client ?? "", p.job_code_code ?? ""],
-      })),
-    [projects],
-  );
+  // Project combobox options — RBAC list + ghost entries for projects in
+  // existing tasks that are no longer accessible (archived / membership lost).
+  // Ghost entries are display-only; the backend still validates on submit.
+  const projectOptions = React.useMemo(() => {
+    const base = projects.map((p) => ({
+      value: p.id,
+      label: p.name,
+      sublabel: p.code,
+      description: p.client ?? undefined,
+      keywords: [p.code, p.name, p.client ?? "", p.job_code_code ?? ""],
+    }));
+    if (mode !== "edit") return base;
+    const inList = new Set(projects.map((p) => p.id));
+    const ghosts: (typeof base)[0][] = [];
+    const seen = new Set<string>();
+    for (const t of defaultValues.tasks) {
+      if (t.project_id && !inList.has(t.project_id) && t.project_name && !seen.has(t.project_id)) {
+        seen.add(t.project_id);
+        ghosts.push({
+          value: t.project_id,
+          label: t.project_name,            // string (narrowed by if guard)
+          sublabel: t.project_code ?? "",   // string (coerce undefined → "")
+          description: undefined,
+          keywords: [t.project_code ?? "", t.project_name],
+        });
+      }
+    }
+    return [...base, ...ghosts];
+  }, [projects, mode, defaultValues.tasks]);
 
   // Activity type combobox options — code shown on the right
   const activityOptions = React.useMemo(
@@ -122,10 +138,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   const watchedTasks = form.watch("tasks");
-  const totalMinutes = (watchedTasks ?? []).reduce((sum, t) => {
-    const n = Number(t?.minutes_spent);
-    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
-  }, 0);
+  const totalMinutes = (watchedTasks ?? []).reduce(
+    (sum, t) => sum + (hoursToMinutes(t?.duration_hours) ?? 0),
+    0,
+  );
 
   const tasksError = form.formState.errors.tasks?.message;
 
@@ -172,7 +188,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="report_date"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Date</FormLabel>
+                    <FormLabel>
+                      Date <span className="text-destructive">*</span>
+                    </FormLabel>
                     <FormControl>
                       <Input type="date" {...field} disabled={mode === "edit"} />
                     </FormControl>
@@ -185,10 +203,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="day_status"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Day Status</FormLabel>
+                    <FormLabel>
+                      Day Status <span className="text-destructive">*</span>
+                    </FormLabel>
                     <Select
-                      value={field.value ?? ALL_NONE}
-                      onValueChange={(v) => field.onChange(v === ALL_NONE ? undefined : v)}
+                      value={field.value ?? undefined}
+                      onValueChange={(v) => field.onChange(v)}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -196,7 +216,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value={ALL_NONE}>— Not specified —</SelectItem>
                         {DAY_STATUSES.map((s) => (
                           <SelectItem key={s} value={s}>
                             {DAY_STATUS_LABEL[s]}
@@ -213,10 +232,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="location"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Office Location</FormLabel>
+                    <FormLabel>
+                      Office Location <span className="text-destructive">*</span>
+                    </FormLabel>
                     <Select
-                      value={field.value ?? ALL_NONE}
-                      onValueChange={(v) => field.onChange(v === ALL_NONE ? undefined : v)}
+                      value={field.value ?? undefined}
+                      onValueChange={(v) => field.onChange(v)}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -224,7 +245,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value={ALL_NONE}>— Not specified —</SelectItem>
                         {WORK_LOCATIONS.map((l) => (
                           <SelectItem key={l} value={l}>
                             {WORK_LOCATION_LABEL[l]}
@@ -323,6 +343,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 const selectedProject = selectedProjectId
                   ? projById.get(selectedProjectId)
                   : undefined;
+                // Prefer the live RBAC-scoped project; fall back to the task snapshot
+                // (edit mode where the project is archived / no longer accessible).
+                const projectCodeLabel =
+                  selectedProject?.code ?? watchedTasks?.[index]?.project_code ?? "—";
                 const jobCodeLabel = selectedProject?.job_code_code ?? "—";
 
                 return (
@@ -330,17 +354,22 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     key={field.id}
                     className="space-y-2 rounded-lg border border-border p-3"
                   >
-                    {/* Row A: Project (searchable) | Job Code (read-only) | Duration | Remove */}
-                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_7rem_auto] sm:items-start">
+                    {/* Row A — one grid; columns collapse responsively:
+                          mobile  → single column, fully stacked
+                          tablet  → Project Name full width, then Code | Job | Duration
+                          desktop → Name | Code | Job | Duration | Actions on one row
+                        Every cell is label + h-9 control with the same space-y-2 gap,
+                        so labels and inputs share a baseline without any margin hacks. */}
+                    <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-3 lg:grid-cols-[minmax(0,1fr)_150px_150px_110px_40px]">
 
-                      {/* Project — searchable combobox with name + code + client */}
+                      {/* Project Name — searchable combobox (name + code) */}
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.project_id`}
                         render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Project Name
+                          <FormItem className="sm:col-span-3 lg:col-span-1">
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
+                              Project Name <span className="text-destructive">*</span>
                             </FormLabel>
                             <FormControl>
                               <Combobox
@@ -348,7 +377,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 onValueChange={f.onChange}
                                 options={projectOptions}
                                 placeholder="Select project…"
-                                searchPlaceholder="Search by name, code, or client…"
+                                searchPlaceholder="Search by name or code…"
                                 emptyMessage="No matching projects."
                                 allowClear={false}
                               />
@@ -358,30 +387,41 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         )}
                       />
 
-                      {/* Job Code — read-only display from selected project */}
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-xs font-medium text-muted-foreground">
+                      {/* Project Code — read-only metadata, auto-filled from selection */}
+                      <div className="space-y-2">
+                        <span className="block text-xs font-medium leading-none text-muted-foreground">
+                          Project Code
+                        </span>
+                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                          {projectCodeLabel}
+                        </div>
+                      </div>
+
+                      {/* Job Code — read-only metadata, auto-filled from selection */}
+                      <div className="space-y-2">
+                        <span className="block text-xs font-medium leading-none text-muted-foreground">
                           Job Code
                         </span>
-                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm">
+                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
                           {jobCodeLabel}
                         </div>
                       </div>
 
-                      {/* Duration */}
+                      {/* Duration — entered in hours (decimals allowed) */}
                       <FormField
                         control={form.control}
-                        name={`tasks.${index}.minutes_spent`}
+                        name={`tasks.${index}.duration_hours`}
                         render={({ field: f }) => (
                           <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Duration (min)
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
+                              Duration (hrs)
                             </FormLabel>
                             <FormControl>
                               <Input
                                 type="number"
                                 min={0}
-                                max={1440}
+                                max={24}
+                                step="0.25"
                                 placeholder="0"
                                 {...f}
                               />
@@ -391,17 +431,26 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         )}
                       />
 
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="mt-6"
-                        onClick={() => remove(index)}
-                        disabled={fields.length === 1}
-                        aria-label="Remove activity"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      {/* Actions — delete. A spacer label (desktop only) keeps the
+                          button on the input baseline via the grid, not margins. */}
+                      <div className="flex flex-col gap-2 items-start sm:col-span-3 sm:items-end lg:col-span-1 lg:items-start">
+                        <span
+                          className="hidden text-xs font-medium leading-none lg:block"
+                          aria-hidden
+                        >
+                          &nbsp;
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => remove(index)}
+                          disabled={fields.length === 1}
+                          aria-label="Remove activity"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
 
                     {/* Row B: Activity Type (searchable) | Description | Tags | Docs | BOM | Spares */}
@@ -414,7 +463,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         render={({ field: f }) => (
                           <FormItem>
                             <FormLabel className="text-xs text-muted-foreground">
-                              Activity Type
+                              Activity Type <span className="text-destructive">*</span>
                             </FormLabel>
                             <FormControl>
                               <Combobox
@@ -424,7 +473,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 placeholder="Select activity type…"
                                 searchPlaceholder="Search by name or code…"
                                 emptyMessage="No matching activity types."
-                                allowClear
+                                allowClear={false}
                                 allowCreate={canCreateActivityType}
                                 onCreateNew={async (name) => {
                                   await handleCreateActivityType(name);

@@ -11,7 +11,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee, EmployeeStatus
-from app.modules.employees.schemas import EmployeeCreate, EmployeeUpdate
+from app.modules.employees.schemas import (
+    AccountCreate,
+    AccountPasswordReset,
+    AccountStatusUpdate,
+    EmployeeCreate,
+    EmployeeUpdate,
+)
 from app.modules.offices.models import Office
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
@@ -206,3 +212,51 @@ def get_team(db: Session, actor: User, emp_id: uuid.UUID) -> list[Employee]:
         .all()
     )
     return list(rows)
+
+
+def _fetch_linked_user(db: Session, emp: Employee) -> User:
+    if emp.user_id is None:
+        raise AppError("not_found", "This employee has no linked account.", 404)
+    user = db.get(User, emp.user_id)
+    if user is None or user.deleted_at is not None:
+        raise AppError("not_found", "Linked user account not found.", 404)
+    return user
+
+
+def create_and_link_account(
+    db: Session, actor: User, emp_id: uuid.UUID, data: AccountCreate
+) -> User:
+    emp = _fetch(db, emp_id)
+    if emp.user_id is not None:
+        raise AppError("conflict", "Employee already has a linked account.", 409)
+
+    # Reuse the users service for consistent password hashing and email checks.
+    from app.modules.users.service import create_user
+    from app.modules.users.schemas import UserCreate
+
+    user = create_user(db, UserCreate(email=data.email, password=data.password, role=data.role))
+    emp.user_id = user.id
+    emp.updated_by = actor.id
+    db.add(emp)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def reset_account_password(
+    db: Session, actor: User, emp_id: uuid.UUID, data: AccountPasswordReset
+) -> None:
+    emp = _fetch(db, emp_id)
+    _fetch_linked_user(db, emp)  # ensure account exists
+    from app.modules.users.service import set_password
+    set_password(db, emp.user_id, data.new_password)  # type: ignore[arg-type]
+
+
+def update_account_status(
+    db: Session, actor: User, emp_id: uuid.UUID, data: AccountStatusUpdate
+) -> User:
+    emp = _fetch(db, emp_id)
+    user = _fetch_linked_user(db, emp)
+    from app.modules.users.service import update_user
+    from app.modules.users.schemas import UserUpdate
+    return update_user(db, user.id, UserUpdate(is_active=data.is_active), actor)

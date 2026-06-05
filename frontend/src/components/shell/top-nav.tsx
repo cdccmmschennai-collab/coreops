@@ -15,17 +15,31 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useEmployeeOptions } from "@/features/attendance/employee-options";
+import { USER_ROLE_LABEL } from "@/features/users/schemas";
 import { NotificationBell } from "@/features/notifications/components/notification-bell";
 
-function initials(email: string): string {
+function nameInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const letters = parts.length >= 2
+    ? `${parts[0][0]}${parts[parts.length - 1][0]}`
+    : name.slice(0, 2);
+  return letters.toUpperCase();
+}
+
+function emailInitials(email: string): string {
   const name = email.split("@")[0] ?? email;
   const parts = name.split(/[.\-_]/).filter(Boolean);
-  const letters = (parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}` : name.slice(0, 2));
+  const letters = parts.length >= 2 ? `${parts[0][0]}${parts[1][0]}` : name.slice(0, 2);
   return letters.toUpperCase();
 }
 
 export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
-  const { user, logout } = useAuth();
+  const { user, employeeId, role, logout } = useAuth();
+  const { items: allEmployees } = useEmployeeOptions();
+  const employee = employeeId
+    ? (allEmployees.find((e) => e.id === employeeId) ?? null)
+    : null;
   const router = useRouter();
 
   async function handleLogout() {
@@ -55,17 +69,37 @@ export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 className="flex items-center gap-2 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Account menu"
               >
-                <Avatar>
-                  <AvatarFallback>{initials(user.email)}</AvatarFallback>
+                <Avatar className="h-9 w-9">
+                  <AvatarFallback>
+                    {employee
+                      ? nameInitials(employee.full_name)
+                      : emailInitials(user.email)}
+                  </AvatarFallback>
                 </Avatar>
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel className="flex flex-col">
-                <span className="truncate text-sm">{user.email}</span>
-                <span className="text-xs font-normal capitalize text-muted-foreground">
-                  {user.role}
-                </span>
+            <DropdownMenuContent align="end" className="min-w-[220px]">
+              <DropdownMenuLabel className="flex flex-col gap-0.5">
+                {employee ? (
+                  <>
+                    <span className="truncate text-sm font-semibold">
+                      {employee.full_name}
+                    </span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {employee.designation ?? employee.employee_code}
+                    </span>
+                    <span className="truncate text-xs font-normal text-muted-foreground">
+                      {employee.work_email ?? user.email}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="truncate text-sm">{user.email}</span>
+                    <span className="text-xs font-normal capitalize text-muted-foreground">
+                      {role ? (USER_ROLE_LABEL[role] ?? role) : "—"}
+                    </span>
+                  </>
+                )}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem disabled>

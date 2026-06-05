@@ -1,11 +1,14 @@
 """Employee endpoints (per openapi-v1.yaml).
 
-  GET    /employees            list (RBAC-scoped) + search/filter/pagination
-  POST   /employees            create (admin)
-  GET    /employees/{id}       read (RBAC-scoped)
-  PATCH  /employees/{id}       update (admin)
-  DELETE /employees/{id}       deactivate / soft-delete (admin)
-  GET    /employees/{id}/team  direct reports (admin / own manager)
+  GET    /employees                        list (RBAC-scoped) + search/filter/pagination
+  POST   /employees                        create (admin)
+  GET    /employees/{id}                   read (RBAC-scoped)
+  PATCH  /employees/{id}                   update (admin)
+  DELETE /employees/{id}                   deactivate / soft-delete (admin)
+  GET    /employees/{id}/team              direct reports (admin)
+  POST   /employees/{id}/account           create + link login account (admin)
+  PATCH  /employees/{id}/account/password  reset linked account password (admin)
+  PATCH  /employees/{id}/account/status    enable / disable linked account (admin)
 """
 import uuid
 
@@ -17,12 +20,16 @@ from app.core.deps import get_current_user, require_role
 from app.modules.employees import service
 from app.modules.employees.models import EmployeeStatus
 from app.modules.employees.schemas import (
+    AccountCreate,
+    AccountPasswordReset,
+    AccountStatusUpdate,
     EmployeeCreate,
     EmployeeOut,
     EmployeePage,
     EmployeeUpdate,
 )
 from app.modules.users.models import User
+from app.modules.users.schemas import UserOut
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -101,3 +108,36 @@ def employee_team(
     db: Session = Depends(get_db),
 ) -> list[EmployeeOut]:
     return [EmployeeOut.model_validate(e) for e in service.get_team(db, current, employee_id)]
+
+
+# ---------- account management (project_manager only) ----------
+
+@router.post("/{employee_id}/account", response_model=UserOut, status_code=201)
+def create_employee_account(
+    employee_id: uuid.UUID,
+    body: AccountCreate,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    return UserOut.model_validate(service.create_and_link_account(db, admin, employee_id, body))
+
+
+@router.patch("/{employee_id}/account/password", status_code=204)
+def reset_employee_account_password(
+    employee_id: uuid.UUID,
+    body: AccountPasswordReset,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> Response:
+    service.reset_account_password(db, admin, employee_id, body)
+    return Response(status_code=204)
+
+
+@router.patch("/{employee_id}/account/status", response_model=UserOut)
+def update_employee_account_status(
+    employee_id: uuid.UUID,
+    body: AccountStatusUpdate,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    return UserOut.model_validate(service.update_account_status(db, admin, employee_id, body))

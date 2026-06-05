@@ -30,32 +30,35 @@ def _now() -> datetime:
 
 
 def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
-          entity_id: uuid.UUID | None = None) -> None:
+          entity_id: uuid.UUID | None = None, target_url: str | None = None) -> None:
     try:
         from app.modules.notifications.service import create_notification
         create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
-                            entity_type="leave_request", entity_id=entity_id)
+                            entity_type="leave_request", entity_id=entity_id,
+                            target_url=target_url)
         db.commit()
     except Exception:
         db.rollback()
 
 
 def _notify_manager(db: Session, employee: Employee, type_: str, title: str,
-                    message: str, entity_id: uuid.UUID | None = None) -> None:
+                    message: str, entity_id: uuid.UUID | None = None,
+                    target_url: str | None = None) -> None:
     if employee.manager_id is None:
         return
     mgr = db.get(Employee, employee.manager_id)
     if mgr is None or mgr.user_id is None:
         return
-    _push(db, mgr.user_id, type_, title, message, entity_id)
+    _push(db, mgr.user_id, type_, title, message, entity_id, target_url)
 
 
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
-                     message: str, entity_id: uuid.UUID | None = None) -> None:
+                     message: str, entity_id: uuid.UUID | None = None,
+                     target_url: str | None = None) -> None:
     emp = db.get(Employee, employee_id)
     if emp is None or emp.user_id is None:
         return
-    _push(db, emp.user_id, type_, title, message, entity_id)
+    _push(db, emp.user_id, type_, title, message, entity_id, target_url)
 
 
 def _team_ids(manager_employee_id: uuid.UUID):
@@ -182,6 +185,7 @@ def create_leave_request(
         f"{me.full_name} submitted a leave request",
         f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
         req.id,
+        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -229,6 +233,7 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
         f"{me.full_name} cancelled a leave request",
         f"{me.full_name} cancelled their leave request ({req.start_date} to {req.end_date}).",
         req.id,
+        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -256,6 +261,7 @@ def approve_leave_request(
         "Your leave request was approved",
         f"Your leave request ({req.start_date} to {req.end_date}) has been approved.",
         req.id,
+        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -282,5 +288,6 @@ def reject_leave_request(
         f"Your leave request ({req.start_date} to {req.end_date}) was not approved."
         + (f" Note: {data.comment}" if data.comment else ""),
         req.id,
+        f"/attendance?tab=leave&id={req.id}",
     )
     return req

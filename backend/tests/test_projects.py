@@ -201,14 +201,16 @@ def test_unassign_member(client, auth_header, make_project, make_employee):
 def test_employee_can_read_but_not_create(client, auth_header, make_project):
     make_project(code="V-1")
     h = auth_header("viewer@example.com", role=UserRole.employee)
-    # employee can list (returns their assigned projects — empty if unassigned)
-    assert client.get("/api/v1/projects", headers=h).status_code == 200
+    # employee has no employee profile → no assigned projects → empty list
+    res = client.get("/api/v1/projects", headers=h)
+    assert res.status_code == 200
     assert client.post("/api/v1/projects", headers=h, json=_payload(code="V-X")).status_code == 403
 
 
 def test_employee_sees_only_assigned(
     client, make_user, make_employee, make_project, make_project_member, login
 ):
+    """Employees see only the projects they are members of."""
     user = make_user("emp@example.com", role=UserRole.employee)
     emp = make_employee(employee_code="EMP", user_id=user.id)
     assigned = make_project(code="ASSIGNED", status=ProjectStatus.active)
@@ -222,6 +224,7 @@ def test_employee_sees_only_assigned(
 def test_employee_cannot_view_unassigned_403(
     client, make_user, make_employee, make_project, login
 ):
+    """Employees get 403 when trying to view a project they are not assigned to."""
     user = make_user("emp@example.com", role=UserRole.employee)
     make_employee(employee_code="EMP", user_id=user.id)
     other = make_project(code="OTHER")

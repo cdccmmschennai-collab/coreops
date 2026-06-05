@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
+from app.modules.job_codes.models import JobCode
 from app.modules.projects.models import Project, ProjectMember, ProjectStatus
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
@@ -42,24 +43,26 @@ MAX_DAY_MINUTES = 1440
 
 
 def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
-          entity_id: uuid.UUID | None = None) -> None:
+          entity_id: uuid.UUID | None = None, target_url: str | None = None) -> None:
     try:
         from app.modules.notifications.service import create_notification
         create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
-                            entity_type="daily_work_report", entity_id=entity_id)
+                            entity_type="daily_work_report", entity_id=entity_id,
+                            target_url=target_url)
         db.commit()
     except Exception:
         db.rollback()
 
 
 def _notify_manager(db: Session, author: Employee, type_: str, title: str,
-                    message: str, entity_id: uuid.UUID | None = None) -> None:
+                    message: str, entity_id: uuid.UUID | None = None,
+                    target_url: str | None = None) -> None:
     if author.manager_id is None:
         return
     mgr = db.get(Employee, author.manager_id)
     if mgr is None or mgr.user_id is None:
         return
-    _push(db, mgr.user_id, type_, title, message, entity_id)
+    _push(db, mgr.user_id, type_, title, message, entity_id, target_url)
 
 
 def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
@@ -67,7 +70,8 @@ def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
     author = db.get(Employee, report.employee_id)
     if author is None or author.user_id is None:
         return
-    _push(db, author.user_id, type_, title, message, report.id)
+    url = f"/work-reports/{report.id}"
+    _push(db, author.user_id, type_, title, message, report.id, url)
 _EDITABLE = {WorkReportStatus.draft, WorkReportStatus.rejected}
 _REVIEW_ROLES = {UserRole.project_manager}
 
@@ -115,9 +119,17 @@ def _team_ids(manager_employee_id: uuid.UUID):
     )
 
 
-def _validate_tasks(db: Session, author_id: uuid.UUID, tasks) -> int:
-    """Validate project (active) + membership for each task; return total minutes."""
+def _validate_tasks(
+    db: Session, author_id: uuid.UUID, tasks
+) -> tuple[int, list[dict]]:
+    """Validate project (active) + membership; return (total_minutes, snapshots).
+
+    Each snapshot dict carries the project_name, project_code, and
+    project_job_code_code frozen at validation time so they can be written
+    directly into the task row for historical accuracy.
+    """
     total = 0
+    snapshots: list[dict] = []
     for task in tasks:
         project = db.get(Project, task.project_id)
         if (
@@ -136,12 +148,21 @@ def _validate_tasks(db: Session, author_id: uuid.UUID, tasks) -> int:
             raise AppError(
                 "validation_error", "You are not assigned to this project.", 422
             )
+        job_code_code: str | None = None
+        if project.job_code_id:
+            jc = db.get(JobCode, project.job_code_id)
+            job_code_code = jc.code if jc else None
+        snapshots.append({
+            "project_name": project.name,
+            "project_code": project.code,
+            "project_job_code_code": job_code_code,
+        })
         total += (task.minutes_spent or 0)
     if total > MAX_DAY_MINUTES:
         raise AppError(
             "validation_error", "Total minutes cannot exceed 1440 for a single day.", 422
         )
-    return total
+    return total, snapshots
 
 
 def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
@@ -269,7 +290,7 @@ def create_work_report(
             "conflict", "A work report for this date already exists.", 409
         )
 
-    total = _validate_tasks(db, me.id, data.tasks)
+    total, snapshots = _validate_tasks(db, me.id, data.tasks)
 
     report = DailyWorkReport(
         employee_id=me.id,
@@ -292,7 +313,7 @@ def create_work_report(
     )
     db.add(report)
     db.flush()
-    for task in data.tasks:
+    for task, snap in zip(data.tasks, snapshots):
         db.add(
             WorkReportTask(
                 report_id=report.id,
@@ -304,6 +325,9 @@ def create_work_report(
                 docs_count=task.docs_count,
                 bom_count=task.bom_count,
                 spares_count=task.spares_count,
+                project_name=snap["project_name"],
+                project_code=snap["project_code"],
+                project_job_code_code=snap["project_job_code_code"],
             )
         )
     try:
@@ -335,10 +359,10 @@ def update_work_report(
     fields = data.model_dump(exclude_unset=True)
 
     if "tasks" in fields and data.tasks is not None:
-        total = _validate_tasks(db, me.id, data.tasks)
+        total, snapshots = _validate_tasks(db, me.id, data.tasks)
         db.execute(delete(WorkReportTask).where(WorkReportTask.report_id == report.id))
         db.flush()
-        for task in data.tasks:
+        for task, snap in zip(data.tasks, snapshots):
             db.add(
                 WorkReportTask(
                     report_id=report.id,
@@ -350,6 +374,9 @@ def update_work_report(
                     docs_count=task.docs_count,
                     bom_count=task.bom_count,
                     spares_count=task.spares_count,
+                    project_name=snap["project_name"],
+                    project_code=snap["project_code"],
+                    project_job_code_code=snap["project_job_code_code"],
                 )
             )
         report.total_minutes = total
@@ -410,6 +437,7 @@ def submit_work_report(
             f"{author.full_name} submitted a work report",
             f"{author.full_name} submitted their work report for {report.report_date}.",
             report.id,
+            f"/work-reports/{report.id}",
         )
     return _load(db, report)
 

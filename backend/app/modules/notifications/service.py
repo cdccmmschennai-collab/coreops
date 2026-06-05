@@ -22,6 +22,7 @@ def create_notification(
     message: str,
     entity_type: str | None = None,
     entity_id: uuid.UUID | None = None,
+    target_url: str | None = None,
 ) -> Notification:
     notif = Notification(
         user_id=user_id,
@@ -30,6 +31,7 @@ def create_notification(
         message=message,
         entity_type=entity_type,
         entity_id=entity_id,
+        target_url=target_url,
         is_read=False,
     )
     db.add(notif)

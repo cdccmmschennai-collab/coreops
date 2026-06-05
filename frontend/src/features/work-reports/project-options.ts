@@ -7,7 +7,7 @@ import { useProjects } from "@/features/projects/hooks";
  * the Job Code field when a project is selected.
  */
 export function useProjectOptions() {
-  const query = useProjects({ q: "", status: "", limit: 200, offset: 0 });
+  const query = useProjects({ q: "", status: "", limit: 100, offset: 0 });
   const all = query.data?.items ?? [];
   const items = all.filter((p) => p.status !== "archived");
   const byId = new Map(all.map((p) => [p.id, p]));

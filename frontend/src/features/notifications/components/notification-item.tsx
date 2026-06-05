@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import {
   CalendarDays,
   CheckCircle,
@@ -28,7 +29,7 @@ function timeAgo(iso: string): string {
   return `${mo}mo ago`;
 }
 
-// ── icon + color per type (matches design-assets/ui_kits) ──────────────────
+// ── icon + color per type ──────────────────────────────────────────────────
 
 type ColorKey = "blue" | "green" | "red" | "amber" | "violet" | "slate";
 
@@ -66,25 +67,32 @@ function getConfig(type: string) {
 export function NotificationItemCompact({
   n,
   onMarkRead,
-  onClick,
+  onClose,
 }: {
   n: Notification;
   onMarkRead?: (id: string) => void;
-  onClick?: () => void;
+  onClose?: () => void;
 }) {
+  const router = useRouter();
   const { Icon, color } = getConfig(n.type);
   const ago = timeAgo(n.created_at);
 
+  function handleClick() {
+    if (!n.is_read) onMarkRead?.(n.id);
+    onClose?.();
+    if (n.target_url) router.push(n.target_url);
+  }
+
   return (
     <div
+      role="button"
+      tabIndex={0}
       className={cn(
         "flex cursor-pointer gap-2.5 px-4 py-3 transition-colors hover:bg-muted/40",
         !n.is_read && "bg-primary/[0.025]",
       )}
-      onClick={() => {
-        if (!n.is_read) onMarkRead?.(n.id);
-        onClick?.();
-      }}
+      onClick={handleClick}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleClick(); }}
     >
       {/* unread dot */}
       <div className="flex w-2 shrink-0 items-start pt-1.5">
@@ -128,8 +136,14 @@ export function NotificationItemFull({
   last: boolean;
   onMarkRead?: (id: string) => void;
 }) {
+  const router = useRouter();
   const { Icon, color } = getConfig(n.type);
   const ago = timeAgo(n.created_at);
+
+  function handleNavigate() {
+    if (!n.is_read) onMarkRead?.(n.id);
+    if (n.target_url) router.push(n.target_url);
+  }
 
   return (
     <div
@@ -137,7 +151,16 @@ export function NotificationItemFull({
         "flex gap-3.5 px-5 py-4",
         !last && "border-b border-border",
         !n.is_read && "bg-primary/[0.025]",
+        n.target_url && "cursor-pointer hover:bg-muted/40 transition-colors",
       )}
+      onClick={n.target_url ? handleNavigate : undefined}
+      role={n.target_url ? "button" : undefined}
+      tabIndex={n.target_url ? 0 : undefined}
+      onKeyDown={
+        n.target_url
+          ? (e) => { if (e.key === "Enter" || e.key === " ") handleNavigate(); }
+          : undefined
+      }
     >
       {/* unread dot */}
       <div className="flex w-2 shrink-0 items-start pt-2">
@@ -168,7 +191,7 @@ export function NotificationItemFull({
         {!n.is_read && (
           <button
             className="mt-2 text-[12px] text-primary hover:underline"
-            onClick={() => onMarkRead?.(n.id)}
+            onClick={(e) => { e.stopPropagation(); onMarkRead?.(n.id); }}
           >
             Mark as read
           </button>

@@ -18,6 +18,7 @@ export interface Notification {
   message: string;
   entity_type: string | null;
   entity_id: string | null;
+  target_url: string | null;
   is_read: boolean;
   created_at: string;
 }

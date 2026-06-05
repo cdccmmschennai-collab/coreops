@@ -27,9 +27,13 @@ import {
   useRemoveMember,
   useUpdateMemberRole,
 } from "../hooks";
-import type { Project, ProjectMemberRole } from "../types";
+import {
+  projectMemberRoleLabel,
+  type Project,
+  type ProjectMemberRole,
+} from "../types";
 
-const ROLES: ProjectMemberRole[] = ["lead", "member"];
+const ROLES: ProjectMemberRole[] = ["team_lead", "contributor", "qc"];
 
 export function ProjectMembers({ project }: { project: Project }) {
   const { role } = useAuth();
@@ -44,7 +48,7 @@ export function ProjectMembers({ project }: { project: Project }) {
   const updateRole = useUpdateMemberRole(project.id);
 
   const [selectedEmployee, setSelectedEmployee] = React.useState("");
-  const [selectedRole, setSelectedRole] = React.useState<ProjectMemberRole>("member");
+  const [selectedRole, setSelectedRole] = React.useState<ProjectMemberRole>("contributor");
 
   const employeesQuery = useEmployees({
     q: "",
@@ -63,7 +67,7 @@ export function ProjectMembers({ project }: { project: Project }) {
       await addMember.mutateAsync({ employee_id: selectedEmployee, role: selectedRole });
       toast.success("Member assigned");
       setSelectedEmployee("");
-      setSelectedRole("member");
+      setSelectedRole("contributor");
     } catch (error) {
       toast.error(error instanceof AppError ? error.message : "Could not assign member.");
     }
@@ -118,7 +122,7 @@ export function ProjectMembers({ project }: { project: Project }) {
                       <SelectContent>
                         {ROLES.map((r) => (
                           <SelectItem key={r} value={r}>
-                            {r}
+                            {projectMemberRoleLabel(r)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -133,7 +137,9 @@ export function ProjectMembers({ project }: { project: Project }) {
                     </Button>
                   </div>
                 ) : (
-                  <Badge variant={m.role === "lead" ? "info" : "neutral"}>{m.role}</Badge>
+                  <Badge variant={m.role === "team_lead" ? "info" : "neutral"}>
+                    {projectMemberRoleLabel(m.role)}
+                  </Badge>
                 )}
               </li>
             ))}
@@ -172,7 +178,7 @@ export function ProjectMembers({ project }: { project: Project }) {
                 <SelectContent>
                   {ROLES.map((r) => (
                     <SelectItem key={r} value={r}>
-                      {r}
+                      {projectMemberRoleLabel(r)}
                     </SelectItem>
                   ))}
                 </SelectContent>

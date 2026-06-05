@@ -31,7 +31,7 @@ import { StatusBadge } from "./status-badge";
 import { useApproveWorkReport, useSubmitWorkReport, useWorkReport } from "../hooks";
 import { useProjectOptions } from "../project-options";
 import { DAY_STATUS_LABEL, WORK_LOCATION_LABEL, type DayStatus, type WorkLocation } from "../schemas";
-import type { WorkReport } from "../types";
+import type { WorkReport, WorkReportTask } from "../types";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -263,6 +263,7 @@ export function WorkReportDetail({ id }: { id: string }) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Project Name</TableHead>
+                    <TableHead>Project Code</TableHead>
                     <TableHead>Job Code</TableHead>
                     <TableHead>Activity Type</TableHead>
                     <TableHead>Description</TableHead>
@@ -275,14 +276,22 @@ export function WorkReportDetail({ id }: { id: string }) {
                 </TableHeader>
                 <TableBody>
                   {report.tasks.map((t) => {
-                    const proj = projById.get(t.project_id);
+                    // Prefer snapshot fields (always current from migration 0017+).
+                    // Fall back to RBAC-scoped projById for pre-migration rows.
+                    const fallback = projById.get(t.project_id);
+                    const projectName = t.project_name ?? fallback?.name ?? "—";
+                    const projectCode = t.project_code ?? fallback?.code ?? "—";
+                    const jobCodeCode = t.project_job_code_code ?? fallback?.job_code_code ?? "—";
                     return (
                       <TableRow key={t.id}>
                         <TableCell className="font-medium">
-                          {proj?.name ?? "—"}
+                          {projectName}
                         </TableCell>
                         <TableCell className="font-mono text-muted-foreground">
-                          {proj?.job_code_code ?? "—"}
+                          {projectCode}
+                        </TableCell>
+                        <TableCell className="font-mono text-muted-foreground">
+                          {jobCodeCode}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {t.activity_type ?? "—"}

@@ -36,6 +36,8 @@ interface ProjectsTableProps {
   canManage: boolean;
   onRequestArchive: (project: Project) => void;
   emptyAction?: React.ReactNode;
+  emptyTitle?: string;
+  emptyDescription?: string;
 }
 
 export function ProjectsTable({
@@ -47,6 +49,8 @@ export function ProjectsTable({
   canManage,
   onRequestArchive,
   emptyAction,
+  emptyTitle,
+  emptyDescription,
 }: ProjectsTableProps) {
   const router = useRouter();
   const cols = canManage ? 5 : 4;
@@ -123,8 +127,8 @@ export function ProjectsTable({
       {isError && <ErrorState message="Could not load projects." onRetry={onRetry} />}
       {showEmpty && (
         <EmptyState
-          title="No projects found"
-          description="No projects match the current filters."
+          title={emptyTitle ?? "No projects found"}
+          description={emptyDescription ?? "No projects match the current filters."}
           action={emptyAction}
         />
       )}

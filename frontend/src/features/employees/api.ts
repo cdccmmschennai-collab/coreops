@@ -1,4 +1,5 @@
 import { api } from "@/lib/api-client";
+import type { components } from "@/types/openapi";
 
 import type {
   Employee,
@@ -7,6 +8,22 @@ import type {
   EmployeePage,
   EmployeeUpdateBody,
 } from "./types";
+
+export type UserOut = components["schemas"]["UserOut"];
+
+export interface AccountCreateBody {
+  email: string;
+  password: string;
+  role: "project_manager" | "employee";
+}
+
+export interface AccountPasswordResetBody {
+  new_password: string;
+}
+
+export interface AccountStatusUpdateBody {
+  is_active: boolean;
+}
 
 function toQuery(p: EmployeeListParams): string {
   const sp = new URLSearchParams();
@@ -27,4 +44,13 @@ export const employeesApi = {
   update: (id: string, body: EmployeeUpdateBody) =>
     api.patch<Employee>(`/employees/${id}`, body),
   deactivate: (id: string) => api.del<void>(`/employees/${id}`),
+  getTeam: (id: string) => api.get<Employee[]>(`/employees/${id}/team`),
+
+  // account management
+  createAccount: (id: string, body: AccountCreateBody) =>
+    api.post<UserOut>(`/employees/${id}/account`, body),
+  resetAccountPassword: (id: string, body: AccountPasswordResetBody) =>
+    api.patch<void>(`/employees/${id}/account/password`, body),
+  updateAccountStatus: (id: string, body: AccountStatusUpdateBody) =>
+    api.patch<UserOut>(`/employees/${id}/account/status`, body),
 };

@@ -63,19 +63,33 @@ const DESCRIPTION_MAX = 2000;
 const REMARKS_MAX     = 2000;
 const REVIEW_NOTE_MAX = 1000;
 const MAX_DAY_MINUTES = 1440;
+const MAX_DAY_HOURS   = 24;
+
+// ── duration conversion (UI shows hours; backend stores whole minutes) ─────────
+
+/** Form hours string → whole minutes for the API. Empty ⇒ null. */
+export const hoursToMinutes = (v: string | undefined): number | null => {
+  if (!v || v.trim() === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 60) : null;
+};
+
+/** API minutes → clean hours string for the form (60→"1", 90→"1.5", 135→"2.25"). */
+export const minutesToHours = (m: number): string => String(+(m / 60).toFixed(2));
 
 // ── task schema ───────────────────────────────────────────────────────────────
 
-// minutes_spent is kept as a string in form inputs so an empty value maps to null.
-const minutesSpentSchema = z
+// duration_hours is kept as a string in form inputs so an empty value maps to null.
+// Decimal hours allowed (e.g. 1, 1.5, 2.25, 7.75); 24h == the 1440-minute day cap.
+const durationHoursSchema = z
   .string()
   .refine(
     (v) => {
-      if (v.trim() === "") return true; // null/omitted — OK
+      if (v.trim() === "") return true; // null/omitted — OK (duration is optional)
       const n = Number(v);
-      return Number.isInteger(n) && n >= 0 && n <= MAX_DAY_MINUTES;
+      return Number.isFinite(n) && n >= 0 && n <= MAX_DAY_HOURS;
     },
-    `Enter whole minutes between 0 and ${MAX_DAY_MINUTES}, or leave blank`,
+    `Enter hours between 0 and ${MAX_DAY_HOURS} (decimals allowed), or leave blank`,
   );
 
 // Count inputs: string → non-negative int, empty = 0
@@ -88,12 +102,17 @@ const countSchema = z
 
 const taskSchema = z.object({
   project_id: z.string().min(1, "Project is required"),
+  // Display-only snapshot fields — populated from API in edit mode so the
+  // Combobox can show the project name/code even when the project is no
+  // longer in the RBAC-scoped list.  Never sent back to the backend.
+  project_name: z.string().optional(),
+  project_code: z.string().optional(),
   description: z
     .string()
     .min(1, "Description is required")
     .max(DESCRIPTION_MAX, `Keep under ${DESCRIPTION_MAX} characters`),
-  minutes_spent: minutesSpentSchema,
-  activity_type: z.string().max(200).optional().default(""),
+  duration_hours: durationHoursSchema,
+  activity_type: z.string().min(1, "Activity type is required").max(200),
   tags_count:   countSchema.default("0"),
   docs_count:   countSchema.default("0"),
   bom_count:    countSchema.default("0"),
@@ -118,11 +137,27 @@ export const workReportFormSchema = z
     tasks: z.array(taskSchema).min(1, "Add at least one task"),
   })
   .superRefine((v, ctx) => {
-    const total = v.tasks.reduce((sum, t) => sum + (Number(t.minutes_spent) || 0), 0);
-    if (total > MAX_DAY_MINUTES) {
+    // Required: Day Status + Office Location (enforced here so the inferred
+    // form type keeps these optional/undefined-friendly).
+    if (v.day_status === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Total minutes (${total}) exceed a single day (${MAX_DAY_MINUTES})`,
+        message: "Day Status is required",
+        path: ["day_status"],
+      });
+    }
+    if (v.location === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Office Location is required",
+        path: ["location"],
+      });
+    }
+    const totalMin = v.tasks.reduce((sum, t) => sum + (hoursToMinutes(t.duration_hours) || 0), 0);
+    if (totalMin > MAX_DAY_MINUTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Total hours (${+(totalMin / 60).toFixed(2)}) exceed a single day (${MAX_DAY_HOURS})`,
         path: ["tasks"],
       });
     }
@@ -133,14 +168,16 @@ export type WorkReportFormValues = z.infer<typeof workReportFormSchema>;
 // ── empty defaults ────────────────────────────────────────────────────────────
 
 export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
-  project_id:   "",
-  description:  "",
-  minutes_spent: "",
-  activity_type: "",
-  tags_count:   "0",
-  docs_count:   "0",
-  bom_count:    "0",
-  spares_count: "0",
+  project_id:     "",
+  project_name:   undefined,
+  project_code:   undefined,
+  description:    "",
+  duration_hours: "",
+  activity_type:  "",
+  tags_count:     "0",
+  docs_count:     "0",
+  bom_count:      "0",
+  spares_count:   "0",
 };
 
 export const EMPTY_WORK_REPORT_FORM: WorkReportFormValues = {
@@ -177,17 +214,11 @@ const orNull = (v: string | undefined): string | null =>
 const toCount = (v: string | undefined): number =>
   Number.isFinite(Number(v)) ? Math.max(0, Math.trunc(Number(v))) : 0;
 
-const toMinutes = (v: string | undefined): number | null => {
-  if (!v || v.trim() === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : null;
-};
-
 function toTasks(v: WorkReportFormValues) {
   return v.tasks.map((t) => ({
     project_id:    t.project_id,
     description:   t.description.trim(),
-    minutes_spent: toMinutes(t.minutes_spent),
+    minutes_spent: hoursToMinutes(t.duration_hours),
     activity_type: orNull(t.activity_type),
     tags_count:    toCount(t.tags_count),
     docs_count:    toCount(t.docs_count),
@@ -245,10 +276,12 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
     tasks:
       report.tasks.length > 0
         ? report.tasks.map((t) => ({
-            project_id:    t.project_id,
-            description:   t.description,
-            minutes_spent: t.minutes_spent != null ? String(t.minutes_spent) : "",
-            activity_type: t.activity_type ?? "",
+            project_id:     t.project_id,
+            project_name:   t.project_name ?? undefined,
+            project_code:   t.project_code ?? undefined,
+            description:    t.description,
+            duration_hours: t.minutes_spent != null ? minutesToHours(t.minutes_spent) : "",
+            activity_type:  t.activity_type ?? "",
             tags_count:    String(t.tags_count ?? 0),
             docs_count:    String(t.docs_count ?? 0),
             bom_count:     String(t.bom_count ?? 0),

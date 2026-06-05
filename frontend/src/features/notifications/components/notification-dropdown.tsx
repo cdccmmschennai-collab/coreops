@@ -13,7 +13,8 @@ interface Props {
   onClose: () => void;
 }
 
-export function NotificationDropdown({ onClose }: Props) {
+export const NotificationDropdown = React.forwardRef<HTMLDivElement, Props>(
+  function NotificationDropdown({ onClose }, ref) {
   const query = useNotifications({ limit: 8, offset: 0 });
   const markRead = useMarkRead();
   const markAll = useMarkAllRead();
@@ -32,11 +33,13 @@ export function NotificationDropdown({ onClose }: Props) {
 
   return (
     <>
-      {/* backdrop */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-
-      {/* panel — matches design: 380px, right-anchored, rounded-xl, shadow-lg */}
+      {/* panel — matches design: 380px, right-anchored, rounded-xl, shadow-lg.
+          Click-outside / Escape / route-change closing is owned by the bell;
+          no blocking backdrop, so clicks pass through to the page underneath. */}
       <div
+        ref={ref}
+        role="dialog"
+        aria-label="Notifications"
         className="fixed right-4 top-[60px] z-50 flex max-h-[calc(100vh-80px)] w-[380px] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-lg"
         style={{ animation: "notifIn 180ms ease-out" }}
       >
@@ -75,7 +78,7 @@ export function NotificationDropdown({ onClose }: Props) {
                 key={n.id}
                 n={n}
                 onMarkRead={(id) => void markRead.mutateAsync(id)}
-                onClick={onClose}
+                onClose={onClose}
               />
             ))
           )}
@@ -101,4 +104,4 @@ export function NotificationDropdown({ onClose }: Props) {
       `}</style>
     </>
   );
-}
+});

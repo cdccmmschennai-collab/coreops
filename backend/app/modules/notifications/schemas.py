@@ -13,6 +13,7 @@ class NotificationOut(BaseModel):
     message: str
     entity_type: Optional[str]
     entity_id: Optional[uuid.UUID]
+    target_url: Optional[str]
     is_read: bool
     created_at: datetime
 

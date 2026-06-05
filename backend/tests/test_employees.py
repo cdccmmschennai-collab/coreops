@@ -185,3 +185,172 @@ def test_team_endpoint_returns_reports(client, make_user, make_employee, login):
     res = client.get(f"/api/v1/employees/{mgr.id}/team", headers=h)
     assert res.status_code == 200
     assert {e["employee_code"] for e in res.json()} == {"R1", "R2"}
+
+
+# ---------- account management ----------
+
+def test_create_account_links_user(client, make_user, make_employee, login):
+    """PM can create a login account and link it to an employee."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="ACC-001")
+    h = login("pm@example.com")
+    res = client.post(
+        f"/api/v1/employees/{emp.id}/account",
+        headers=h,
+        json={"email": "newhire@company.com", "password": "Secure1234", "role": "employee"},
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["email"] == "newhire@company.com"
+    assert body["role"] == "employee"
+    assert body["is_active"] is True
+
+    # The employee record should now carry the user_id.
+    emp_data = client.get(f"/api/v1/employees/{emp.id}", headers=h).json()
+    assert emp_data["user_id"] == body["id"]
+
+
+def test_create_account_duplicate_409(client, make_user, make_employee, login):
+    """Creating a second account for the same employee is rejected."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    existing_user = make_user("already@company.com")
+    emp = make_employee(employee_code="ACC-002", user_id=existing_user.id)
+    h = login("pm@example.com")
+    res = client.post(
+        f"/api/v1/employees/{emp.id}/account",
+        headers=h,
+        json={"email": "second@company.com", "password": "Secure1234", "role": "employee"},
+    )
+    assert res.status_code == 409
+
+
+def test_create_account_duplicate_email_409(client, make_user, make_employee, login):
+    """Email already in use by another user returns 409."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    make_user("taken@company.com")
+    emp = make_employee(employee_code="ACC-003")
+    h = login("pm@example.com")
+    res = client.post(
+        f"/api/v1/employees/{emp.id}/account",
+        headers=h,
+        json={"email": "taken@company.com", "password": "Secure1234", "role": "employee"},
+    )
+    assert res.status_code == 409
+
+
+def test_create_account_employee_forbidden(client, make_user, make_employee, login):
+    """Employees cannot create accounts for others."""
+    emp_user = make_user("emp@example.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ACC-004", user_id=emp_user.id)
+    other = make_employee(employee_code="OTHER-004")
+    h = login("emp@example.com")
+    res = client.post(
+        f"/api/v1/employees/{other.id}/account",
+        headers=h,
+        json={"email": "other@company.com", "password": "Secure1234", "role": "employee"},
+    )
+    assert res.status_code == 403
+
+
+def test_reset_account_password(client, make_user, make_employee, login):
+    """PM can reset the linked account's password."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp_user = make_user("hire@company.com")
+    emp = make_employee(employee_code="ACC-005", user_id=emp_user.id)
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/password",
+        headers=h,
+        json={"new_password": "NewPass9999"},
+    )
+    assert res.status_code == 204
+
+    # New password should work at login.
+    login_res = client.post(
+        "/api/v1/auth/login", json={"email": "hire@company.com", "password": "NewPass9999"}
+    )
+    assert login_res.status_code == 200
+
+
+def test_disable_and_enable_account(client, make_user, make_employee, login):
+    """PM can disable then re-enable a linked account."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp_user = make_user("active@company.com")
+    emp = make_employee(employee_code="ACC-006", user_id=emp_user.id)
+    h = login("pm@example.com")
+
+    # Disable.
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/status",
+        headers=h,
+        json={"is_active": False},
+    )
+    assert res.status_code == 200
+    assert res.json()["is_active"] is False
+
+    # Disabled user cannot log in.
+    login_res = client.post(
+        "/api/v1/auth/login", json={"email": "active@company.com", "password": "password123"}
+    )
+    assert login_res.status_code == 401
+
+    # Re-enable.
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/status",
+        headers=h,
+        json={"is_active": True},
+    )
+    assert res.status_code == 200
+    assert res.json()["is_active"] is True
+
+
+def test_account_password_no_account_404(client, make_user, make_employee, login):
+    """Reset password for employee with no linked account returns 404."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="ACC-007")
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/password",
+        headers=h,
+        json={"new_password": "NewPass9999"},
+    )
+    assert res.status_code == 404
+
+
+# ---------- manager hierarchy ----------
+
+def test_manager_id_is_exposed_on_employee(client, make_user, make_employee, login):
+    """The manager_id FK is returned in EmployeeOut."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    mgr = make_employee(employee_code="MGR-H1")
+    report = make_employee(employee_code="REP-H1", manager_id=mgr.id)
+    h = login("pm@example.com")
+    data = client.get(f"/api/v1/employees/{report.id}", headers=h).json()
+    assert data["manager_id"] == str(mgr.id)
+
+
+def test_team_empty_for_no_reports(client, make_user, make_employee, login):
+    """An employee with no direct reports returns an empty team list."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="LONE-001")
+    h = login("pm@example.com")
+    res = client.get(f"/api/v1/employees/{emp.id}/team", headers=h)
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_team_does_not_include_exited_employees(client, make_user, make_employee, login):
+    """Soft-deleted / exited employees do not appear in the team list."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    mgr = make_employee(employee_code="MGR-EXIT")
+    make_employee(employee_code="ACTIVE-R", manager_id=mgr.id, status=EmployeeStatus.active)
+    exited = make_employee(employee_code="EXITED-R", manager_id=mgr.id)
+    # Soft-delete the exited employee via the API.
+    h = login("pm@example.com")
+    client.delete(f"/api/v1/employees/{exited.id}", headers=h)
+
+    res = client.get(f"/api/v1/employees/{mgr.id}/team", headers=h)
+    assert res.status_code == 200
+    codes = {e["employee_code"] for e in res.json()}
+    assert "ACTIVE-R" in codes
+    assert "EXITED-R" not in codes

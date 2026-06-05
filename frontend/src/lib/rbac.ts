@@ -15,7 +15,8 @@ export type Capability =
   | "project.view"        // project_manager: navigate to /projects list (employee sees assigned)
   | "project.manage"      // project_manager: create/edit/archive projects
   | "analytics.view"      // project_manager: aggregate analytics
-  | "report.submit"       // both: create/edit/submit/delete own reports
+  | "report.nav"          // both: Reports tab visible in sidebar (PM reviews, employee submits)
+  | "report.submit"       // employee: create/edit/submit/delete own reports
   | "report.review"       // project_manager: approve/reject reports
   | "attendance.viewTeam" // project_manager: team attendance view
   | "attendance.manage"   // project_manager: create/edit/delete attendance records
@@ -28,10 +29,11 @@ const MATRIX: Record<Capability, Role[]> = {
   "user.manage":          ["project_manager"],
   "employee.view":        ["project_manager"],
   "employee.manage":      ["project_manager"],
-  "project.view":         ["project_manager"],
+  "project.view":         ["project_manager", "employee"],
   "project.manage":       ["project_manager"],
   "analytics.view":       ["project_manager"],
-  "report.submit":        ["project_manager", "employee"],
+  "report.nav":           ["project_manager", "employee"],
+  "report.submit":        ["employee"],
   "report.review":        ["project_manager"],
   "attendance.viewTeam":  ["project_manager"],
   "attendance.manage":    ["project_manager"],

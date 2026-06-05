@@ -26,11 +26,12 @@ from app.shared.errors import AppError
 
 
 def _push_notification(db: Session, user_id: uuid.UUID, type_: str, title: str,
-                       message: str, entity_id: uuid.UUID | None = None) -> None:
+                       message: str, entity_id: uuid.UUID | None = None,
+                       target_url: str | None = None) -> None:
     try:
         from app.modules.notifications.service import create_notification
         create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
-                            entity_type="project", entity_id=entity_id)
+                            entity_type="project", entity_id=entity_id, target_url=target_url)
         db.commit()
     except Exception:
         db.rollback()
@@ -323,6 +324,7 @@ def add_member(
             f"You were assigned to {project.name}",
             f"You have been added to project {project.name} ({project.code}) as {role.value}.",
             project.id,
+            f"/projects/{project.id}",
         )
     return member
 

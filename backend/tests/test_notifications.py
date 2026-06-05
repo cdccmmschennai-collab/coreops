@@ -287,3 +287,78 @@ def test_notification_has_entity_fields(db, make_user):
     db.commit()
     assert n.entity_type == "leave_request"
     assert n.entity_id == eid
+
+
+# ── target_url ─────────────────────────────────────────────────────────────
+
+def test_target_url_persisted(db, make_user):
+    u = make_user("tu@x.com")
+    n = create_notification(db, user_id=u.id, type_="report_approved", title="T",
+                            message="M", target_url="/work-reports/abc-123")
+    db.commit()
+    assert n.target_url == "/work-reports/abc-123"
+
+
+def test_target_url_none_by_default(db, make_user):
+    u = make_user("tun@x.com")
+    n = create_notification(db, user_id=u.id, type_="test", title="T", message="M")
+    db.commit()
+    assert n.target_url is None
+
+
+def test_target_url_in_api_response(client, make_user, login):
+    u = make_user("tur@x.com")
+    from app.core.database import SessionLocal
+    with SessionLocal() as db:
+        create_notification(db, user_id=u.id, type_="project_assigned", title="T",
+                            message="M", target_url="/projects/some-id")
+        db.commit()
+    h = login("tur@x.com")
+    items = client.get("/api/v1/notifications", headers=h).json()["items"]
+    assert items[0]["target_url"] == "/projects/some-id"
+
+
+def test_leave_submitted_notification_has_target_url(
+    client, make_user, make_employee, login
+):
+    """Leave-submitted notification sent to manager carries target_url."""
+    from datetime import date, timedelta
+    mgr_u  = make_user("mgr@tu.com", role=UserRole.project_manager)
+    emp_u  = make_user("emp@tu.com", role=UserRole.employee)
+    mgr_e  = make_employee(employee_code="MGR-TU", user_id=mgr_u.id)
+    emp_e  = make_employee(employee_code="EMP-TU", user_id=emp_u.id, manager_id=mgr_e.id)
+
+    start = str(date.today() + timedelta(days=7))
+    end   = str(date.today() + timedelta(days=9))
+    h = login("emp@tu.com")
+    res = client.post("/api/v1/leave-requests", headers=h,
+                      json={"leave_type": "casual", "start_date": start, "end_date": end})
+    assert res.status_code == 201
+    leave_id = res.json()["id"]
+
+    h_mgr = login("mgr@tu.com")
+    notifs = client.get("/api/v1/notifications", headers=h_mgr).json()["items"]
+    assert len(notifs) == 1
+    assert notifs[0]["target_url"] == f"/attendance?tab=leave&id={leave_id}"
+
+
+def test_project_assigned_notification_has_target_url(
+    client, make_user, make_employee, make_project, login
+):
+    """Project-assigned notification carries /projects/{id} as target_url."""
+    from app.modules.projects.models import ProjectStatus
+    pm_u  = make_user("pm@tu.com", role=UserRole.project_manager)
+    emp_u = make_user("emp@tu.com", role=UserRole.employee)
+    emp_e = make_employee(employee_code="EMP-PR2", user_id=emp_u.id)
+    proj  = make_project(code="PROJ-TU", status=ProjectStatus.active)
+
+    h = login("pm@tu.com")
+    client.post(f"/api/v1/projects/{proj.id}/members", headers=h,
+                json={"employee_id": str(emp_e.id), "role": "contributor"})
+
+    h_emp = login("emp@tu.com")
+    notifs = client.get("/api/v1/notifications", headers=h_emp).json()["items"]
+    assert any(
+        n["type"] == "project_assigned" and n["target_url"] == f"/projects/{proj.id}"
+        for n in notifs
+    )

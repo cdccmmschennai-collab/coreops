@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.employees.models import EmployeeStatus
+from app.modules.users.models import UserRole
 
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
@@ -62,3 +63,20 @@ class EmployeePage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------- account management ----------
+
+class AccountCreate(BaseModel):
+    """Create a new login account and link it to the employee."""
+    email: str = Field(pattern=EMAIL_PATTERN)
+    password: str = Field(min_length=8)
+    role: UserRole = UserRole.employee
+
+
+class AccountPasswordReset(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
+class AccountStatusUpdate(BaseModel):
+    is_active: bool

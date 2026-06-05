@@ -80,10 +80,6 @@ function commandItemValue(opt: ComboboxOption): string {
     .join(" ");
 }
 
-/** Prevent Radix from closing the popover before click selection registers. */
-function preventPopoverClose(e: React.MouseEvent | React.PointerEvent) {
-  e.preventDefault();
-}
 
 export function Combobox({
   value,
@@ -201,8 +197,6 @@ export function Combobox({
               <CommandGroup>
                 <CommandItem
                   value={`__create__ ${search.trim()}`}
-                  onPointerDown={preventPopoverClose}
-                  onMouseDown={preventPopoverClose}
                   onSelect={() => void handleCreateNew()}
                   className="gap-2 text-primary"
                 >
@@ -226,8 +220,6 @@ export function Combobox({
                     key={opt.value}
                     value={commandItemValue(opt)}
                     keywords={opt.keywords}
-                    onPointerDown={preventPopoverClose}
-                    onMouseDown={preventPopoverClose}
                     onSelect={() => handleSelect(opt.value)}
                   >
                     <Check
@@ -260,8 +252,6 @@ export function Combobox({
               <CommandGroup>
                 <CommandItem
                   value={`__create__ ${search.trim()}`}
-                  onPointerDown={preventPopoverClose}
-                  onMouseDown={preventPopoverClose}
                   onSelect={() => void handleCreateNew()}
                   className="gap-2 text-primary"
                 >

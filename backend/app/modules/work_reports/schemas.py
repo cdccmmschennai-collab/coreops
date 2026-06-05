@@ -39,6 +39,10 @@ class WorkReportTaskOut(BaseModel):
 
     id: uuid.UUID
     project_id: uuid.UUID
+    # Snapshot fields (populated at save time; null for records predating migration 0017).
+    project_name: str | None = None
+    project_code: str | None = None
+    project_job_code_code: str | None = None
     description: str
     minutes_spent: int | None = None
     activity_type: str | None = None
