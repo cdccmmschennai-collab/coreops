@@ -8,10 +8,10 @@ import { RequireCapability } from "@/components/auth/require-capability";
 import { PageHeader } from "@/components/shell/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { ActivityTypesManager } from "@/features/activity-types/components/activity-types-manager";
+import { AuditLogView } from "@/features/audit/components/audit-log-view";
 import { UsersView } from "@/features/users/components/users-view";
 
 import { AdminCorrectionsPreview } from "./components/admin-corrections-preview";
-import { AuditLogPreview } from "./components/audit-log-preview";
 import { LeaveApprovalsPreview } from "./components/leave-approvals-preview";
 import { RolesTab } from "./components/roles-tab";
 import { SsoPreview } from "./components/sso-preview";
@@ -22,7 +22,7 @@ const TABS = [
   { value: "users",          label: "Users & Roles" },
   { value: "roles",          label: "Roles" },
   { value: "activity-types", label: "Activity Types" },
-  { value: "leave",          label: "Leave approvals",         count: 4 },
+  { value: "leave",          label: "Leave approvals" },
   { value: "corrections",    label: "Attendance corrections",  count: 2 },
   { value: "audit",          label: "Audit log" },
   { value: "sso",            label: "SSO" },
@@ -54,7 +54,7 @@ function SettingsContent() {
       {tab === "activity-types" && <ActivityTypesManager />}
       {tab === "leave"          && <LeaveApprovalsPreview />}
       {tab === "corrections"    && <AdminCorrectionsPreview />}
-      {tab === "audit"          && <AuditLogPreview />}
+      {tab === "audit"          && <AuditLogView />}
       {tab === "sso"            && <SsoPreview />}
     </RequireCapability>
   );

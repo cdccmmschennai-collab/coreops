@@ -11,6 +11,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.audit import service as audit
+from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
@@ -355,6 +357,14 @@ def add_member(
         project_id=project_id, employee_id=employee_id, role=role, created_by=actor.id
     )
     db.add(member)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_MEMBER_ADD,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={"employee_id": str(employee_id), "role": role.value},
+    )
     db.commit()
     db.refresh(member)
     member.employee_name = employee.full_name  # type: ignore[attr-defined]
@@ -385,10 +395,23 @@ def update_member_role(
     if member is None:
         raise AppError("not_found", "Membership not found.", 404)
 
+    prev_role = member.role
     if role == ProjectMemberRole.team_lead:
         _demote_existing_lead(db, project_id, except_id=member.id)
     member.role = role
     db.add(member)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_MEMBER_ROLE_CHANGE,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={
+            "employee_id": str(employee_id),
+            "from": prev_role.value,
+            "to": role.value,
+        },
+    )
     db.commit()
     db.refresh(member)
     employee = db.get(Employee, employee_id)
@@ -407,5 +430,14 @@ def remove_member(
     ).scalar_one_or_none()
     if member is None:
         raise AppError("not_found", "Membership not found.", 404)
+    member_role = member.role
     db.delete(member)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_MEMBER_REMOVE,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={"employee_id": str(employee_id), "role": member_role.value},
+    )
     db.commit()

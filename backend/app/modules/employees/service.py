@@ -10,6 +10,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.audit import service as audit
+from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.schemas import (
     AccountCreate,
@@ -191,6 +193,15 @@ def create_employee(db: Session, actor: User, data: EmployeeCreate) -> Employee:
     emp = Employee(**data.model_dump(), created_by=actor.id, updated_by=actor.id)
     db.add(emp)
     try:
+        db.flush()
+        audit.record_audit(
+            db,
+            action=AuditAction.EMPLOYEE_CREATE,
+            actor=actor,
+            entity_type=EntityType.EMPLOYEE,
+            entity_id=emp.id,
+            details={"employee_code": data.employee_code},
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -225,6 +236,14 @@ def update_employee(
         setattr(emp, key, value)
     emp.updated_by = actor.id
     db.add(emp)
+    audit.record_audit(
+        db,
+        action=AuditAction.EMPLOYEE_UPDATE,
+        actor=actor,
+        entity_type=EntityType.EMPLOYEE,
+        entity_id=emp.id,
+        details={"changed_fields": sorted(fields.keys())},
+    )
     db.commit()
     db.refresh(emp)
     return emp
@@ -238,6 +257,13 @@ def deactivate_employee(db: Session, actor: User, emp_id: uuid.UUID) -> None:
     emp.deleted_at = datetime.now(timezone.utc)
     emp.updated_by = actor.id
     db.add(emp)
+    audit.record_audit(
+        db,
+        action=AuditAction.EMPLOYEE_DEACTIVATE,
+        actor=actor,
+        entity_type=EntityType.EMPLOYEE,
+        entity_id=emp.id,
+    )
     db.commit()
 
 
@@ -272,10 +298,18 @@ def create_and_link_account(
     from app.modules.users.service import create_user
     from app.modules.users.schemas import UserCreate
 
-    user = create_user(db, UserCreate(email=data.email, password=data.password, role=data.role))
+    user = create_user(db, UserCreate(email=data.email, password=data.password, role=data.role), actor)
     emp.user_id = user.id
     emp.updated_by = actor.id
     db.add(emp)
+    audit.record_audit(
+        db,
+        action=AuditAction.EMPLOYEE_ACCOUNT_LINK,
+        actor=actor,
+        entity_type=EntityType.EMPLOYEE,
+        entity_id=emp.id,
+        details={"user_id": str(user.id), "email": data.email, "role": data.role.value},
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -287,7 +321,7 @@ def reset_account_password(
     emp = _fetch(db, emp_id)
     _fetch_linked_user(db, emp)  # ensure account exists
     from app.modules.users.service import set_password
-    set_password(db, emp.user_id, data.new_password)  # type: ignore[arg-type]
+    set_password(db, emp.user_id, data.new_password, actor)  # type: ignore[arg-type]
 
 
 def update_account_status(
@@ -334,6 +368,14 @@ def relink_account(
     emp.user_id = user.id
     emp.updated_by = actor.id
     db.add(emp)
+    audit.record_audit(
+        db,
+        action=AuditAction.EMPLOYEE_ACCOUNT_RELINK,
+        actor=actor,
+        entity_type=EntityType.EMPLOYEE,
+        entity_id=emp.id,
+        details={"user_id": str(user.id)},
+    )
     db.commit()
     db.refresh(user)
     return user
@@ -344,7 +386,16 @@ def unlink_account(db: Session, actor: User, emp_id: uuid.UUID) -> None:
     emp = _fetch(db, emp_id)
     if emp.user_id is None:
         raise AppError("not_found", "This employee has no linked account.", 404)
+    detached_user_id = emp.user_id
     emp.user_id = None
     emp.updated_by = actor.id
     db.add(emp)
+    audit.record_audit(
+        db,
+        action=AuditAction.EMPLOYEE_ACCOUNT_UNLINK,
+        actor=actor,
+        entity_type=EntityType.EMPLOYEE,
+        entity_id=emp.id,
+        details={"user_id": str(detached_user_id)},
+    )
     db.commit()

@@ -3,12 +3,14 @@
 V0 wires configuration, CORS, the uniform error envelope, and the health
 router. Domain routers are registered in later phases.
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.context import set_request_context
 from app.health import router as health_router
 from app.modules.activity_types.router import router as activity_types_router
+from app.modules.audit.router import router as audit_router
 from app.modules.calendar.router import router as calendar_router
 from app.modules.job_codes.router import router as job_codes_router
 from app.modules.notifications.router import router as notifications_router
@@ -44,6 +46,17 @@ def create_app() -> FastAPI:
 
     register_error_handlers(app)
 
+    @app.middleware("http")
+    async def _capture_request_context(request: Request, call_next):
+        # Stash client IP / user-agent for the audit logger (read via ContextVars
+        # in app.modules.audit.service). Starlette copies the contextvars Context
+        # into the threadpool that runs sync endpoints, so this is visible there.
+        set_request_context(
+            ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        )
+        return await call_next(request)
+
     # Routers (one module per phase).
     app.include_router(health_router, prefix=settings.API_V1_PREFIX)
     app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
@@ -59,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router, prefix=settings.API_V1_PREFIX)
     app.include_router(activity_types_router, prefix=settings.API_V1_PREFIX)
     app.include_router(job_codes_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(audit_router, prefix=settings.API_V1_PREFIX)
 
     return app
 

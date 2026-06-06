@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_claims, get_current_user
 from app.core.security import revoke_token
+from app.modules.audit import service as audit
+from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.auth import service
 from app.modules.employees.service import _current_employee, build_profile
 from app.modules.users.models import User
@@ -27,8 +29,20 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)) -
 
 
 @router.post("/logout", status_code=204)
-def logout(claims: dict = Depends(get_current_claims)) -> Response:
+def logout(
+    claims: dict = Depends(get_current_claims),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
     revoke_token(claims["jti"], claims["exp"])
+    audit.record_audit(
+        db,
+        action=AuditAction.LOGOUT,
+        actor=current,
+        entity_type=EntityType.USER,
+        entity_id=current.id,
+        commit=True,
+    )
     return Response(status_code=204)
 
 

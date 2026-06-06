@@ -49,9 +49,9 @@ def list_users(
 
 @router.post("", response_model=UserOut, status_code=201)
 def create_user(
-    body: UserCreate, _admin: User = AdminUser, db: Session = Depends(get_db)
+    body: UserCreate, admin: User = AdminUser, db: Session = Depends(get_db)
 ) -> UserOut:
-    return UserOut.model_validate(service.create_user(db, body))
+    return UserOut.model_validate(service.create_user(db, body, admin))
 
 
 @router.get("/{user_id}", response_model=UserOut)
@@ -85,8 +85,8 @@ def set_role(
 def set_password(
     user_id: uuid.UUID,
     body: PasswordUpdate,
-    _admin: User = AdminUser,
+    admin: User = AdminUser,
     db: Session = Depends(get_db),
 ) -> Response:
-    service.set_password(db, user_id, body.new_password)
+    service.set_password(db, user_id, body.new_password, admin)
     return Response(status_code=204)
