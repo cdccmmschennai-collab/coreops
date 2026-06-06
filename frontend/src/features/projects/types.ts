@@ -15,8 +15,8 @@ export type ProjectMemberCreateBody = components["schemas"]["ProjectMemberCreate
 // Keyed by the active roles only; legacy/unknown values fall back to the raw value
 // via projectMemberRoleLabel().
 export const PROJECT_MEMBER_ROLE_LABEL: Partial<Record<ProjectMemberRole, string>> = {
-  team_lead: "TEAM LEAD",
-  contributor: "CONTRIBUTOR",
+  team_lead: "Lead",
+  contributor: "Contributor",
   qc: "QC",
 };
 

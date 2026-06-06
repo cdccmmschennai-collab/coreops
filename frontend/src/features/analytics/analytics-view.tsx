@@ -226,14 +226,14 @@ export function AnalyticsView() {
             </div>
           </CardHeader>
           <CardContent className="px-5 pb-4 pt-3">
-            <PreviewBanner>tasks have no category field yet — distribution is representative sample data.</PreviewBanner>
+            <PreviewBanner>tasks have no category field yet - distribution is representative sample data.</PreviewBanner>
             <StackedBarsPreview />
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="border-b border-border px-5 py-3.5">
-            <CardTitle className="text-base">Hours by category — total</CardTitle>
+            <CardTitle className="text-base">Hours by category - total</CardTitle>
           </CardHeader>
           <CardContent className="px-5 pb-4 pt-3">
             <PreviewBanner>sample data until category field exists.</PreviewBanner>

@@ -1,20 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { MoreHorizontal, Pencil } from "lucide-react";
 
 import { Pagination } from "@/components/data/pagination";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { TableSkeleton } from "@/components/feedback/table-skeleton";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -35,8 +26,6 @@ interface UsersTableProps {
   isError: boolean;
   onRetry: () => void;
   onPageChange: (offset: number) => void;
-  canManage: boolean;
-  emptyAction?: React.ReactNode;
 }
 
 export function UsersTable({
@@ -45,11 +34,8 @@ export function UsersTable({
   isError,
   onRetry,
   onPageChange,
-  canManage,
-  emptyAction,
 }: UsersTableProps) {
-  const router = useRouter();
-  const cols = canManage ? 7 : 6;
+  const cols = 6;
   const rows: UserListItem[] = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
   const showEmpty = !isLoading && !isError && rows.length === 0;
@@ -65,7 +51,6 @@ export function UsersTable({
             <TableHead>Role</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Last Login</TableHead>
-            {canManage && <TableHead className="w-12 text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
 
@@ -74,17 +59,12 @@ export function UsersTable({
         {showRows && (
           <TableBody>
             {rows.map((u) => (
-              <TableRow
-                key={u.id}
-                className="cursor-pointer"
-                onClick={() => router.push(`/settings/${u.id}`)}
-              >
+              <TableRow key={u.id}>
                 <TableCell className="font-medium">
                   {u.linked_employee ? (
                     <Link
                       href={`/employees/${u.linked_employee.id}`}
                       className="text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
                     >
                       {u.linked_employee.full_name}
                     </Link>
@@ -105,25 +85,6 @@ export function UsersTable({
                 <TableCell className="tabular text-muted-foreground">
                   {formatDateTime(u.last_login_at)}
                 </TableCell>
-                {canManage && (
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" aria-label="Row actions">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem asChild>
-                          <Link href={`/settings/${u.id}/edit`}>
-                            <Pencil className="h-4 w-4" />
-                            Edit
-                          </Link>
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                )}
               </TableRow>
             ))}
           </TableBody>
@@ -135,7 +96,6 @@ export function UsersTable({
         <EmptyState
           title="No users"
           description="No users match the current filters."
-          action={emptyAction}
         />
       )}
       {showRows && data && (

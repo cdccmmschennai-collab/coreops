@@ -1,13 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
-import { Button } from "@/components/ui/button";
-import { useAuth } from "@/features/auth/auth-provider";
-import { can } from "@/lib/rbac";
 
 import { UsersFilters, type UserFilterValues } from "./users-filters";
 import { UsersTable } from "./users-table";
@@ -25,8 +20,6 @@ export function UsersView({ hideHeader = false }: { hideHeader?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { role } = useAuth();
-  const canManage = can(role, "user.manage");
 
   const q = searchParams.get("q") ?? "";
   // Role is filtered client-side (the /users API exposes only q/limit/offset).
@@ -69,15 +62,6 @@ export function UsersView({ hideHeader = false }: { hideHeader?: boolean }) {
       : query.data
     : undefined;
 
-  const addButton = canManage ? (
-    <Button asChild>
-      <Link href="/settings/new">
-        <Plus className="h-4 w-4" />
-        Add user
-      </Link>
-    </Button>
-  ) : null;
-
   const count = query.data?.total;
 
   return (
@@ -86,7 +70,6 @@ export function UsersView({ hideHeader = false }: { hideHeader?: boolean }) {
         <PageHeader
           title="Users & Roles"
           subtitle={count !== undefined ? `${count} ${count === 1 ? "user" : "users"}` : undefined}
-          actions={addButton}
         />
       )}
       <div className="mb-4">
@@ -98,8 +81,6 @@ export function UsersView({ hideHeader = false }: { hideHeader?: boolean }) {
         isError={query.isError}
         onRetry={() => void query.refetch()}
         onPageChange={onPageChange}
-        canManage={canManage}
-        emptyAction={addButton}
       />
     </>
   );

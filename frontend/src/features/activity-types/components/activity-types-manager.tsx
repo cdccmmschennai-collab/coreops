@@ -121,7 +121,7 @@ function ActivityTypeForm({
       <CardHeader className="pb-3">
         <CardTitle className="text-base">
           {editing
-            ? `Edit: ${editing.code ? `${editing.code} — ` : ""}${editing.name}`
+            ? `Edit: ${editing.code ? `${editing.code} - ` : ""}${editing.name}`
             : "New Activity Type"}
         </CardTitle>
       </CardHeader>

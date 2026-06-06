@@ -163,7 +163,7 @@ export function EmployeeDetail({ id }: { id: string }) {
 
       <SectionHeading
         title="Employee Information"
-        description="Business identity — the employee's HR record."
+        description="Business identity - the employee's HR record."
       />
       <div className="grid gap-4 md:grid-cols-2">
         {/* Profile card */}
@@ -233,7 +233,7 @@ export function EmployeeDetail({ id }: { id: string }) {
 
       <SectionHeading
         title="Login Account"
-        description="Authentication identity — a separate user account linked one-to-one to this employee. Passwords are never shown."
+        description="Authentication identity - a separate user account linked one-to-one to this employee. Passwords are never shown."
       />
       <div className="grid gap-4 md:grid-cols-2">
         {/* Login account card */}
@@ -249,7 +249,7 @@ export function EmployeeDetail({ id }: { id: string }) {
                     value={<Badge variant="neutral">No account</Badge>}
                   />
                   {canManage && accountPanel === "none" && (
-                    <div className="pt-3">
+                    <div className="flex flex-wrap gap-2 pt-3">
                       <Button
                         size="sm"
                         variant="secondary"
@@ -257,10 +257,24 @@ export function EmployeeDetail({ id }: { id: string }) {
                       >
                         Create account
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setAccountPanel("relink")}
+                      >
+                        Link existing account
+                      </Button>
                     </div>
                   )}
                   {canManage && accountPanel === "create" && (
                     <CreateAccountForm
+                      employeeId={emp.id}
+                      employeeName={emp.full_name}
+                      onCancel={() => setAccountPanel("none")}
+                    />
+                  )}
+                  {canManage && accountPanel === "relink" && (
+                    <RelinkAccountForm
                       employeeId={emp.id}
                       employeeName={emp.full_name}
                       onCancel={() => setAccountPanel("none")}
@@ -377,11 +391,11 @@ export function EmployeeDetail({ id }: { id: string }) {
             <CardContent className="space-y-2 text-sm text-muted-foreground">
               <p>
                 The <span className="font-medium text-foreground">employee record</span>{" "}
-                holds business identity — name, department, office, reporting line.
+                holds business identity - name, department, office, reporting line.
               </p>
               <p>
                 The <span className="font-medium text-foreground">login account</span>{" "}
-                holds authentication — email, password, and role. The two are linked
+                holds authentication - email, password, and role. The two are linked
                 one-to-one.
               </p>
               <p>

@@ -32,7 +32,7 @@ export function AttendanceView() {
 
   const actions = (
     <>
-      <Button variant="secondary" onClick={() => toast.info("Export — coming soon")}>
+      <Button variant="secondary" onClick={() => toast.info("Export - coming soon")}>
         <Download className="h-4 w-4" />
         Export
       </Button>

@@ -116,7 +116,7 @@ export function ProjectMembers({ project }: { project: Project }) {
                         void changeRole(m.employee_id, v as ProjectMemberRole)
                       }
                     >
-                      <SelectTrigger className="h-8 w-28">
+                      <SelectTrigger className="h-8 w-auto whitespace-nowrap">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -172,7 +172,7 @@ export function ProjectMembers({ project }: { project: Project }) {
                 value={selectedRole}
                 onValueChange={(v) => setSelectedRole(v as ProjectMemberRole)}
               >
-                <SelectTrigger className="sm:w-32">
+                <SelectTrigger className="sm:w-32 whitespace-nowrap">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
