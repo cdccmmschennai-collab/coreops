@@ -25,6 +25,14 @@ export interface AccountStatusUpdateBody {
   is_active: boolean;
 }
 
+export interface AccountRoleUpdateBody {
+  role: "project_manager" | "employee";
+}
+
+export interface AccountLinkBody {
+  user_id: string;
+}
+
 function toQuery(p: EmployeeListParams): string {
   const sp = new URLSearchParams();
   if (p.q) sp.set("q", p.q);
@@ -53,4 +61,9 @@ export const employeesApi = {
     api.patch<void>(`/employees/${id}/account/password`, body),
   updateAccountStatus: (id: string, body: AccountStatusUpdateBody) =>
     api.patch<UserOut>(`/employees/${id}/account/status`, body),
+  changeAccountRole: (id: string, body: AccountRoleUpdateBody) =>
+    api.patch<UserOut>(`/employees/${id}/account/role`, body),
+  relinkAccount: (id: string, body: AccountLinkBody) =>
+    api.patch<UserOut>(`/employees/${id}/account/link`, body),
+  unlinkAccount: (id: string) => api.del<void>(`/employees/${id}/account/link`),
 };

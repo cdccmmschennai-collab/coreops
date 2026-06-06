@@ -85,6 +85,16 @@ class AccountStatusUpdate(BaseModel):
     is_active: bool
 
 
+class AccountRoleUpdate(BaseModel):
+    """Change the role of the employee's linked account."""
+    role: UserRole
+
+
+class AccountLink(BaseModel):
+    """Relink the employee to a different existing user account."""
+    user_id: uuid.UUID
+
+
 # ---------- self-service profile ----------
 
 class EmployeeProfile(BaseModel):

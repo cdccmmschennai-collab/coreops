@@ -63,8 +63,22 @@ class PasswordUpdate(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class LinkedEmployee(BaseModel):
+    """Compact employee summary attached to a user row in the admin list."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    full_name: str
+    employee_code: str
+
+
+class UserListItem(UserOut):
+    """A user row enriched with its linked employee (one-to-one), if any."""
+    linked_employee: LinkedEmployee | None = None
+
+
 class UserPage(BaseModel):
-    items: list[UserOut]
+    items: list[UserListItem]
     total: int
     limit: int
     offset: int

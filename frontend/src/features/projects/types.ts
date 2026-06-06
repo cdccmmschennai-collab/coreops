@@ -12,7 +12,9 @@ export type ProjectMemberCreateBody = components["schemas"]["ProjectMemberCreate
 
 // Display labels for project member roles. Stored/API values are kept as-is
 // (team_lead, contributor, qc) — only the rendered text differs.
-export const PROJECT_MEMBER_ROLE_LABEL: Record<ProjectMemberRole, string> = {
+// Keyed by the active roles only; legacy/unknown values fall back to the raw value
+// via projectMemberRoleLabel().
+export const PROJECT_MEMBER_ROLE_LABEL: Partial<Record<ProjectMemberRole, string>> = {
   team_lead: "TEAM LEAD",
   contributor: "CONTRIBUTOR",
   qc: "QC",

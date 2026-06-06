@@ -27,7 +27,7 @@ import { formatDateTime } from "@/lib/format";
 
 import { RoleBadge } from "./role-badge";
 import { UserStatusBadge } from "./user-status-badge";
-import type { User, UserPage } from "../types";
+import type { UserListItem, UserPage } from "../types";
 
 interface UsersTableProps {
   data: UserPage | undefined;
@@ -49,8 +49,8 @@ export function UsersTable({
   emptyAction,
 }: UsersTableProps) {
   const router = useRouter();
-  const cols = canManage ? 5 : 4;
-  const rows: User[] = data?.items ?? [];
+  const cols = canManage ? 7 : 6;
+  const rows: UserListItem[] = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
   const showEmpty = !isLoading && !isError && rows.length === 0;
 
@@ -59,10 +59,12 @@ export function UsersTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Email</TableHead>
+            <TableHead>Employee Name</TableHead>
+            <TableHead>Employee ID</TableHead>
+            <TableHead>Login Email</TableHead>
             <TableHead>Role</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Last login</TableHead>
+            <TableHead>Last Login</TableHead>
             {canManage && <TableHead className="w-12 text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
@@ -77,7 +79,23 @@ export function UsersTable({
                 className="cursor-pointer"
                 onClick={() => router.push(`/settings/${u.id}`)}
               >
-                <TableCell className="font-medium">{u.email}</TableCell>
+                <TableCell className="font-medium">
+                  {u.linked_employee ? (
+                    <Link
+                      href={`/employees/${u.linked_employee.id}`}
+                      className="text-primary hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {u.linked_employee.full_name}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="tabular text-muted-foreground">
+                  {u.linked_employee?.employee_code ?? "—"}
+                </TableCell>
+                <TableCell>{u.email}</TableCell>
                 <TableCell>
                   <RoleBadge role={u.role} />
                 </TableCell>

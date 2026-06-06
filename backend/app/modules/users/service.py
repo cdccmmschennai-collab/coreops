@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.modules.employees.models import Employee
 from app.modules.users.models import User, UserRole
 from app.modules.users.schemas import UserCreate, UserUpdate
 from app.shared.errors import AppError
@@ -36,19 +37,31 @@ def get_user(db: Session, user_id: uuid.UUID) -> User:
 
 def list_users(
     db: Session, q: str | None, limit: int, offset: int
-) -> tuple[list[User], int]:
+) -> tuple[list[User], int, dict[uuid.UUID, Employee]]:
     stmt = select(User).where(User.deleted_at.is_(None))
     if q:
         stmt = stmt.where(User.email.ilike(f"%{q}%"))
     total = db.execute(
         select(func.count()).select_from(stmt.order_by(None).subquery())
     ).scalar_one()
-    rows = (
+    rows = list(
         db.execute(stmt.order_by(User.created_at.desc()).limit(limit).offset(offset))
         .scalars()
         .all()
     )
-    return list(rows), total
+
+    # Attach the linked employee (one-to-one) for this page in a single query.
+    emp_map: dict[uuid.UUID, Employee] = {}
+    user_ids = [u.id for u in rows]
+    if user_ids:
+        emps = db.execute(
+            select(Employee).where(
+                Employee.user_id.in_(user_ids), Employee.deleted_at.is_(None)
+            )
+        ).scalars().all()
+        emp_map = {e.user_id: e for e in emps if e.user_id is not None}
+
+    return rows, total, emp_map
 
 
 def create_user(db: Session, data: UserCreate) -> User:

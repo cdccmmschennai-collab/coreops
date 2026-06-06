@@ -9,9 +9,11 @@ from app.core.deps import require_role
 from app.modules.users import service
 from app.modules.users.models import User
 from app.modules.users.schemas import (
+    LinkedEmployee,
     PasswordUpdate,
     RoleUpdate,
     UserCreate,
+    UserListItem,
     UserOut,
     UserPage,
     UserUpdate,
@@ -30,13 +32,19 @@ def list_users(
     _admin: User = AdminUser,
     db: Session = Depends(get_db),
 ) -> UserPage:
-    rows, total = service.list_users(db, q, limit, offset)
-    return UserPage(
-        items=[UserOut.model_validate(u) for u in rows],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    rows, total, emp_map = service.list_users(db, q, limit, offset)
+    items: list[UserListItem] = []
+    for u in rows:
+        emp = emp_map.get(u.id)
+        items.append(
+            UserListItem(
+                **UserOut.model_validate(u).model_dump(),
+                linked_employee=(
+                    LinkedEmployee.model_validate(emp) if emp is not None else None
+                ),
+            )
+        )
+    return UserPage(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=UserOut, status_code=201)

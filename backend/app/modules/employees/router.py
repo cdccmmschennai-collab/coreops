@@ -9,6 +9,9 @@
   POST   /employees/{id}/account           create + link login account (admin)
   PATCH  /employees/{id}/account/password  reset linked account password (admin)
   PATCH  /employees/{id}/account/status    enable / disable linked account (admin)
+  PATCH  /employees/{id}/account/role      change linked account role (admin)
+  PATCH  /employees/{id}/account/link      relink to a different user (admin)
+  DELETE /employees/{id}/account/link      unlink the account (admin)
 """
 import uuid
 
@@ -21,7 +24,9 @@ from app.modules.employees import service
 from app.modules.employees.models import EmployeeStatus
 from app.modules.employees.schemas import (
     AccountCreate,
+    AccountLink,
     AccountPasswordReset,
+    AccountRoleUpdate,
     AccountStatusUpdate,
     EmployeeCreate,
     EmployeeOut,
@@ -141,3 +146,33 @@ def update_employee_account_status(
     db: Session = Depends(get_db),
 ) -> UserOut:
     return UserOut.model_validate(service.update_account_status(db, admin, employee_id, body))
+
+
+@router.patch("/{employee_id}/account/role", response_model=UserOut)
+def change_employee_account_role(
+    employee_id: uuid.UUID,
+    body: AccountRoleUpdate,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    return UserOut.model_validate(service.change_account_role(db, admin, employee_id, body))
+
+
+@router.patch("/{employee_id}/account/link", response_model=UserOut)
+def relink_employee_account(
+    employee_id: uuid.UUID,
+    body: AccountLink,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    return UserOut.model_validate(service.relink_account(db, admin, employee_id, body))
+
+
+@router.delete("/{employee_id}/account/link", status_code=204)
+def unlink_employee_account(
+    employee_id: uuid.UUID,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> Response:
+    service.unlink_account(db, admin, employee_id)
+    return Response(status_code=204)

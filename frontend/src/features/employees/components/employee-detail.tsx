@@ -18,13 +18,16 @@ import { useUser } from "@/features/users/hooks";
 import { AppError } from "@/lib/api-client";
 import { can } from "@/lib/rbac";
 
+import { ChangeRoleForm } from "./change-role-form";
 import { CreateAccountForm } from "./create-account-dialog";
 import { DeactivateDialog } from "./deactivate-dialog";
+import { RelinkAccountForm } from "./relink-account-form";
 import { ResetPasswordForm } from "./reset-password-dialog";
 import { StatusBadge } from "./status-badge";
 import {
   useEmployee,
   useEmployeeTeam,
+  useUnlinkEmployeeAccount,
   useUpdateEmployeeAccountStatus,
 } from "../hooks";
 import type { Employee } from "../types";
@@ -43,7 +46,18 @@ const ROLE_LABEL: Record<string, string> = {
   employee: "Employee",
 };
 
-type AccountPanel = "none" | "create" | "reset_password";
+type AccountPanel = "none" | "create" | "reset_password" | "change_role" | "relink";
+
+function SectionHeading({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="mb-3 mt-6">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </h2>
+      <p className="text-xs text-muted-foreground/80">{description}</p>
+    </div>
+  );
+}
 
 export function EmployeeDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -64,6 +78,7 @@ export function EmployeeDetail({ id }: { id: string }) {
     : null;
 
   const toggleStatus = useUpdateEmployeeAccountStatus(id);
+  const unlinkAccount = useUnlinkEmployeeAccount(id);
 
   const [confirm, setConfirm] = React.useState<Employee | null>(null);
   const [accountPanel, setAccountPanel] = React.useState<AccountPanel>("none");
@@ -78,6 +93,15 @@ export function EmployeeDetail({ id }: { id: string }) {
       toast.success(next ? "Account enabled" : "Account disabled");
     } catch (err) {
       toast.error(err instanceof AppError ? err.message : "Could not update account status.");
+    }
+  }
+
+  async function handleUnlinkAccount() {
+    try {
+      await unlinkAccount.mutateAsync();
+      toast.success("Account unlinked");
+    } catch (err) {
+      toast.error(err instanceof AppError ? err.message : "Could not unlink account.");
     }
   }
 
@@ -137,6 +161,10 @@ export function EmployeeDetail({ id }: { id: string }) {
         }
       />
 
+      <SectionHeading
+        title="Employee Information"
+        description="Business identity — the employee's HR record."
+      />
       <div className="grid gap-4 md:grid-cols-2">
         {/* Profile card */}
         <Card>
@@ -154,12 +182,11 @@ export function EmployeeDetail({ id }: { id: string }) {
           </CardContent>
         </Card>
 
-        <div className="flex flex-col gap-4">
-          {/* Reporting line card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Reporting line</CardTitle>
-            </CardHeader>
+        {/* Reporting line card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Reporting line</CardTitle>
+          </CardHeader>
             <CardContent className="divide-y divide-border">
               <Row
                 label="Manager"
@@ -202,12 +229,18 @@ export function EmployeeDetail({ id }: { id: string }) {
               )}
             </CardContent>
           </Card>
+      </div>
 
-          {/* Login account card */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Login account</CardTitle>
-            </CardHeader>
+      <SectionHeading
+        title="Login Account"
+        description="Authentication identity — a separate user account linked one-to-one to this employee. Passwords are never shown."
+      />
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* Login account card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Login account</CardTitle>
+          </CardHeader>
             <CardContent className="divide-y divide-border">
               {!emp.user_id ? (
                 <>
@@ -274,16 +307,53 @@ export function EmployeeDetail({ id }: { id: string }) {
                       </Button>
                       <Button
                         size="sm"
+                        variant="secondary"
+                        onClick={() => setAccountPanel("change_role")}
+                      >
+                        Change role
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setAccountPanel("relink")}
+                      >
+                        Relink account
+                      </Button>
+                      <Button
+                        size="sm"
                         variant={linkedUser.is_active ? "danger" : "secondary"}
                         loading={toggleStatus.isPending}
                         onClick={() => void handleToggleAccountStatus()}
                       >
                         {linkedUser.is_active ? "Disable account" : "Enable account"}
                       </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={unlinkAccount.isPending}
+                        onClick={() => void handleUnlinkAccount()}
+                      >
+                        Unlink
+                      </Button>
                     </div>
                   )}
                   {canManage && accountPanel === "reset_password" && (
                     <ResetPasswordForm
+                      employeeId={emp.id}
+                      employeeName={emp.full_name}
+                      onCancel={() => setAccountPanel("none")}
+                    />
+                  )}
+                  {canManage && accountPanel === "change_role" && (
+                    <ChangeRoleForm
+                      employeeId={emp.id}
+                      employeeName={emp.full_name}
+                      currentRole={linkedUser.role}
+                      onCancel={() => setAccountPanel("none")}
+                    />
+                  )}
+                  {canManage && accountPanel === "relink" && (
+                    <RelinkAccountForm
                       employeeId={emp.id}
                       employeeName={emp.full_name}
                       onCancel={() => setAccountPanel("none")}
@@ -298,8 +368,29 @@ export function EmployeeDetail({ id }: { id: string }) {
               )}
             </CardContent>
           </Card>
+
+          {/* Relationship explainer */}
+          <Card className="bg-muted/30">
+            <CardHeader>
+              <CardTitle className="text-base">How linking works</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                The <span className="font-medium text-foreground">employee record</span>{" "}
+                holds business identity — name, department, office, reporting line.
+              </p>
+              <p>
+                The <span className="font-medium text-foreground">login account</span>{" "}
+                holds authentication — email, password, and role. The two are linked
+                one-to-one.
+              </p>
+              <p>
+                Account actions here never reveal passwords. Unlinking detaches the
+                account without deleting it.
+              </p>
+            </CardContent>
+          </Card>
         </div>
-      </div>
 
       <DeactivateDialog
         employee={confirm}

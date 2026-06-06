@@ -317,6 +317,132 @@ def test_account_password_no_account_404(client, make_user, make_employee, login
     assert res.status_code == 404
 
 
+# ---------- account role change ----------
+
+def test_change_account_role(client, make_user, make_employee, login):
+    """PM can change the linked account's role from Employee Details."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp_user = make_user("worker@company.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ROLE-1", user_id=emp_user.id)
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/role",
+        headers=h,
+        json={"role": "project_manager"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["role"] == "project_manager"
+
+
+def test_change_account_role_no_account_404(client, make_user, make_employee, login):
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="ROLE-2")
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/role",
+        headers=h,
+        json={"role": "project_manager"},
+    )
+    assert res.status_code == 404
+
+
+def test_change_account_role_employee_forbidden(client, make_user, make_employee, login):
+    emp_user = make_user("emp@example.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ROLE-3", user_id=emp_user.id)
+    h = login("emp@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/role",
+        headers=h,
+        json={"role": "project_manager"},
+    )
+    assert res.status_code == 403
+
+
+# ---------- account relink / unlink ----------
+
+def test_relink_account_to_existing_user(client, make_user, make_employee, login):
+    """PM can repoint an employee to a different existing user (one-to-one)."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    old_user = make_user("old@company.com")
+    new_user = make_user("new@company.com")
+    emp = make_employee(employee_code="LINK-1", user_id=old_user.id)
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/link",
+        headers=h,
+        json={"user_id": str(new_user.id)},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["id"] == str(new_user.id)
+    emp_data = client.get(f"/api/v1/employees/{emp.id}", headers=h).json()
+    assert emp_data["user_id"] == str(new_user.id)
+
+
+def test_relink_account_already_linked_409(client, make_user, make_employee, login):
+    """Relinking to a user already owned by another employee is rejected."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    taken_user = make_user("taken@company.com")
+    make_employee(employee_code="LINK-2A", user_id=taken_user.id)
+    emp = make_employee(employee_code="LINK-2B")
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/link",
+        headers=h,
+        json={"user_id": str(taken_user.id)},
+    )
+    assert res.status_code == 409
+
+
+def test_relink_account_unknown_user_422(client, make_user, make_employee, login):
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="LINK-3")
+    h = login("pm@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/link",
+        headers=h,
+        json={"user_id": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert res.status_code == 422
+
+
+def test_unlink_account(client, make_user, make_employee, login):
+    """Unlink detaches the user but keeps the user row intact."""
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp_user = make_user("detach@company.com")
+    emp = make_employee(employee_code="LINK-4", user_id=emp_user.id)
+    h = login("pm@example.com")
+    res = client.delete(f"/api/v1/employees/{emp.id}/account/link", headers=h)
+    assert res.status_code == 204
+    emp_data = client.get(f"/api/v1/employees/{emp.id}", headers=h).json()
+    assert emp_data["user_id"] is None
+    # User row still exists and can still authenticate.
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"email": "detach@company.com", "password": "password123"},
+    ).status_code == 200
+
+
+def test_unlink_account_no_account_404(client, make_user, make_employee, login):
+    pm = make_user("pm@example.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="LINK-5")
+    h = login("pm@example.com")
+    res = client.delete(f"/api/v1/employees/{emp.id}/account/link", headers=h)
+    assert res.status_code == 404
+
+
+def test_relink_account_employee_forbidden(client, make_user, make_employee, login):
+    emp_user = make_user("emp@example.com", role=UserRole.employee)
+    emp = make_employee(employee_code="LINK-6", user_id=emp_user.id)
+    other_user = make_user("other@company.com")
+    h = login("emp@example.com")
+    res = client.patch(
+        f"/api/v1/employees/{emp.id}/account/link",
+        headers=h,
+        json={"user_id": str(other_user.id)},
+    )
+    assert res.status_code == 403
+
+
 # ---------- manager hierarchy ----------
 
 def test_manager_id_is_exposed_on_employee(client, make_user, make_employee, login):

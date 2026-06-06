@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   employeesApi,
   type AccountCreateBody,
+  type AccountLinkBody,
   type AccountPasswordResetBody,
+  type AccountRoleUpdateBody,
   type AccountStatusUpdateBody,
 } from "./api";
 import { employeesKeys } from "./keys";
@@ -88,5 +90,39 @@ export function useUpdateEmployeeAccountStatus(empId: string) {
     mutationFn: (body: AccountStatusUpdateBody) =>
       employeesApi.updateAccountStatus(empId, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
+  });
+}
+
+export function useChangeEmployeeAccountRole(empId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AccountRoleUpdateBody) =>
+      employeesApi.changeAccountRole(empId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: employeesKeys.detail(empId) });
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+export function useRelinkEmployeeAccount(empId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AccountLinkBody) => employeesApi.relinkAccount(empId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: employeesKeys.detail(empId) });
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+export function useUnlinkEmployeeAccount(empId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => employeesApi.unlinkAccount(empId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: employeesKeys.detail(empId) });
+      qc.invalidateQueries({ queryKey: ["users"] });
+    },
   });
 }
