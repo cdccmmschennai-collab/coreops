@@ -1576,8 +1576,8 @@ export interface components {
             code: string;
             /** Name */
             name: string;
-            /** Job Code Id */
-            job_code_id?: string | null;
+            /** Job Code */
+            job_code?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -1691,8 +1691,8 @@ export interface components {
         ProjectUpdate: {
             /** Name */
             name?: string | null;
-            /** Job Code Id */
-            job_code_id?: string | null;
+            /** Job Code */
+            job_code?: string | null;
             /** Client */
             client?: string | null;
             /** Description */

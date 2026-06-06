@@ -182,6 +182,36 @@ def _validate_dates(start: date | None, end: date | None) -> None:
         raise AppError("validation_error", "End date cannot be before start date.", 422)
 
 
+def _resolve_job_code(
+    db: Session, raw: str | None, project_name: str, actor_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """Map a free-text job code to a JobCode id.
+
+    Reuses an existing active job code when one matches (case-insensitive),
+    otherwise creates a new active job code on the fly so PM-entered codes
+    flow through the same master-data join used by reports and project views.
+    """
+    if raw is None:
+        return None
+    code = raw.strip()
+    if code == "":
+        return None
+    if len(code) > 30:
+        raise AppError("validation_error", "Job code must be 30 characters or fewer.", 422)
+    existing = db.execute(
+        select(JobCode).where(
+            func.lower(JobCode.code) == code.lower(),
+            JobCode.is_active.is_(True),
+        )
+    ).scalars().first()
+    if existing is not None:
+        return existing.id
+    jc = JobCode(code=code, name=(project_name or code)[:200], created_by=actor_id)
+    db.add(jc)
+    db.flush()
+    return jc.id
+
+
 def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
     if db.execute(
         select(Project).where(Project.code == data.code, Project.deleted_at.is_(None))
@@ -189,7 +219,11 @@ def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
         raise AppError("conflict", "A project with this code already exists.", 409)
     _validate_dates(data.start_date, data.end_date)
 
-    project = Project(**data.model_dump(), created_by=actor.id, updated_by=actor.id)
+    payload = data.model_dump()
+    job_code_id = _resolve_job_code(db, payload.pop("job_code", None), data.name, actor.id)
+    project = Project(
+        **payload, job_code_id=job_code_id, created_by=actor.id, updated_by=actor.id
+    )
     db.add(project)
     try:
         db.commit()
@@ -227,6 +261,12 @@ def update_project(
     new_start = fields.get("start_date", project.start_date)
     new_end = fields.get("end_date", project.end_date)
     _validate_dates(new_start, new_end)
+
+    if "job_code" in fields:
+        new_name = fields.get("name") or project.name
+        fields["job_code_id"] = _resolve_job_code(
+            db, fields.pop("job_code"), new_name, actor.id
+        )
 
     for key, value in fields.items():
         setattr(project, key, value)

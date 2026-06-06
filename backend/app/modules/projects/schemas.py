@@ -28,7 +28,7 @@ class ProjectOut(BaseModel):
 class ProjectCreate(BaseModel):
     code: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    job_code_id: uuid.UUID | None = None
+    job_code: str | None = None   # free text; resolved to a JobCode by the service
     client: str | None = None
     description: str | None = None
     status: ProjectStatus = ProjectStatus.planning
@@ -38,7 +38,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1)
-    job_code_id: uuid.UUID | None = None
+    job_code: str | None = None   # free text; resolved to a JobCode by the service
     client: str | None = None
     description: str | None = None
     status: ProjectStatus | None = None

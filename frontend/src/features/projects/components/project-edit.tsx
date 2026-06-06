@@ -38,7 +38,7 @@ export function ProjectEdit({ id }: { id: string }) {
   const defaults: ProjectFormValues = {
     code: project.code,
     name: project.name,
-    job_code_id: project.job_code_id ?? "",
+    job_code: project.job_code_code ?? "",
     client: project.client ?? "",
     description: project.description ?? "",
     status: project.status,

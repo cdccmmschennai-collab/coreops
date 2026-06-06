@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -27,7 +26,6 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
-import { useJobCodeOptions } from "@/features/job-codes/hooks";
 
 import { useCreateProject, useUpdateProject } from "../hooks";
 import {
@@ -48,14 +46,6 @@ interface ProjectFormProps {
 export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
-
-  const { items: jobCodes } = useJobCodeOptions();
-  const jobCodeOptions = jobCodes.map((jc) => ({
-    value: jc.id,
-    label: jc.code,                                        // J-615-2 (primary, short)
-    description: jc.name.length > 60 ? jc.name.slice(0, 60) + "…" : jc.name, // full title below
-    keywords: [jc.code, jc.name],
-  }));
 
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(projectFormSchema),
@@ -163,22 +153,15 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                 )}
               />
 
-              {/* Job Code — searchable combobox */}
+              {/* Job Code — free text, entered by the PM */}
               <FormField
                 control={form.control}
-                name="job_code_id"
+                name="job_code"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Job Code</FormLabel>
                     <FormControl>
-                      <Combobox
-                        value={field.value || ""}
-                        onValueChange={field.onChange}
-                        options={jobCodeOptions}
-                        placeholder="Select job code…"
-                        searchPlaceholder="Search J-code or project title…"
-                        emptyMessage="No matching job codes."
-                      />
+                      <Input {...field} placeholder="e.g. J-615-2" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

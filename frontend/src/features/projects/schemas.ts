@@ -22,7 +22,7 @@ export const projectFormSchema = z
   .object({
     code: z.string().trim().min(1, "Project code is required"),
     name: z.string().trim().min(1, "Project name is required"),
-    job_code_id: z.string().optional().default(""),
+    job_code: z.string().trim().optional().default(""),
     client: z.string().trim(),
     description: z.string().trim(),
     status: z.enum(PROJECT_STATUSES),
@@ -39,7 +39,7 @@ export type ProjectFormValues = z.infer<typeof projectFormSchema>;
 export const EMPTY_PROJECT_FORM: ProjectFormValues = {
   code: "",
   name: "",
-  job_code_id: "",
+  job_code: "",
   client: "",
   description: "",
   status: "planning",
@@ -49,14 +49,11 @@ export const EMPTY_PROJECT_FORM: ProjectFormValues = {
 
 const orNull = (v: string): string | null => (v.trim() === "" ? null : v.trim());
 
-const orNullUuid = (v: string | undefined): string | null =>
-  !v || v.trim() === "" ? null : v.trim();
-
 export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
   return {
     code: v.code,
     name: v.name,
-    job_code_id: orNullUuid(v.job_code_id),
+    job_code: orNull(v.job_code),
     status: v.status,
     client: orNull(v.client),
     description: orNull(v.description),
@@ -69,7 +66,7 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
 export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
   return {
     name: v.name,
-    job_code_id: orNullUuid(v.job_code_id),
+    job_code: orNull(v.job_code),
     status: v.status,
     client: orNull(v.client),
     description: orNull(v.description),
