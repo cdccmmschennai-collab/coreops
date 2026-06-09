@@ -10,6 +10,7 @@ import {
   Home,
   Users,
   FileText,
+  ListTodo,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -35,6 +36,7 @@ const WORKSPACE: NavItem[] = [
   { label: "Employees",     href: "/employees",     icon: Users,        capability: "employee.view" },
   { label: "Projects",      href: "/projects",      icon: FolderKanban, capability: "project.view" },
   { label: "Attendance",    href: "/attendance",    icon: CalendarDays },
+  { label: "Tasks",         href: "/tasks",         icon: ListTodo,     capability: "task.view", alsoMatch: ["/tasks/all"] },
   { label: "Reports",       href: "/reports",       icon: FileText,     capability: "report.nav", alsoMatch: ["/work-reports"] },
   { label: "Analytics",     href: "/analytics",     icon: BarChart3,    capability: "analytics.view" },
   { label: "Notifications", href: "/notifications", icon: Bell },

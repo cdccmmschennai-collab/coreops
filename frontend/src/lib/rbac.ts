@@ -23,7 +23,9 @@ export type Capability =
   | "leave.request"       // employee: submit leave requests via UI
   | "leave.review"        // project_manager: approve/reject leave
   | "calendar.manage"     // project_manager: create/edit/delete company calendar events
-  | "masterdata.manage";  // project_manager: manage activity types, job codes
+  | "masterdata.manage"   // project_manager: manage activity types, job codes
+  | "task.view"           // both: navigate to /tasks (my tasks)
+  | "task.manage";        // project_manager: create/edit/cancel tasks, all-tasks view
 
 const MATRIX: Record<Capability, Role[]> = {
   "user.manage":          ["project_manager"],
@@ -41,6 +43,8 @@ const MATRIX: Record<Capability, Role[]> = {
   "leave.review":         ["project_manager"],
   "calendar.manage":      ["project_manager"],
   "masterdata.manage":    ["project_manager"],
+  "task.view":            ["project_manager", "employee"],
+  "task.manage":          ["project_manager"],
 };
 
 export function can(role: Role | undefined, capability: Capability): boolean {
