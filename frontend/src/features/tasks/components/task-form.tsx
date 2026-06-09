@@ -26,9 +26,10 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
+import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
 
-import { useCreateTask, useUpdateTask } from "../hooks";
+import { useAssignableProjects, useCreateTask, useUpdateTask } from "../hooks";
 import {
   EMPTY_TASK_FORM,
   TASK_PRIORITIES,
@@ -47,13 +48,26 @@ interface TaskFormProps {
 
 export function TaskForm({ mode, defaultValues = EMPTY_TASK_FORM, taskId }: TaskFormProps) {
   const router = useRouter();
+  const { role } = useAuth();
+  const isPM = role === "project_manager";
   const [formError, setFormError] = React.useState<string | null>(null);
   const { items } = useEmployeeOptions();
+  // Team leads assign within a project they lead; PMs assign to anyone.
+  const { data: assignableProjects = [] } = useAssignableProjects({ enabled: !isPM });
 
   const form = useForm<TaskFormValues>({
     resolver: zodResolver(taskFormSchema),
     defaultValues,
   });
+
+  const projectId = form.watch("project_id");
+
+  // With a single led project, pre-select it so the team lead only picks an assignee.
+  React.useEffect(() => {
+    if (!isPM && !projectId && assignableProjects.length === 1) {
+      form.setValue("project_id", assignableProjects[0].project_id);
+    }
+  }, [isPM, projectId, assignableProjects, form]);
 
   const createMutation = useCreateTask();
   const updateMutation = useUpdateTask(taskId ?? "");
@@ -78,7 +92,16 @@ export function TaskForm({ mode, defaultValues = EMPTY_TASK_FORM, taskId }: Task
     }
   }
 
-  const assigneeOptions = items.filter((e) => e.status === "active");
+  const selectedProject = assignableProjects.find((p) => p.project_id === projectId);
+  const assigneeOptions: { id: string; name: string }[] = isPM
+    ? items
+        .filter((e) => e.status === "active")
+        .map((e) => ({ id: e.id, name: e.full_name }))
+    : (selectedProject?.members ?? []).map((m) => ({
+        id: m.employee_id,
+        name: m.name,
+      }));
+  const assigneeDisabled = !isPM && !selectedProject;
 
   return (
     <Card className="max-w-2xl">
@@ -117,24 +140,78 @@ export function TaskForm({ mode, defaultValues = EMPTY_TASK_FORM, taskId }: Task
               )}
             />
 
+            {!isPM && (
+              <FormField
+                control={form.control}
+                name="project_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Project</FormLabel>
+                    <Select
+                      value={field.value}
+                      onValueChange={(v) => {
+                        field.onChange(v);
+                        // Reset assignee when the project changes.
+                        form.setValue("assigned_to_employee_id", "");
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select project" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {assignableProjects.length === 0 ? (
+                          <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                            You don't lead any active projects
+                          </div>
+                        ) : (
+                          assignableProjects.map((p) => (
+                            <SelectItem key={p.project_id} value={p.project_id}>
+                              {p.name} · {p.code}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+
             <FormField
               control={form.control}
               name="assigned_to_employee_id"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Assign to</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    disabled={assigneeDisabled}
+                  >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select employee" />
+                        <SelectValue
+                          placeholder={
+                            assigneeDisabled ? "Select a project first" : "Select employee"
+                          }
+                        />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {assigneeOptions.map((e) => (
-                        <SelectItem key={e.id} value={e.id}>
-                          {e.full_name}
-                        </SelectItem>
-                      ))}
+                      {assigneeOptions.length === 0 ? (
+                        <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                          No assignable members
+                        </div>
+                      ) : (
+                        assigneeOptions.map((e) => (
+                          <SelectItem key={e.id} value={e.id}>
+                            {e.name}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormMessage />

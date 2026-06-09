@@ -16,6 +16,7 @@ from app.shared.base import TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from app.modules.employees.models import Employee
+    from app.modules.projects.models import Project
 
 
 class TaskStatus(str, enum.Enum):
@@ -41,6 +42,9 @@ class Task(UUIDMixin, TimestampMixin, Base):
     )
     assigned_by_employee_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[TaskStatus] = mapped_column(
         SAEnum(
@@ -69,9 +73,13 @@ class Task(UUIDMixin, TimestampMixin, Base):
     assigned_by: Mapped["Employee"] = relationship(
         "Employee", foreign_keys="Task.assigned_by_employee_id", viewonly=True
     )
+    project: Mapped["Project | None"] = relationship(
+        "Project", foreign_keys="Task.project_id", viewonly=True
+    )
 
     __table_args__ = (
         Index("tasks_assigned_to_idx", "assigned_to_employee_id", "status"),
         Index("tasks_assigned_by_idx", "assigned_by_employee_id"),
+        Index("tasks_project_idx", "project_id"),
         Index("tasks_due_date_idx", "due_date"),
     )

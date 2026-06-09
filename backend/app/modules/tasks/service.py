@@ -12,8 +12,20 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
+from app.modules.projects.models import (
+    Project,
+    ProjectMember,
+    ProjectMemberRole,
+    ProjectStatus,
+)
 from app.modules.tasks.models import Task, TaskPriority, TaskStatus
-from app.modules.tasks.schemas import TaskCreate, TaskStatusUpdate, TaskUpdate
+from app.modules.tasks.schemas import (
+    AssignableMember,
+    AssignableProject,
+    TaskCreate,
+    TaskStatusUpdate,
+    TaskUpdate,
+)
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
@@ -51,17 +63,6 @@ def _push_notification(
         db.rollback()
 
 
-def _pm_employee(db: Session, actor: User) -> Employee:
-    me = _current_employee(db, actor)
-    if me is None:
-        raise AppError(
-            "validation_error",
-            "You need an employee profile to assign tasks.",
-            422,
-        )
-    return me
-
-
 def _fetch_assignee(db: Session, employee_id: uuid.UUID) -> Employee:
     assignee = db.execute(
         select(Employee).where(Employee.id == employee_id, Employee.deleted_at.is_(None))
@@ -97,8 +98,40 @@ def _assert_can_read(db: Session, actor: User, task: Task) -> None:
     if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)
-    if me is None or task.assigned_to_employee_id != me.id:
-        raise AppError("forbidden", "You can only view tasks assigned to you.", 403)
+    if me is None or (
+        task.assigned_to_employee_id != me.id
+        and task.assigned_by_employee_id != me.id
+    ):
+        raise AppError(
+            "forbidden", "You can only view tasks assigned to or by you.", 403
+        )
+
+
+def _is_team_lead(db: Session, employee_id: uuid.UUID, project_id: uuid.UUID) -> bool:
+    return (
+        db.execute(
+            select(ProjectMember.id).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.employee_id == employee_id,
+                ProjectMember.role == ProjectMemberRole.team_lead,
+            )
+        ).first()
+        is not None
+    )
+
+
+def _is_project_member(
+    db: Session, employee_id: uuid.UUID, project_id: uuid.UUID
+) -> bool:
+    return (
+        db.execute(
+            select(ProjectMember.id).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.employee_id == employee_id,
+            )
+        ).first()
+        is not None
+    )
 
 
 def list_tasks(
@@ -120,7 +153,14 @@ def list_tasks(
         me = _current_employee(db, actor)
         if me is None:
             return [], 0
-        stmt = stmt.where(Task.assigned_to_employee_id == me.id)
+        # Contributors see tasks assigned to them; team leads also see the
+        # tasks they assigned out (assigned_by themselves).
+        stmt = stmt.where(
+            or_(
+                Task.assigned_to_employee_id == me.id,
+                Task.assigned_by_employee_id == me.id,
+            )
+        )
     elif mine:
         me = _current_employee(db, actor)
         if me is None:
@@ -145,7 +185,9 @@ def list_tasks(
     rows = (
         db.execute(
             stmt.options(
-                selectinload(Task.assigned_to), selectinload(Task.assigned_by)
+                selectinload(Task.assigned_to),
+                selectinload(Task.assigned_by),
+                selectinload(Task.project),
             )
             .order_by(Task.due_date.asc().nulls_last(), Task.created_at.desc())
             .limit(limit)
@@ -163,15 +205,78 @@ def get_task(db: Session, actor: User, task_id: uuid.UUID) -> Task:
     return task
 
 
+def _resolve_assigner_and_project(
+    db: Session, actor: User, body: TaskCreate
+) -> tuple[Employee, uuid.UUID | None]:
+    """Authorize the actor and resolve (assigner employee, project_id).
+
+    project_manager  may assign to any active employee; project is optional.
+    team_lead        may assign only within a project they lead, and only to
+                     another member of that project.
+    """
+    me = _current_employee(db, actor)
+
+    if actor.role == UserRole.project_manager:
+        if me is None:
+            raise AppError(
+                "validation_error", "You need an employee profile to assign tasks.", 422
+            )
+        if body.project_id is not None:
+            project = db.get(Project, body.project_id)
+            if project is None or project.deleted_at is not None:
+                raise AppError("validation_error", "Project not found.", 422)
+        return me, body.project_id
+
+    # Non-PM: must be a team lead of at least one project, and may assign only
+    # within a project they lead.
+    if me is None:
+        raise AppError(
+            "forbidden",
+            "Only project managers and team leads can assign tasks.",
+            403,
+        )
+    leads_any = (
+        db.execute(
+            select(ProjectMember.id).where(
+                ProjectMember.employee_id == me.id,
+                ProjectMember.role == ProjectMemberRole.team_lead,
+            )
+        ).first()
+        is not None
+    )
+    if not leads_any:
+        raise AppError(
+            "forbidden",
+            "Only project managers and team leads can assign tasks.",
+            403,
+        )
+    if body.project_id is None:
+        raise AppError(
+            "validation_error", "Select a project to assign the task within.", 422
+        )
+    if not _is_team_lead(db, me.id, body.project_id):
+        raise AppError(
+            "forbidden", "You can only assign tasks within projects you lead.", 403
+        )
+    if body.assigned_to_employee_id == me.id:
+        raise AppError("validation_error", "You can't assign a task to yourself.", 422)
+    if not _is_project_member(db, body.assigned_to_employee_id, body.project_id):
+        raise AppError(
+            "validation_error", "Assignee must be a member of this project.", 422
+        )
+    return me, body.project_id
+
+
 def create_task(db: Session, actor: User, body: TaskCreate) -> Task:
-    pm = _pm_employee(db, actor)
+    assigner, project_id = _resolve_assigner_and_project(db, actor, body)
     assignee = _fetch_assignee(db, body.assigned_to_employee_id)
 
     task = Task(
         title=body.title.strip(),
         description=body.description.strip() if body.description else None,
         assigned_to_employee_id=assignee.id,
-        assigned_by_employee_id=pm.id,
+        assigned_by_employee_id=assigner.id,
+        project_id=project_id,
         status=TaskStatus.open,
         priority=body.priority,
         due_date=body.due_date,
@@ -198,7 +303,20 @@ def update_task(db: Session, actor: User, task_id: uuid.UUID, body: TaskUpdate) 
     task = _fetch(db, task_id)
 
     if actor.role != UserRole.project_manager:
-        raise AppError("forbidden", "Only project managers can edit tasks.", 403)
+        # A team lead may cancel a task they assigned, but not otherwise edit it.
+        me = _current_employee(db, actor)
+        is_assigner = me is not None and task.assigned_by_employee_id == me.id
+        cancel_only = body.model_fields_set <= {"status"} and (
+            body.status == TaskStatus.cancelled
+        )
+        if not is_assigner:
+            raise AppError(
+                "forbidden", "Only project managers or the assigner can edit tasks.", 403
+            )
+        if not cancel_only:
+            raise AppError(
+                "forbidden", "You can only cancel tasks you assigned.", 403
+            )
 
     if body.title is not None:
         task.title = body.title.strip()
@@ -250,3 +368,67 @@ def update_task_status(
     db.commit()
     db.refresh(task)
     return task
+
+
+def list_assignable_projects(db: Session, actor: User) -> list[AssignableProject]:
+    """Projects the current user leads, each with the members they may assign to.
+
+    Returns [] for users who don't lead any (live, non-archived) project — which
+    is the signal the UI uses to decide whether to show the assign-task option.
+    """
+    me = _current_employee(db, actor)
+    if me is None:
+        return []
+
+    led_ids = (
+        db.execute(
+            select(ProjectMember.project_id).where(
+                ProjectMember.employee_id == me.id,
+                ProjectMember.role == ProjectMemberRole.team_lead,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not led_ids:
+        return []
+
+    projects = (
+        db.execute(
+            select(Project)
+            .where(
+                Project.id.in_(led_ids),
+                Project.deleted_at.is_(None),
+                Project.status != ProjectStatus.archived,
+            )
+            .order_by(Project.name)
+        )
+        .scalars()
+        .all()
+    )
+
+    result: list[AssignableProject] = []
+    for project in projects:
+        rows = db.execute(
+            select(Employee)
+            .join(ProjectMember, ProjectMember.employee_id == Employee.id)
+            .where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.employee_id != me.id,
+                Employee.status == EmployeeStatus.active,
+                Employee.user_id.is_not(None),
+                Employee.deleted_at.is_(None),
+            )
+            .order_by(Employee.first_name, Employee.last_name)
+        ).scalars().all()
+        result.append(
+            AssignableProject(
+                project_id=project.id,
+                name=project.name,
+                code=project.code,
+                members=[
+                    AssignableMember(employee_id=e.id, name=e.full_name) for e in rows
+                ],
+            )
+        )
+    return result

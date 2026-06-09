@@ -17,6 +17,8 @@ class TaskOut(BaseModel):
     assigned_by_employee_id: uuid.UUID
     assigned_to_name: str = ""
     assigned_by_name: str = ""
+    project_id: uuid.UUID | None = None
+    project_name: str | None = None
     status: TaskStatus
     priority: TaskPriority
     due_date: date | None = None
@@ -25,7 +27,7 @@ class TaskOut(BaseModel):
 
     @classmethod
     def from_task(cls, task: Task) -> "TaskOut":
-        """Serialize a Task ORM row, resolving assignee/assigner display names."""
+        """Serialize a Task ORM row, resolving assignee/assigner/project names."""
         return cls(
             id=task.id,
             title=task.title,
@@ -34,6 +36,8 @@ class TaskOut(BaseModel):
             assigned_by_employee_id=task.assigned_by_employee_id,
             assigned_to_name=task.assigned_to.full_name if task.assigned_to else "",
             assigned_by_name=task.assigned_by.full_name if task.assigned_by else "",
+            project_id=task.project_id,
+            project_name=task.project.name if task.project else None,
             status=task.status,
             priority=task.priority,
             due_date=task.due_date,
@@ -46,6 +50,7 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     description: str | None = None
     assigned_to_employee_id: uuid.UUID
+    project_id: uuid.UUID | None = None
     priority: TaskPriority = TaskPriority.medium
     due_date: date | None = None
 
@@ -68,3 +73,19 @@ class TaskPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class AssignableMember(BaseModel):
+    """A project member a team lead may assign a task to."""
+
+    employee_id: uuid.UUID
+    name: str
+
+
+class AssignableProject(BaseModel):
+    """A project the current user leads, with its assignable members."""
+
+    project_id: uuid.UUID
+    name: str
+    code: str
+    members: list[AssignableMember]

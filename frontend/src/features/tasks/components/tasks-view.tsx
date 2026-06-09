@@ -15,7 +15,7 @@ import { can } from "@/lib/rbac";
 import { TasksFilters, type TaskFilterValues } from "./tasks-filters";
 import { TasksTable } from "./tasks-table";
 import { tasksApi } from "../api";
-import { useTasks } from "../hooks";
+import { useAssignableProjects, useTasks } from "../hooks";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../schemas";
 import type { Task, TaskListParams, TaskPriority, TaskStatus } from "../types";
 
@@ -37,8 +37,11 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { role } = useAuth();
+  const { role, employeeId } = useAuth();
   const canManage = can(role, "task.manage");
+  // Team leads (non-PM) can assign within projects they lead.
+  const { data: assignableProjects } = useAssignableProjects({ enabled: !canManage });
+  const canAssign = canManage || (assignableProjects?.length ?? 0) > 0;
 
   const params: TaskListParams = {
     mine: mode === "mine",
@@ -93,7 +96,7 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
     }
   }
 
-  const addButton = canManage ? (
+  const addButton = canAssign ? (
     <Button asChild>
       <Link href="/tasks/new">
         <Plus className="h-4 w-4" />
@@ -152,6 +155,7 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
         onRetry={() => void query.refetch()}
         onPageChange={onPageChange}
         canManage={canManage && mode === "all"}
+        currentEmployeeId={employeeId}
         onRequestCancel={canManage ? onRequestCancel : undefined}
         onStatusChange={mode === "mine" ? onStatusChange : undefined}
         emptyAction={canManage && mode === "all" ? addButton : undefined}

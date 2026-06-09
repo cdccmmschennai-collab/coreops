@@ -1,4 +1,5 @@
 """API tests for the tasks module: CRUD, status updates, RBAC, notifications."""
+from app.modules.projects.models import ProjectMemberRole
 from app.modules.users.models import UserRole
 
 
@@ -185,3 +186,164 @@ def test_cannot_assign_to_non_employee(client, make_user, make_employee, login):
         json=_task_payload(pm_emp.id),
     )
     assert res.status_code == 422
+
+
+# ---- Team lead assignment (scoped to a led project) ---------------------------
+
+
+def _project_with_lead(
+    make_user, make_employee, make_project, make_project_member, login
+):
+    lead_user = make_user("lead@example.com", role=UserRole.employee)
+    lead = make_employee(
+        employee_code="TL-1", first_name="Alex", last_name="Lead", user_id=lead_user.id
+    )
+    member_user = make_user("member@example.com", role=UserRole.employee)
+    member = make_employee(
+        employee_code="C-1", first_name="Nainar", last_name="B", user_id=member_user.id
+    )
+    project = make_project(code="P-100", name="Alpha")
+    make_project_member(
+        project_id=project.id, employee_id=lead.id, role=ProjectMemberRole.team_lead
+    )
+    make_project_member(
+        project_id=project.id,
+        employee_id=member.id,
+        role=ProjectMemberRole.contributor,
+    )
+    return login("lead@example.com"), lead, member, project
+
+
+def test_team_lead_assigns_task_to_project_member(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    header, lead, member, project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    res = client.post(
+        "/api/v1/tasks",
+        headers=header,
+        json=_task_payload(member.id, project_id=str(project.id)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["assigned_by_name"] == "Alex Lead"
+    assert body["assigned_to_name"] == "Nainar B"
+    assert body["project_id"] == str(project.id)
+    assert body["project_name"] == "Alpha"
+
+
+def test_team_lead_requires_a_project(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    header, _lead, member, _project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    res = client.post(
+        "/api/v1/tasks", headers=header, json=_task_payload(member.id)
+    )
+    assert res.status_code == 422
+
+
+def test_team_lead_cannot_assign_non_member(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    header, _lead, _member, project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    outsider = make_employee(
+        employee_code="O-1",
+        user_id=make_user("out@example.com", role=UserRole.employee).id,
+    )
+    res = client.post(
+        "/api/v1/tasks",
+        headers=header,
+        json=_task_payload(outsider.id, project_id=str(project.id)),
+    )
+    assert res.status_code == 422
+
+
+def test_team_lead_cannot_assign_in_unled_project(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    header, _lead, member, _project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    other = make_project(code="P-200", name="Beta")
+    make_project_member(
+        project_id=other.id,
+        employee_id=member.id,
+        role=ProjectMemberRole.contributor,
+    )
+    res = client.post(
+        "/api/v1/tasks",
+        headers=header,
+        json=_task_payload(member.id, project_id=str(other.id)),
+    )
+    assert res.status_code == 403
+
+
+def test_contributor_cannot_create_task(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    _header, lead, _member, project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    member_header = login("member@example.com")
+    res = client.post(
+        "/api/v1/tasks",
+        headers=member_header,
+        json=_task_payload(lead.id, project_id=str(project.id)),
+    )
+    assert res.status_code == 403
+
+
+def test_assignable_projects_endpoint(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    header, _lead, _member, project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    res = client.get("/api/v1/tasks/assignable-projects", headers=header)
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert len(data) == 1
+    assert data[0]["project_id"] == str(project.id)
+    names = [m["name"] for m in data[0]["members"]]
+    assert "Nainar B" in names
+    assert "Alex Lead" not in names  # excludes the lead themselves
+
+    # A plain contributor leads nothing.
+    member_header = login("member@example.com")
+    res = client.get("/api/v1/tasks/assignable-projects", headers=member_header)
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_team_lead_can_cancel_but_not_edit_assigned_task(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    header, _lead, member, project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+    created = client.post(
+        "/api/v1/tasks",
+        headers=header,
+        json=_task_payload(member.id, project_id=str(project.id)),
+    ).json()
+
+    cancel = client.patch(
+        f"/api/v1/tasks/{created['id']}", headers=header, json={"status": "cancelled"}
+    )
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "cancelled"
+
+    other = client.post(
+        "/api/v1/tasks",
+        headers=header,
+        json=_task_payload(member.id, project_id=str(project.id), title="Second"),
+    ).json()
+    edit = client.patch(
+        f"/api/v1/tasks/{other['id']}", headers=header, json={"title": "Renamed"}
+    )
+    assert edit.status_code == 403

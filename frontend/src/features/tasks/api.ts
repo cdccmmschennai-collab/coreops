@@ -1,6 +1,7 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  AssignableProject,
   Task,
   TaskCreateBody,
   TaskListParams,
@@ -27,4 +28,6 @@ export const tasksApi = {
   update: (id: string, body: TaskUpdateBody) => api.patch<Task>(`/tasks/${id}`, body),
   updateStatus: (id: string, body: TaskStatusUpdateBody) =>
     api.patch<Task>(`/tasks/${id}/status`, body),
+  assignableProjects: () =>
+    api.get<AssignableProject[]>("/tasks/assignable-projects"),
 };

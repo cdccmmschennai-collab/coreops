@@ -9,11 +9,25 @@ export interface Task {
   assigned_by_employee_id: string;
   assigned_to_name: string;
   assigned_by_name: string;
+  project_id: string | null;
+  project_name: string | null;
   status: TaskStatus;
   priority: TaskPriority;
   due_date: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AssignableMember {
+  employee_id: string;
+  name: string;
+}
+
+export interface AssignableProject {
+  project_id: string;
+  name: string;
+  code: string;
+  members: AssignableMember[];
 }
 
 export interface TaskPage {
@@ -36,6 +50,7 @@ export interface TaskCreateBody {
   title: string;
   description?: string | null;
   assigned_to_employee_id: string;
+  project_id?: string | null;
   priority?: TaskPriority;
   due_date?: string | null;
 }

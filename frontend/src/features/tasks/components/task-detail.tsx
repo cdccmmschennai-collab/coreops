@@ -70,6 +70,7 @@ export function TaskDetail({ id }: { id: string }) {
   }
 
   const isAssignee = employeeId === task.assigned_to_employee_id;
+  const isAssigner = employeeId === task.assigned_by_employee_id;
   const isActive = task.status !== "cancelled" && task.status !== "completed";
 
   async function handleCancel() {
@@ -93,22 +94,22 @@ export function TaskDetail({ id }: { id: string }) {
   const actions = (
     <>
       {canManage && isActive && (
-        <>
-          <Button variant="secondary" asChild>
-            <Link href={`/tasks/${id}/edit`}>
-              <Pencil className="h-4 w-4" />
-              Edit
-            </Link>
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void handleCancel()}
-            disabled={updateTask.isPending}
-          >
-            <XCircle className="h-4 w-4" />
-            Cancel task
-          </Button>
-        </>
+        <Button variant="secondary" asChild>
+          <Link href={`/tasks/${id}/edit`}>
+            <Pencil className="h-4 w-4" />
+            Edit
+          </Link>
+        </Button>
+      )}
+      {(canManage || isAssigner) && isActive && (
+        <Button
+          variant="secondary"
+          onClick={() => void handleCancel()}
+          disabled={updateTask.isPending}
+        >
+          <XCircle className="h-4 w-4" />
+          Cancel task
+        </Button>
       )}
       {isAssignee && isActive && (
         <StatusActions task={task} onChange={(s) => void handleStatusChange(s)} />
@@ -138,6 +139,7 @@ export function TaskDetail({ id }: { id: string }) {
           <div>
             <Row label="Status" value={<StatusBadge status={task.status} />} />
             <Row label="Priority" value={<PriorityBadge priority={task.priority} />} />
+            {task.project_name && <Row label="Project" value={task.project_name} />}
             <Row label="Assignee" value={task.assigned_to_name || "—"} />
             <Row label="Assigned by" value={task.assigned_by_name || "—"} />
             <Row label="Due date" value={formatDueDate(task.due_date)} />

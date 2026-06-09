@@ -12,6 +12,7 @@ function toFormValues(task: {
   title: string;
   description: string | null;
   assigned_to_employee_id: string;
+  project_id: string | null;
   priority: TaskFormValues["priority"];
   due_date: string | null;
 }): TaskFormValues {
@@ -19,6 +20,7 @@ function toFormValues(task: {
     title: task.title,
     description: task.description ?? "",
     assigned_to_employee_id: task.assigned_to_employee_id,
+    project_id: task.project_id ?? "",
     priority: task.priority,
     due_date: task.due_date ?? "",
   };

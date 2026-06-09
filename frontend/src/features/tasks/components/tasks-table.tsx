@@ -42,6 +42,7 @@ interface TasksTableProps {
   onRetry: () => void;
   onPageChange: (offset: number) => void;
   canManage: boolean;
+  currentEmployeeId?: string | null;
   onRequestCancel?: (task: Task) => void;
   onStatusChange?: (task: Task, status: Task["status"]) => void;
   emptyAction?: React.ReactNode;
@@ -55,6 +56,7 @@ export function TasksTable({
   onRetry,
   onPageChange,
   canManage,
+  currentEmployeeId,
   onRequestCancel,
   onStatusChange,
   emptyAction,
@@ -115,6 +117,7 @@ export function TasksTable({
                     <RowActions
                       task={task}
                       canManage={canManage}
+                      isAssignee={task.assigned_to_employee_id === currentEmployeeId}
                       onRequestCancel={onRequestCancel}
                       onStatusChange={onStatusChange}
                     />
@@ -153,11 +156,13 @@ export function TasksTable({
 function RowActions({
   task,
   canManage,
+  isAssignee,
   onRequestCancel,
   onStatusChange,
 }: {
   task: Task;
   canManage: boolean;
+  isAssignee: boolean;
   onRequestCancel?: (task: Task) => void;
   onStatusChange?: (task: Task, status: Task["status"]) => void;
 }) {
@@ -192,7 +197,7 @@ function RowActions({
     );
   }
 
-  if (!onStatusChange || !isActive) return null;
+  if (!onStatusChange || !isActive || !isAssignee) return null;
 
   return (
     <DropdownMenu>

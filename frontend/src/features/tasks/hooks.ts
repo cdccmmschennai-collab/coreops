@@ -25,6 +25,19 @@ export function useTask(id: string | undefined) {
   });
 }
 
+/**
+ * Projects the current user leads, with the members they can assign to.
+ * A non-empty result is the signal that a (non-PM) team lead may assign tasks.
+ */
+export function useAssignableProjects(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: tasksKeys.assignableProjects(),
+    queryFn: () => tasksApi.assignableProjects(),
+    enabled: options?.enabled ?? true,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useCreateTask() {
   const qc = useQueryClient();
   return useMutation({

@@ -13,10 +13,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_role
+from app.core.deps import get_current_user
 from app.modules.tasks import service
 from app.modules.tasks.models import TaskPriority, TaskStatus
 from app.modules.tasks.schemas import (
+    AssignableProject,
     TaskCreate,
     TaskOut,
     TaskPage,
@@ -64,10 +65,21 @@ def list_tasks(
 @router.post("", response_model=TaskOut, status_code=201)
 def create_task(
     body: TaskCreate,
-    pm: User = Depends(require_role("project_manager")),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TaskOut:
-    return TaskOut.from_task(service.create_task(db, pm, body))
+    # Authorization (project_manager, or team lead of the target project) is
+    # enforced inside the service.
+    return TaskOut.from_task(service.create_task(db, current, body))
+
+
+@router.get("/assignable-projects", response_model=list[AssignableProject])
+def assignable_projects(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[AssignableProject]:
+    """Projects the current user leads + the members they may assign to."""
+    return service.list_assignable_projects(db, current)
 
 
 @router.get("/{task_id}", response_model=TaskOut)
@@ -83,10 +95,12 @@ def get_task(
 def update_task(
     task_id: uuid.UUID,
     body: TaskUpdate,
-    pm: User = Depends(require_role("project_manager")),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TaskOut:
-    return TaskOut.from_task(service.update_task(db, pm, task_id, body))
+    # PM may fully edit; the assigner (team lead) may only cancel — enforced in
+    # the service.
+    return TaskOut.from_task(service.update_task(db, current, task_id, body))
 
 
 @router.patch("/{task_id}/status", response_model=TaskOut)
