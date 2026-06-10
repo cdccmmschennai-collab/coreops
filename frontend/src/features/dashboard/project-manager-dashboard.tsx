@@ -9,6 +9,7 @@ import {
   FolderKanban,
   Users,
   CalendarClock,
+  ListChecks,
 } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
@@ -42,6 +43,7 @@ const REVIEW_SCAN_LIMIT = 100;
 
 const MANAGER_ACTIONS = [
   { href: "/reports?status=submitted", label: "Review Pending Reports", icon: ClipboardCheck },
+  { href: "/tasks/new", label: "Assign Task", icon: ListChecks },
   { href: "/reports", label: "View All Reports", icon: FileText },
   { href: "/projects", label: "Manage Projects", icon: FolderKanban },
   { href: "/employees", label: "Manage Employees", icon: Users },
@@ -101,7 +103,7 @@ export function ProjectManagerDashboard() {
   });
 
   const projects = useProjects({ q: "", status: "active", limit: 6, offset: 0 });
-  const activity = useNotifications({ limit: 10 });
+  const activity = useNotifications({ limit: 5 });
 
   // ── KPI computations ──────────────────────────────────────────────────────
   const pendingCount  = pending.data?.total ?? 0;

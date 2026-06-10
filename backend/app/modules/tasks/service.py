@@ -10,6 +10,8 @@ from datetime import date
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.modules.audit import service as audit
+from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.projects.models import (
@@ -61,6 +63,45 @@ def _push_notification(
         db.commit()
     except Exception:
         db.rollback()
+
+
+def _status_action(status: TaskStatus) -> str:
+    """Map a task status transition to its audit action."""
+    if status == TaskStatus.completed:
+        return AuditAction.TASK_COMPLETE
+    if status == TaskStatus.cancelled:
+        return AuditAction.TASK_CANCEL
+    return AuditAction.TASK_STATUS_CHANGE
+
+
+def _record_task_audit(
+    db: Session,
+    actor: User,
+    action: str,
+    task: Task,
+    extra: dict | None = None,
+) -> None:
+    """Append a task audit row in the caller's transaction (flush only).
+
+    Caller commits afterwards so the audit row lands atomically with the change.
+    """
+    details = {
+        "title": task.title,
+        "assigned_to_employee_id": str(task.assigned_to_employee_id),
+        "assigned_by_employee_id": str(task.assigned_by_employee_id),
+    }
+    if task.project_id is not None:
+        details["project_id"] = str(task.project_id)
+    if extra:
+        details.update(extra)
+    audit.record_audit(
+        db,
+        action=action,
+        actor=actor,
+        entity_type=EntityType.TASK,
+        entity_id=task.id,
+        details=details,
+    )
 
 
 def _fetch_assignee(db: Session, employee_id: uuid.UUID) -> Employee:
@@ -282,6 +323,8 @@ def create_task(db: Session, actor: User, body: TaskCreate) -> Task:
         due_date=body.due_date,
     )
     db.add(task)
+    db.flush()
+    _record_task_audit(db, actor, AuditAction.TASK_ASSIGN, task)
     db.commit()
     db.refresh(task)
 
@@ -326,10 +369,12 @@ def update_task(db: Session, actor: User, task_id: uuid.UUID, body: TaskUpdate) 
         task.priority = body.priority
     if body.due_date is not None or "due_date" in body.model_fields_set:
         task.due_date = body.due_date
+    reassigned = False
     if body.assigned_to_employee_id is not None:
         assignee = _fetch_assignee(db, body.assigned_to_employee_id)
         if assignee.id != task.assigned_to_employee_id:
             task.assigned_to_employee_id = assignee.id
+            reassigned = True
             if assignee.user_id is not None:
                 _push_notification(
                     db,
@@ -340,10 +385,23 @@ def update_task(db: Session, actor: User, task_id: uuid.UUID, body: TaskUpdate) 
                     entity_id=task.id,
                     target_url=f"/tasks/{task.id}",
                 )
-    if body.status is not None:
+    status_changed_to: TaskStatus | None = None
+    if body.status is not None and body.status != task.status:
+        status_changed_to = body.status
         task.status = body.status
 
     db.add(task)
+    db.flush()
+    if reassigned:
+        _record_task_audit(db, actor, AuditAction.TASK_ASSIGN, task)
+    if status_changed_to is not None:
+        _record_task_audit(
+            db,
+            actor,
+            _status_action(status_changed_to),
+            task,
+            {"status": status_changed_to.value},
+        )
     db.commit()
     db.refresh(task)
     return task
@@ -363,8 +421,14 @@ def update_task_status(
     if task.status == TaskStatus.completed and body.status != TaskStatus.completed:
         raise AppError("validation_error", "Completed tasks cannot be reopened.", 422)
 
+    old_status = task.status
     task.status = body.status
     db.add(task)
+    db.flush()
+    if body.status != old_status:
+        _record_task_audit(
+            db, actor, _status_action(body.status), task, {"status": body.status.value}
+        )
     db.commit()
     db.refresh(task)
     return task

@@ -10,6 +10,7 @@ class EntityType:
     EMPLOYEE = "employee"
     PROJECT = "project"
     PROJECT_MEMBER = "project_member"
+    TASK = "task"
 
 
 class AuditAction:
@@ -40,6 +41,12 @@ class AuditAction:
     PROJECT_MEMBER_ADD = "project.member.add"
     PROJECT_MEMBER_ROLE_CHANGE = "project.member.role_change"
     PROJECT_MEMBER_REMOVE = "project.member.remove"
+
+    # --- task assignment & lifecycle (Tier B) ---
+    TASK_ASSIGN = "task.assign"
+    TASK_COMPLETE = "task.complete"
+    TASK_STATUS_CHANGE = "task.status.change"
+    TASK_CANCEL = "task.cancel"
 
 
 # Statuses

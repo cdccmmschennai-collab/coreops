@@ -20,6 +20,10 @@ export const ACTION_LABEL: Record<string, string> = {
   "project.member.add": "Project member added",
   "project.member.role_change": "Project role changed",
   "project.member.remove": "Project member removed",
+  "task.assign": "Task assigned",
+  "task.complete": "Task completed",
+  "task.status.change": "Task status changed",
+  "task.cancel": "Task cancelled",
 };
 
 export function actionLabel(action: string): string {
@@ -28,6 +32,6 @@ export function actionLabel(action: string): string {
 
 export const ACTION_OPTIONS = Object.keys(ACTION_LABEL);
 
-export const ENTITY_OPTIONS = ["user", "employee", "project", "project_member"];
+export const ENTITY_OPTIONS = ["user", "employee", "project", "project_member", "task"];
 
 export const STATUS_OPTIONS = ["success", "failure"];

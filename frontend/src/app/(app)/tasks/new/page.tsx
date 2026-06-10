@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/shell/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,7 +32,10 @@ export default function NewTaskPage() {
 
   return (
     <>
-      <PageHeader title="New task" subtitle="Assign work to a team member" />
+      <Link href="/tasks" className="text-sm text-primary hover:underline">
+        ← Tasks
+      </Link>
+      <PageHeader className="mt-2" title="New task" subtitle="Assign work to a team member" />
       <TaskForm mode="create" />
     </>
   );
