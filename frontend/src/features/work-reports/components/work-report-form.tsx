@@ -30,6 +30,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useActivityTypeOptions, useCreateActivityType } from "@/features/activity-types/hooks";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useTasks } from "@/features/tasks/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 import { formatMinutes } from "@/lib/format";
@@ -99,6 +100,29 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return [...base, ...ghosts];
   }, [projects, mode, defaultValues.tasks]);
 
+  // The author's own assigned tasks (open / in-progress) for the task picker.
+  const { data: myTasksData } = useTasks({
+    mine: true, q: "", status: "", priority: "", limit: 100, offset: 0,
+  });
+  const myTaskById = React.useMemo(
+    () => new Map((myTasksData?.items ?? []).map((t) => [t.id, t])),
+    [myTasksData],
+  );
+  const taskOptions = React.useMemo(
+    () =>
+      (myTasksData?.items ?? [])
+        // Show assignable tasks incl. completed (you still log hours for them);
+        // only cancelled tasks are hidden.
+        .filter((t) => t.status !== "cancelled")
+        .map((t) => ({
+          value: t.id,
+          label: t.title,
+          sublabel: t.project_name ?? undefined,
+          keywords: [t.title, t.project_name ?? ""],
+        })),
+    [myTasksData],
+  );
+
   // Activity type combobox options — code shown on the right
   const activityOptions = React.useMemo(
     () =>
@@ -139,7 +163,8 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
   const watchedTasks = form.watch("tasks");
   const totalMinutes = (watchedTasks ?? []).reduce(
-    (sum, t) => sum + (hoursToMinutes(t?.duration_hours) ?? 0),
+    (sum, t) =>
+      sum + (hoursToMinutes(t?.duration_hours) ?? 0) + (hoursToMinutes(t?.task_hours) ?? 0),
     0,
   );
 
@@ -288,20 +313,78 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     key={field.id}
                     className="space-y-2 rounded-lg border border-border p-3"
                   >
+                    {/* Task line shares Row A's grid so Task hours lands in the same
+                        column as Duration (the two hour fields stack one above the
+                        other); picking a task fills in the project. */}
+                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.task_id`}
+                        render={({ field: f }) => (
+                          <FormItem className="md:col-span-3">
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
+                              Task <span className="font-normal">(optional)</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Combobox
+                                value={f.value || ""}
+                                onValueChange={(v) => {
+                                  f.onChange(v);
+                                  const t = v ? myTaskById.get(v) : undefined;
+                                  if (t?.project_id) {
+                                    form.setValue(
+                                      `tasks.${index}.project_id`,
+                                      t.project_id,
+                                      { shouldValidate: true },
+                                    );
+                                  }
+                                }}
+                                options={taskOptions}
+                                placeholder="Select an assigned task…"
+                                searchPlaceholder="Search your tasks…"
+                                emptyMessage="No tasks assigned to you."
+                                allowClear
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Task hours — task-based work; adds to the day total */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.task_hours`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
+                              Task hours <span className="font-normal">(HH.MM)</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="e.g. 2.30"
+                                {...f}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
                     {/* Row A — one grid; columns collapse responsively:
-                          mobile  → single column, fully stacked
-                          tablet  → Project Name full width, then Code | Job | Duration
-                          desktop → Name | Code | Job | Duration | Actions on one row
-                        Every cell is label + h-9 control with the same space-y-2 gap,
-                        so labels and inputs share a baseline without any margin hacks. */}
-                    <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-3 lg:grid-cols-[minmax(0,1fr)_150px_150px_110px_40px]">
+                          desktop → Name | Code | Job | Duration | Actions on one row.
+                        Duration here = project-based hours (distinct from Task hours). */}
+                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
 
                       {/* Project Name — searchable combobox (name + code) */}
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.project_id`}
                         render={({ field: f }) => (
-                          <FormItem className="sm:col-span-3 lg:col-span-1">
+                          <FormItem className="min-w-0">
                             <FormLabel className="block text-xs leading-none text-muted-foreground">
                               Project Name <span className="text-destructive">*</span>
                             </FormLabel>
@@ -341,22 +424,20 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         </div>
                       </div>
 
-                      {/* Duration — entered in hours (decimals allowed) */}
+                      {/* Duration — project-based hours (decimals allowed) */}
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.duration_hours`}
                         render={({ field: f }) => (
                           <FormItem>
                             <FormLabel className="block text-xs leading-none text-muted-foreground">
-                              Duration (hrs)
+                              Duration <span className="font-normal">(HH.MM)</span>
                             </FormLabel>
                             <FormControl>
                               <Input
-                                type="number"
-                                min={0}
-                                max={24}
-                                step="0.25"
-                                placeholder="0"
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="e.g. 2.30"
                                 {...f}
                               />
                             </FormControl>
@@ -367,9 +448,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
                       {/* Actions — delete. A spacer label (desktop only) keeps the
                           button on the input baseline via the grid, not margins. */}
-                      <div className="flex flex-col gap-2 items-start sm:col-span-3 sm:items-end lg:col-span-1 lg:items-start">
+                      <div className="flex flex-col gap-2 items-start md:items-start">
                         <span
-                          className="hidden text-xs font-medium leading-none lg:block"
+                          className="hidden text-xs font-medium leading-none md:block"
                           aria-hidden
                         >
                           &nbsp;

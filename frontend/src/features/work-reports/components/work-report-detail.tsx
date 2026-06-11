@@ -289,6 +289,22 @@ export function WorkReportDetail({ id }: { id: string }) {
                       </div>
                     </div>
 
+                    {/* Linked task (if any) + its hours */}
+                    {t.task_title && (
+                      <div className="mt-4 flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-xs text-muted-foreground">Task</p>
+                          <p className="text-sm font-medium">{t.task_title}</p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="text-xs text-muted-foreground">Task hours</p>
+                          <p className="text-sm font-medium tabular">
+                            {t.task_minutes_spent != null ? formatMinutes(t.task_minutes_spent) : "—"}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Activity type — own row so long names wrap in full */}
                     <div className="mt-4 space-y-0.5">
                       <p className="text-xs text-muted-foreground">Activity Type</p>

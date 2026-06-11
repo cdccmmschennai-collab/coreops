@@ -24,10 +24,13 @@ _MAX_DAY_MINUTES = 1440
 
 class WorkReportTaskIn(BaseModel):
     project_id: uuid.UUID
+    # Optional link to an assigned task (must be assigned to the author).
+    task_id: uuid.UUID | None = None
     # Day remarks — optional free text (the daily report has no mandatory note)
     description: str = Field(default="", max_length=_DESCRIPTION_MAX)
-    # minutes_spent is optional — Google Form has no time field
+    # minutes_spent = project-activity hours; task_minutes_spent = task hours.
     minutes_spent: int | None = Field(default=None, ge=0, le=_MAX_DAY_MINUTES)
+    task_minutes_spent: int | None = Field(default=None, ge=0, le=_MAX_DAY_MINUTES)
     activity_type: str | None = Field(default=None, max_length=200)
     tags_count: int = Field(default=0, ge=0)
     docs_count: int = Field(default=0, ge=0)
@@ -40,12 +43,15 @@ class WorkReportTaskOut(BaseModel):
 
     id: uuid.UUID
     project_id: uuid.UUID
+    task_id: uuid.UUID | None = None
+    task_title: str | None = None
     # Snapshot fields (populated at save time; null for records predating migration 0017).
     project_name: str | None = None
     project_code: str | None = None
     project_job_code_code: str | None = None
     description: str
     minutes_spent: int | None = None
+    task_minutes_spent: int | None = None
     activity_type: str | None = None
     tags_count: int = 0
     docs_count: int = 0

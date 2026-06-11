@@ -2249,6 +2249,8 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /** Task Id */
+            task_id?: string | null;
             /**
              * Description
              * @default
@@ -2256,6 +2258,8 @@ export interface components {
             description: string;
             /** Minutes Spent */
             minutes_spent?: number | null;
+            /** Task Minutes Spent */
+            task_minutes_spent?: number | null;
             /** Activity Type */
             activity_type?: string | null;
             /**
@@ -2291,6 +2295,10 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /** Task Id */
+            task_id?: string | null;
+            /** Task Title */
+            task_title?: string | null;
             /** Project Name */
             project_name?: string | null;
             /** Project Code */
@@ -2301,6 +2309,8 @@ export interface components {
             description: string;
             /** Minutes Spent */
             minutes_spent?: number | null;
+            /** Task Minutes Spent */
+            task_minutes_spent?: number | null;
             /** Activity Type */
             activity_type?: string | null;
             /**

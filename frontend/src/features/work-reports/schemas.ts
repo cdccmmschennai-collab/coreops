@@ -69,31 +69,40 @@ const REVIEW_NOTE_MAX = 1000;
 const MAX_DAY_MINUTES = 1440;
 const MAX_DAY_HOURS   = 24;
 
-// ── duration conversion (UI shows hours; backend stores whole minutes) ─────────
+// ── duration conversion (UI uses H.MM clock notation; backend stores minutes) ──
+// "2.20" means 2 hours 20 minutes (= 140 min), NOT 2.2 decimal hours.
 
-/** Form hours string → whole minutes for the API. Empty ⇒ null. */
+/** Form time string "H" or "H.MM" → whole minutes. "2.20" → 140. Empty/invalid ⇒ null. */
 export const hoursToMinutes = (v: string | undefined): number | null => {
   if (!v || v.trim() === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.round(n * 60) : null;
+  const match = /^(\d+)(?:[.:](\d{1,2}))?$/.exec(v.trim());
+  if (!match) return null;
+  const h = parseInt(match[1], 10);
+  const m = match[2] != null ? parseInt(match[2], 10) : 0;
+  if (m > 59) return null; // minutes must be 00–59
+  return h * 60 + m;
 };
 
-/** API minutes → clean hours string for the form (60→"1", 90→"1.5", 135→"2.25"). */
-export const minutesToHours = (m: number): string => String(+(m / 60).toFixed(2));
+/** Whole minutes → "H.MM" string for the form (60→"1", 140→"2.20", 125→"2.05"). */
+export const minutesToHours = (mins: number): string => {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? String(h) : `${h}.${String(m).padStart(2, "0")}`;
+};
 
 // ── task schema ───────────────────────────────────────────────────────────────
 
-// duration_hours is kept as a string in form inputs so an empty value maps to null.
-// Decimal hours allowed (e.g. 1, 1.5, 2.25, 7.75); 24h == the 1440-minute day cap.
+// Time is entered in H.MM clock notation (e.g. "2.20" = 2h20m). Kept as a string
+// so an empty value maps to null; 24h == the 1440-minute day cap.
 const durationHoursSchema = z
   .string()
   .refine(
     (v) => {
       if (v.trim() === "") return true; // null/omitted — OK (duration is optional)
-      const n = Number(v);
-      return Number.isFinite(n) && n >= 0 && n <= MAX_DAY_HOURS;
+      const mins = hoursToMinutes(v);
+      return mins !== null && mins <= MAX_DAY_MINUTES;
     },
-    `Enter hours between 0 and ${MAX_DAY_HOURS} (decimals allowed), or leave blank`,
+    "Enter time as HH.MM (e.g. 2.30) — minutes 00–59, max 24h",
   );
 
 // Count inputs: string → non-negative int, empty = 0
@@ -106,6 +115,11 @@ const countSchema = z
 
 const taskSchema = z.object({
   project_id: z.string().min(1, "Project is required"),
+  // Optional link to an assigned task; selecting one fills in the project.
+  task_id: z.string().optional().default(""),
+  task_title: z.string().optional(),
+  // Task-based hours (separate from the project-activity duration below).
+  task_hours: durationHoursSchema,
   // Display-only snapshot fields — populated from API in edit mode so the
   // Combobox can show the project name/code even when the project is no
   // longer in the RBAC-scoped list.  Never sent back to the backend.
@@ -159,7 +173,11 @@ export const workReportFormSchema = z
         path: ["location"],
       });
     }
-    const totalMin = v.tasks.reduce((sum, t) => sum + (hoursToMinutes(t.duration_hours) || 0), 0);
+    const totalMin = v.tasks.reduce(
+      (sum, t) =>
+        sum + (hoursToMinutes(t.duration_hours) || 0) + (hoursToMinutes(t.task_hours) || 0),
+      0,
+    );
     if (totalMin > MAX_DAY_MINUTES) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -175,6 +193,9 @@ export type WorkReportFormValues = z.infer<typeof workReportFormSchema>;
 
 export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   project_id:     "",
+  task_id:        "",
+  task_title:     undefined,
+  task_hours:     "",
   project_name:   undefined,
   project_code:   undefined,
   description:    "",
@@ -232,8 +253,10 @@ const toCount = (v: string | undefined): number =>
 function toTasks(v: WorkReportFormValues) {
   return v.tasks.map((t) => ({
     project_id:    t.project_id,
+    task_id:       orNull(t.task_id),
     description:   t.description.trim(),
     minutes_spent: hoursToMinutes(t.duration_hours),
+    task_minutes_spent: hoursToMinutes(t.task_hours),
     activity_type: orNull(t.activity_type),
     tags_count:    toCount(t.tags_count),
     docs_count:    toCount(t.docs_count),
@@ -292,6 +315,9 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
       report.tasks.length > 0
         ? report.tasks.map((t) => ({
             project_id:     t.project_id,
+            task_id:        t.task_id ?? "",
+            task_title:     t.task_title ?? undefined,
+            task_hours:     t.task_minutes_spent != null ? minutesToHours(t.task_minutes_spent) : "",
             project_name:   t.project_name ?? undefined,
             project_code:   t.project_code ?? undefined,
             description:    t.description,

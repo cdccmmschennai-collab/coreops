@@ -143,13 +143,20 @@ class WorkReportTask(UUIDMixin, Base):
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    # minutes_spent is optional — the Google Form has no time field
+    # minutes_spent = project-activity hours; task_minutes_spent = task-based hours.
+    # Both optional; both add to the report total.
     minutes_spent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_minutes_spent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     activity_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     tags_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     spares_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # Optional link to an assigned Task (the activity logs work on that task).
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    task_title: Mapped[str | None] = mapped_column(Text, nullable=True)  # snapshot
     # Snapshot fields (migration 0017) — frozen at save time for historical accuracy.
     project_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     project_code: Mapped[str | None] = mapped_column(Text, nullable=True)
