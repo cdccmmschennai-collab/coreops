@@ -24,7 +24,8 @@ _MAX_DAY_MINUTES = 1440
 
 class WorkReportTaskIn(BaseModel):
     project_id: uuid.UUID
-    description: str = Field(min_length=1, max_length=_DESCRIPTION_MAX)
+    # Day remarks — optional free text (the daily report has no mandatory note)
+    description: str = Field(default="", max_length=_DESCRIPTION_MAX)
     # minutes_spent is optional — Google Form has no time field
     minutes_spent: int | None = Field(default=None, ge=0, le=_MAX_DAY_MINUTES)
     activity_type: str | None = Field(default=None, max_length=200)

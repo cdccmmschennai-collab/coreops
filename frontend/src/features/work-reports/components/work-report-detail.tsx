@@ -11,14 +11,6 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
@@ -38,6 +30,16 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
     <div className="flex items-center justify-between gap-4 py-2 text-sm">
       <span className="text-muted-foreground">{label}</span>
       <span className="text-right font-medium">{value ?? "—"}</span>
+    </div>
+  );
+}
+
+/** Compact label-over-value cell used inside the activity cards. */
+function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-0.5">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="truncate text-sm font-medium tabular">{value ?? "—"}</p>
     </div>
   );
 }
@@ -200,24 +202,70 @@ export function WorkReportDetail({ id }: { id: string }) {
         </Card>
 
         <div className="space-y-6">
-          {/* Maintenance counters (shown if any > 0) */}
-          {hasCounters && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Maintenance counts</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-1">
-                  <Row label="Task List" value={report.task_list_count ?? 0} />
-                  <Row label="Task List Ops" value={report.task_list_op_count ?? 0} />
-                  <Row label="Maint. Items" value={report.maintenance_item_count ?? 0} />
-                  <Row label="Maint. Plans" value={report.maintenance_plan_count ?? 0} />
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* Project activities — one card per activity so wide data stays readable */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Project activities</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {report.tasks.length === 0 && (
+                <p className="text-sm text-muted-foreground">No activities recorded.</p>
+              )}
+              {report.tasks.map((t) => {
+                // Prefer snapshot fields (always current from migration 0017+).
+                // Fall back to RBAC-scoped projById for pre-migration rows.
+                const fallback = projById.get(t.project_id);
+                const projectName = t.project_name ?? fallback?.name ?? "—";
+                const projectCode = t.project_code ?? fallback?.code ?? "—";
+                const jobCodeCode = t.project_job_code_code ?? fallback?.job_code_code ?? "—";
+                return (
+                  <div key={t.id} className="rounded-lg border border-border p-4">
+                    {/* Header: project + duration */}
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="font-medium leading-snug">{projectName}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
+                          <span>{projectCode}</span>
+                          <span aria-hidden>·</span>
+                          <span>{jobCodeCode}</span>
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-xs text-muted-foreground">Duration</p>
+                        <p className="font-medium tabular">
+                          {t.minutes_spent != null ? formatMinutes(t.minutes_spent) : "—"}
+                        </p>
+                      </div>
+                    </div>
 
-          {/* Remarks (new field) */}
+                    {/* Activity type — own row so long names wrap in full */}
+                    <div className="mt-4 space-y-0.5">
+                      <p className="text-xs text-muted-foreground">Activity Type</p>
+                      <p className="text-sm font-medium">{t.activity_type ?? "—"}</p>
+                    </div>
+
+                    {/* Counts */}
+                    <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3">
+                      <Stat label="Tags" value={t.tags_count ?? 0} />
+                      <Stat label="Docs" value={t.docs_count ?? 0} />
+                      <Stat label="BOM" value={t.bom_count ?? 0} />
+                      <Stat label="Spares" value={t.spares_count ?? 0} />
+                    </div>
+
+                    {/* Per-activity day remarks */}
+                    {t.description && (
+                      <div className="mt-4 border-t border-border pt-3">
+                        <p className="text-xs text-muted-foreground">Day Remarks</p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm">{t.description}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          {/* Day Remarks (report-level; present on older reports) */}
           {report.remarks && (
             <Card>
               <CardHeader>
@@ -253,66 +301,22 @@ export function WorkReportDetail({ id }: { id: string }) {
             </Card>
           )}
 
-          {/* Activities table */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Project activities</CardTitle>
-            </CardHeader>
-            <CardContent className="px-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Project Name</TableHead>
-                    <TableHead>Project Code</TableHead>
-                    <TableHead>Job Code</TableHead>
-                    <TableHead>Activity Type</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead className="text-right">Tags</TableHead>
-                    <TableHead className="text-right">Docs</TableHead>
-                    <TableHead className="text-right">BOM</TableHead>
-                    <TableHead className="text-right">Spares</TableHead>
-                    <TableHead className="text-right">Duration</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {report.tasks.map((t) => {
-                    // Prefer snapshot fields (always current from migration 0017+).
-                    // Fall back to RBAC-scoped projById for pre-migration rows.
-                    const fallback = projById.get(t.project_id);
-                    const projectName = t.project_name ?? fallback?.name ?? "—";
-                    const projectCode = t.project_code ?? fallback?.code ?? "—";
-                    const jobCodeCode = t.project_job_code_code ?? fallback?.job_code_code ?? "—";
-                    return (
-                      <TableRow key={t.id}>
-                        <TableCell className="font-medium">
-                          {projectName}
-                        </TableCell>
-                        <TableCell className="font-mono text-muted-foreground">
-                          {projectCode}
-                        </TableCell>
-                        <TableCell className="font-mono text-muted-foreground">
-                          {jobCodeCode}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {t.activity_type ?? "—"}
-                        </TableCell>
-                        <TableCell className="whitespace-pre-wrap text-muted-foreground">
-                          {t.description}
-                        </TableCell>
-                        <TableCell className="text-right tabular">{t.tags_count ?? 0}</TableCell>
-                        <TableCell className="text-right tabular">{t.docs_count ?? 0}</TableCell>
-                        <TableCell className="text-right tabular">{t.bom_count ?? 0}</TableCell>
-                        <TableCell className="text-right tabular">{t.spares_count ?? 0}</TableCell>
-                        <TableCell className="text-right tabular">
-                          {t.minutes_spent != null ? formatMinutes(t.minutes_spent) : "—"}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          {/* Maintenance counts (shown if any > 0) */}
+          {hasCounters && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Maintenance counts</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-x-8 gap-y-1 sm:grid-cols-4">
+                  <Row label="Task List" value={report.task_list_count ?? 0} />
+                  <Row label="Task List Ops" value={report.task_list_op_count ?? 0} />
+                  <Row label="Maint. Items" value={report.maintenance_item_count ?? 0} />
+                  <Row label="Maint. Plans" value={report.maintenance_plan_count ?? 0} />
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 

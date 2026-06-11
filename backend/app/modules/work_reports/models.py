@@ -43,6 +43,7 @@ class WorkReportStatus(str, enum.Enum):
 
 class DayStatus(str, enum.Enum):
     on_duty = "on_duty"
+    office = "office"
     half_day = "half_day"
     on_leave = "on_leave"
     wfh = "wfh"

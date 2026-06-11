@@ -258,72 +258,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               />
             </div>
 
-            {/* ── Row 2: Well Head, PM Plant ── */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                control={form.control}
-                name="well_head_no"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Well Head No.{" "}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="If worked on well head" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="pm_plant"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      PM Plant{" "}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="PM plant identifier" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            {/* ── Row 3: Maintenance Counters ── */}
-            <div>
-              <p className="mb-2 text-sm font-medium">Maintenance counts</p>
-              <div className="grid gap-3 sm:grid-cols-4">
-                {(
-                  [
-                    ["task_list_count",        "Task List"],
-                    ["task_list_op_count",     "Task List Ops"],
-                    ["maintenance_item_count", "Maint. Items"],
-                    ["maintenance_plan_count", "Maint. Plans"],
-                  ] as const
-                ).map(([name, label]) => (
-                  <FormField
-                    key={name}
-                    control={form.control}
-                    name={name}
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-xs">{label}</FormLabel>
-                        <FormControl>
-                          <Input type="number" min={0} placeholder="0" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-
             <Separator />
 
             {/* ── Project Task Rows ── */}
@@ -486,14 +420,14 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         )}
                       />
 
-                      {/* Description */}
+                      {/* Day Remarks (optional) */}
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.description`}
                         render={({ field: f }) => (
                           <FormItem>
                             <FormLabel className="text-xs text-muted-foreground">
-                              Description
+                              Day Remarks (optional)
                             </FormLabel>
                             <FormControl>
                               <Input placeholder="What did you work on?" {...f} />
@@ -550,23 +484,19 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
             <Separator />
 
-            {/* ── Remarks & Query ── */}
+            {/* ── Well Head, PM Plant ── */}
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField
                 control={form.control}
-                name="remarks"
+                name="well_head_no"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Day Remarks{" "}
+                      Well Head No.{" "}
                       <span className="font-normal text-muted-foreground">(optional)</span>
                     </FormLabel>
                     <FormControl>
-                      <Textarea
-                        rows={3}
-                        placeholder="What did you accomplish today?"
-                        {...field}
-                      />
+                      <Input placeholder="If worked on well head" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -574,25 +504,75 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               />
               <FormField
                 control={form.control}
-                name="query_text"
+                name="pm_plant"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Query / Issues{" "}
+                      PM Plant{" "}
                       <span className="font-normal text-muted-foreground">(optional)</span>
                     </FormLabel>
                     <FormControl>
-                      <Textarea
-                        rows={3}
-                        placeholder="Any blockers or questions?"
-                        {...field}
-                      />
+                      <Input placeholder="PM plant identifier" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
+
+            {/* ── Maintenance Counters ── */}
+            <div>
+              <p className="mb-2 text-sm font-medium">Maintenance counts</p>
+              <div className="grid gap-3 sm:grid-cols-4">
+                {(
+                  [
+                    ["task_list_count",        "Task List"],
+                    ["task_list_op_count",     "Task List Ops"],
+                    ["maintenance_item_count", "Maint. Items"],
+                    ["maintenance_plan_count", "Maint. Plans"],
+                  ] as const
+                ).map(([name, label]) => (
+                  <FormField
+                    key={name}
+                    control={form.control}
+                    name={name}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">{label}</FormLabel>
+                        <FormControl>
+                          <Input type="number" min={0} placeholder="0" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* ── Query / Issues (end) ── */}
+            <FormField
+              control={form.control}
+              name="query_text"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Query / Issues{" "}
+                    <span className="font-normal text-muted-foreground">(optional)</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={3}
+                      placeholder="Any blockers or questions?"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <div className="flex justify-end gap-2 pt-2">
               <Button

@@ -27,6 +27,7 @@ export const WORK_REPORT_STATUS_LABEL: Record<WorkReportStatus, string> = {
 
 export const DAY_STATUSES = [
   "on_duty",
+  "office",
   "half_day",
   "on_leave",
   "wfh",
@@ -38,6 +39,7 @@ export type DayStatus = (typeof DAY_STATUSES)[number];
 
 export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
   on_duty: "On Duty",
+  office: "Office",
   half_day: "Half Day",
   on_leave: "On Leave",
   wfh: "Work From Home",
@@ -107,10 +109,12 @@ const taskSchema = z.object({
   // longer in the RBAC-scoped list.  Never sent back to the backend.
   project_name: z.string().optional(),
   project_code: z.string().optional(),
+  // Day remarks — optional free text describing the activity.
   description: z
     .string()
-    .min(1, "Description is required")
-    .max(DESCRIPTION_MAX, `Keep under ${DESCRIPTION_MAX} characters`),
+    .max(DESCRIPTION_MAX, `Keep under ${DESCRIPTION_MAX} characters`)
+    .optional()
+    .default(""),
   duration_hours: durationHoursSchema,
   activity_type: z.string().min(1, "Activity type is required").max(200),
   tags_count:   countSchema.default("0"),
