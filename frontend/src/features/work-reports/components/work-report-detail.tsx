@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Check, Pencil, Send, Trash2, X } from "lucide-react";
+import { KeyRound, Pencil, Send, Trash2, Undo2, Unlock } from "lucide-react";
 import { toast } from "sonner";
 
 import { ErrorState } from "@/components/feedback/error-state";
@@ -19,8 +19,13 @@ import { can } from "@/lib/rbac";
 
 import { DeleteDialog } from "./delete-dialog";
 import { RejectDialog } from "./reject-dialog";
+import { RequestEditDialog } from "./request-edit-dialog";
 import { StatusBadge } from "./status-badge";
-import { useApproveWorkReport, useSubmitWorkReport, useWorkReport } from "../hooks";
+import {
+  useGrantEditWorkReport,
+  useSubmitWorkReport,
+  useWorkReport,
+} from "../hooks";
 import { useProjectOptions } from "../project-options";
 import { DAY_STATUS_LABEL, WORK_LOCATION_LABEL, type DayStatus, type WorkLocation } from "../schemas";
 import type { WorkReport, WorkReportTask } from "../types";
@@ -54,8 +59,9 @@ export function WorkReportDetail({ id }: { id: string }) {
   const { byId: projById } = useProjectOptions();
 
   const submit = useSubmitWorkReport(id);
-  const approve = useApproveWorkReport(id);
+  const grantEdit = useGrantEditWorkReport(id);
   const [rejectOpen, setRejectOpen] = React.useState(false);
+  const [requestEditOpen, setRequestEditOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<WorkReport | null>(null);
 
   if (query.isLoading) {
@@ -82,11 +88,18 @@ export function WorkReportDetail({ id }: { id: string }) {
     );
   }
 
-  const employeeName = empById.get(report.employee_id) ?? "Employee";
+  const employeeName =
+    report.employee_name ?? empById.get(report.employee_id) ?? "Employee";
   const isAuthor = !!employeeId && report.employee_id === employeeId;
-  const isEditable = report.status === "draft" || report.status === "rejected";
+  const isEditable =
+    report.status === "draft" ||
+    report.status === "rejected" ||
+    report.status === "granted";
   const canAuthorAct = isAuthor && can(role, "report.submit");
-  const canReview = !isAuthor && report.status === "submitted" && can(role, "report.review");
+  const isSubmitted = report.status === "submitted";
+  const editRequested = !!report.edit_requested_at;
+  // can_review is computed per-actor by the API (PM = any; team lead = their projects).
+  const canReview = !isAuthor && report.can_review === true;
 
   const dayStatusLabel =
     report.day_status
@@ -107,18 +120,18 @@ export function WorkReportDetail({ id }: { id: string }) {
   async function onSubmit() {
     try {
       await submit.mutateAsync();
-      toast.success("Report submitted for review");
+      toast.success("Report submitted");
     } catch (error) {
       toast.error(error instanceof AppError ? error.message : "Could not submit report.");
     }
   }
 
-  async function onApprove() {
+  async function onGrantEdit() {
     try {
-      await approve.mutateAsync();
-      toast.success("Report approved");
+      await grantEdit.mutateAsync();
+      toast.success("Edit access granted");
     } catch (error) {
-      toast.error(error instanceof AppError ? error.message : "Could not approve report.");
+      toast.error(error instanceof AppError ? error.message : "Could not grant edit access.");
     }
   }
 
@@ -144,15 +157,31 @@ export function WorkReportDetail({ id }: { id: string }) {
           Delete
         </Button>
       )}
-      {canReview && (
+      {/* Author of a locked (submitted) report can request edit access */}
+      {canAuthorAct && isSubmitted && !editRequested && (
+        <Button variant="secondary" onClick={() => setRequestEditOpen(true)}>
+          <KeyRound className="h-4 w-4" />
+          Request edit
+        </Button>
+      )}
+      {canAuthorAct && isSubmitted && editRequested && (
+        <span className="rounded-md border border-border bg-muted/50 px-3 py-1.5 text-sm text-muted-foreground">
+          Edit requested
+        </span>
+      )}
+      {/* Reviewer (PM / team lead) actions on a submitted report.
+          Grant edit only when the author has actually requested it. */}
+      {canReview && isSubmitted && (
         <>
-          <Button onClick={() => void onApprove()} loading={approve.isPending}>
-            <Check className="h-4 w-4" />
-            Approve
-          </Button>
+          {editRequested && (
+            <Button onClick={() => void onGrantEdit()} loading={grantEdit.isPending}>
+              <Unlock className="h-4 w-4" />
+              Grant edit
+            </Button>
+          )}
           <Button variant="danger" onClick={() => setRejectOpen(true)}>
-            <X className="h-4 w-4" />
-            Reject
+            <Undo2 className="h-4 w-4" />
+            Send back
           </Button>
         </>
       )}
@@ -170,12 +199,32 @@ export function WorkReportDetail({ id }: { id: string }) {
         actions={actions}
       />
 
+      {/* Edit access granted — shown only to the author who requested it */}
+      {report.status === "granted" && isAuthor && (
+        <div className="mb-4 max-w-2xl rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground">
+          <span className="font-medium">Edit access granted.</span> You can edit and resubmit this report.
+        </div>
+      )}
+
+      {/* Sent back for changes */}
       {report.status === "rejected" && report.review_note && (
         <div
           role="alert"
           className="mb-4 max-w-2xl rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
         >
-          <span className="font-medium">Rejected:</span> {report.review_note}
+          <span className="font-medium">Sent back:</span> {report.review_note}
+        </div>
+      )}
+
+      {isSubmitted && editRequested && (
+        <div className="mb-4 max-w-2xl rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground">
+          <span className="font-medium">Edit access requested.</span>{" "}
+          {report.edit_request_note && <span>{report.edit_request_note}</span>}
+          <span className="mt-1 block text-muted-foreground">
+            {canReview
+              ? "Grant edit to reopen the report, or send it back with a note."
+              : "Waiting for a reviewer (PM or team lead) to respond."}
+          </span>
         </div>
       )}
 
@@ -195,7 +244,9 @@ export function WorkReportDetail({ id }: { id: string }) {
             {report.pm_plant && <Row label="PM Plant" value={report.pm_plant} />}
             <Row label="Total" value={report.total_minutes > 0 ? formatMinutes(report.total_minutes) : "—"} />
             <Row label="Submitted" value={formatDateTime(report.submitted_at)} />
-            {(report.status === "approved" || report.status === "rejected") && (
+            {(report.status === "approved" ||
+              report.status === "rejected" ||
+              report.status === "granted") && (
               <Row label="Reviewed" value={formatDateTime(report.reviewed_at)} />
             )}
           </CardContent>
@@ -324,6 +375,11 @@ export function WorkReportDetail({ id }: { id: string }) {
         reportId={report.id}
         open={rejectOpen}
         onOpenChange={setRejectOpen}
+      />
+      <RequestEditDialog
+        reportId={report.id}
+        open={requestEditOpen}
+        onOpenChange={setRequestEditOpen}
       />
       <DeleteDialog
         report={deleteTarget}

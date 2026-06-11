@@ -90,11 +90,17 @@ class WorkReportReject(BaseModel):
     review_note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
 
 
+class WorkReportEditRequest(BaseModel):
+    # Author's reason for requesting edit access on a submitted report.
+    note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
+
+
 class WorkReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     employee_id: uuid.UUID
+    employee_name: str | None = None
     report_date: date
     status: WorkReportStatus
     # Google Form fields
@@ -116,6 +122,11 @@ class WorkReportOut(BaseModel):
     reviewed_by: uuid.UUID | None = None
     reviewed_at: datetime | None = None
     review_note: str | None = None
+    edit_requested_at: datetime | None = None
+    edit_request_note: str | None = None
+    # Per-actor: True when the current user may reject / grant edit on this report
+    # (PM for any report; team lead for reports on their projects). Set in service.
+    can_review: bool = False
     created_at: datetime
 
 

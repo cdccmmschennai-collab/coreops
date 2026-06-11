@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart3,
   Bell,
   CalendarDays,
   FolderKanban,
@@ -38,7 +37,6 @@ const WORKSPACE: NavItem[] = [
   { label: "Attendance",    href: "/attendance",    icon: CalendarDays },
   { label: "Tasks",         href: "/tasks",         icon: ListTodo,     capability: "task.view", alsoMatch: ["/tasks/all"] },
   { label: "Reports",       href: "/reports",       icon: FileText,     capability: "report.nav", alsoMatch: ["/work-reports"] },
-  { label: "Analytics",     href: "/analytics",     icon: BarChart3,    capability: "analytics.view" },
   { label: "Notifications", href: "/notifications", icon: Bell },
 ];
 

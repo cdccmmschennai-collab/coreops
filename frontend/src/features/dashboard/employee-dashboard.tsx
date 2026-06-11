@@ -21,6 +21,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList } from "@/features/work-reports/hooks";
+import { projectSummary } from "@/features/work-reports/project-summary";
 import { formatMinutes } from "@/lib/format";
 
 import { greeting, todayISO, weekStartISO } from "./utils";
@@ -121,7 +122,7 @@ export function EmployeeDashboard() {
   const weekItems  = weekReports.data?.items ?? [];
   const hoursTotal = weekItems.reduce((s, r) => s + r.total_minutes, 0);
   const submitted  = weekItems.filter((r) => r.status !== "draft").length;
-  const inReview   = weekItems.filter((r) => r.status === "submitted").length;
+  const drafts     = weekItems.filter((r) => r.status === "draft").length;
 
   // ── week chart data (Mon–Sun) ─────────────────────────────────────────────
   const chartData = React.useMemo(() => {
@@ -162,15 +163,9 @@ export function EmployeeDashboard() {
           label="Hours logged this week"
           value={formatMinutes(hoursTotal)}
         />
-        <Kpi
-          label="Reports this week"
-          value={`${submitted} / ${weekItems.length}`}
-        />
-        <Kpi label="In review" value={String(inReview)} />
-        <Kpi
-          label="Approved"
-          value={String(weekItems.filter((r) => r.status === "approved").length)}
-        />
+        <Kpi label="Reports this week" value={String(weekItems.length)} />
+        <Kpi label="Submitted" value={String(submitted)} />
+        <Kpi label="Drafts" value={String(drafts)} />
       </KpiGrid>
 
       {/* main two-column grid */}
@@ -199,7 +194,7 @@ export function EmployeeDashboard() {
               </TableHeader>
               <TableBody>
                 {(recentReports.data?.items ?? []).map((r) => {
-                  const uniqueProjects = [...new Set(r.tasks.map((t) => t.project_id))].length;
+                  const proj = projectSummary(r);
                   return (
                     <TableRow
                       key={r.id}
@@ -207,12 +202,11 @@ export function EmployeeDashboard() {
                       onClick={() => window.location.assign(`/work-reports/${r.id}`)}
                     >
                       <TableCell className="font-medium tabular">{r.report_date}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {r.tasks.length === 0
-                          ? "—"
-                          : uniqueProjects === 1
-                            ? `${r.tasks.length} task${r.tasks.length > 1 ? "s" : ""}`
-                            : `${uniqueProjects} projects`}
+                      <TableCell
+                        className="max-w-[240px] truncate text-sm text-muted-foreground"
+                        title={proj.title}
+                      >
+                        {proj.label}
                       </TableCell>
                       <TableCell className="tabular">{formatMinutes(r.total_minutes)}</TableCell>
                       <TableCell><StatusBadge status={r.status} /></TableCell>

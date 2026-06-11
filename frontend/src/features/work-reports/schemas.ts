@@ -14,6 +14,7 @@ export const WORK_REPORT_STATUSES = [
   "submitted",
   "approved",
   "rejected",
+  "granted",
 ] as const;
 
 export const WORK_REPORT_STATUS_LABEL: Record<WorkReportStatus, string> = {
@@ -21,6 +22,7 @@ export const WORK_REPORT_STATUS_LABEL: Record<WorkReportStatus, string> = {
   submitted: "Submitted",
   approved: "Approved",
   rejected: "Rejected",
+  granted: "Granted",
 };
 
 // ── day status ────────────────────────────────────────────────────────────────
@@ -184,6 +186,26 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   spares_count:   "0",
 };
 
+// ── review note (reject dialog) ─────────────────────────────────────────────
+
+export const reviewNoteSchema = z.object({
+  review_note: z
+    .string()
+    .min(1, "A reason is required")
+    .max(REVIEW_NOTE_MAX, `Keep under ${REVIEW_NOTE_MAX} characters`),
+});
+
+export type ReviewNoteValues = z.infer<typeof reviewNoteSchema>;
+
+export const editRequestSchema = z.object({
+  note: z
+    .string()
+    .min(1, "Tell your reviewer why you need to edit")
+    .max(REVIEW_NOTE_MAX, `Keep under ${REVIEW_NOTE_MAX} characters`),
+});
+
+export type EditRequestValues = z.infer<typeof editRequestSchema>;
+
 export const EMPTY_WORK_REPORT_FORM: WorkReportFormValues = {
   report_date:  "",
   day_status:   undefined,
@@ -198,17 +220,6 @@ export const EMPTY_WORK_REPORT_FORM: WorkReportFormValues = {
   query_text: "",
   tasks: [{ ...EMPTY_TASK_ROW }],
 };
-
-// ── review note ───────────────────────────────────────────────────────────────
-
-export const reviewNoteSchema = z.object({
-  review_note: z
-    .string()
-    .min(1, "A reason is required")
-    .max(REVIEW_NOTE_MAX, `Keep under ${REVIEW_NOTE_MAX} characters`),
-});
-
-export type ReviewNoteValues = z.infer<typeof reviewNoteSchema>;
 
 // ── API body converters ───────────────────────────────────────────────────────
 

@@ -9,6 +9,7 @@ export type WorkReportTaskInput = components["schemas"]["WorkReportTaskIn"];
 export type WorkReportCreateBody = components["schemas"]["WorkReportCreate"];
 export type WorkReportUpdateBody = components["schemas"]["WorkReportUpdate"];
 export type WorkReportRejectBody = components["schemas"]["WorkReportReject"];
+export type WorkReportEditRequestBody = components["schemas"]["WorkReportEditRequest"];
 
 export interface WorkReportListParams {
   employee_id: string;

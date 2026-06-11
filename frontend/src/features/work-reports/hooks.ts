@@ -4,6 +4,7 @@ import { workReportsApi } from "./api";
 import { workReportKeys } from "./keys";
 import type {
   WorkReportCreateBody,
+  WorkReportEditRequestBody,
   WorkReportListParams,
   WorkReportRejectBody,
   WorkReportUpdateBody,
@@ -60,10 +61,10 @@ export function useSubmitWorkReport(id: string) {
   });
 }
 
-export function useApproveWorkReport(id: string) {
+export function useRequestEditWorkReport(id: string) {
   const invalidate = useReportActionInvalidation(id);
   return useMutation({
-    mutationFn: () => workReportsApi.approve(id),
+    mutationFn: (body: WorkReportEditRequestBody) => workReportsApi.requestEdit(id, body),
     onSuccess: invalidate,
   });
 }
@@ -72,6 +73,14 @@ export function useRejectWorkReport(id: string) {
   const invalidate = useReportActionInvalidation(id);
   return useMutation({
     mutationFn: (body: WorkReportRejectBody) => workReportsApi.reject(id, body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useGrantEditWorkReport(id: string) {
+  const invalidate = useReportActionInvalidation(id);
+  return useMutation({
+    mutationFn: () => workReportsApi.grantEdit(id),
     onSuccess: invalidate,
   });
 }

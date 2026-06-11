@@ -37,8 +37,9 @@ from app.shared.base import TimestampMixin, UUIDMixin
 class WorkReportStatus(str, enum.Enum):
     draft = "draft"
     submitted = "submitted"
-    approved = "approved"
-    rejected = "rejected"
+    approved = "approved"      # legacy — no longer produced (approval removed)
+    rejected = "rejected"      # reviewer sent the report back for changes
+    granted = "granted"        # reviewer reopened the report on an edit request
 
 
 class DayStatus(str, enum.Enum):
@@ -109,6 +110,13 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when the author requests edit access on a submitted (locked) report;
+    # cleared when a reviewer reopens it (reject / grant edit) or on resubmit.
+    edit_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The author's reason for the edit request (shown to the reviewer).
+    edit_request_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 

@@ -26,21 +26,19 @@ function parseStatus(value: string | null): WorkReportStatus | "" {
     : "";
 }
 
-function roleSubtitle(role: ReturnType<typeof useAuth>["role"]): string | undefined {
-  if (role === "project_manager") return "All employees";
-  return undefined;
-}
-
 export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { role } = useAuth();
-  const showEmployee = isManagerial(role);
+  const { role, employeeId } = useAuth();
+  // PMs get the employee filter dropdown; team leads (who are `employee` role)
+  // don't, but still get the Employee column once their project-scoped list
+  // returns reports authored by others (see showEmployeeColumn below).
+  const showEmployeeFilter = isManagerial(role);
   const canCreate = can(role, "report.submit");
 
   const params: WorkReportListParams = {
-    employee_id: showEmployee ? searchParams.get("employee_id") ?? "" : "",
+    employee_id: showEmployeeFilter ? searchParams.get("employee_id") ?? "" : "",
     project_id: searchParams.get("project_id") ?? "",
     status: parseStatus(searchParams.get("status")),
     from: searchParams.get("from") ?? "",
@@ -73,8 +71,17 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
     commit(next);
   }
 
+  const items = query.data?.items ?? [];
+  // Team leads see reports from their project members → show who authored each.
+  const showEmployeeColumn =
+    showEmployeeFilter || items.some((r) => r.employee_id !== employeeId);
+
   const count = query.data?.total;
-  const scopeLabel = roleSubtitle(role);
+  const scopeLabel = isManagerial(role)
+    ? "All employees"
+    : showEmployeeColumn
+      ? "Projects you lead"
+      : undefined;
   const countLabel = count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined;
   const subtitle = [scopeLabel, countLabel].filter(Boolean).join(" · ") || undefined;
 
@@ -103,7 +110,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
             from: params.from,
             to: params.to,
           }}
-          showEmployee={showEmployee}
+          showEmployee={showEmployeeFilter}
           onChange={onFilterChange}
         />
       </div>
@@ -113,7 +120,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
         isError={query.isError}
         onRetry={() => void query.refetch()}
         onPageChange={onPageChange}
-        showEmployee={showEmployee}
+        showEmployee={showEmployeeColumn}
         emptyAction={addButton}
       />
     </>

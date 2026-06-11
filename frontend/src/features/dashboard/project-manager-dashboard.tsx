@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import {
   ArrowRight,
-  ClipboardCheck,
   FileText,
   FolderKanban,
   Users,
@@ -34,15 +33,9 @@ import { useWorkReportList } from "@/features/work-reports/hooks";
 import type { WorkReport } from "@/features/work-reports/types";
 import { formatMinutes } from "@/lib/format";
 
-import { greeting, isToday, timeAgo, todayISO, weekStartISO } from "./utils";
-
-// How many recent review-decisions to scan for the "today" counts. The list API
-// filters by report_date (not review date), so the today-counts are computed
-// client-side from this window — accurate at normal volumes (see note in PR).
-const REVIEW_SCAN_LIMIT = 100;
+import { greeting, timeAgo, todayISO, weekStartISO } from "./utils";
 
 const MANAGER_ACTIONS = [
-  { href: "/reports?status=submitted", label: "Review Pending Reports", icon: ClipboardCheck },
   { href: "/tasks/new", label: "Assign Task", icon: ListChecks },
   { href: "/reports", label: "View All Reports", icon: FileText },
   { href: "/projects", label: "Manage Projects", icon: FolderKanban },
@@ -73,30 +66,19 @@ export function ProjectManagerDashboard() {
 
   const nameOf = (id: string) => employeeById.get(id) ?? "Unknown employee";
 
-  // Pending reports → drives both the "Pending Reviews" KPI (total) and the
-  // Approval Queue widget (first few items).
-  const pending = useWorkReportList({
-    employee_id: "", project_id: "", status: "submitted",
-    from: "", to: "", limit: 8, offset: 0,
-  });
-
   // Latest team submissions across all statuses (the PM work queue).
   const recent = useWorkReportList({
     employee_id: "", project_id: "", status: "",
-    from: "", to: "", limit: 5, offset: 0,
+    from: "", to: "", limit: 8, offset: 0,
   });
 
-  // Review decisions — scanned client-side for ones made today.
-  const approved = useWorkReportList({
-    employee_id: "", project_id: "", status: "approved",
-    from: "", to: "", limit: REVIEW_SCAN_LIMIT, offset: 0,
-  });
-  const rejected = useWorkReportList({
-    employee_id: "", project_id: "", status: "rejected",
-    from: "", to: "", limit: REVIEW_SCAN_LIMIT, offset: 0,
+  // Submitted reports → filtered client-side for pending edit requests.
+  const submittedReports = useWorkReportList({
+    employee_id: "", project_id: "", status: "submitted",
+    from: "", to: "", limit: 50, offset: 0,
   });
 
-  // This week's reports → distinct authors = active employees.
+  // This week's reports → KPIs (counts + distinct authors).
   const weekReports = useWorkReportList({
     employee_id: "", project_id: "", status: "",
     from: weekStart, to: today, limit: 200, offset: 0,
@@ -106,13 +88,15 @@ export function ProjectManagerDashboard() {
   const activity = useNotifications({ limit: 5 });
 
   // ── KPI computations ──────────────────────────────────────────────────────
-  const pendingCount  = pending.data?.total ?? 0;
-  const approvedToday = (approved.data?.items ?? []).filter((r) => isToday(r.reviewed_at)).length;
-  const rejectedToday = (rejected.data?.items ?? []).filter((r) => isToday(r.reviewed_at)).length;
-  const activeEmployees = new Set((weekReports.data?.items ?? []).map((r) => r.employee_id)).size;
+  const weekItems        = weekReports.data?.items ?? [];
+  const reportsThisWeek  = weekItems.length;
+  const submittedThisWeek = weekItems.filter((r) => r.status !== "draft").length;
+  const activeEmployees  = new Set(weekItems.map((r) => r.employee_id)).size;
 
-  const pendingItems = pending.data?.items ?? [];
-  const recentItems  = recent.data?.items ?? [];
+  const editReqItems = (submittedReports.data?.items ?? []).filter((r) => r.edit_requested_at);
+  const editReqCount = editReqItems.length;
+
+  const recentItems = recent.data?.items ?? [];
 
   return (
     <>
@@ -123,13 +107,42 @@ export function ProjectManagerDashboard() {
 
       {/* ── Team Overview KPIs ────────────────────────────────────────────── */}
       <KpiGrid>
-        <Kpi label="Pending reviews" value={String(pendingCount)} />
-        <Kpi label="Approved today" value={String(approvedToday)} />
-        <Kpi label="Rejected today" value={String(rejectedToday)} />
+        <Kpi label="Reports this week" value={String(reportsThisWeek)} />
+        <Kpi label="Submitted this week" value={String(submittedThisWeek)} />
+        <Kpi label="Edit requests" value={String(editReqCount)} />
         <Kpi label="Active employees" value={String(activeEmployees)} />
       </KpiGrid>
 
-      {/* ── Recent Team Submissions | Approval Queue ──────────────────────── */}
+      {/* Pending edit requests — authors asking to reopen a locked report */}
+      {editReqCount > 0 && (
+        <Card className="overflow-hidden border-primary/40">
+          <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
+            <CardTitle className="text-base">Edit requests</CardTitle>
+            <span className="tabular rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+              {editReqCount}
+            </span>
+          </CardHeader>
+          <CardContent className="p-2">
+            <ul className="divide-y divide-border">
+              {editReqItems.map((r) => (
+                <li key={r.id} className="flex items-center gap-2 px-2.5 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-foreground">{nameOf(r.employee_id)}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {r.report_date} · requested {timeAgo(r.edit_requested_at)}
+                    </p>
+                  </div>
+                  <Button size="sm" variant="secondary" asChild>
+                    <Link href={`/work-reports/${r.id}`}>Review</Link>
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Recent Team Submissions | Active Projects ─────────────────────── */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         {/* Recent team submissions */}
         <Card className="overflow-hidden">
@@ -180,50 +193,6 @@ export function ProjectManagerDashboard() {
           )}
         </Card>
 
-        {/* Approval queue */}
-        <Card className="overflow-hidden">
-          <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
-            <CardTitle className="text-base">Approval queue</CardTitle>
-            {pendingCount > 0 && (
-              <span className="tabular rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-                {pendingCount}
-              </span>
-            )}
-          </CardHeader>
-          <CardContent className="p-2">
-            {pending.isLoading ? (
-              <div className="space-y-2 p-2">
-                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
-              </div>
-            ) : pendingItems.length === 0 ? (
-              <p className="px-3 py-8 text-center text-sm text-muted-foreground">
-                No reports are awaiting review.
-              </p>
-            ) : (
-              <ul className="divide-y divide-border">
-                {pendingItems.map((r) => (
-                  <li key={r.id} className="flex items-center gap-2 px-2.5 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">
-                        {nameOf(r.employee_id)}
-                      </p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {formatMinutes(r.total_minutes)} · Submitted {timeAgo(r.submitted_at)}
-                      </p>
-                    </div>
-                    <Button size="sm" variant="secondary" asChild>
-                      <Link href={`/work-reports/${r.id}`}>Review</Link>
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ── Active Projects | Team Activity | Manager Actions ─────────────── */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
         {/* Active projects */}
         <Card className="overflow-hidden">
           <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
@@ -260,7 +229,10 @@ export function ProjectManagerDashboard() {
             )}
           </CardContent>
         </Card>
+      </div>
 
+      {/* ── Team Activity | Manager Actions ───────────────────────────────── */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
         {/* Recent team activity */}
         <Card className="overflow-hidden">
           <CardHeader className="border-b border-border px-5 py-3.5">

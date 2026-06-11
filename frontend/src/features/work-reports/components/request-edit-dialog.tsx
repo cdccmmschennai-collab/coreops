@@ -25,35 +25,32 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
 
-import { useRejectWorkReport } from "../hooks";
-import { reviewNoteSchema, type ReviewNoteValues } from "../schemas";
+import { useRequestEditWorkReport } from "../hooks";
+import { editRequestSchema, type EditRequestValues } from "../schemas";
 
-export function RejectDialog({
+export function RequestEditDialog({
   reportId,
   open,
   onOpenChange,
-  onDone,
 }: {
   reportId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onDone?: () => void;
 }) {
-  const form = useForm<ReviewNoteValues>({
-    resolver: zodResolver(reviewNoteSchema),
-    defaultValues: { review_note: "" },
+  const form = useForm<EditRequestValues>({
+    resolver: zodResolver(editRequestSchema),
+    defaultValues: { note: "" },
   });
-  const mutation = useRejectWorkReport(reportId);
+  const mutation = useRequestEditWorkReport(reportId);
 
-  async function onSubmit(values: ReviewNoteValues) {
+  async function onSubmit(values: EditRequestValues) {
     try {
       await mutation.mutateAsync(values);
-      toast.success("Report sent back for changes");
+      toast.success("Edit request sent to your reviewer");
       form.reset();
-      onDone?.();
       onOpenChange(false);
     } catch (error) {
-      toast.error(error instanceof AppError ? error.message : "Could not send the report back.");
+      toast.error(error instanceof AppError ? error.message : "Could not send edit request.");
     }
   }
 
@@ -66,21 +63,21 @@ export function RejectDialog({
     <AlertDialog open={open} onOpenChange={handleOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Send report back?</AlertDialogTitle>
+          <AlertDialogTitle>Request edit access?</AlertDialogTitle>
           <AlertDialogDescription>
-            Explain what needs to change. The author can edit and resubmit.
+            This report is submitted. Tell your reviewer why you need to edit it.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <Form {...form}>
           <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
             <FormField
               control={form.control}
-              name="review_note"
+              name="note"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Reason</FormLabel>
                   <FormControl>
-                    <Textarea rows={4} placeholder="What needs to change?" {...field} />
+                    <Textarea rows={4} placeholder="Why do you need to edit this report?" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -88,8 +85,8 @@ export function RejectDialog({
             />
             <AlertDialogFooter>
               <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
-              <Button type="submit" variant="danger" loading={mutation.isPending}>
-                Send back
+              <Button type="submit" loading={mutation.isPending}>
+                Send request
               </Button>
             </AlertDialogFooter>
           </form>

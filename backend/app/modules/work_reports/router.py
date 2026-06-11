@@ -1,17 +1,23 @@
 """Daily Work Report endpoints (mirrors employees/projects/attendance routers).
 
-  GET    /work-reports                 list (RBAC-scoped) + filters/pagination
-  POST   /work-reports                 create draft  (report.submit: author)
-  GET    /work-reports/{id}            read (RBAC-scoped)
-  PATCH  /work-reports/{id}            edit draft/rejected (author)
-  POST   /work-reports/{id}/submit     submit for review (author)
-  POST   /work-reports/{id}/approve    approve (report.review: admin/owning manager)
-  POST   /work-reports/{id}/reject     reject + note (report.review)
-  DELETE /work-reports/{id}            delete own draft (author)
+  GET    /work-reports                  list (RBAC-scoped) + filters/pagination
+  POST   /work-reports                  create draft  (author)
+  GET    /work-reports/{id}             read (RBAC-scoped)
+  PATCH  /work-reports/{id}             edit draft/rejected (author)
+  POST   /work-reports/{id}/submit      submit (author)
+  POST   /work-reports/{id}/request-edit  author asks to reopen a submitted report
+  POST   /work-reports/{id}/reject      reviewer sends report back + note
+  POST   /work-reports/{id}/grant-edit  reviewer reopens report for editing
+  DELETE /work-reports/{id}             delete own draft (author)
 
-Coarse role gate at the router (the service enforces ownership + team scope):
-  report.submit = admin, manager, employee   (write/own actions; viewer blocked)
-  report.review = admin, manager             (approve/reject)
+There is no approval step: a submitted report is final unless a reviewer reopens
+it (reject / grant-edit), which returns it to the editable 'rejected' state.
+
+Coarse role gate at the router; the service enforces the fine-grained rules:
+  - author actions (create/edit/submit/request-edit/delete) → own reports
+  - reviewer actions (reject/grant-edit) → PM (any) or team lead (their projects)
+Both author and reviewer actions are reachable by project_manager + employee at
+the router, so team leads (who are employees) can reach the reviewer endpoints.
 """
 import uuid
 from datetime import date
@@ -26,6 +32,7 @@ from app.modules.work_reports import service
 from app.modules.work_reports.models import WorkReportStatus
 from app.modules.work_reports.schemas import (
     WorkReportCreate,
+    WorkReportEditRequest,
     WorkReportOut,
     WorkReportPage,
     WorkReportReject,
@@ -34,9 +41,8 @@ from app.modules.work_reports.schemas import (
 
 router = APIRouter(prefix="/work-reports", tags=["work-reports"])
 
-# Capability gates (USER_ROLES → DWR capabilities, see spec §3).
+# Capability gate (USER_ROLES → DWR capabilities, see spec §3).
 require_submit = require_role("project_manager", "employee")
-require_review = require_role("project_manager")
 
 
 @router.get("", response_model=WorkReportPage)
@@ -109,24 +115,38 @@ def submit_work_report(
     return WorkReportOut.model_validate(service.submit_work_report(db, current, report_id))
 
 
-@router.post("/{report_id}/approve", response_model=WorkReportOut)
-def approve_work_report(
+@router.post("/{report_id}/request-edit", response_model=WorkReportOut)
+def request_edit_work_report(
     report_id: uuid.UUID,
-    current: User = Depends(require_review),
+    body: WorkReportEditRequest,
+    current: User = Depends(require_submit),
     db: Session = Depends(get_db),
 ) -> WorkReportOut:
-    return WorkReportOut.model_validate(service.approve_work_report(db, current, report_id))
+    return WorkReportOut.model_validate(
+        service.request_edit_work_report(db, current, report_id, body)
+    )
 
 
 @router.post("/{report_id}/reject", response_model=WorkReportOut)
 def reject_work_report(
     report_id: uuid.UUID,
     body: WorkReportReject,
-    current: User = Depends(require_review),
+    current: User = Depends(require_submit),
     db: Session = Depends(get_db),
 ) -> WorkReportOut:
     return WorkReportOut.model_validate(
         service.reject_work_report(db, current, report_id, body)
+    )
+
+
+@router.post("/{report_id}/grant-edit", response_model=WorkReportOut)
+def grant_edit_work_report(
+    report_id: uuid.UUID,
+    current: User = Depends(require_submit),
+    db: Session = Depends(get_db),
+) -> WorkReportOut:
+    return WorkReportOut.model_validate(
+        service.grant_edit_work_report(db, current, report_id)
     )
 
 
