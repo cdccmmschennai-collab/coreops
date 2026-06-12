@@ -64,7 +64,7 @@ export function ProjectsTable({
         <TableHeader>
           <TableRow>
             <TableHead>Project</TableHead>
-            <TableHead>Client</TableHead>
+            <TableHead>Project Name</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Members</TableHead>
             {canManage && <TableHead className="w-12 text-right">Actions</TableHead>}

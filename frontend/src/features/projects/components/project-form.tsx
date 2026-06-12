@@ -138,13 +138,13 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                 )}
               />
 
-              {/* Project Name */}
+              {/* Project Title */}
               <FormField
                 control={form.control}
                 name="name"
                 render={({ field }) => (
                   <FormItem className="sm:col-span-2">
-                    <FormLabel>Project Name</FormLabel>
+                    <FormLabel>Project Title</FormLabel>
                     <FormControl>
                       <Input {...field} placeholder="Full project title" />
                     </FormControl>
@@ -168,13 +168,13 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                 )}
               />
 
-              {/* Client */}
+              {/* Project Name */}
               <FormField
                 control={form.control}
                 name="client"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Client</FormLabel>
+                    <FormLabel>Project Name</FormLabel>
                     <FormControl>
                       <Input {...field} placeholder="Contractor / client name" />
                     </FormControl>

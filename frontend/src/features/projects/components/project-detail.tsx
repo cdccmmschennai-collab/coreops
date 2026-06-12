@@ -108,7 +108,7 @@ export function ProjectDetail({ id }: { id: string }) {
                 )
               }
             />
-            <Row label="Client" value={project.client ?? "—"} />
+            <Row label="Project Name" value={project.client ?? "—"} />
             <Row label="Status" value={<StatusBadge status={project.status} />} />
             <Row label="Start date" value={project.start_date ?? "—"} />
             <Row label="End date" value={project.end_date ?? "—"} />
