@@ -18,7 +18,7 @@ Manager "team" = employees whose manager_id == the manager's employee id.
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -291,12 +291,12 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
 def _apply_scope(db: Session, actor: User, stmt):
     """Return (stmt, allowed). allowed=False short-circuits to an empty page.
 
-    PM sees all. Everyone else sees their own reports, plus — if they are a team
-    lead on any project — every report that includes a task on one of those
-    projects (project-scoped read).
+    PM sees only submitted reports.
+    TL sees own reports (all statuses) + submitted reports from their led projects.
+    Everyone else sees only their own reports (all statuses).
     """
     if actor.role == UserRole.project_manager:
-        return stmt, True
+        return stmt.where(DailyWorkReport.status == WorkReportStatus.submitted), True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
@@ -308,7 +308,10 @@ def _apply_scope(db: Session, actor: User, stmt):
         return stmt.where(
             or_(
                 DailyWorkReport.employee_id == me.id,
-                DailyWorkReport.id.in_(led_reports),
+                and_(
+                    DailyWorkReport.id.in_(led_reports),
+                    DailyWorkReport.status == WorkReportStatus.submitted,
+                ),
             )
         ), True
     return stmt.where(DailyWorkReport.employee_id == me.id), True

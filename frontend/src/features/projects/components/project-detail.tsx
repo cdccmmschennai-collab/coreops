@@ -11,7 +11,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs } from "@/components/ui/tabs";
 import { useAuth } from "@/features/auth/auth-provider";
+import { DeliverablesTab } from "@/features/project-deliverables/components/deliverables-tab";
 import { AppError } from "@/lib/api-client";
 import { can } from "@/lib/rbac";
 
@@ -20,6 +22,11 @@ import { ProjectMembers } from "./project-members";
 import { StatusBadge } from "./status-badge";
 import { useProject } from "../hooks";
 import type { Project } from "../types";
+
+const TAB_ITEMS = [
+  { value: "overview", label: "Overview" },
+  { value: "deliverables", label: "Deliverables" },
+];
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -38,6 +45,7 @@ export function ProjectDetail({ id }: { id: string }) {
   const query = useProject(id);
   const project = query.data;
   const [confirm, setConfirm] = React.useState<Project | null>(null);
+  const [activeTab, setActiveTab] = React.useState("overview");
 
   if (query.isLoading) {
     return (
@@ -62,11 +70,12 @@ export function ProjectDetail({ id }: { id: string }) {
     );
   }
 
+  const archived = project.status === "archived";
   const subtitleParts = [project.code, project.client].filter(Boolean) as string[];
 
   return (
     <>
-      <Link href="/projects" className="text-sm text-primary hover:underline">
+      <Link href="/projects/list" className="text-sm text-primary hover:underline">
         ← Projects
       </Link>
       <PageHeader
@@ -91,45 +100,58 @@ export function ProjectDetail({ id }: { id: string }) {
         }
       />
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Overview</CardTitle>
-          </CardHeader>
-          <CardContent className="divide-y divide-border">
-            <Row label="Code" value={<span className="font-mono">{project.code}</span>} />
-            <Row
-              label="Job Code"
-              value={
-                project.job_code_code ? (
-                  <span className="font-mono">{project.job_code_code}</span>
-                ) : (
-                  "—"
-                )
-              }
-            />
-            <Row label="Project Name" value={project.client ?? "—"} />
-            <Row label="Status" value={<StatusBadge status={project.status} />} />
-            <Row label="Start date" value={project.start_date ?? "—"} />
-            <Row label="End date" value={project.end_date ?? "—"} />
-            {project.description && (
-              <div className="py-2 text-sm">
-                <div className="mb-1 text-muted-foreground">Description</div>
-                <p className="whitespace-pre-wrap">{project.description}</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <Tabs
+        items={TAB_ITEMS}
+        value={activeTab}
+        onChange={setActiveTab}
+        className="mb-4"
+      />
 
-        <ProjectMembers project={project} />
-      </div>
+      {activeTab === "overview" && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Overview</CardTitle>
+            </CardHeader>
+            <CardContent className="divide-y divide-border">
+              <Row label="Code" value={<span className="font-mono">{project.code}</span>} />
+              <Row
+                label="Job Code"
+                value={
+                  project.job_code_code ? (
+                    <span className="font-mono">{project.job_code_code}</span>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <Row label="Project Name" value={project.client ?? "—"} />
+              <Row label="Status" value={<StatusBadge status={project.status} />} />
+              <Row label="Start date" value={project.start_date ?? "—"} />
+              <Row label="End date" value={project.end_date ?? "—"} />
+              {project.description && (
+                <div className="py-2 text-sm">
+                  <div className="mb-1 text-muted-foreground">Description</div>
+                  <p className="whitespace-pre-wrap">{project.description}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <ProjectMembers project={project} />
+        </div>
+      )}
+
+      {activeTab === "deliverables" && (
+        <DeliverablesTab projectId={project.id} projectArchived={archived} />
+      )}
 
       <ArchiveDialog
         project={confirm}
         onOpenChange={(open) => {
           if (!open) setConfirm(null);
         }}
-        onDone={() => router.push("/projects")}
+        onDone={() => router.push("/projects/list")}
       />
     </>
   );
