@@ -1,20 +1,11 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Archive, MoreHorizontal, Pencil } from "lucide-react";
 
 import { Pagination } from "@/components/data/pagination";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { TableSkeleton } from "@/components/feedback/table-skeleton";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -46,14 +37,11 @@ export function ProjectsTable({
   isError,
   onRetry,
   onPageChange,
-  canManage,
-  onRequestArchive,
   emptyAction,
   emptyTitle,
   emptyDescription,
 }: ProjectsTableProps) {
   const router = useRouter();
-  const cols = canManage ? 5 : 4;
   const rows = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
   const showEmpty = !isLoading && !isError && rows.length === 0;
@@ -67,11 +55,10 @@ export function ProjectsTable({
             <TableHead>Project Name</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Members</TableHead>
-            {canManage && <TableHead className="w-12 text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
 
-        {isLoading && <TableSkeleton cols={cols} />}
+        {isLoading && <TableSkeleton cols={4} />}
 
         {showRows && (
           <TableBody>
@@ -92,32 +79,6 @@ export function ProjectsTable({
                 <TableCell className="tabular text-muted-foreground">
                   {p.member_count}
                 </TableCell>
-                {canManage && (
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" aria-label="Row actions">
-                          <MoreHorizontal className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem asChild>
-                          <Link href={`/projects/${p.id}/edit`}>
-                            <Pencil className="h-4 w-4" />
-                            Edit
-                          </Link>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => onRequestArchive(p)}
-                          className="text-destructive focus:bg-destructive/10"
-                        >
-                          <Archive className="h-4 w-4" />
-                          Archive
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                )}
               </TableRow>
             ))}
           </TableBody>

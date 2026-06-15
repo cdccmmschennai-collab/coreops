@@ -197,12 +197,45 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                   </FormItem>
                 )}
               />
+              {mode === "create" || !defaultValues.planned_completion_date ? (
+                <FormField
+                  control={form.control}
+                  name="planned_completion_date"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Planned completion date</FormLabel>
+                      <FormControl>
+                        <Input type="date" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium leading-none">
+                    Planned completion date
+                  </label>
+                  <Input
+                    type="date"
+                    value={defaultValues.planned_completion_date}
+                    disabled
+                    readOnly
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use the calendar icon on the project page to change this date (a reason is required).
+                  </p>
+                </div>
+              )}
               <FormField
                 control={form.control}
-                name="end_date"
+                name="actual_completion_date"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>End date</FormLabel>
+                    <FormLabel>
+                      Actual completion date{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </FormLabel>
                     <FormControl>
                       <Input type="date" {...field} />
                     </FormControl>

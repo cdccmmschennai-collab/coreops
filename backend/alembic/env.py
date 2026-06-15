@@ -29,6 +29,7 @@ import app.modules.job_codes.models  # noqa: E402,F401
 import app.modules.employees.models  # noqa: E402,F401 (re-import after reporting_pm_id)
 import app.modules.job_codes.models  # noqa: E402,F401 (already imported but ensure re-registration)
 import app.modules.tasks.models  # noqa: E402,F401
+import app.modules.project_submissions.models  # noqa: E402,F401
 
 target_metadata = Base.metadata
 

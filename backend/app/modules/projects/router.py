@@ -20,6 +20,8 @@ from app.core.deps import get_current_user, require_role
 from app.modules.projects import service
 from app.modules.projects.models import ProjectStatus
 from app.modules.projects.schemas import (
+    PlannedDateChangeOut,
+    PlannedDateUpdate,
     ProjectCreate,
     ProjectMemberCreate,
     ProjectMemberOut,
@@ -27,6 +29,7 @@ from app.modules.projects.schemas import (
     ProjectOut,
     ProjectPage,
     ProjectUpdate,
+    TimelineEventOut,
 )
 from app.modules.users.models import User
 
@@ -90,6 +93,42 @@ def archive_project(
 ) -> Response:
     service.archive_project(db, admin, project_id)
     return Response(status_code=204)
+
+
+@router.patch("/{project_id}/planned-completion-date", response_model=ProjectOut)
+def update_planned_completion_date(
+    project_id: uuid.UUID,
+    body: PlannedDateUpdate,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> ProjectOut:
+    return ProjectOut.model_validate(
+        service.update_planned_completion_date(db, admin, project_id, body)
+    )
+
+
+@router.get("/{project_id}/timeline", response_model=list[TimelineEventOut])
+def list_timeline(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[TimelineEventOut]:
+    return [
+        TimelineEventOut.model_validate(e)
+        for e in service.list_timeline(db, current, project_id)
+    ]
+
+
+@router.get("/{project_id}/planned-date-changes", response_model=list[PlannedDateChangeOut])
+def list_planned_date_changes(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[PlannedDateChangeOut]:
+    return [
+        PlannedDateChangeOut.model_validate(c)
+        for c in service.list_planned_date_changes(db, current, project_id)
+    ]
 
 
 @router.get("/{project_id}/members", response_model=list[ProjectMemberOut])

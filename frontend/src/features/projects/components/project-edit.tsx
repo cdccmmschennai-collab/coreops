@@ -43,7 +43,8 @@ export function ProjectEdit({ id }: { id: string }) {
     description: project.description ?? "",
     status: project.status,
     start_date: project.start_date ?? "",
-    end_date: project.end_date ?? "",
+    planned_completion_date: project.planned_completion_date ?? "",
+    actual_completion_date: project.actual_completion_date ?? "",
   };
 
   return (

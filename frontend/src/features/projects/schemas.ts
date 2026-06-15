@@ -27,11 +27,17 @@ export const projectFormSchema = z
     description: z.string().trim(),
     status: z.enum(PROJECT_STATUSES),
     start_date: z.string(),
-    end_date: z.string(),
+    planned_completion_date: z.string(),
+    actual_completion_date: z.string(),
   })
   .refine(
-    (v) => !(v.start_date && v.end_date) || v.end_date >= v.start_date,
-    { message: "End date cannot be before start date", path: ["end_date"] },
+    (v) =>
+      !(v.start_date && v.planned_completion_date) ||
+      v.planned_completion_date >= v.start_date,
+    {
+      message: "Planned completion date cannot be before start date",
+      path: ["planned_completion_date"],
+    },
   );
 
 export type ProjectFormValues = z.infer<typeof projectFormSchema>;
@@ -44,7 +50,8 @@ export const EMPTY_PROJECT_FORM: ProjectFormValues = {
   description: "",
   status: "planning",
   start_date: "",
-  end_date: "",
+  planned_completion_date: "",
+  actual_completion_date: "",
 };
 
 const orNull = (v: string): string | null => (v.trim() === "" ? null : v.trim());
@@ -58,11 +65,14 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
     client: orNull(v.client),
     description: orNull(v.description),
     start_date: orNull(v.start_date),
-    end_date: orNull(v.end_date),
+    planned_completion_date: orNull(v.planned_completion_date),
+    actual_completion_date: orNull(v.actual_completion_date),
   };
 }
 
-/** ProjectUpdate excludes code (immutable). */
+/** ProjectUpdate excludes code (immutable). planned_completion_date is included but
+ *  the backend only applies it when the project has no existing planned date (initial set).
+ *  Use PATCH /planned-completion-date for subsequent changes (requires a reason). */
 export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
   return {
     name: v.name,
@@ -71,6 +81,14 @@ export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
     client: orNull(v.client),
     description: orNull(v.description),
     start_date: orNull(v.start_date),
-    end_date: orNull(v.end_date),
+    planned_completion_date: orNull(v.planned_completion_date),
+    actual_completion_date: orNull(v.actual_completion_date),
   };
 }
+
+export const plannedDateSchema = z.object({
+  new_date: z.string(),
+  reason: z.string().trim().min(1, "Reason is required").max(500),
+});
+
+export type PlannedDateFormValues = z.infer<typeof plannedDateSchema>;

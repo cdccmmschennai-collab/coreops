@@ -20,7 +20,9 @@ class ProjectOut(BaseModel):
     description: str | None = None
     status: ProjectStatus
     start_date: date | None = None
-    end_date: date | None = None
+    planned_completion_date: date | None = None
+    actual_completion_date: date | None = None
+    days_running: int | None = None   # populated by service (today - start_date)
     member_count: int = 0
     created_at: datetime
 
@@ -33,7 +35,8 @@ class ProjectCreate(BaseModel):
     description: str | None = None
     status: ProjectStatus = ProjectStatus.planning
     start_date: date | None = None
-    end_date: date | None = None
+    planned_completion_date: date | None = None
+    actual_completion_date: date | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -43,7 +46,10 @@ class ProjectUpdate(BaseModel):
     description: str | None = None
     status: ProjectStatus | None = None
     start_date: date | None = None
-    end_date: date | None = None
+    actual_completion_date: date | None = None
+    # Allowed only for initial set (when the project has no planned date yet).
+    # Use PATCH /projects/{id}/planned-completion-date (with reason) for subsequent changes.
+    planned_completion_date: date | None = None
 
 
 class ProjectPage(BaseModel):
@@ -71,3 +77,33 @@ class ProjectMemberCreate(BaseModel):
 
 class ProjectMemberRoleUpdate(BaseModel):
     role: ProjectMemberRole
+
+
+class TimelineEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    event_type: str
+    actor_id: uuid.UUID | None
+    actor_name: str | None
+    details: dict
+    created_at: datetime
+
+
+class PlannedDateUpdate(BaseModel):
+    new_date: date | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class PlannedDateChangeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    old_date: date | None
+    new_date: date | None
+    changed_by: uuid.UUID
+    changed_by_name: str = ""   # populated by service join
+    reason: str
+    changed_at: datetime

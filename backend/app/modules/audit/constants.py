@@ -42,6 +42,9 @@ class AuditAction:
     PROJECT_MEMBER_ROLE_CHANGE = "project.member.role_change"
     PROJECT_MEMBER_REMOVE = "project.member.remove"
 
+    # --- project dates (Tier B) ---
+    PROJECT_PLANNED_DATE_CHANGE = "project.planned_date.change"
+
     # --- task assignment & lifecycle (Tier B) ---
     TASK_ASSIGN = "task.assign"
     TASK_COMPLETE = "task.complete"

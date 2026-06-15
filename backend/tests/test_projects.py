@@ -42,7 +42,7 @@ def test_create_bad_dates_422(client, auth_header):
     res = client.post(
         "/api/v1/projects",
         headers=h,
-        json=_payload(start_date="2026-05-10", end_date="2026-05-01"),
+        json=_payload(start_date="2026-05-10", planned_completion_date="2026-05-01"),
     )
     assert res.status_code == 422
 

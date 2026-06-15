@@ -1768,6 +1768,128 @@ export interface components {
             /** New Password */
             new_password: string;
         };
+        /**
+         * SubmissionStatus
+         * @enum {string}
+         */
+        SubmissionStatus: "draft" | "submitted" | "approved" | "rejected";
+        /** SubmissionItemIn */
+        SubmissionItemIn: {
+            activity_type_id?: string | null;
+            activity_label: string;
+            quantity: number;
+            unit: string;
+        };
+        /** SubmissionItemOut */
+        SubmissionItemOut: {
+            id: string;
+            submission_id: string;
+            activity_type_id?: string | null;
+            activity_label: string;
+            quantity: number;
+            unit: string;
+        };
+        /** SubmissionCreate */
+        SubmissionCreate: {
+            /** Format: date */
+            submission_date: string;
+            /** Format: date */
+            period_start: string;
+            /** Format: date */
+            period_end: string;
+            notes?: string | null;
+            items?: components["schemas"]["SubmissionItemIn"][];
+        };
+        /** SubmissionUpdate */
+        SubmissionUpdate: {
+            /** Format: date */
+            submission_date?: string | null;
+            /** Format: date */
+            period_start?: string | null;
+            /** Format: date */
+            period_end?: string | null;
+            notes?: string | null;
+            items?: components["schemas"]["SubmissionItemIn"][] | null;
+        };
+        /** SubmissionStatusUpdate */
+        SubmissionStatusUpdate: {
+            status: components["schemas"]["SubmissionStatus"];
+            review_note?: string | null;
+        };
+        /** SubmissionOut */
+        SubmissionOut: {
+            id: string;
+            project_id: string;
+            /** Format: date */
+            submission_date: string;
+            /** Format: date */
+            period_start: string;
+            /** Format: date */
+            period_end: string;
+            status: components["schemas"]["SubmissionStatus"];
+            notes?: string | null;
+            submitted_by: string;
+            submitted_by_name: string;
+            reviewed_by?: string | null;
+            reviewed_by_name?: string | null;
+            /** Format: date-time */
+            reviewed_at?: string | null;
+            review_note?: string | null;
+            items: components["schemas"]["SubmissionItemOut"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /** ProjectTimelineEventOut */
+        ProjectTimelineEventOut: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Event Type */
+            event_type: string;
+            /** Actor Id */
+            actor_id?: string | null;
+            /** Actor Name */
+            actor_name?: string | null;
+            /** Details */
+            details: Record<string, unknown>;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** PlannedDateUpdate */
+        PlannedDateUpdate: {
+            /** New Date */
+            new_date?: string | null;
+            /** Reason */
+            reason: string;
+        };
+        /** PlannedDateChangeOut */
+        PlannedDateChangeOut: {
+            /** Id */
+            id: string;
+            /** Project Id */
+            project_id: string;
+            /** Old Date */
+            old_date?: string | null;
+            /** New Date */
+            new_date?: string | null;
+            /** Changed By */
+            changed_by: string;
+            /** Changed By Name */
+            changed_by_name: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Code */
@@ -1784,8 +1906,10 @@ export interface components {
             status: components["schemas"]["ProjectStatus"];
             /** Start Date */
             start_date?: string | null;
-            /** End Date */
-            end_date?: string | null;
+            /** Planned Completion Date */
+            planned_completion_date?: string | null;
+            /** Actual Completion Date */
+            actual_completion_date?: string | null;
         };
         /** ProjectMemberCreate */
         ProjectMemberCreate: {
@@ -1856,8 +1980,12 @@ export interface components {
             status: components["schemas"]["ProjectStatus"];
             /** Start Date */
             start_date?: string | null;
-            /** End Date */
-            end_date?: string | null;
+            /** Planned Completion Date */
+            planned_completion_date?: string | null;
+            /** Actual Completion Date */
+            actual_completion_date?: string | null;
+            /** Days Running */
+            days_running?: number | null;
             /**
              * Member Count
              * @default 0
@@ -1898,8 +2026,10 @@ export interface components {
             status?: components["schemas"]["ProjectStatus"] | null;
             /** Start Date */
             start_date?: string | null;
-            /** End Date */
-            end_date?: string | null;
+            /** Planned Completion Date — only applied for initial set when currently null */
+            planned_completion_date?: string | null;
+            /** Actual Completion Date */
+            actual_completion_date?: string | null;
         };
         /** RoleUpdate */
         RoleUpdate: {
