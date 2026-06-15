@@ -24,6 +24,7 @@ from app.modules.leave.router import router as leave_router
 from app.modules.offices.router import router as offices_router
 from app.modules.projects.router import router as projects_router
 from app.modules.users.router import router as users_router
+from app.modules.project_activities.router import router as project_activities_router
 from app.modules.project_deliverables.router import router as deliverables_router
 from app.modules.project_submissions.router import router as submissions_router
 from app.modules.tasks.router import router as tasks_router
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(activity_types_router, prefix=settings.API_V1_PREFIX)
     app.include_router(job_codes_router, prefix=settings.API_V1_PREFIX)
     app.include_router(audit_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(project_activities_router, prefix=settings.API_V1_PREFIX)
     app.include_router(deliverables_router, prefix=settings.API_V1_PREFIX)
     app.include_router(submissions_router, prefix=settings.API_V1_PREFIX)
     app.include_router(tasks_router, prefix=settings.API_V1_PREFIX)

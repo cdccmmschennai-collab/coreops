@@ -35,6 +35,7 @@ import { AppError } from "@/lib/api-client";
 import { can } from "@/lib/rbac";
 
 import { Tabs } from "@/components/ui/tabs";
+import { ActivitiesTab } from "@/features/project-activities/components/activities-tab";
 import { SubmissionsTab } from "@/features/project-submissions/components/submissions-tab";
 import { ArchiveDialog } from "./archive-dialog";
 import { ProjectMembers } from "./project-members";
@@ -247,6 +248,7 @@ export function ProjectDetail({ id }: { id: string }) {
         onChange={setActiveTab}
         items={[
           { value: "overview", label: "Overview" },
+          { value: "activities", label: "Activities" },
           { value: "submissions", label: "Submissions" },
         ]}
       />
@@ -315,6 +317,14 @@ export function ProjectDetail({ id }: { id: string }) {
             <ProjectTimeline projectId={project.id} />
           </div>
         </div>
+      )}
+
+      {activeTab === "activities" && (
+        <ActivitiesTab
+          projectId={project.id}
+          canManage={canManage}
+          canEdit={canManage}
+        />
       )}
 
       {activeTab === "submissions" && (
