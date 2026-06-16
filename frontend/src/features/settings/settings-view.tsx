@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Suspense } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 import { RequireCapability } from "@/components/auth/require-capability";
 import { PageHeader } from "@/components/shell/page-header";
@@ -29,16 +29,18 @@ const TABS = [
 ];
 
 function SettingsContent() {
-  const router    = useRouter();
   const pathname  = usePathname();
   const sp        = useSearchParams();
-  const tab       = (sp.get("tab") ?? "users") as TabKey;
+  // Read once on mount; subsequent switches are local state, not a router
+  // navigation, so they don't trigger a server round-trip for every tab.
+  const [tab, setTabState] = React.useState<TabKey>((sp.get("tab") ?? "users") as TabKey);
 
   function setTab(next: string) {
+    setTabState(next as TabKey);
     const p = new URLSearchParams();
     if (next !== "users") p.set("tab", next);
     const qs = p.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname);
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
   }
 
   return (
