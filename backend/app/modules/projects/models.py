@@ -69,6 +69,12 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     job_code_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_codes.id", ondelete="SET NULL"), nullable=True
     )
+    # The plant this project is assigned to. Pick the Maintenance Plant
+    # directly; its Planning Plant code/description are joined in by the
+    # service (_attach_maintenance_plants), same pattern as job_code.
+    maintenance_plant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("maintenance_plants.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -85,6 +91,7 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         ),
         Index("projects_status_idx", "status", postgresql_where=text("deleted_at IS NULL")),
         Index("projects_job_code_idx", "job_code_id", postgresql_where=text("deleted_at IS NULL")),
+        Index("projects_maintenance_plant_idx", "maintenance_plant_id"),
     )
 
 

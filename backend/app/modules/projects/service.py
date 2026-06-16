@@ -16,6 +16,7 @@ from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
+from app.modules.plants.models import MaintenancePlant, PlanningPlant
 from app.modules.projects.models import (
     Project,
     ProjectMember,
@@ -133,6 +134,33 @@ def _attach_job_codes(db: Session, projects: list[Project]) -> None:
         jc = by_id.get(p.job_code_id) if p.job_code_id else None
         p.job_code_code = jc.code if jc else None   # type: ignore[attr-defined]
         p.job_code_name = jc.name if jc else None   # type: ignore[attr-defined]
+
+
+def _attach_maintenance_plants(db: Session, projects: list[Project]) -> None:
+    """Bulk-fetch maintenance plants (+ their parent planning plant) and
+    attach the flattened code/description fields, same pattern as
+    _attach_job_codes."""
+    mp_ids = {p.maintenance_plant_id for p in projects if p.maintenance_plant_id}
+    if not mp_ids:
+        for p in projects:
+            p.maintenance_plant_code = None   # type: ignore[attr-defined]
+            p.maintenance_plant_description = None   # type: ignore[attr-defined]
+            p.planning_plant_code = None   # type: ignore[attr-defined]
+            p.planning_plant_description = None   # type: ignore[attr-defined]
+        return
+    rows = db.execute(
+        select(MaintenancePlant, PlanningPlant)
+        .join(PlanningPlant, MaintenancePlant.planning_plant_id == PlanningPlant.id)
+        .where(MaintenancePlant.id.in_(mp_ids))
+    ).all()
+    by_id = {mp.id: (mp, pp) for mp, pp in rows}
+    for p in projects:
+        entry = by_id.get(p.maintenance_plant_id) if p.maintenance_plant_id else None
+        mp, pp = entry if entry else (None, None)
+        p.maintenance_plant_code = mp.code if mp else None   # type: ignore[attr-defined]
+        p.maintenance_plant_description = mp.description if mp else None   # type: ignore[attr-defined]
+        p.planning_plant_code = pp.code if pp else None   # type: ignore[attr-defined]
+        p.planning_plant_description = pp.description if pp else None   # type: ignore[attr-defined]
 
 
 def _attach_member_counts(db: Session, projects: list[Project]) -> None:
