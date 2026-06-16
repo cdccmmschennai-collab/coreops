@@ -353,6 +353,57 @@ export interface paths {
         patch: operations["update_project_api_v1_projects__project_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/planned-completion-date": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Planned Completion Date */
+        patch: operations["update_planned_completion_date_api_v1_projects__project_id__planned_completion_date_patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Timeline */
+        get: operations["list_timeline_api_v1_projects__project_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/planned-date-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Planned Date Changes */
+        get: operations["list_planned_date_changes_api_v1_projects__project_id__planned_date_changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/members": {
         parameters: {
             query?: never;
@@ -546,6 +597,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/work-reports/tasks/{task_id}/completion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Task Completion */
+        patch: operations["update_task_completion_api_v1_work_reports_tasks__task_id__completion_patch"];
         trace?: never;
     };
     "/api/v1/offices": {
@@ -813,6 +881,95 @@ export interface paths {
         patch: operations["update_activity_type_api_v1_activity_types__activity_type_id__patch"];
         trace?: never;
     };
+    "/api/v1/activity-master/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activities */
+        get: operations["list_activities_api_v1_activity_master_activities_get"];
+        put?: never;
+        /** Create Activity */
+        post: operations["create_activity_api_v1_activity_master_activities_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/sub-activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sub Activities */
+        get: operations["list_sub_activities_api_v1_activity_master_activities__activity_id__sub_activities_get"];
+        put?: never;
+        /** Create Sub Activity */
+        post: operations["create_sub_activity_api_v1_activity_master_activities__activity_id__sub_activities_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/sub-activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List All Sub Activities Flat */
+        get: operations["list_all_sub_activities_flat_api_v1_activity_master_sub_activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_master_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deactivate Activity */
+        delete: operations["deactivate_activity_api_v1_activity_master_activities__activity_master_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Activity */
+        patch: operations["update_activity_api_v1_activity_master_activities__activity_master_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/activity-master/sub-activities/{activity_master_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deactivate Sub Activity */
+        delete: operations["deactivate_sub_activity_api_v1_activity_master_sub_activities__activity_master_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Sub Activity */
+        patch: operations["update_sub_activity_api_v1_activity_master_sub_activities__activity_master_id__patch"];
+        trace?: never;
+    };
     "/api/v1/job-codes": {
         parameters: {
             query?: never;
@@ -882,6 +1039,149 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activities */
+        get: operations["list_activities_api_v1_projects__project_id__activities_get"];
+        put?: never;
+        /** Create Activity */
+        post: operations["create_activity_api_v1_projects__project_id__activities_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/activities/{activity_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Activity */
+        delete: operations["delete_activity_api_v1_projects__project_id__activities__activity_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Activity */
+        patch: operations["update_activity_api_v1_projects__project_id__activities__activity_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/deliverables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Deliverables */
+        get: operations["list_deliverables_api_v1_projects__project_id__deliverables_get"];
+        put?: never;
+        /** Create Deliverable */
+        post: operations["create_deliverable_api_v1_projects__project_id__deliverables_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/deliverables/{deliverable_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Deliverable */
+        delete: operations["delete_deliverable_api_v1_projects__project_id__deliverables__deliverable_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Deliverable */
+        patch: operations["update_deliverable_api_v1_projects__project_id__deliverables__deliverable_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/deliverables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List All Deliverables */
+        get: operations["list_all_deliverables_api_v1_deliverables_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Submissions */
+        get: operations["list_submissions_api_v1_projects__project_id__submissions_get"];
+        put?: never;
+        /** Create Submission */
+        post: operations["create_submission_api_v1_projects__project_id__submissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Submission */
+        get: operations["get_submission_api_v1_projects__project_id__submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Submission */
+        delete: operations["delete_submission_api_v1_projects__project_id__submissions__submission_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Submission */
+        patch: operations["update_submission_api_v1_projects__project_id__submissions__submission_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/submissions/{submission_id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Submission Status */
+        patch: operations["update_submission_status_api_v1_projects__project_id__submissions__submission_id__status_patch"];
         trace?: never;
     };
     "/api/v1/tasks": {
@@ -1000,6 +1300,90 @@ export interface components {
         AccountStatusUpdate: {
             /** Is Active */
             is_active: boolean;
+        };
+        /**
+         * ActivityCreate
+         * @description Top-level Activity. parent_id is implicit (None) — never accepted here.
+         */
+        ActivityCreate: {
+            /** Code */
+            code?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Sort Order
+             * @default 0
+             */
+            sort_order: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+        };
+        /** ActivityMasterOut */
+        ActivityMasterOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Code */
+            code: string | null;
+            /** Name */
+            name: string;
+            /** Level */
+            level: string;
+            /** Benchmark Type */
+            benchmark_type: ("NUMERIC" | "TASK_BASED") | null;
+            /** Benchmark Value */
+            benchmark_value: string | null;
+            /** Benchmark Period Days */
+            benchmark_period_days: number | null;
+            /** Benchmark Unit Note */
+            benchmark_unit_note: string | null;
+            /** Benchmark Remarks */
+            benchmark_remarks: string | null;
+            /** Relevant Count Field */
+            relevant_count_field: ("tags" | "docs" | "bom" | "spares") | null;
+            /** Is Active */
+            is_active: boolean;
+            /** Sort Order */
+            sort_order: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * ActivityMasterUpdate
+         * @description Shared update shape for both levels. Service rejects benchmark_* edits
+         *     on a level='activity' row (benchmarks only apply to sub-activities).
+         */
+        ActivityMasterUpdate: {
+            /** Code */
+            code?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Benchmark Type */
+            benchmark_type?: ("NUMERIC" | "TASK_BASED") | null;
+            /** Benchmark Value */
+            benchmark_value?: number | string | null;
+            /** Benchmark Period Days */
+            benchmark_period_days?: number | null;
+            /** Benchmark Unit Note */
+            benchmark_unit_note?: string | null;
+            /** Benchmark Remarks */
+            benchmark_remarks?: string | null;
+            /** Relevant Count Field */
+            relevant_count_field?: ("tags" | "docs" | "bom" | "spares") | null;
+            /** Sort Order */
+            sort_order?: number | null;
+            /** Is Active */
+            is_active?: boolean | null;
         };
         /** ActivityTypeCreate */
         ActivityTypeCreate: {
@@ -1302,6 +1686,80 @@ export interface components {
          * @enum {string}
          */
         DayStatus: "on_duty" | "office" | "half_day" | "on_leave" | "wfh" | "permission" | "comp_off";
+        /** DeliverableCreate */
+        DeliverableCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Owner Employee Id */
+            owner_employee_id?: string | null;
+            /** @default pending */
+            status: components["schemas"]["DeliverableStatus"];
+            /** Completion Date */
+            completion_date?: string | null;
+        };
+        /** DeliverableOut */
+        DeliverableOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Name */
+            project_name?: string | null;
+            /** Project Code */
+            project_code?: string | null;
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Owner Employee Id */
+            owner_employee_id?: string | null;
+            /** Owner Name */
+            owner_name?: string | null;
+            status: components["schemas"]["DeliverableStatus"];
+            /** Completion Date */
+            completion_date?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * DeliverableStatus
+         * @enum {string}
+         */
+        DeliverableStatus: "pending" | "in_progress" | "completed";
+        /** DeliverableUpdate */
+        DeliverableUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Owner Employee Id */
+            owner_employee_id?: string | null;
+            status?: components["schemas"]["DeliverableStatus"] | null;
+            /** Completion Date */
+            completion_date?: string | null;
+        };
         /** EmployeeCreate */
         EmployeeCreate: {
             /** Employee Code */
@@ -1654,6 +2112,11 @@ export interface components {
             title: string;
             /** Message */
             message: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "INFO" | "WARNING" | "CRITICAL";
             /** Entity Type */
             entity_type: string | null;
             /** Entity Id */
@@ -1662,6 +2125,8 @@ export interface components {
             target_url: string | null;
             /** Is Read */
             is_read: boolean;
+            /** Resolved At */
+            resolved_at: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1768,119 +2233,31 @@ export interface components {
             /** New Password */
             new_password: string;
         };
-        /**
-         * SubmissionStatus
-         * @enum {string}
-         */
-        SubmissionStatus: "draft" | "submitted" | "approved" | "rejected";
-        /** SubmissionItemIn */
-        SubmissionItemIn: {
-            activity_type_id?: string | null;
-            activity_label: string;
-            quantity: number;
-            unit: string;
-        };
-        /** SubmissionItemOut */
-        SubmissionItemOut: {
-            id: string;
-            submission_id: string;
-            activity_type_id?: string | null;
-            activity_label: string;
-            quantity: number;
-            unit: string;
-        };
-        /** SubmissionCreate */
-        SubmissionCreate: {
-            /** Format: date */
-            submission_date: string;
-            /** Format: date */
-            period_start: string;
-            /** Format: date */
-            period_end: string;
-            notes?: string | null;
-            items?: components["schemas"]["SubmissionItemIn"][];
-        };
-        /** SubmissionUpdate */
-        SubmissionUpdate: {
-            /** Format: date */
-            submission_date?: string | null;
-            /** Format: date */
-            period_start?: string | null;
-            /** Format: date */
-            period_end?: string | null;
-            notes?: string | null;
-            items?: components["schemas"]["SubmissionItemIn"][] | null;
-        };
-        /** SubmissionStatusUpdate */
-        SubmissionStatusUpdate: {
-            status: components["schemas"]["SubmissionStatus"];
-            review_note?: string | null;
-        };
-        /** SubmissionOut */
-        SubmissionOut: {
-            id: string;
-            project_id: string;
-            /** Format: date */
-            submission_date: string;
-            /** Format: date */
-            period_start: string;
-            /** Format: date */
-            period_end: string;
-            status: components["schemas"]["SubmissionStatus"];
-            notes?: string | null;
-            submitted_by: string;
-            submitted_by_name: string;
-            reviewed_by?: string | null;
-            reviewed_by_name?: string | null;
-            /** Format: date-time */
-            reviewed_at?: string | null;
-            review_note?: string | null;
-            items: components["schemas"]["SubmissionItemOut"][];
-            /** Format: date-time */
-            created_at: string;
-            /** Format: date-time */
-            updated_at: string;
-        };
-        /** ProjectTimelineEventOut */
-        ProjectTimelineEventOut: {
-            /** Id */
-            id: string;
-            /** Project Id */
-            project_id: string;
-            /** Event Type */
-            event_type: string;
-            /** Actor Id */
-            actor_id?: string | null;
-            /** Actor Name */
-            actor_name?: string | null;
-            /** Details */
-            details: Record<string, unknown>;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /** PlannedDateUpdate */
-        PlannedDateUpdate: {
-            /** New Date */
-            new_date?: string | null;
-            /** Reason */
-            reason: string;
-        };
         /** PlannedDateChangeOut */
         PlannedDateChangeOut: {
-            /** Id */
+            /**
+             * Id
+             * Format: uuid
+             */
             id: string;
-            /** Project Id */
+            /**
+             * Project Id
+             * Format: uuid
+             */
             project_id: string;
             /** Old Date */
-            old_date?: string | null;
+            old_date: string | null;
             /** New Date */
-            new_date?: string | null;
-            /** Changed By */
+            new_date: string | null;
+            /**
+             * Changed By
+             * Format: uuid
+             */
             changed_by: string;
-            /** Changed By Name */
+            /**
+             * Changed By Name
+             * @default
+             */
             changed_by_name: string;
             /** Reason */
             reason: string;
@@ -1889,6 +2266,103 @@ export interface components {
              * Format: date-time
              */
             changed_at: string;
+        };
+        /** PlannedDateUpdate */
+        PlannedDateUpdate: {
+            /** New Date */
+            new_date?: string | null;
+            /** Reason */
+            reason: string;
+        };
+        /** ProjectActivityCreate */
+        ProjectActivityCreate: {
+            /** Activity Type Id */
+            activity_type_id?: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Status
+             * @default open
+             * @enum {string}
+             */
+            status: "open" | "in_progress" | "closed";
+            /** Assigned To Id */
+            assigned_to_id?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Closed Date */
+            closed_date?: string | null;
+            /** Remarks */
+            remarks?: string | null;
+            /**
+             * Sort Order
+             * @default 0
+             */
+            sort_order: number;
+        };
+        /** ProjectActivityOut */
+        ProjectActivityOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Activity Type Id */
+            activity_type_id: string | null;
+            /** Activity Type Name */
+            activity_type_name: string | null;
+            /** Title */
+            title: string;
+            /** Status */
+            status: string;
+            /** Assigned To Id */
+            assigned_to_id: string | null;
+            /** Assigned To Name */
+            assigned_to_name: string | null;
+            /** Target Date */
+            target_date: string | null;
+            /** Closed Date */
+            closed_date: string | null;
+            /** Remarks */
+            remarks: string | null;
+            /** Sort Order */
+            sort_order: number;
+            /** Created By */
+            created_by: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ProjectActivityUpdate */
+        ProjectActivityUpdate: {
+            /** Activity Type Id */
+            activity_type_id?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Status */
+            status?: ("open" | "in_progress" | "closed") | null;
+            /** Assigned To Id */
+            assigned_to_id?: string | null;
+            /** Target Date */
+            target_date?: string | null;
+            /** Closed Date */
+            closed_date?: string | null;
+            /** Remarks */
+            remarks?: string | null;
+            /** Sort Order */
+            sort_order?: number | null;
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -2026,14 +2500,227 @@ export interface components {
             status?: components["schemas"]["ProjectStatus"] | null;
             /** Start Date */
             start_date?: string | null;
-            /** Planned Completion Date — only applied for initial set when currently null */
-            planned_completion_date?: string | null;
             /** Actual Completion Date */
             actual_completion_date?: string | null;
+            /** Planned Completion Date */
+            planned_completion_date?: string | null;
         };
         /** RoleUpdate */
         RoleUpdate: {
             role: components["schemas"]["UserRole"];
+        };
+        /**
+         * SubActivityCreate
+         * @description Sub-Activity created under a path-param Activity id.
+         */
+        SubActivityCreate: {
+            /** Code */
+            code?: string | null;
+            /** Name */
+            name: string;
+            /** Benchmark Type */
+            benchmark_type?: ("NUMERIC" | "TASK_BASED") | null;
+            /** Benchmark Value */
+            benchmark_value?: number | string | null;
+            /** Benchmark Period Days */
+            benchmark_period_days?: number | null;
+            /** Benchmark Unit Note */
+            benchmark_unit_note?: string | null;
+            /** Benchmark Remarks */
+            benchmark_remarks?: string | null;
+            /** Relevant Count Field */
+            relevant_count_field?: ("tags" | "docs" | "bom" | "spares") | null;
+            /**
+             * Sort Order
+             * @default 0
+             */
+            sort_order: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+        };
+        /**
+         * SubActivityFlatOut
+         * @description Leaf rows flattened with the parent Activity's name — for the work-report
+         *     cascading-select / combobox use case.
+         */
+        SubActivityFlatOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /** Activity Name */
+            activity_name: string;
+            /** Name */
+            name: string;
+            /** Benchmark Type */
+            benchmark_type: ("NUMERIC" | "TASK_BASED") | null;
+            /** Benchmark Value */
+            benchmark_value: string | null;
+            /** Benchmark Period Days */
+            benchmark_period_days: number | null;
+            /** Relevant Count Field */
+            relevant_count_field: ("tags" | "docs" | "bom" | "spares") | null;
+            /** Is Active */
+            is_active: boolean;
+        };
+        /** SubmissionCreate */
+        SubmissionCreate: {
+            /**
+             * Submission Date
+             * Format: date
+             */
+            submission_date: string;
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+            /** Notes */
+            notes?: string | null;
+            /** Items */
+            items?: components["schemas"]["SubmissionItemIn"][];
+        };
+        /** SubmissionItemIn */
+        SubmissionItemIn: {
+            /** Activity Type Id */
+            activity_type_id?: string | null;
+            /** Activity Label */
+            activity_label: string;
+            /** Quantity */
+            quantity: number;
+            /** Unit */
+            unit: string;
+        };
+        /** SubmissionItemOut */
+        SubmissionItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Activity Type Id */
+            activity_type_id: string | null;
+            /** Activity Label */
+            activity_label: string;
+            /** Quantity */
+            quantity: number;
+            /** Unit */
+            unit: string;
+        };
+        /** SubmissionOut */
+        SubmissionOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Submission Date
+             * Format: date
+             */
+            submission_date: string;
+            /**
+             * Period Start
+             * Format: date
+             */
+            period_start: string;
+            /**
+             * Period End
+             * Format: date
+             */
+            period_end: string;
+            status: components["schemas"]["SubmissionStatus"];
+            /** Notes */
+            notes: string | null;
+            /**
+             * Submitted By
+             * Format: uuid
+             */
+            submitted_by: string;
+            /**
+             * Submitted By Name
+             * @default
+             */
+            submitted_by_name: string;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /** Reviewed By Name */
+            reviewed_by_name?: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Review Note */
+            review_note: string | null;
+            /** Items */
+            items?: components["schemas"]["SubmissionItemOut"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * SubmissionStatus
+         * @enum {string}
+         */
+        SubmissionStatus: "draft" | "submitted" | "approved" | "rejected";
+        /** SubmissionStatusUpdate */
+        SubmissionStatusUpdate: {
+            status: components["schemas"]["SubmissionStatus"];
+            /** Review Note */
+            review_note?: string | null;
+        };
+        /** SubmissionUpdate */
+        SubmissionUpdate: {
+            /** Submission Date */
+            submission_date?: string | null;
+            /** Period Start */
+            period_start?: string | null;
+            /** Period End */
+            period_end?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Items */
+            items?: components["schemas"]["SubmissionItemIn"][] | null;
+        };
+        /**
+         * TaskCompletionUpdate
+         * @description Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*
+         *     way a TASK_BASED row's completion is changed once the parent report is
+         *     submitted/locked, since these activities often complete days after the
+         *     report they were logged on. Independent of report.status by design.
+         */
+        TaskCompletionUpdate: {
+            /** Is Completed */
+            is_completed: boolean;
         };
         /** TaskCreate */
         TaskCreate: {
@@ -2140,6 +2827,32 @@ export interface components {
             /** Due Date */
             due_date?: string | null;
             status?: components["schemas"]["TaskStatus"] | null;
+        };
+        /** TimelineEventOut */
+        TimelineEventOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Event Type */
+            event_type: string;
+            /** Actor Id */
+            actor_id: string | null;
+            /** Actor Name */
+            actor_name: string | null;
+            /** Details */
+            details: Record<string, never>;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -2412,6 +3125,13 @@ export interface components {
              * @default 0
              */
             spares_count: number;
+            /** Sub Activity Id */
+            sub_activity_id?: string | null;
+            /**
+             * Is Completed
+             * @default false
+             */
+            is_completed: boolean;
         };
         /** WorkReportTaskOut */
         WorkReportTaskOut: {
@@ -2463,6 +3183,45 @@ export interface components {
              * @default 0
              */
             spares_count: number;
+            /** Sub Activity Id */
+            sub_activity_id?: string | null;
+            /** Sub Activity Name */
+            sub_activity_name?: string | null;
+            /** Activity Name */
+            activity_name?: string | null;
+            /** Benchmark Value Snapshot */
+            benchmark_value_snapshot?: string | null;
+            /** Benchmark Period Days Snapshot */
+            benchmark_period_days_snapshot?: number | null;
+            /** Benchmark Type Snapshot */
+            benchmark_type_snapshot?: string | null;
+            /** Relevant Count Field Snapshot */
+            relevant_count_field_snapshot?: string | null;
+            /** Deficit */
+            deficit?: string | null;
+            /** Productivity Pct */
+            productivity_pct?: string | null;
+            /** Started Date */
+            started_date?: string | null;
+            /** Due Date */
+            due_date?: string | null;
+            /**
+             * Is Completed
+             * @default false
+             */
+            is_completed: boolean;
+            /** Completed Date */
+            completed_date?: string | null;
+            /**
+             * Is Overdue
+             * @default false
+             */
+            is_overdue: boolean;
+            /**
+             * Days Overdue
+             * @default 0
+             */
+            days_overdue: number;
         };
         /** WorkReportUpdate */
         WorkReportUpdate: {
@@ -3400,6 +4159,103 @@ export interface operations {
             };
         };
     };
+    update_planned_completion_date_api_v1_projects__project_id__planned_completion_date_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlannedDateUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_timeline_api_v1_projects__project_id__timeline_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimelineEventOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_planned_date_changes_api_v1_projects__project_id__planned_date_changes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlannedDateChangeOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_members_api_v1_projects__project_id__members_get: {
         parameters: {
             query?: never;
@@ -4017,6 +4873,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_task_completion_api_v1_work_reports_tasks__task_id__completion_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskCompletionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkReportTaskOut"];
                 };
             };
             /** @description Validation Error */
@@ -4829,6 +5720,301 @@ export interface operations {
             };
         };
     };
+    list_activities_api_v1_activity_master_activities_get: {
+        parameters: {
+            query?: {
+                active_only?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_activity_api_v1_activity_master_activities_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sub_activities_api_v1_activity_master_activities__activity_id__sub_activities_get: {
+        parameters: {
+            query?: {
+                active_only?: boolean;
+            };
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_sub_activity_api_v1_activity_master_activities__activity_id__sub_activities_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubActivityCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_all_sub_activities_flat_api_v1_activity_master_sub_activities_get: {
+        parameters: {
+            query?: {
+                active_only?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubActivityFlatOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_activity_api_v1_activity_master_activities__activity_master_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_master_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_activity_api_v1_activity_master_activities__activity_master_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_master_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityMasterUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_sub_activity_api_v1_activity_master_sub_activities__activity_master_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_master_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_sub_activity_api_v1_activity_master_sub_activities__activity_master_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_master_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityMasterUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMasterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_job_codes_api_v1_job_codes_get: {
         parameters: {
             query?: {
@@ -5049,6 +6235,490 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditLogOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_activities_api_v1_projects__project_id__activities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectActivityOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_activity_api_v1_projects__project_id__activities_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectActivityCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectActivityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_activity_api_v1_projects__project_id__activities__activity_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_activity_api_v1_projects__project_id__activities__activity_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectActivityUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectActivityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deliverables_api_v1_projects__project_id__deliverables_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_deliverable_api_v1_projects__project_id__deliverables_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeliverableCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_deliverable_api_v1_projects__project_id__deliverables__deliverable_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                deliverable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_deliverable_api_v1_projects__project_id__deliverables__deliverable_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                deliverable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeliverableUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_all_deliverables_api_v1_deliverables_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableOut"][];
+                };
+            };
+        };
+    };
+    list_submissions_api_v1_projects__project_id__submissions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_submission_api_v1_projects__project_id__submissions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_api_v1_projects__project_id__submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_submission_api_v1_projects__project_id__submissions__submission_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_submission_api_v1_projects__project_id__submissions__submission_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_submission_status_api_v1_projects__project_id__submissions__submission_id__status_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionStatusUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionOut"];
                 };
             };
             /** @description Validation Error */

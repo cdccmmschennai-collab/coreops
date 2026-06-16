@@ -9,6 +9,7 @@ from the client.
 """
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +37,14 @@ class WorkReportTaskIn(BaseModel):
     docs_count: int = Field(default=0, ge=0)
     bom_count: int = Field(default=0, ge=0)
     spares_count: int = Field(default=0, ge=0)
+    # Activity Master selection — replaces free-text activity_type going forward.
+    # NUMERIC sub-activities are benchmarked against whichever of
+    # tags_count/docs_count/bom_count/spares_count above the master's
+    # relevant_count_field names — there is no separate actual-count input.
+    sub_activity_id: uuid.UUID | None = None
+    # TASK_BASED sub-activities only: the completion checkbox. started_date/
+    # due_date/completed_date are never client-supplied — see service.py.
+    is_completed: bool = False
 
 
 class WorkReportTaskOut(BaseModel):
@@ -57,6 +66,30 @@ class WorkReportTaskOut(BaseModel):
     docs_count: int = 0
     bom_count: int = 0
     spares_count: int = 0
+    # Activity Master (snapshots frozen at save time; null for rows predating
+    # this feature, or rows whose sub-activity carries no benchmark).
+    sub_activity_id: uuid.UUID | None = None
+    sub_activity_name: str | None = None
+    activity_name: str | None = None
+    # Frozen at submit time — see work_reports/service.py `_apply_benchmarks`.
+    benchmark_value_snapshot: Decimal | None = None
+    benchmark_period_days_snapshot: int | None = None
+    benchmark_type_snapshot: str | None = None
+    # Which count field (tags/docs/bom/spares) fed the calc above.
+    relevant_count_field_snapshot: str | None = None
+    deficit: Decimal | None = None
+    productivity_pct: Decimal | None = None
+    # TASK_BASED tracking: started_date/due_date are computed server-side the
+    # moment a TASK_BASED sub-activity is attached (see _validate_tasks);
+    # is_completed/completed_date are set via the completion-toggle endpoint.
+    started_date: date | None = None
+    due_date: date | None = None
+    is_completed: bool = False
+    completed_date: date | None = None
+    # Computed fresh on every read (never stored) — see
+    # activity_master.service.compute_overdue.
+    is_overdue: bool = False
+    days_overdue: int = 0
 
 
 class WorkReportCreate(BaseModel):
@@ -99,6 +132,15 @@ class WorkReportReject(BaseModel):
 class WorkReportEditRequest(BaseModel):
     # Author's reason for requesting edit access on a submitted report.
     note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
+
+
+class TaskCompletionUpdate(BaseModel):
+    """Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*
+    way a TASK_BASED row's completion is changed once the parent report is
+    submitted/locked, since these activities often complete days after the
+    report they were logged on. Independent of report.status by design."""
+
+    is_completed: bool
 
 
 class WorkReportOut(BaseModel):

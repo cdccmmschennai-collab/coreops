@@ -14,7 +14,10 @@ import enum
 import uuid
 from datetime import date, datetime
 
+from decimal import Decimal
+
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -22,6 +25,8 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -152,6 +157,38 @@ class WorkReportTask(UUIDMixin, Base):
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     spares_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # Activity Master link (replaces free-text `activity_type` as the selection
+    # mechanism going forward; `activity_type` itself is kept, auto-derived from
+    # these for backward compat — see work_reports/service.py `_validate_tasks`).
+    sub_activity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="SET NULL"), nullable=True
+    )
+    sub_activity_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # snapshot
+    activity_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # snapshot (parent)
+    # Frozen at submit time (submit_work_report -> _apply_benchmarks). Never
+    # recomputed on draft save — only when the report is (re)submitted.
+    benchmark_value_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    benchmark_period_days_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    benchmark_type_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Which of tags_count/docs_count/bom_count/spares_count fed the benchmark
+    # calc, frozen at submit time (NUMERIC rows only). There is no separate
+    # "actual count" field — the benchmark reads straight off the existing
+    # count fields below so production numbers are never entered twice.
+    relevant_count_field_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    deficit: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    productivity_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    # TASK_BASED sub-activities only: no deficit/productivity calculation —
+    # tracked by these dates instead. started_date/due_date are computed
+    # server-side (see work_reports/service.py `_validate_tasks`), never
+    # client-supplied. is_completed is the only real user input (the
+    # completion checkbox / the dedicated completion-toggle endpoint);
+    # completed_date is stamped automatically the moment it flips true.
+    # is_overdue/days_overdue are NOT stored — computed fresh on every read
+    # via activity_master.service.compute_overdue, so they're never stale.
+    started_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    completed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # Optional link to an assigned Task (the activity logs work on that task).
     task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
@@ -172,4 +209,5 @@ class WorkReportTask(UUIDMixin, Base):
         ),
         Index("work_report_tasks_report_idx", "report_id"),
         Index("work_report_tasks_project_idx", "project_id"),
+        Index("work_report_tasks_sub_activity_idx", "sub_activity_id"),
     )

@@ -105,6 +105,15 @@ const durationHoursSchema = z
     "Enter time as HH.MM (e.g. 2.30) — minutes 00–59, max 24h",
   );
 
+// Same as above, but the project-activity Duration field is required.
+const requiredDurationHoursSchema = z
+  .string()
+  .refine((v) => v.trim() !== "", "Duration is required")
+  .refine((v) => {
+    const mins = hoursToMinutes(v);
+    return mins !== null && mins <= MAX_DAY_MINUTES;
+  }, "Enter time as HH.MM (e.g. 2.30) — minutes 00–59, max 24h");
+
 // Count inputs: string → non-negative int, empty = 0
 const countSchema = z
   .string()
@@ -113,31 +122,68 @@ const countSchema = z
     "Enter a whole number ≥ 0",
   );
 
-const taskSchema = z.object({
-  project_id: z.string().min(1, "Project is required"),
-  // Optional link to an assigned task; selecting one fills in the project.
-  task_id: z.string().optional().default(""),
-  task_title: z.string().optional(),
-  // Task-based hours (separate from the project-activity duration below).
-  task_hours: durationHoursSchema,
-  // Display-only snapshot fields — populated from API in edit mode so the
-  // Combobox can show the project name/code even when the project is no
-  // longer in the RBAC-scoped list.  Never sent back to the backend.
-  project_name: z.string().optional(),
-  project_code: z.string().optional(),
-  // Day remarks — optional free text describing the activity.
-  description: z
-    .string()
-    .max(DESCRIPTION_MAX, `Keep under ${DESCRIPTION_MAX} characters`)
-    .optional()
-    .default(""),
-  duration_hours: durationHoursSchema,
-  activity_type: z.string().min(1, "Activity type is required").max(200),
-  tags_count:   countSchema.default("0"),
-  docs_count:   countSchema.default("0"),
-  bom_count:    countSchema.default("0"),
-  spares_count: countSchema.default("0"),
-});
+const taskSchema = z
+  .object({
+    project_id: z.string().min(1, "Project is required"),
+    // Optional link to an assigned task; selecting one fills in the project.
+    task_id: z.string().optional().default(""),
+    task_title: z.string().optional(),
+    // Task-based hours (separate from the project-activity duration below).
+    task_hours: durationHoursSchema,
+    // Display-only snapshot fields — populated from API in edit mode so the
+    // Combobox can show the project name/code even when the project is no
+    // longer in the RBAC-scoped list.  Never sent back to the backend.
+    project_name: z.string().optional(),
+    project_code: z.string().optional(),
+    // Day remarks — optional free text describing the activity.
+    description: z
+      .string()
+      .max(DESCRIPTION_MAX, `Keep under ${DESCRIPTION_MAX} characters`)
+      .optional()
+      .default(""),
+    duration_hours: requiredDurationHoursSchema,
+    // Legacy free-text activity label. Kept for backward round-tripping of
+    // rows saved before the Activity Master existed; new rows are selected
+    // via activity_id/sub_activity_id below and the server derives this.
+    activity_type: z.string().max(200).optional().default(""),
+    // Activity Master selection. activity_id is a UI-only filter (never sent
+    // to the backend); sub_activity_id is the real selection.
+    activity_id: z.string().optional().default(""),
+    sub_activity_id: z.string().optional().default(""),
+    sub_activity_name: z.string().optional(),
+    activity_name: z.string().optional(),
+    // NUMERIC sub-activities are benchmarked directly against whichever of
+    // these four the chosen sub-activity's relevant_count_field names — there
+    // is no separate "actual count" field, so a value is never entered twice.
+    tags_count:   countSchema.default("0"),
+    docs_count:   countSchema.default("0"),
+    bom_count:    countSchema.default("0"),
+    spares_count: countSchema.default("0"),
+    // TASK_BASED sub-activities only — the completion checkbox. started_date/
+    // due_date/completed_date are never user-entered; they're system-managed
+    // (shown read-only from the API, set via the dedicated completion-toggle
+    // endpoint — see useToggleTaskCompletion).
+    is_completed: z.boolean().default(false),
+    started_date: z.string().optional(),
+    due_date: z.string().optional(),
+    completed_date: z.string().optional(),
+  })
+  .superRefine((v, ctx) => {
+    // Legacy rows (pre-Activity Master) keep their free-text activity_type and
+    // are exempt — new rows must pick both an Activity and a Sub-Activity.
+    if (!v.activity_type.trim() && !v.sub_activity_id.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Activity is required",
+        path: ["activity_id"],
+      });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Select a Sub-Activity",
+        path: ["sub_activity_id"],
+      });
+    }
+  });
 
 // ── report form schema ────────────────────────────────────────────────────────
 
@@ -201,10 +247,18 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   description:    "",
   duration_hours: "",
   activity_type:  "",
+  activity_id:       "",
+  sub_activity_id:   "",
+  sub_activity_name: undefined,
+  activity_name:     undefined,
   tags_count:     "0",
   docs_count:     "0",
   bom_count:      "0",
   spares_count:   "0",
+  is_completed:   false,
+  started_date:   undefined,
+  due_date:       undefined,
+  completed_date: undefined,
 };
 
 // ── review note (reject dialog) ─────────────────────────────────────────────
@@ -258,10 +312,12 @@ function toTasks(v: WorkReportFormValues) {
     minutes_spent: hoursToMinutes(t.duration_hours),
     task_minutes_spent: hoursToMinutes(t.task_hours),
     activity_type: orNull(t.activity_type),
+    sub_activity_id: orNull(t.sub_activity_id),
     tags_count:    toCount(t.tags_count),
     docs_count:    toCount(t.docs_count),
     bom_count:     toCount(t.bom_count),
     spares_count:  toCount(t.spares_count),
+    is_completed:  t.is_completed,
   }));
 }
 
@@ -323,10 +379,22 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             description:    t.description,
             duration_hours: t.minutes_spent != null ? minutesToHours(t.minutes_spent) : "",
             activity_type:  t.activity_type ?? "",
+            // activity_id is a UI-only filter; derive it so the cascading
+            // Sub-Activity select pre-filters correctly when editing a row
+            // that already has a sub_activity_id (resolved client-side by
+            // the form against the flat sub-activity options list).
+            activity_id:       "",
+            sub_activity_id:   t.sub_activity_id ?? "",
+            sub_activity_name: t.sub_activity_name ?? undefined,
+            activity_name:     t.activity_name ?? undefined,
             tags_count:    String(t.tags_count ?? 0),
             docs_count:    String(t.docs_count ?? 0),
             bom_count:     String(t.bom_count ?? 0),
             spares_count:  String(t.spares_count ?? 0),
+            is_completed:   t.is_completed ?? false,
+            started_date:   t.started_date ?? undefined,
+            due_date:       t.due_date ?? undefined,
+            completed_date: t.completed_date ?? undefined,
           }))
         : [{ ...EMPTY_TASK_ROW }],
   };

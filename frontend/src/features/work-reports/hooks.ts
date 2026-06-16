@@ -92,3 +92,15 @@ export function useDeleteWorkReport() {
     onSuccess: () => qc.invalidateQueries({ queryKey: workReportKeys.all }),
   });
 }
+
+/** Toggle a TASK_BASED row's completion checkbox. `reportId` is only used to
+ * invalidate that report's detail query — the mutation itself targets the
+ * task row directly and works regardless of the parent report's status. */
+export function useToggleTaskCompletion(reportId: string) {
+  const invalidate = useReportActionInvalidation(reportId);
+  return useMutation({
+    mutationFn: ({ taskId, isCompleted }: { taskId: string; isCompleted: boolean }) =>
+      workReportsApi.toggleTaskCompletion(taskId, { is_completed: isCompleted }),
+    onSuccess: invalidate,
+  });
+}

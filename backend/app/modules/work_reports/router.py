@@ -9,6 +9,11 @@
   POST   /work-reports/{id}/reject      reviewer sends report back + note
   POST   /work-reports/{id}/grant-edit  reviewer reopens report for editing
   DELETE /work-reports/{id}             delete own draft (author)
+  PATCH  /work-reports/tasks/{task_id}/completion
+                                         toggle a TASK_BASED row's completion
+                                         checkbox — author-only, works
+                                         regardless of the parent report's
+                                         status (see service docstring)
 
 There is no approval step: a submitted report is final unless a reviewer reopens
 it (reject / grant-edit), which returns it to the editable 'rejected' state.
@@ -31,11 +36,13 @@ from app.modules.users.models import User
 from app.modules.work_reports import service
 from app.modules.work_reports.models import WorkReportStatus
 from app.modules.work_reports.schemas import (
+    TaskCompletionUpdate,
     WorkReportCreate,
     WorkReportEditRequest,
     WorkReportOut,
     WorkReportPage,
     WorkReportReject,
+    WorkReportTaskOut,
     WorkReportUpdate,
 )
 
@@ -158,3 +165,15 @@ def delete_work_report(
 ) -> Response:
     service.delete_work_report(db, current, report_id)
     return Response(status_code=204)
+
+
+@router.patch("/tasks/{task_id}/completion", response_model=WorkReportTaskOut)
+def update_task_completion(
+    task_id: uuid.UUID,
+    body: TaskCompletionUpdate,
+    current: User = Depends(require_submit),
+    db: Session = Depends(get_db),
+) -> WorkReportTaskOut:
+    return WorkReportTaskOut.model_validate(
+        service.update_task_completion(db, current, task_id, body)
+    )

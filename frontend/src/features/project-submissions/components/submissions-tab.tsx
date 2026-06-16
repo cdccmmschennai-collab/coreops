@@ -259,7 +259,7 @@ function SubmissionDetail({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {submission.items.map((item) => (
+                {(submission.items ?? []).map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>{item.activity_label}</TableCell>
                     <TableCell className="text-right tabular">{item.quantity.toLocaleString()}</TableCell>
@@ -410,7 +410,7 @@ export function SubmissionsTab({
                     {s.period_start} – {s.period_end}
                   </TableCell>
                   <TableCell className="tabular text-muted-foreground">
-                    {s.items.length}
+                    {s.items?.length ?? 0}
                   </TableCell>
                   <TableCell>
                     <SubmissionStatusBadge status={s.status as SubmissionStatus} />

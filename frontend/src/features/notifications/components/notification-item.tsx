@@ -3,8 +3,10 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   CalendarDays,
   CheckCircle,
+  Clock,
   FileText,
   FolderKanban,
   UserPlus,
@@ -13,7 +15,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { Notification } from "../types";
+import type { Notification, NotificationSeverity } from "../types";
 
 function timeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -47,6 +49,8 @@ const TYPE_CONFIG: Record<
   project_assigned:      { Icon: FolderKanban,  color: "blue" },
   calendar_event_created:{ Icon: CalendarDays,  color: "violet" },
   employee_created:      { Icon: UserPlus,      color: "green" },
+  NUMERIC_BENCHMARK:     { Icon: AlertTriangle, color: "amber" },
+  TASK_OVERDUE:          { Icon: Clock,         color: "red" },
 };
 
 const BG: Record<ColorKey, string> = {
@@ -58,8 +62,18 @@ const BG: Record<ColorKey, string> = {
   slate:  "bg-slate-100 text-slate-700",
 };
 
-function getConfig(type: string) {
-  return TYPE_CONFIG[type] ?? { Icon: FileText, color: "slate" as ColorKey };
+// Severity outranks the type-based color for ongoing-condition notifications
+// (NUMERIC_BENCHMARK/TASK_OVERDUE) — CRITICAL always reads as urgent even if
+// a new type is added later without updating TYPE_CONFIG.
+const SEVERITY_COLOR: Partial<Record<NotificationSeverity, ColorKey>> = {
+  WARNING: "amber",
+  CRITICAL: "red",
+};
+
+function getConfig(type: string, severity?: NotificationSeverity) {
+  const base = TYPE_CONFIG[type] ?? { Icon: FileText, color: "slate" as ColorKey };
+  const color = (severity && SEVERITY_COLOR[severity]) ?? base.color;
+  return { ...base, color };
 }
 
 // ── compact row (used in dropdown) ─────────────────────────────────────────
@@ -74,7 +88,7 @@ export function NotificationItemCompact({
   onClose?: () => void;
 }) {
   const router = useRouter();
-  const { Icon, color } = getConfig(n.type);
+  const { Icon, color } = getConfig(n.type, n.severity);
   const ago = timeAgo(n.created_at);
 
   function handleClick() {
@@ -137,7 +151,7 @@ export function NotificationItemFull({
   onMarkRead?: (id: string) => void;
 }) {
   const router = useRouter();
-  const { Icon, color } = getConfig(n.type);
+  const { Icon, color } = getConfig(n.type, n.severity);
   const ago = timeAgo(n.created_at);
 
   function handleNavigate() {

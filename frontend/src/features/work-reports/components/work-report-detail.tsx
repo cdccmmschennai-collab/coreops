@@ -8,13 +8,14 @@ import { toast } from "sonner";
 
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/shell/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
-import { formatDateTime, formatMinutes } from "@/lib/format";
+import { formatDateTime, formatInt, formatMinutes } from "@/lib/format";
 import { can } from "@/lib/rbac";
 
 import { DeleteDialog } from "./delete-dialog";
@@ -24,10 +25,16 @@ import { StatusBadge } from "./status-badge";
 import {
   useGrantEditWorkReport,
   useSubmitWorkReport,
+  useToggleTaskCompletion,
   useWorkReport,
 } from "../hooks";
 import { useProjectOptions } from "../project-options";
-import { DAY_STATUS_LABEL, WORK_LOCATION_LABEL, type DayStatus, type WorkLocation } from "../schemas";
+import {
+  DAY_STATUS_LABEL,
+  WORK_LOCATION_LABEL,
+  type DayStatus,
+  type WorkLocation,
+} from "../schemas";
 import type { WorkReport, WorkReportTask } from "../types";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -37,6 +44,24 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
       <span className="text-right font-medium">{value ?? "—"}</span>
     </div>
   );
+}
+
+const COUNT_FIELD_LABEL: Record<string, string> = {
+  tags: "Tags", docs: "Docs", bom: "BOM", spares: "Spares",
+};
+
+/** The NUMERIC benchmark's "actual" value — whichever of
+ * tags_count/docs_count/bom_count/spares_count the sub-activity's
+ * relevant_count_field named, frozen at submit time. There is no separate
+ * actual-count field; this just reads the existing count straight off. */
+function benchmarkActualCount(t: WorkReportTask): number | "—" {
+  switch (t.relevant_count_field_snapshot) {
+    case "tags":   return t.tags_count ?? 0;
+    case "docs":   return t.docs_count ?? 0;
+    case "bom":    return t.bom_count ?? 0;
+    case "spares": return t.spares_count ?? 0;
+    default:       return "—";
+  }
 }
 
 /** Compact label-over-value cell used inside the activity cards. */
@@ -60,6 +85,7 @@ export function WorkReportDetail({ id }: { id: string }) {
 
   const submit = useSubmitWorkReport(id);
   const grantEdit = useGrantEditWorkReport(id);
+  const toggleCompletion = useToggleTaskCompletion(id);
   const [rejectOpen, setRejectOpen] = React.useState(false);
   const [requestEditOpen, setRequestEditOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<WorkReport | null>(null);
@@ -132,6 +158,17 @@ export function WorkReportDetail({ id }: { id: string }) {
       toast.success("Edit access granted");
     } catch (error) {
       toast.error(error instanceof AppError ? error.message : "Could not grant edit access.");
+    }
+  }
+
+  // Works regardless of report.status — completing a TASK_BASED item often
+  // happens days after the report it was logged on is already submitted.
+  async function onToggleCompletion(taskId: string, next: boolean) {
+    try {
+      await toggleCompletion.mutateAsync({ taskId, isCompleted: next });
+      toast.success(next ? "Marked complete" : "Marked incomplete");
+    } catch (error) {
+      toast.error(error instanceof AppError ? error.message : "Could not update completion.");
     }
   }
 
@@ -305,13 +342,77 @@ export function WorkReportDetail({ id }: { id: string }) {
                       </div>
                     )}
 
-                    {/* Activity type — own row so long names wrap in full */}
+                    {/* Activity / Sub-Activity — new rows use the Activity Master;
+                        legacy rows (filed before it existed) fall back to the old
+                        free-text activity_type. */}
                     <div className="mt-4 space-y-0.5">
-                      <p className="text-xs text-muted-foreground">Activity Type</p>
-                      <p className="text-sm font-medium">{t.activity_type ?? "—"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {t.sub_activity_id ? "Activity / Sub-Activity" : "Activity Type"}
+                      </p>
+                      <p className="text-sm font-medium">
+                        {t.sub_activity_id
+                          ? `${t.activity_name ?? "—"} / ${t.sub_activity_name ?? "—"}`
+                          : t.activity_type ?? "—"}
+                      </p>
                     </div>
 
-                    {/* Counts */}
+                    {/* Benchmark — shape depends on the sub-activity's benchmark
+                        type, frozen at submit time. Nothing renders for legacy
+                        rows or sub-activities with no benchmark tracked. */}
+                    {t.benchmark_type_snapshot === "NUMERIC" && (
+                      <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3 border-t border-border pt-3">
+                        <Stat label="Target" value={formatInt(t.benchmark_value_snapshot)} />
+                        <Stat
+                          label={
+                            t.relevant_count_field_snapshot
+                              ? `Actual (${COUNT_FIELD_LABEL[t.relevant_count_field_snapshot] ?? t.relevant_count_field_snapshot})`
+                              : "Actual"
+                          }
+                          value={benchmarkActualCount(t)}
+                        />
+                        <Stat label="Deficit" value={t.deficit ?? "—"} />
+                        <Stat
+                          label="Productivity %"
+                          value={t.productivity_pct != null ? `${t.productivity_pct}%` : "—"}
+                        />
+                      </div>
+                    )}
+                    {/* TASK_BASED tracking — started_date/due_date are set as
+                        soon as the row is saved (not gated on submit), so
+                        this shows on drafts too; gate on started_date rather
+                        than benchmark_type_snapshot (which is submit-only). */}
+                    {t.started_date && (
+                      <div className="mt-4 space-y-2 border-t border-border pt-3">
+                        <div className="grid grid-cols-3 gap-x-6 gap-y-3">
+                          <Stat label="Started" value={t.started_date} />
+                          <Stat label="Due" value={t.due_date ?? "—"} />
+                          <Stat label="Completed" value={t.completed_date ?? "—"} />
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          {t.is_completed ? (
+                            <Badge variant="success">Completed</Badge>
+                          ) : t.is_overdue ? (
+                            <Badge variant="danger">Overdue by {t.days_overdue}d</Badge>
+                          ) : (
+                            <Badge variant="neutral">In progress</Badge>
+                          )}
+                          {isAuthor && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              loading={toggleCompletion.isPending}
+                              onClick={() => void onToggleCompletion(t.id, !t.is_completed)}
+                            >
+                              {t.is_completed ? "Reopen" : "Mark complete"}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Counts — operational reporting, independent of the
+                        benchmark above. */}
                     <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3">
                       <Stat label="Tags" value={t.tags_count ?? 0} />
                       <Stat label="Docs" value={t.docs_count ?? 0} />

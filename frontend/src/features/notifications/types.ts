@@ -8,7 +8,13 @@ export type NotificationType =
   | "report_rejected"
   | "project_assigned"
   | "calendar_event_created"
-  | "employee_created";
+  | "employee_created"
+  // Ongoing-condition notifications (upserted/resolved, not one-off events).
+  | "NUMERIC_BENCHMARK"
+  | "TASK_OVERDUE"
+  | "SYSTEM";
+
+export type NotificationSeverity = "INFO" | "WARNING" | "CRITICAL";
 
 export interface Notification {
   id: string;
@@ -16,10 +22,14 @@ export interface Notification {
   type: NotificationType | string;
   title: string;
   message: string;
+  severity: NotificationSeverity;
   entity_type: string | null;
   entity_id: string | null;
   target_url: string | null;
   is_read: boolean;
+  // NULL = still an active/unresolved condition. Always null for one-off
+  // event notifications (they're never "resolved", just read).
+  resolved_at: string | null;
   created_at: string;
 }
 

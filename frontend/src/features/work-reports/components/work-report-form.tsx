@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox } from "@/components/ui/combobox";
 import {
   Form,
@@ -28,13 +29,12 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { useActivityTypeOptions, useCreateActivityType } from "@/features/activity-types/hooks";
+import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useTasks } from "@/features/tasks/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
-import { formatMinutes } from "@/lib/format";
-import { can } from "@/lib/rbac";
+import { formatInt, formatMinutes } from "@/lib/format";
 
 import { useCreateWorkReport, useUpdateWorkReport } from "../hooks";
 import { useProjectOptions } from "../project-options";
@@ -57,18 +57,27 @@ interface WorkReportFormProps {
   reportId?: string;
 }
 
+/** "2026-06-16" + 2 -> "2026-06-18". Client-side preview only, for a
+ * TASK_BASED row that hasn't been saved yet — the server is authoritative
+ * once the row exists (it computes due_date the same way, on save). */
+function addDays(isoDate: string, days: number): string | null {
+  const d = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
 
-  const { employeeId, role } = useAuth();
+  const { employeeId } = useAuth();
   const { byId: empById } = useEmployeeOptions();
   const { items: projects, byId: projById } = useProjectOptions();
-  const { items: activityTypes } = useActivityTypeOptions();
-  const createActivityType = useCreateActivityType();
+  const { data: activities } = useActivities(true);
+  const { items: subActivities, byId: subActivityById } = useSubActivityOptions();
 
   const employeeName = employeeId ? (empById.get(employeeId) ?? "—") : "—";
-  const canCreateActivityType = can(role, "masterdata.manage");
 
   // Project combobox options — RBAC list + ghost entries for projects in
   // existing tasks that are no longer accessible (archived / membership lost).
@@ -123,30 +132,20 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     [myTasksData],
   );
 
-  // Activity type combobox options — code shown on the right
+  // Activity Master combobox options (Activity → Sub-Activity cascade).
   const activityOptions = React.useMemo(
-    () =>
-      activityTypes.map((a) => ({
-        value: a.name,   // stored as TEXT in work_report_tasks.activity_type
-        label: a.name,
-        sublabel: a.code ?? undefined,
-        keywords: [a.code ?? "", a.name, a.category],
-      })),
-    [activityTypes],
+    () => (activities ?? []).map((a) => ({ value: a.id, label: a.name })),
+    [activities],
   );
-
-  async function handleCreateActivityType(inputName: string) {
-    try {
-      await createActivityType.mutateAsync({
-        name: inputName,
-        category: "GENERAL",
-        requires_project: false,
-      });
-      toast.success(`Activity type "${inputName}" created`);
-    } catch (err) {
-      toast.error(err instanceof AppError ? err.message : "Could not create activity type.");
+  const subActivityOptionsByActivity = React.useMemo(() => {
+    const map = new Map<string, { value: string; label: string }[]>();
+    for (const s of subActivities) {
+      const list = map.get(s.activity_id) ?? [];
+      list.push({ value: s.id, label: s.name });
+      map.set(s.activity_id, list);
     }
-  }
+    return map;
+  }, [subActivities]);
 
   const form = useForm<WorkReportFormValues>({
     resolver: zodResolver(workReportFormSchema),
@@ -157,11 +156,28 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     name: "tasks",
   });
 
+  // Backfill the UI-only `activity_id` filter for rows loaded from the API
+  // with a sub_activity_id already set (edit mode) — once the flat
+  // sub-activity options arrive, resolve which Activity each belongs to so
+  // the Sub-Activity select shows the right filtered list immediately.
+  React.useEffect(() => {
+    if (subActivityById.size === 0) return;
+    fields.forEach((_, index) => {
+      const row = form.getValues(`tasks.${index}`);
+      if (row.sub_activity_id && !row.activity_id) {
+        const sub = subActivityById.get(row.sub_activity_id);
+        if (sub) form.setValue(`tasks.${index}.activity_id`, sub.activity_id);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subActivityById, fields.length]);
+
   const createMutation = useCreateWorkReport();
   const updateMutation = useUpdateWorkReport(reportId ?? "");
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   const watchedTasks = form.watch("tasks");
+  const reportDate = form.watch("report_date");
   const totalMinutes = (watchedTasks ?? []).reduce(
     (sum, t) =>
       sum + (hoursToMinutes(t?.duration_hours) ?? 0) + (hoursToMinutes(t?.task_hours) ?? 0),
@@ -351,14 +367,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         )}
                       />
 
-                      {/* Task hours — task-based work; adds to the day total */}
+                      {/* Hours (task-based work; adds to the day total) — kept short
+                          ("Hours" not "Task hours") so the label stays on one line
+                          and this box aligns with the row below it. */}
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.task_hours`}
                         render={({ field: f }) => (
                           <FormItem>
-                            <FormLabel className="block text-xs leading-none text-muted-foreground">
-                              Task hours <span className="font-normal">(HH.MM)</span>
+                            <FormLabel className="block whitespace-nowrap text-xs leading-none text-muted-foreground">
+                              Hours <span className="font-normal">(HH.MM)</span>
                             </FormLabel>
                             <FormControl>
                               <Input
@@ -430,8 +448,8 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         name={`tasks.${index}.duration_hours`}
                         render={({ field: f }) => (
                           <FormItem>
-                            <FormLabel className="block text-xs leading-none text-muted-foreground">
-                              Duration <span className="font-normal">(HH.MM)</span>
+                            <FormLabel className="block whitespace-nowrap text-xs leading-none text-muted-foreground">
+                              Duration <span className="font-normal">(HH.MM)</span> <span className="text-destructive">*</span>
                             </FormLabel>
                             <FormControl>
                               <Input
@@ -468,83 +486,208 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       </div>
                     </div>
 
-                    {/* Row B: Activity Type (searchable) | Description | Tags | Docs | BOM | Spares */}
-                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)_repeat(4,5rem)]">
-
-                      {/* Activity Type — searchable combobox; PM can create inline */}
+                    {/* Row B: Activity (25%) | Sub-Activity (75%) — own full-width row
+                        so long sub-activity names show in full, uncramped. Selections
+                        come from the Activity Master (Settings → Activity Master),
+                        never hardcoded here. */}
+                    <div className="grid grid-cols-[1fr_3fr] gap-2">
                       <FormField
                         control={form.control}
-                        name={`tasks.${index}.activity_type`}
+                        name={`tasks.${index}.activity_id`}
                         render={({ field: f }) => (
-                          <FormItem>
+                          <FormItem className="min-w-0">
                             <FormLabel className="text-xs text-muted-foreground">
-                              Activity Type <span className="text-destructive">*</span>
+                              Activity <span className="text-destructive">*</span>
                             </FormLabel>
                             <FormControl>
                               <Combobox
                                 value={f.value || ""}
-                                onValueChange={(v) => f.onChange(v)}
-                                options={activityOptions}
-                                placeholder="Select activity type…"
-                                searchPlaceholder="Search by name or code…"
-                                emptyMessage="No matching activity types."
-                                allowClear={false}
-                                allowCreate={canCreateActivityType}
-                                onCreateNew={async (name) => {
-                                  await handleCreateActivityType(name);
-                                  f.onChange(name);
+                                onValueChange={(v) => {
+                                  f.onChange(v);
+                                  // Changing the Activity invalidates any previously
+                                  // chosen Sub-Activity from a different Activity.
+                                  const currentSub = form.getValues(`tasks.${index}.sub_activity_id`);
+                                  if (currentSub && subActivityById.get(currentSub)?.activity_id !== v) {
+                                    form.setValue(`tasks.${index}.sub_activity_id`, "");
+                                    form.setValue(`tasks.${index}.sub_activity_name`, undefined);
+                                    form.setValue(`tasks.${index}.activity_name`, undefined);
+                                  }
                                 }}
+                                options={activityOptions}
+                                placeholder="Select activity…"
+                                searchPlaceholder="Search activities…"
+                                emptyMessage="No matching activities."
                               />
                             </FormControl>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
-
-                      {/* Day Remarks (optional) */}
                       <FormField
                         control={form.control}
-                        name={`tasks.${index}.description`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Day Remarks (optional)
-                            </FormLabel>
-                            <FormControl>
-                              <Input placeholder="What did you work on?" {...f} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Count fields */}
-                      {(
-                        [
-                          ["tags_count",   "Tags"],
-                          ["docs_count",   "Docs"],
-                          ["bom_count",    "BOM"],
-                          ["spares_count", "Spares"],
-                        ] as const
-                      ).map(([name, label]) => (
-                        <FormField
-                          key={name}
-                          control={form.control}
-                          name={`tasks.${index}.${name}`}
-                          render={({ field: f }) => (
-                            <FormItem>
+                        name={`tasks.${index}.sub_activity_id`}
+                        render={({ field: f }) => {
+                          const selectedActivityId = watchedTasks?.[index]?.activity_id;
+                          const options = selectedActivityId
+                            ? subActivityOptionsByActivity.get(selectedActivityId) ?? []
+                            : [];
+                          return (
+                            <FormItem className="min-w-0">
                               <FormLabel className="text-xs text-muted-foreground">
-                                {label}
+                                Sub-Activity <span className="text-destructive">*</span>
                               </FormLabel>
                               <FormControl>
-                                <Input type="number" min={0} placeholder="0" {...f} />
+                                <Combobox
+                                  value={f.value || ""}
+                                  onValueChange={(v) => {
+                                    f.onChange(v);
+                                    const sub = v ? subActivityById.get(v) : undefined;
+                                    form.setValue(`tasks.${index}.sub_activity_name`, sub?.name);
+                                    form.setValue(`tasks.${index}.activity_name`, sub?.activity_name);
+                                    // Server derives activity_type from the new selection.
+                                    form.setValue(`tasks.${index}.activity_type`, "");
+                                  }}
+                                  options={options}
+                                  placeholder={selectedActivityId ? "Select sub-activity…" : "Pick an Activity first"}
+                                  searchPlaceholder="Search sub-activities…"
+                                  emptyMessage="No matching sub-activities."
+                                  disabled={!selectedActivityId}
+                                />
                               </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          );
+                        }}
+                      />
+                    </div>
+
+                    {/* Row B2: Day Remarks — own full-width row, right below Activity. */}
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.description`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">
+                            Day Remarks (optional)
+                          </FormLabel>
+                          <FormControl>
+                            <Input placeholder="What did you work on?" {...f} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    {/* Row B3: Tags / Docs / BOM / Spares — operational reporting,
+                        independent of the benchmark target shown on whichever field
+                        is relevant. None are required. Same full-row 4-col grid as
+                        "Maintenance counts" below, so the layout stays consistent
+                        regardless of label length (e.g. "Docs (Target: 1000/1d)"). */}
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      {(() => {
+                        const subId = watchedTasks?.[index]?.sub_activity_id;
+                        const sub = subId ? subActivityById.get(subId) : undefined;
+                        // The benchmark target is shown directly on whichever count
+                        // field the sub-activity names — there is no separate
+                        // "Actual Count" entry, so the same number is never typed twice.
+                        const targetField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
+
+                        return (
+                          [
+                            ["tags_count",   "Tags",   "tags"],
+                            ["docs_count",   "Docs",   "docs"],
+                            ["bom_count",    "BOM",    "bom"],
+                            ["spares_count", "Spares", "spares"],
+                          ] as const
+                        ).map(([name, label, countField]) => {
+                          const isTarget = targetField === countField;
+                          return (
+                            <FormField
+                              key={name}
+                              control={form.control}
+                              name={`tasks.${index}.${name}`}
+                              render={({ field: f }) => (
+                                <FormItem>
+                                  <FormLabel
+                                    className={
+                                      isTarget
+                                        ? "text-xs font-medium text-foreground"
+                                        : "text-xs text-muted-foreground"
+                                    }
+                                  >
+                                    {label}
+                                    {isTarget && (
+                                      <span className="font-normal text-muted-foreground">
+                                        {" "}(Target: {formatInt(sub!.benchmark_value)}/{sub!.benchmark_period_days ?? 1}d)
+                                      </span>
+                                    )}
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Input
+                                      type="number"
+                                      min={0}
+                                      placeholder="0"
+                                      className={isTarget ? "border-primary" : undefined}
+                                      {...f}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          );
+                        });
+                      })()}
+                    </div>
+
+                    {/* Row C: TASK_BASED sub-activities only — a single
+                        completion checkbox. No status dropdown, no manual
+                        date entry: started_date/due_date/completed_date are
+                        all system-managed (see schemas.ts). NUMERIC
+                        sub-activities have no extra row here: the benchmark
+                        target is shown directly on the matching count field
+                        above (Tags/Docs/BOM/Spares), not a separate entry. */}
+                    {(() => {
+                      const subId = watchedTasks?.[index]?.sub_activity_id;
+                      const sub = subId ? subActivityById.get(subId) : undefined;
+                      if (sub?.benchmark_type !== "TASK_BASED") return null;
+
+                      const row = watchedTasks?.[index];
+                      // Prefer the server-computed due_date (existing row);
+                      // for a brand-new row not yet saved, preview it
+                      // client-side from the report date + allocated duration.
+                      const periodDays = sub.benchmark_period_days ?? 1;
+                      const previewDue = row?.due_date
+                        ? row.due_date
+                        : reportDate
+                          ? addDays(reportDate, periodDays)
+                          : null;
+
+                      return (
+                        <FormField
+                          control={form.control}
+                          name={`tasks.${index}.is_completed`}
+                          render={({ field: f }) => (
+                            <FormItem>
+                              <label className="flex items-center gap-2 text-sm">
+                                <FormControl>
+                                  <Checkbox
+                                    checked={f.value}
+                                    onChange={(e) => f.onChange(e.target.checked)}
+                                  />
+                                </FormControl>
+                                <span>Task Completed</span>
+                                <span className="text-xs text-muted-foreground">
+                                  (within {periodDays}d
+                                  {previewDue ? ` — due ${previewDue}` : ""})
+                                </span>
+                              </label>
                               <FormMessage />
                             </FormItem>
                           )}
                         />
-                      ))}
-                    </div>
+                      );
+                    })()}
                   </div>
                 );
               })}

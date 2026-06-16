@@ -50,7 +50,7 @@ export function SubmissionForm({
           period_start: existing.period_start,
           period_end: existing.period_end,
           notes: existing.notes ?? "",
-          items: existing.items.map((i) => ({
+          items: (existing.items ?? []).map((i) => ({
             activity_type_id: i.activity_type_id ?? null,
             activity_label: i.activity_label,
             quantity: i.quantity,

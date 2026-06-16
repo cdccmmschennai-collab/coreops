@@ -11,7 +11,7 @@ export type ProjectMemberRole = components["schemas"]["ProjectMemberRole"];
 export type ProjectMemberCreateBody = components["schemas"]["ProjectMemberCreate"];
 export type PlannedDateUpdateBody = components["schemas"]["PlannedDateUpdate"];
 export type PlannedDateChange = components["schemas"]["PlannedDateChangeOut"];
-export type ProjectTimelineEvent = components["schemas"]["ProjectTimelineEventOut"];
+export type ProjectTimelineEvent = components["schemas"]["TimelineEventOut"];
 
 // Display labels for project member roles. Stored/API values are kept as-is
 // (team_lead, contributor, qc) — only the rendered text differs.
