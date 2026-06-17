@@ -783,15 +783,6 @@ def submit_work_report(
     db.add(report)
     db.commit()
     db.refresh(report)
-    author = db.get(Employee, report.employee_id)
-    if author:
-        _notify_manager(
-            db, author, "report_submitted",
-            f"{author.full_name} submitted a work report",
-            f"{author.full_name} submitted their work report for {report.report_date}.",
-            report.id,
-            f"/work-reports/{report.id}",
-        )
     return _decorate(db, actor, [report])[0]
 
 
