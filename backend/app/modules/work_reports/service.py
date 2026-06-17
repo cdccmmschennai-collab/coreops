@@ -27,6 +27,7 @@ from app.modules.activity_master.service import compute_benchmark, compute_overd
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
+from app.modules.plants.models import MaintenancePlant, PlanningPlant
 from app.modules.projects.models import (
     Project,
     ProjectMember,
@@ -295,6 +296,23 @@ def _validate_tasks(
                 )
             is_task_based = sub.benchmark_type == "TASK_BASED"
             benchmark_period_days = sub.benchmark_period_days
+        # Optional Maintenance Plant selection — independent of the project's
+        # own assigned plant; which plant the employee worked at that day.
+        maintenance_plant_code: str | None = None
+        maintenance_plant_description: str | None = None
+        planning_plant_code: str | None = None
+        planning_plant_description: str | None = None
+        if getattr(task, "maintenance_plant_id", None) is not None:
+            mp = db.get(MaintenancePlant, task.maintenance_plant_id)
+            if mp is None or not mp.is_active:
+                raise AppError(
+                    "validation_error", "Selected maintenance plant is invalid or inactive.", 422
+                )
+            pp = db.get(PlanningPlant, mp.planning_plant_id)
+            maintenance_plant_code = mp.code
+            maintenance_plant_description = mp.description
+            planning_plant_code = pp.code if pp else None
+            planning_plant_description = pp.description if pp else None
         snapshots.append({
             "project_name": project.name,
             "project_code": project.code,
@@ -305,6 +323,10 @@ def _validate_tasks(
             "activity_type": activity_type,
             "is_task_based": is_task_based,
             "benchmark_period_days": benchmark_period_days,
+            "maintenance_plant_code": maintenance_plant_code,
+            "maintenance_plant_description": maintenance_plant_description,
+            "planning_plant_code": planning_plant_code,
+            "planning_plant_description": planning_plant_description,
         })
         total += (task.minutes_spent or 0) + (getattr(task, "task_minutes_spent", None) or 0)
     if total > MAX_DAY_MINUTES:
@@ -508,6 +530,11 @@ def create_work_report(
                 due_date=due_date,
                 is_completed=task.is_completed,
                 completed_date=_today() if task.is_completed else None,
+                maintenance_plant_id=task.maintenance_plant_id,
+                maintenance_plant_code=snap["maintenance_plant_code"],
+                maintenance_plant_description=snap["maintenance_plant_description"],
+                planning_plant_code=snap["planning_plant_code"],
+                planning_plant_description=snap["planning_plant_description"],
                 project_name=snap["project_name"],
                 project_code=snap["project_code"],
                 project_job_code_code=snap["project_job_code_code"],
@@ -586,6 +613,11 @@ def update_work_report(
                     due_date=due_date,
                     is_completed=task.is_completed,
                     completed_date=completed_date,
+                    maintenance_plant_id=task.maintenance_plant_id,
+                    maintenance_plant_code=snap["maintenance_plant_code"],
+                    maintenance_plant_description=snap["maintenance_plant_description"],
+                    planning_plant_code=snap["planning_plant_code"],
+                    planning_plant_description=snap["planning_plant_description"],
                     project_name=snap["project_name"],
                     project_code=snap["project_code"],
                     project_job_code_code=snap["project_job_code_code"],

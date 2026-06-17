@@ -167,6 +167,14 @@ const taskSchema = z
     started_date: z.string().optional(),
     due_date: z.string().optional(),
     completed_date: z.string().optional(),
+    // Maintenance Plant the employee worked at — independent of the
+    // project's own assigned plant. Pick it directly; Planning Plant
+    // code/description auto-derive (display-only, never sent to the backend).
+    maintenance_plant_id: z.string().optional().default(""),
+    maintenance_plant_code: z.string().optional(),
+    maintenance_plant_description: z.string().optional(),
+    planning_plant_code: z.string().optional(),
+    planning_plant_description: z.string().optional(),
   })
   .superRefine((v, ctx) => {
     // Legacy rows (pre-Activity Master) keep their free-text activity_type and
@@ -259,6 +267,11 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   started_date:   undefined,
   due_date:       undefined,
   completed_date: undefined,
+  maintenance_plant_id:          "",
+  maintenance_plant_code:        undefined,
+  maintenance_plant_description: undefined,
+  planning_plant_code:           undefined,
+  planning_plant_description:    undefined,
 };
 
 // ── review note (reject dialog) ─────────────────────────────────────────────
@@ -318,6 +331,7 @@ function toTasks(v: WorkReportFormValues) {
     bom_count:     toCount(t.bom_count),
     spares_count:  toCount(t.spares_count),
     is_completed:  t.is_completed,
+    maintenance_plant_id: orNull(t.maintenance_plant_id),
   }));
 }
 
@@ -395,6 +409,11 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             started_date:   t.started_date ?? undefined,
             due_date:       t.due_date ?? undefined,
             completed_date: t.completed_date ?? undefined,
+            maintenance_plant_id:          t.maintenance_plant_id ?? "",
+            maintenance_plant_code:        t.maintenance_plant_code ?? undefined,
+            maintenance_plant_description: t.maintenance_plant_description ?? undefined,
+            planning_plant_code:           t.planning_plant_code ?? undefined,
+            planning_plant_description:    t.planning_plant_description ?? undefined,
           }))
         : [{ ...EMPTY_TASK_ROW }],
   };

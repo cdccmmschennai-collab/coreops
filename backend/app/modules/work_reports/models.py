@@ -189,6 +189,17 @@ class WorkReportTask(UUIDMixin, Base):
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     completed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Independent of the project's own assigned plant (projects.maintenance_plant_id)
+    # — the employee picks which plant they actually worked at that day. Pick the
+    # Maintenance Plant directly; Planning Plant code/description auto-derive and
+    # are frozen as snapshots at save time, same convention as project_name/code.
+    maintenance_plant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("maintenance_plants.id", ondelete="SET NULL"), nullable=True
+    )
+    maintenance_plant_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    maintenance_plant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    planning_plant_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    planning_plant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Optional link to an assigned Task (the activity logs work on that task).
     task_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
@@ -210,4 +221,5 @@ class WorkReportTask(UUIDMixin, Base):
         Index("work_report_tasks_report_idx", "report_id"),
         Index("work_report_tasks_project_idx", "project_id"),
         Index("work_report_tasks_sub_activity_idx", "sub_activity_id"),
+        Index("work_report_tasks_maintenance_plant_idx", "maintenance_plant_id"),
     )

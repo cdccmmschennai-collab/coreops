@@ -45,6 +45,10 @@ class WorkReportTaskIn(BaseModel):
     # TASK_BASED sub-activities only: the completion checkbox. started_date/
     # due_date/completed_date are never client-supplied — see service.py.
     is_completed: bool = False
+    # Independent of the project's own assigned plant — which plant the
+    # employee actually worked at that day. Planning Plant code/description
+    # auto-derive server-side; never client-supplied.
+    maintenance_plant_id: uuid.UUID | None = None
 
 
 class WorkReportTaskOut(BaseModel):
@@ -90,6 +94,14 @@ class WorkReportTaskOut(BaseModel):
     # activity_master.service.compute_overdue.
     is_overdue: bool = False
     days_overdue: int = 0
+    # Maintenance Plant the employee worked at, frozen at save time (see
+    # work_reports/service.py `_validate_tasks`). Independent of the
+    # project's own assigned plant.
+    maintenance_plant_id: uuid.UUID | None = None
+    maintenance_plant_code: str | None = None
+    maintenance_plant_description: str | None = None
+    planning_plant_code: str | None = None
+    planning_plant_description: str | None = None
 
 
 class WorkReportCreate(BaseModel):

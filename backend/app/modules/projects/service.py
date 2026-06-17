@@ -113,6 +113,7 @@ def list_projects(
     projects = list(rows)
     _attach_member_counts(db, projects)
     _attach_job_codes(db, projects)
+    _attach_maintenance_plants(db, projects)
     for p in projects:
         p.days_running = _compute_days_running(p)  # type: ignore[attr-defined]
     return projects, total
@@ -209,6 +210,7 @@ def get_project(db: Session, actor: User, project_id: uuid.UUID) -> Project:
         )
     ).scalar_one()
     _attach_job_codes(db, [project])
+    _attach_maintenance_plants(db, [project])
     project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     return project
 
@@ -320,6 +322,7 @@ def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
     project.member_count = 0  # type: ignore[attr-defined]
     project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     _attach_job_codes(db, [project])
+    _attach_maintenance_plants(db, [project])
     return project
 
 
@@ -348,6 +351,19 @@ def update_project(
     if "status" in fields and fields["status"] is not None:
         _validate_status_transition(project.status, fields["status"])
 
+    # code is editable (PMs need to fix codes entered before this field
+    # existed) — but must stay unique among non-deleted projects, same rule
+    # create_project enforces.
+    if "code" in fields and fields["code"] != project.code:
+        if db.execute(
+            select(Project).where(
+                Project.code == fields["code"],
+                Project.deleted_at.is_(None),
+                Project.id != project.id,
+            )
+        ).scalar_one_or_none():
+            raise AppError("conflict", "A project with this code already exists.", 409)
+
     # planned_completion_date via this endpoint is only allowed as an initial set.
     # Once a date exists, changes must go through the dedicated endpoint (which
     # requires a reason and records the change log / timeline event).
@@ -369,7 +385,11 @@ def update_project(
         setattr(project, key, value)
     project.updated_by = actor.id
     db.add(project)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "A project with this code already exists.", 409)
     db.refresh(project)
     project.member_count = db.execute(  # type: ignore[attr-defined]
         select(func.count()).select_from(ProjectMember).where(
@@ -377,6 +397,7 @@ def update_project(
         )
     ).scalar_one()
     _attach_job_codes(db, [project])
+    _attach_maintenance_plants(db, [project])
     project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     return project
 

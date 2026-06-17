@@ -31,6 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { useTasks } from "@/features/tasks/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
@@ -57,6 +58,13 @@ interface WorkReportFormProps {
   reportId?: string;
 }
 
+const COUNT_FIELD_KEY = {
+  tags: "tags_count",
+  docs: "docs_count",
+  bom: "bom_count",
+  spares: "spares_count",
+} as const;
+
 /** "2026-06-16" + 2 -> "2026-06-18". Client-side preview only, for a
  * TASK_BASED row that hasn't been saved yet — the server is authoritative
  * once the row exists (it computes due_date the same way, on save). */
@@ -76,6 +84,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const { items: projects, byId: projById } = useProjectOptions();
   const { data: activities } = useActivities(true);
   const { items: subActivities, byId: subActivityById } = useSubActivityOptions();
+  const { options: maintenancePlantOptions, byId: maintenancePlantById } = useMaintenancePlantOptions();
 
   const employeeName = employeeId ? (empById.get(employeeId) ?? "—") : "—";
 
@@ -188,6 +197,28 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
   async function onSubmit(values: WorkReportFormValues) {
     setFormError(null);
+
+    // A NUMERIC sub-activity's relevant_count_field is the benchmark's
+    // actual-value source — it must be filled in (not left at the default
+    // 0) whenever that benchmark applies, so the deficit/productivity calc
+    // at submit time reflects real production, not an unfilled field.
+    let hasBenchmarkError = false;
+    values.tasks.forEach((t, i) => {
+      const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
+      const countField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
+      const key = countField ? COUNT_FIELD_KEY[countField] : null;
+      if (key && Number(t[key] || 0) <= 0) {
+        form.setError(`tasks.${i}.${key}`, {
+          message: `Required — ${sub!.name} has a benchmark target`,
+        });
+        hasBenchmarkError = true;
+      }
+    });
+    if (hasBenchmarkError) {
+      setFormError("Fill in the required benchmark count(s) highlighted below.");
+      return;
+    }
+
     try {
       const result =
         mode === "create"
@@ -486,6 +517,72 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       </div>
                     </div>
 
+                    {/* Row A2: Maintenance Plant — pick directly (searchable, like
+                        Activity/Sub-Activity); Planning Plant code/description
+                        auto-derive, read-only. Independent of the project's own
+                        assigned plant — which plant the employee actually worked
+                        at that day. Reuses Row A's exact column template so this
+                        row's fields line up under Project Name / Project Code,
+                        with Description (PP) spanning the remaining width. */}
+                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                      {(() => {
+                        const selectedPlantId = watchedTasks?.[index]?.maintenance_plant_id;
+                        const selectedPlant = selectedPlantId
+                          ? maintenancePlantById.get(selectedPlantId)
+                          : undefined;
+                        const planningPlantCode =
+                          selectedPlant?.planning_plant_code
+                          ?? watchedTasks?.[index]?.planning_plant_code
+                          ?? "—";
+                        const planningPlantDescription =
+                          selectedPlant?.planning_plant_description
+                          ?? watchedTasks?.[index]?.planning_plant_description
+                          ?? "—";
+                        return (
+                          <>
+                            <FormField
+                              control={form.control}
+                              name={`tasks.${index}.maintenance_plant_id`}
+                              render={({ field: f }) => (
+                                <FormItem className="min-w-0">
+                                  <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
+                                    Maintenance Plant
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Combobox
+                                      value={f.value || ""}
+                                      onValueChange={f.onChange}
+                                      options={maintenancePlantOptions}
+                                      placeholder="Select plant…"
+                                      searchPlaceholder="Search maintenance plants…"
+                                      emptyMessage="No matching plants."
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <div className="space-y-2">
+                              <span className="block text-xs font-medium leading-none text-muted-foreground">
+                                Planning Plant
+                              </span>
+                              <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                                {planningPlantCode}
+                              </div>
+                            </div>
+                            <div className="space-y-2 md:col-span-3">
+                              <span className="block text-xs font-medium leading-none text-muted-foreground">
+                                Description (PP)
+                              </span>
+                              <div className="flex h-9 items-center truncate rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
+                                {planningPlantDescription}
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+
                     {/* Row B: Activity (25%) | Sub-Activity (75%) — own full-width row
                         so long sub-activity names show in full, uncramped. Selections
                         come from the Activity Master (Settings → Activity Master),
@@ -561,24 +658,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       />
                     </div>
 
-                    {/* Row B2: Day Remarks — own full-width row, right below Activity. */}
-                    <FormField
-                      control={form.control}
-                      name={`tasks.${index}.description`}
-                      render={({ field: f }) => (
-                        <FormItem>
-                          <FormLabel className="text-xs text-muted-foreground">
-                            Day Remarks (optional)
-                          </FormLabel>
-                          <FormControl>
-                            <Input placeholder="What did you work on?" {...f} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    {/* Row B3: Tags / Docs / BOM / Spares — operational reporting,
+                    {/* Row B2: Tags / Docs / BOM / Spares — operational reporting,
                         independent of the benchmark target shown on whichever field
                         is relevant. None are required. Same full-row 4-col grid as
                         "Maintenance counts" below, so the layout stays consistent
@@ -617,9 +697,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                   >
                                     {label}
                                     {isTarget && (
-                                      <span className="font-normal text-muted-foreground">
-                                        {" "}(Target: {formatInt(sub!.benchmark_value)}/{sub!.benchmark_period_days ?? 1}d)
-                                      </span>
+                                      <>
+                                        <span className="text-destructive"> *</span>
+                                        <span className="font-normal text-muted-foreground">
+                                          {" "}(Target: {formatInt(sub!.benchmark_value)}/{sub!.benchmark_period_days ?? 1}d)
+                                        </span>
+                                      </>
                                     )}
                                   </FormLabel>
                                   <FormControl>
@@ -639,6 +722,23 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         });
                       })()}
                     </div>
+
+                    {/* Row B3: Day Remarks — own full-width row. */}
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.description`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">
+                            Day Remarks (optional)
+                          </FormLabel>
+                          <FormControl>
+                            <Input placeholder="What did you work on?" {...f} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
 
                     {/* Row C: TASK_BASED sub-activities only — a single
                         completion checkbox. No status dropdown, no manual

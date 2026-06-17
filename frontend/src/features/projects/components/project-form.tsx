@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -25,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { AppError } from "@/lib/api-client";
 
 import { useCreateProject, useUpdateProject } from "../hooks";
@@ -55,6 +57,12 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
   const createMutation = useCreateProject();
   const updateMutation = useUpdateProject(projectId ?? "");
   const isPending = createMutation.isPending || updateMutation.isPending;
+
+  const { options: maintenancePlantOptions, byId: maintenancePlantById } = useMaintenancePlantOptions();
+  const watchedMaintenancePlantId = form.watch("maintenance_plant_id");
+  const selectedMaintenancePlant = watchedMaintenancePlantId
+    ? maintenancePlantById.get(watchedMaintenancePlantId)
+    : undefined;
 
   function handleError(error: unknown) {
     if (error instanceof AppError) {
@@ -97,7 +105,7 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
           <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
             <div className="grid gap-4 sm:grid-cols-2">
 
-              {/* Project Code */}
+              {/* Project Code — editable; uniqueness re-checked server-side on change */}
               <FormField
                 control={form.control}
                 name="code"
@@ -105,7 +113,7 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                   <FormItem>
                     <FormLabel>Project Code</FormLabel>
                     <FormControl>
-                      <Input {...field} disabled={mode === "edit"} placeholder="e.g. GC19101900" />
+                      <Input {...field} placeholder="e.g. GC19101900" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -182,6 +190,49 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                   </FormItem>
                 )}
               />
+
+              {/* Maintenance Plant — pick directly (searchable, ~100 options);
+                  Planning Plant code/description auto-derive, read-only. */}
+              <div className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
+                <FormField
+                  control={form.control}
+                  name="maintenance_plant_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="block text-sm font-medium leading-none text-muted-foreground">
+                        Maintenance Plant
+                      </FormLabel>
+                      <FormControl>
+                        <Combobox
+                          value={field.value || ""}
+                          onValueChange={field.onChange}
+                          options={maintenancePlantOptions}
+                          placeholder="Select plant…"
+                          searchPlaceholder="Search maintenance plants…"
+                          emptyMessage="No matching plants."
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium leading-none text-muted-foreground">
+                    Planning Plant
+                  </label>
+                  <Input value={selectedMaintenancePlant?.planning_plant_code ?? ""} disabled readOnly />
+                </div>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium leading-none text-muted-foreground">
+                    Description (PP)
+                  </label>
+                  <Input
+                    value={selectedMaintenancePlant?.planning_plant_description ?? ""}
+                    disabled
+                    readOnly
+                  />
+                </div>
+              </div>
 
               {/* Dates */}
               <FormField

@@ -356,6 +356,16 @@ export function WorkReportDetail({ id }: { id: string }) {
                       </p>
                     </div>
 
+                    {/* Maintenance Plant — independent of the project's own
+                        assigned plant; which plant the employee worked at that day. */}
+                    {t.maintenance_plant_id && (
+                      <div className="mt-3 grid grid-cols-3 gap-x-6 gap-y-3">
+                        <Stat label="Maintenance Plant" value={t.maintenance_plant_code ?? "—"} />
+                        <Stat label="Planning Plant" value={t.planning_plant_code ?? "—"} />
+                        <Stat label="Description (PP)" value={t.planning_plant_description ?? "—"} />
+                      </div>
+                    )}
+
                     {/* Benchmark — shape depends on the sub-activity's benchmark
                         type, frozen at submit time. Nothing renders for legacy
                         rows or sub-activities with no benchmark tracked. */}

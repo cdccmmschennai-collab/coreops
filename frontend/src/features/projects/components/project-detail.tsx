@@ -271,6 +271,28 @@ export function ProjectDetail({ id }: { id: string }) {
                   )
                 }
               />
+              <Row
+                label="Maintenance Plant"
+                value={
+                  project.maintenance_plant_code ? (
+                    <span className="font-mono">{project.maintenance_plant_code}</span>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <Row label="MP Description" value={project.maintenance_plant_description ?? "—"} />
+              <Row
+                label="Planning Plant"
+                value={
+                  project.planning_plant_code ? (
+                    <span className="font-mono">{project.planning_plant_code}</span>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <Row label="PP Description" value={project.planning_plant_description ?? "—"} />
               <Row label="Project Name" value={project.client ?? "—"} />
               <Row label="Status" value={<StatusBadge status={project.status} />} />
               <Row label="Members" value={project.member_count} />

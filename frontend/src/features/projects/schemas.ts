@@ -23,6 +23,9 @@ export const projectFormSchema = z
     code: z.string().trim().min(1, "Project code is required"),
     name: z.string().trim().min(1, "Project name is required"),
     job_code: z.string().trim().optional().default(""),
+    // Maintenance Plant is the only real selection; Planning Plant code +
+    // description are display-only, derived client-side from it.
+    maintenance_plant_id: z.string().optional().default(""),
     client: z.string().trim(),
     description: z.string().trim(),
     status: z.enum(PROJECT_STATUSES),
@@ -46,6 +49,7 @@ export const EMPTY_PROJECT_FORM: ProjectFormValues = {
   code: "",
   name: "",
   job_code: "",
+  maintenance_plant_id: "",
   client: "",
   description: "",
   status: "planning",
@@ -61,6 +65,7 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
     code: v.code,
     name: v.name,
     job_code: orNull(v.job_code),
+    maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
     client: orNull(v.client),
     description: orNull(v.description),
@@ -70,13 +75,17 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
   };
 }
 
-/** ProjectUpdate excludes code (immutable). planned_completion_date is included but
- *  the backend only applies it when the project has no existing planned date (initial set).
- *  Use PATCH /planned-completion-date for subsequent changes (requires a reason). */
+/** code is editable — the PM can fix a code entered before this field
+ *  existed (still subject to the same uniqueness rule create enforces).
+ *  planned_completion_date is included but the backend only applies it when
+ *  the project has no existing planned date (initial set). Use
+ *  PATCH /planned-completion-date for subsequent changes (requires a reason). */
 export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
   return {
+    code: v.code,
     name: v.name,
     job_code: orNull(v.job_code),
+    maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
     client: orNull(v.client),
     description: orNull(v.description),

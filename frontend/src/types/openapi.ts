@@ -1257,6 +1257,40 @@ export interface paths {
         patch: operations["update_task_status_api_v1_tasks__task_id__status_patch"];
         trace?: never;
     };
+    "/api/v1/plants/planning-plants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Planning Plants */
+        get: operations["list_planning_plants_api_v1_plants_planning_plants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/plants/maintenance-plants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Maintenance Plants */
+        get: operations["list_maintenance_plants_api_v1_plants_maintenance_plants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2087,6 +2121,34 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * MaintenancePlantOut
+         * @description Flattened with the parent Planning Plant's code/description — the
+         *     shape both the Project form and the Work Report row need (pick the
+         *     Maintenance Plant, auto-show the Planning Plant info).
+         */
+        MaintenancePlantOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Description */
+            description: string | null;
+            /**
+             * Planning Plant Id
+             * Format: uuid
+             */
+            planning_plant_id: string;
+            /** Planning Plant Code */
+            planning_plant_code: string;
+            /** Planning Plant Description */
+            planning_plant_description: string;
+            /** Is Active */
+            is_active: boolean;
+        };
         /** Me */
         Me: {
             user: components["schemas"]["UserOut"];
@@ -2274,6 +2336,25 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** PlanningPlantOut */
+        PlanningPlantOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Code */
+            code: string;
+            /** Description */
+            description: string;
+            /** Is Active */
+            is_active: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** ProjectActivityCreate */
         ProjectActivityCreate: {
             /** Activity Type Id */
@@ -2372,6 +2453,8 @@ export interface components {
             name: string;
             /** Job Code */
             job_code?: string | null;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -2447,6 +2530,16 @@ export interface components {
             job_code_code?: string | null;
             /** Job Code Name */
             job_code_name?: string | null;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
+            /** Maintenance Plant Code */
+            maintenance_plant_code?: string | null;
+            /** Maintenance Plant Description */
+            maintenance_plant_description?: string | null;
+            /** Planning Plant Code */
+            planning_plant_code?: string | null;
+            /** Planning Plant Description */
+            planning_plant_description?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -2489,10 +2582,14 @@ export interface components {
         ProjectStatus: "planning" | "active" | "on_hold" | "completed" | "archived";
         /** ProjectUpdate */
         ProjectUpdate: {
+            /** Code */
+            code?: string | null;
             /** Name */
             name?: string | null;
             /** Job Code */
             job_code?: string | null;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -3132,6 +3229,8 @@ export interface components {
              * @default false
              */
             is_completed: boolean;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
         };
         /** WorkReportTaskOut */
         WorkReportTaskOut: {
@@ -3222,6 +3321,16 @@ export interface components {
              * @default 0
              */
             days_overdue: number;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
+            /** Maintenance Plant Code */
+            maintenance_plant_code?: string | null;
+            /** Maintenance Plant Description */
+            maintenance_plant_description?: string | null;
+            /** Planning Plant Code */
+            planning_plant_code?: string | null;
+            /** Planning Plant Description */
+            planning_plant_description?: string | null;
         };
         /** WorkReportUpdate */
         WorkReportUpdate: {
@@ -6911,6 +7020,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_planning_plants_api_v1_plants_planning_plants_get: {
+        parameters: {
+            query?: {
+                active_only?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanningPlantOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_maintenance_plants_api_v1_plants_maintenance_plants_get: {
+        parameters: {
+            query?: {
+                active_only?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenancePlantOut"][];
                 };
             };
             /** @description Validation Error */
