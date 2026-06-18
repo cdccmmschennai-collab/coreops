@@ -688,9 +688,6 @@ _COUNT_FIELD_COLUMNS = {
 }
 
 
-_NUMERIC_BENCHMARK_TYPE = "NUMERIC_BENCHMARK"
-
-
 def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
     """Freeze benchmark snapshot + compute deficit/productivity_pct for every
     task row with a NUMERIC sub-activity. Runs once, at submit time only — never
@@ -703,16 +700,11 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
     relevant_count_field names — there is no separate actual-count field, so
     the same production number is never entered twice.
 
-    Also upserts/resolves a NUMERIC_BENCHMARK notification per (employee,
-    sub-activity) — kept active (deficit > 0) or resolved (benchmark met) on
-    every submit. This is a lightweight stand-in ahead of the Phase 2C daily
-    scan: it only re-checks on submit, not every calendar day, but already
-    gives the author real feedback without waiting for that cron."""
-    from app.modules.notifications.service import resolve_notification, upsert_notification
-
-    author = db.get(Employee, report.employee_id)
-    user_id = author.user_id if author else None
-
+    Benchmark shortfall/overdue alerts are NOT persisted here — they're
+    computed live, on demand, by activity_master.service.get_daily_benchmark_ledger
+    / get_overdue_activities (see the dashboard + login-alert endpoints).
+    Persisting a notification at submit time would create a second, staler
+    source of truth alongside those live queries."""
     rows = db.execute(
         select(WorkReportTask).where(WorkReportTask.report_id == report.id)
     ).scalars().all()
@@ -736,24 +728,6 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         row.deficit = deficit
         row.productivity_pct = productivity_pct
         db.add(row)
-
-        if user_id is None or sub.benchmark_type != "NUMERIC":
-            continue
-        unit = sub.relevant_count_field or "units"
-        if deficit and deficit > 0:
-            upsert_notification(
-                db, user_id=user_id, type_=_NUMERIC_BENCHMARK_TYPE,
-                title=f"{sub.name} benchmark shortfall",
-                message=f"{sub.name} benchmark shortfall. Pending {deficit:g} {unit}.",
-                severity="WARNING",
-                entity_type="activity_master", entity_id=sub.id,
-                target_url=f"/work-reports/{report.id}",
-            )
-        else:
-            resolve_notification(
-                db, user_id=user_id, type_=_NUMERIC_BENCHMARK_TYPE,
-                entity_type="activity_master", entity_id=sub.id,
-            )
 
 
 def submit_work_report(
