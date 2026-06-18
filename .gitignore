@@ -41,3 +41,11 @@ secrets/
 .Rhistory
 
 wms_backup.sql
+Datas/
+rbac_evidence/
+verify_rbac.js
+
+*.log
+*.tmp
+.env
+.env.local
