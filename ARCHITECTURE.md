@@ -1,0 +1,364 @@
+# CoreOps — Architecture Guide
+
+> Onboarding reference for engineers joining the CoreOps Workforce Management System.
+> Read the **System Overview** and **Cross-Cutting Conventions** first — every module
+> repeats the same patterns, so once you understand one module you understand them all.
+
+---
+
+## 1. System Overview
+
+CoreOps is a **Workforce Management System (WMS)**: employee records, login accounts,
+projects, attendance, daily work reports, leave, a company calendar, and in-app
+notifications — with a two-role RBAC model.
+
+### Tech stack
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python, **FastAPI**, **SQLAlchemy 2.0** (`Mapped`/`mapped_column`), **Pydantic v2** |
+| Migrations | **Alembic** (linear, numbered `0001…0018`) |
+| Database | **PostgreSQL** (UUID PKs, CITEXT emails, partial-unique indexes, native enum types) |
+| Cache / sessions | **Redis** (login throttle + JWT logout denylist) |
+| Async (scaffolded) | **Celery** (`core/celery_app.py`) — present, lightly used |
+| Frontend | **Next.js 14 App Router**, **TanStack Query**, **react-hook-form + zod**, shadcn-style UI |
+| Auth | **JWT HS256** access tokens, **bcrypt** password hashing |
+
+### Runtime topology (Docker Compose, project `wms`)
+| Service | Host port |
+|---------|-----------|
+| frontend (Next.js) | 3100 |
+| backend (FastAPI) | 8100 |
+| postgres | 5433 |
+| redis | 6381 |
+
+Backend applies migrations on start. Tests run in-container:
+`docker compose exec -T backend pytest`; frontend typecheck:
+`docker compose exec -T frontend npm run typecheck`.
+
+### Repository layout
+```
+backend/app/
+  core/        config, database, deps (auth), security, redis, celery_app
+  shared/      base (ORM mixins), errors (uniform envelope), pagination
+  modules/     one folder per domain (models, schemas, service, router)
+  main.py      app factory: CORS, error handlers, router registration
+backend/alembic/versions/   numbered migrations
+backend/tests/              pytest suite (253 tests)
+frontend/src/
+  app/(app)    auth-gated routes;  app/(auth) login
+  features/    one folder per domain (api, hooks, types, components)
+  lib/         api-client, auth-storage, rbac, format
+  types/       api.ts (hand-authored, auth flow) + openapi.ts (generated)
+```
+
+---
+
+## 2. Cross-Cutting Conventions
+
+**Module anatomy.** Every backend module has the same four files:
+- `models.py` — SQLAlchemy ORM tables + enums.
+- `schemas.py` — Pydantic request/response models (`ConfigDict(from_attributes=True)`).
+- `service.py` — **all business logic and authorization scoping**. Routers stay thin.
+- `router.py` — FastAPI endpoints; wires dependencies and maps service results to schemas.
+
+**Shared ORM mixins** (`shared/base.py`): `UUIDMixin` (UUID PK via `gen_random_uuid`),
+`TimestampMixin` (`created_at`/`updated_at`), `SoftDeleteMixin` (`deleted_at`). Most
+business entities also carry bare `created_by`/`updated_by` UUID columns (provenance;
+**no FK** to `users`).
+
+**Soft-delete vs hard-delete.** Master/identity entities (users, employees, projects)
+use `deleted_at` + partial-unique indexes scoped `WHERE deleted_at IS NULL`. Operational
+logs (attendance, work reports, leave, notifications) are hard rows (delete removes them).
+
+**Uniform error envelope** (`shared/errors.py`). Services raise
+`AppError(code, message, status_code)`. All errors serialize to:
+```json
+{ "error": { "code", "message", "details", "request_id" } }
+```
+A catch-all handler wraps unexpected exceptions as `500 internal_error` without leaking
+internals. The frontend `lib/api-client.ts` parses this into a typed `AppError`.
+
+**Authentication** (`core/security.py`, `core/deps.py`):
+- `POST /auth/login` → bcrypt-verify → issue JWT (HS256, `sub`/`role`/`jti`/`exp`, 60-min).
+- `get_current_claims` decodes the token and checks the Redis **denylist** (logout).
+- `get_current_user` **re-loads the User from the DB every request** and rejects
+  inactive/deleted users → disable and role changes take effect **immediately**; the JWT
+  `role` claim is never trusted for authorization.
+- Token stored client-side in `localStorage` (`lib/auth-storage.ts`).
+
+**Authorization (RBAC).** Two active roles: **`project_manager`** (full access) and
+**`employee`** (self-scoped). Deprecated values `admin`/`manager`/`viewer` remain in the
+DB/Python enums for rollback safety (migrated away in `0013`) but should never be assigned.
+Two enforcement layers:
+1. **Coarse gate** — `require_role("project_manager")` dependency on write endpoints.
+2. **Fine data-scoping** — inside each service (`_apply_scope`, `_assert_can_read`):
+   employees see only their own rows; PMs see everything.
+
+Frontend mirrors this with a capability matrix in `lib/rbac.ts` (`can(role, capability)`).
+**Note:** the matrix is FE-only; backend uses raw role checks — keep them in sync.
+
+**Pagination.** Offset/limit everywhere; list responses are `{ items, total, limit, offset }`.
+
+**API contract.** OpenAPI is generated by the backend and consumed by the frontend
+(`npm run gen:api` → `types/openapi.ts`). Regenerate after changing any schema.
+
+---
+
+## 3. Module Reference
+
+Bounded contexts in dependency order. **User** = authentication identity;
+**Employee** = business identity; the two are linked one-to-one via `employee.user_id`.
+
+### 3.1 `auth`
+1. **Purpose** — Login, logout, self-service password change, and the `/auth/me` identity payload.
+2. **Tables** — none (operates on `users` + `employees`).
+3. **APIs** (`/api/v1/auth`)
+   - `POST /login` → `{access_token, expires_in}`
+   - `POST /logout` (204) — denylists the current `jti` in Redis until its expiry.
+   - `POST /change-password` (204) — verifies current password, rejects reuse, keeps session active.
+   - `GET /me` → `{user, employee, employee_id}` (employee profile embedded, names resolved server-side).
+4. **Frontend** — `(auth)/login`; `(app)/account/change-password`; `/me` powers the auth provider/avatar menu.
+5. **Relationships** — reads `users` (auth) and `employees` (profile via `build_profile`).
+6. **RBAC** — `/login` public; others require a valid token (any role).
+7. **Business logic** — Redis login throttle (5 fails / 15 min per email+IP, `auth/service.py`);
+   wrong current password → **400** (not 401, to avoid global logout handling); password change
+   deliberately does **not** revoke the session.
+
+### 3.2 `users` (authentication identity)
+1. **Purpose** — Administer login accounts (the "Users & Roles" surface).
+2. **Tables** — `users` (`email` CITEXT, `password_hash`, `role` enum, `is_active`,
+   `last_login_at`, soft-delete). Partial-unique `users_email_uq` on live rows.
+3. **APIs** (`/api/v1/users`, all **project_manager**)
+   - `GET ""` → `UserPage` of `UserListItem` (each enriched with its linked employee).
+   - `POST ""`, `GET /{id}`, `PATCH /{id}`, `PATCH /{id}/role`, `PATCH /{id}/password` (204).
+4. **Frontend** — Users & Roles table (under Settings): Employee Name (links to employee),
+   Employee ID, Login Email, Role, Status, Last Login, Actions.
+5. **Relationships** — one-to-one with `employees`; `list_users` batch-fetches linked
+   employees in a single `IN` query (no N+1).
+6. **RBAC** — entirely project_manager.
+7. **Business logic** — guard rails in `users/service.py`: cannot remove/deactivate the
+   **last active PM**, cannot deactivate yourself, cannot change your own PM role.
+   `set_role`/`set_password` are reused by the employees module.
+
+### 3.3 `employees` (business identity) — **primary account-management surface**
+1. **Purpose** — Employee HR records, org/reporting structure, and lifecycle management
+   of the linked login account.
+2. **Tables** — `employees`: `user_id` (FK→users, nullable, `SET NULL`), `employee_code`,
+   names, `work_email` (CITEXT), `personal_email` (CITEXT, **informational only — never
+   used for auth**), `phone`, `department`, `designation`, `manager_id` (self-FK,
+   `RESTRICT`), `reporting_pm_id` (FK→users), `office_id` (FK→offices), `date_of_joining`,
+   `status` enum (`active`/`on_leave`/`exited`), soft-delete. Key indexes:
+   `employees_code_uq`, `employees_work_email_uq`, **`employees_user_id_uq`** (enforces the
+   one-to-one link), plus manager/office/status. Check: `manager_id <> id`.
+3. **APIs** (`/api/v1/employees`)
+   - `GET ""` (scoped), `GET /{id}` (scoped) — any authenticated user.
+   - `POST ""`, `PATCH /{id}`, `DELETE /{id}` (soft-delete + status→exited) — PM.
+   - `GET /{id}/team` — PM (direct reports).
+   - **Account sub-resource** (all PM): `POST /{id}/account` (create+link),
+     `PATCH /{id}/account/password` (204), `PATCH /{id}/account/status`,
+     `PATCH /{id}/account/role`, `PATCH /{id}/account/link` (relink),
+     `DELETE /{id}/account/link` (204, unlink).
+4. **Frontend** — `(app)/employees` list, `/new`, `/[id]` (detail), `/[id]/edit`. Detail is
+   split into **Employee Information** (business identity) and **Login Account**
+   (authentication identity) sections, with create/reset/role/relink/unlink actions.
+5. **Relationships** — central hub: links to `users`; referenced by `attendance`,
+   `work_reports`, `leave`, `projects` (members); manager self-reference forms the org tree.
+6. **RBAC** — reads self-scoped for employees (own record only via `_assert_can_read`);
+   all writes and account actions are PM-only.
+7. **Business logic** — `build_profile` resolves manager/office **names server-side** so
+   low-privilege users still see labels. Relink enforces one-to-one via DB index **and** a
+   friendly 409 pre-check. Account actions delegate to `users/service.py` so its guards
+   (last-PM, self-role, password hashing) always apply. **PMs never see passwords/hashes.**
+
+### 3.4 `offices`
+1. **Purpose** — Physical branches with timezone + shift config (foundation for future
+   shift-compliance features).
+2. **Tables** — `offices`: `name` (unique), `timezone` (IANA), `shift_start`/`shift_end`
+   (local `TIME`), `break_minutes`, `is_active`.
+3. **APIs** (`/api/v1/offices`, all **project_manager**) — `GET ""`, `POST ""`,
+   `GET /{id}`, `PATCH /{id}`.
+4. **Frontend** — managed under Settings; office names surface on employee profiles.
+5. **Relationships** — referenced by `employees.office_id` (`SET NULL`).
+6. **RBAC** — project_manager only (including reads).
+7. **Business logic** — currently CRUD + config storage; no attendance math yet.
+
+### 3.5 `projects`
+1. **Purpose** — Projects, their members, and PM assignments; the basis for work-report
+   project attribution.
+2. **Tables**
+   - `projects`: `code` (unique-live), `name`, `client`, `description`, `status` enum
+     (`planning`/`active`/`on_hold`/`completed`/`archived`), dates (check `end>=start`),
+     `job_code_id` (FK→job_codes, `SET NULL`), soft-delete.
+   - `project_members`: (`project_id`, `employee_id`) unique; `role` enum
+     (`team_lead`/`contributor`/`qc`; legacy `lead`/`member` retained).
+   - `project_managers`: explicit (`project_id`, `user_id`) assignment for routing/UI.
+3. **APIs** (`/api/v1/projects`)
+   - `GET ""` (scoped), `GET /{id}`, `GET /{id}/members` — authenticated.
+   - `POST ""`, `PATCH /{id}`, `DELETE /{id}`, `POST/PATCH/DELETE /{id}/members…` — PM.
+4. **Frontend** — `(app)/projects` list, `/new`, `/[id]` (with members panel), `/[id]/edit`.
+5. **Relationships** — members reference `employees`; `work_report_tasks` reference projects;
+   optional `job_code`.
+6. **RBAC** — employees see **only projects they're a member of** (`list_projects` scope);
+   PMs see all. All writes PM-only.
+7. **Business logic** — a **status state machine** (`_ALLOWED_TRANSITIONS`); archived
+   projects are hidden by default and cannot be selected in new work reports.
+
+### 3.6 `attendance`
+1. **Purpose** — Operational attendance log, one row per (employee, date).
+2. **Tables** — `attendance_records` (**no soft-delete**): `employee_id` (`RESTRICT`),
+   `attendance_date`, `check_in_at`/`check_out_at`, `total_minutes`, `overtime_minutes`,
+   `status` enum (`present`/`absent`/`half_day`/`leave`/`holiday`/`weekend`). Unique
+   (`employee_id`,`attendance_date`); checks: minutes ≥ 0, check-out ≥ check-in.
+3. **APIs**
+   - `GET /attendance` (scoped) + filters; `GET /attendance/{id}` (scoped) — authenticated.
+   - `POST/PATCH/DELETE /attendance/{id}` — PM.
+   - `GET /employees/{employee_id}/attendance` — scoped per-employee view.
+4. **Frontend** — `(app)/attendance` (also hosts the Leave tab), `/new`, `/[id]`, `/[id]/edit`.
+5. **Relationships** — references `employees`.
+6. **RBAC** — employees read own; PMs read all and own all writes.
+7. **Business logic** — `total_minutes`/`overtime_minutes` derived; hard delete (it's a log).
+
+### 3.7 `work_reports` (Daily Work Reports) — most complex module
+1. **Purpose** — Daily work reporting with a submit→review workflow; models the company's
+   former Google Form.
+2. **Tables**
+   - `daily_work_reports` (header, **no soft-delete**): `employee_id`, `report_date`,
+     `status` enum (`draft`/`submitted`/`approved`/`rejected`), Google-Form fields
+     (`day_status`, `location`, counts, `remarks`, `query_text`, …), `total_minutes`
+     (derived, check 0–1440), review fields (`submitted_at`, `reviewed_by`, `reviewed_at`,
+     `review_note`). Unique (`employee_id`,`report_date`).
+   - `work_report_tasks` (lines, `CASCADE`): `project_id`, `description`, `minutes_spent`,
+     counts, plus **snapshot columns** (`project_name`/`project_code`/`project_job_code_code`)
+     frozen at save time for historical accuracy.
+3. **APIs** (`/api/v1/work-reports`)
+   - `GET ""` (scoped) + filters; `GET /{id}` (scoped).
+   - `POST ""`, `PATCH /{id}`, `DELETE /{id}` — author only (submit/approve gated separately).
+   - `POST /{id}/submit` (author), `POST /{id}/approve`, `POST /{id}/reject` (PM review).
+4. **Frontend** — `(app)/work-reports` list, `/new`, `/[id]`, `/[id]/edit`; `(app)/reports`/
+   `analytics` aggregate views.
+5. **Relationships** — references `employees` (author), `projects` (tasks), `job_codes`
+   (snapshot); emits notifications.
+6. **RBAC** — employees CRUD their **own** reports; PMs read all and review.
+7. **Business logic** — date window (current + previous month, no future); duplicate-per-day
+   guard; each task validates project is active **and** the author is a member; daily sum ≤
+   1440; `total_minutes` always server-derived; editing a `rejected` report returns it to
+   `draft`; only `draft` is deletable; submit/approve/reject notify the counterpart.
+
+### 3.8 `leave`
+1. **Purpose** — Leave requests with manager review.
+2. **Tables** — `leave_requests`: `employee_id`, `leave_type` enum
+   (`casual`/`sick`/`annual`/`comp_off`/`unpaid`/`other`), `start_date`/`end_date`
+   (check end≥start), `reason`, `status` enum (`pending`/`approved`/`rejected`/`cancelled`),
+   `manager_id` (captured at decision time — denormalized audit), `manager_comment`.
+3. **APIs** (`/api/v1/leave`) — `GET ""`/`GET /{id}` (scoped); `POST`/`PATCH`/`POST /{id}/cancel`
+   (employee, own pending); `POST /{id}/approve`, `POST /{id}/reject` (PM).
+4. **Frontend** — surfaced inside the Attendance UI (`/attendance?tab=leave`).
+5. **Relationships** — references `employees`; emits notifications.
+6. **RBAC** — employees manage own pending; PMs review.
+7. **Business logic** — only `pending` is editable/cancellable; approve/reject capture the
+   reviewing manager's employee id and notify the requester.
+
+### 3.9 `calendar`
+1. **Purpose** — Company calendar (holidays/events).
+2. **Tables** — `company_calendar_events`: `event_date`, `title`, `event_type`
+   (`holiday`/`event`), `description`.
+3. **APIs** (`/api/v1/calendar`) — `GET ""`/`GET /{id}` (any authenticated);
+   `POST`/`PATCH`/`DELETE` (project_manager — enforced in service).
+4. **Frontend** — managed under Settings; consumed by attendance/calendar views.
+5. **Relationships** — standalone; broadcasts notifications to all users on create.
+6. **RBAC** — all read; PM write.
+7. **Business logic** — creating an event notifies every user (`_notify_all_users`).
+
+### 3.10 `notifications`
+1. **Purpose** — In-app notification feed (per user).
+2. **Tables** — `notifications` (hard rows): `user_id` (`CASCADE`), `type`, `title`,
+   `message`, `entity_type`/`entity_id`, `target_url` (deep-link), `is_read`.
+3. **APIs** (`/api/v1/notifications`) — `GET ""`, `GET /unread-count`, `POST /read-all`,
+   `POST /{id}/read`. **No public create endpoint.**
+4. **Frontend** — `(app)/notifications` + the bell/unread badge; `target_url` drives deep-linking.
+5. **Relationships** — written **internally** by `work_reports`, `leave`, `projects`,
+   `calendar` via `create_notification`.
+6. **RBAC** — every user reads/manages **only their own** notifications.
+7. **Business logic** — producers call `create_notification` inside a best-effort
+   try/except (a notification failure never breaks the primary action).
+
+### 3.11 `activity_types` (master data)
+1. **Purpose** — Reference list classifying work-report activity.
+2. **Tables** — `activity_types`: `code` (nullable, unique among active), `name`,
+   `category` (`GENERAL`/`PROJECT`/`TAG_ESTIMATION`), `requires_project`, `is_active`.
+3. **APIs** (`/api/v1/activity-types`) — `GET ""`/`GET /{id}` (authenticated);
+   `POST`/`PATCH`/`DELETE` (PM; delete is a soft toggle returning the row).
+4. **Frontend** — Settings → master data.
+5. **Relationships** — referenced by work-report tasks (`activity_type` text).
+6. **RBAC** — all read; PM write.
+7. **Business logic** — `requires_project` flags activities that must be tied to a project.
+
+### 3.12 `job_codes` (master data)
+1. **Purpose** — Billing / J-code reference for projects.
+2. **Tables** — `job_codes`: `code` (unique among active), `name`, `description`, `is_active`.
+3. **APIs** (`/api/v1/job-codes`) — `GET ""`/`GET /{id}` (authenticated);
+   `POST`/`PATCH`/`DELETE` (PM).
+4. **Frontend** — Settings → master data.
+5. **Relationships** — referenced by `projects.job_code_id`; snapshotted into work-report tasks.
+6. **RBAC** — all read; PM write.
+7. **Business logic** — straightforward master CRUD with active-scoped uniqueness.
+
+---
+
+## 4. Entity Relationship Map
+
+```
+users (auth identity) 1───1 employees (business identity)        [employees.user_id, unique]
+employees ──self──> employees                                    [manager_id; org tree]
+employees ──> offices                                            [office_id]
+employees 1──* attendance_records
+employees 1──* daily_work_reports 1──* work_report_tasks ──> projects
+employees 1──* leave_requests
+projects 1──* project_members ──> employees
+projects 1──* project_managers ──> users
+projects ──> job_codes
+work_report_tasks ──> job_codes (snapshot)
+users 1──* notifications      (written by work_reports / leave / projects / calendar)
+company_calendar_events  (standalone; broadcasts to all users)
+```
+
+---
+
+## 5. How to Add a Feature (typical flow)
+
+1. **Model** — add/extend the table in `modules/<m>/models.py`; write an Alembic migration
+   (`backend/alembic/versions/00NN_*.py`, set `down_revision` to the current head).
+2. **Schemas** — request/response Pydantic models in `schemas.py`.
+3. **Service** — business logic + authorization scoping in `service.py` (raise `AppError`).
+4. **Router** — thin endpoints in `router.py`; gate writes with
+   `require_role("project_manager")`; register the router in `main.py` if new.
+5. **Tests** — add to `backend/tests/`; run `docker compose exec -T backend pytest`.
+6. **Regenerate the contract** — `npm run gen:api` → updates `frontend/src/types/openapi.ts`.
+7. **Frontend** — add `api.ts`/`hooks.ts`/`types.ts`/`components/` under `features/<m>`,
+   route pages under `app/(app)/<m>`, and capabilities in `lib/rbac.ts` if needed.
+8. **Verify** — `docker compose exec -T frontend npm run typecheck`.
+
+---
+
+## 6. Conventions & Gotchas for New Engineers
+
+- **Routers are thin; logic lives in services.** Authorization scoping is *also* in services
+  (`_apply_scope`, `_assert_can_read`) — not just the `require_role` gate.
+- **Cross-module imports are done inside functions** (e.g. employees↔users, *_↔notifications)
+  to avoid circular imports. Follow that pattern rather than adding top-level imports.
+- **`get_current_user` re-reads the DB each request**, so disabling/role-changing a user is
+  immediate; never trust the JWT `role` claim for server authorization.
+- **Two type sources on the frontend**: hand-authored `types/api.ts` (auth flow) and
+  generated `types/openapi.ts` (everything else). Regenerate after backend schema changes.
+- **Deprecated roles** (`admin`/`manager`/`viewer`, `lead`/`member`) still exist in the
+  enums/DB for rollback safety; never assign them. The frontend tolerates them with fallbacks.
+- **Notifications are best-effort** and must never break the primary action.
+- **No audit-log table yet** — only `created_by`/`updated_by` columns (and these have no FK).
+  Sensitive identity actions are not yet recorded in an append-only trail (roadmap item).
+- **Tokens live in `localStorage`** and there is no refresh token (single 60-min access
+  token); httpOnly-cookie + refresh hardening is on the roadmap.
+
+---
+
+*Generated from a read-through of the backend modules, routers, services, and migrations.
+When in doubt, the `service.py` of a module is the source of truth for its rules.*

@@ -229,7 +229,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
               variant="secondary"
               size="sm"
               className="w-full"
-              onClick={() => toast.info("Punch in/out — coming soon")}
+              onClick={() => toast.info("Punch in/out - coming soon")}
             >
               Punch out
             </Button>

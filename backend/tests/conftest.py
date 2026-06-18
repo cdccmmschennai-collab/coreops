@@ -62,10 +62,12 @@ def _clean_state():
     with SessionLocal() as db:
         db.execute(
             text(
-                "TRUNCATE TABLE notifications, work_report_tasks, daily_work_reports, "
-                "attendance_records, leave_requests, project_managers, project_members, "
-                "projects, company_calendar_events, activity_types, job_codes, "
-                "employees, offices, users RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE audit_logs, notifications, tasks, work_report_tasks, "
+                "daily_work_reports, attendance_records, leave_requests, "
+                "project_managers, project_members, projects, company_calendar_events, "
+                "activity_types, activity_master, maintenance_plants, planning_plants, "
+                "job_codes, employees, offices, users "
+                "RESTART IDENTITY CASCADE"
             )
         )
         db.commit()
@@ -172,7 +174,8 @@ def make_project(db):
         client: str | None = None,
         status: ProjectStatus = ProjectStatus.planning,
         start_date=None,
-        end_date=None,
+        planned_completion_date=None,
+        end_date=None,  # legacy alias
     ) -> Project:
         project = Project(
             code=code,
@@ -180,7 +183,7 @@ def make_project(db):
             client=client,
             status=status,
             start_date=start_date,
-            end_date=end_date,
+            planned_completion_date=planned_completion_date or end_date,
         )
         db.add(project)
         db.commit()

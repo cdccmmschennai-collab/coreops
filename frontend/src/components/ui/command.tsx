@@ -83,7 +83,10 @@ const CommandItem = React.forwardRef<
     className={cn(
       "relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none",
       "aria-selected:bg-secondary aria-selected:text-secondary-foreground",
-      "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      // cmdk renders data-disabled="false" on every item (attribute present), so the
+      // bare [data-disabled] selector would match ALL items and disable pointer events.
+      // Match the value explicitly so only truly disabled items are affected.
+      "data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50",
       className,
     )}
     {...props}

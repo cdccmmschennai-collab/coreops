@@ -8,6 +8,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.employees.schemas import EmployeeProfile
 from app.modules.users.models import UserRole
 
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -23,6 +24,12 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class ChangePasswordRequest(BaseModel):
+    """Self-service password change. Confirm-new is validated client-side."""
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8)
 
 
 # ---------- User ----------
@@ -56,8 +63,22 @@ class PasswordUpdate(BaseModel):
     new_password: str = Field(min_length=8)
 
 
+class LinkedEmployee(BaseModel):
+    """Compact employee summary attached to a user row in the admin list."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    full_name: str
+    employee_code: str
+
+
+class UserListItem(UserOut):
+    """A user row enriched with its linked employee (one-to-one), if any."""
+    linked_employee: LinkedEmployee | None = None
+
+
 class UserPage(BaseModel):
-    items: list[UserOut]
+    items: list[UserListItem]
     total: int
     limit: int
     offset: int
@@ -65,5 +86,5 @@ class UserPage(BaseModel):
 
 class Me(BaseModel):
     user: UserOut
-    employee: None = None  # reserved for a future embedded employee object
-    employee_id: uuid.UUID | None = None  # linked employee profile, if any
+    employee: EmployeeProfile | None = None  # linked business identity, if any
+    employee_id: uuid.UUID | None = None  # linked employee profile id, if any

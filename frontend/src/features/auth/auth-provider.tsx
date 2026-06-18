@@ -4,7 +4,7 @@ import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { clearToken, getToken, setToken } from "@/lib/auth-storage";
-import type { Role, User } from "@/types/api";
+import type { EmployeeProfile, Role, User } from "@/types/api";
 
 import { authApi } from "./api";
 
@@ -14,6 +14,7 @@ interface AuthContextValue {
   status: AuthStatus;
   user: User | undefined;
   role: Role | undefined;
+  employee: EmployeeProfile | null;
   employeeId: string | null;
   login: (accessToken: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -73,6 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     status,
     user,
     role: user?.role,
+    employee: meQuery.data?.employee ?? null,
     employeeId: meQuery.data?.employee_id ?? null,
     login,
     logout,

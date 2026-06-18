@@ -38,12 +38,14 @@ export function ProjectEdit({ id }: { id: string }) {
   const defaults: ProjectFormValues = {
     code: project.code,
     name: project.name,
-    job_code_id: project.job_code_id ?? "",
+    job_code: project.job_code_code ?? "",
+    maintenance_plant_id: project.maintenance_plant_id ?? "",
     client: project.client ?? "",
     description: project.description ?? "",
     status: project.status,
     start_date: project.start_date ?? "",
-    end_date: project.end_date ?? "",
+    planned_completion_date: project.planned_completion_date ?? "",
+    actual_completion_date: project.actual_completion_date ?? "",
   };
 
   return (

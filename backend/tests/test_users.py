@@ -2,6 +2,28 @@
 from app.modules.users.models import UserRole
 
 
+def test_user_list_includes_linked_employee(client, auth_header, make_user, make_employee):
+    """Users & Roles list exposes the linked employee (name + code), or null."""
+    headers = auth_header("admin@example.com", role=UserRole.project_manager)
+    linked_user = make_user("linked@example.com", role=UserRole.employee)
+    make_employee(
+        employee_code="EMP-LE1",
+        first_name="Santhosh",
+        last_name="Kumar",
+        user_id=linked_user.id,
+    )
+    res = client.get("/api/v1/users", headers=headers)
+    assert res.status_code == 200
+    items = {u["email"]: u for u in res.json()["items"]}
+
+    linked = items["linked@example.com"]
+    assert linked["linked_employee"]["full_name"] == "Santhosh Kumar"
+    assert linked["linked_employee"]["employee_code"] == "EMP-LE1"
+
+    # The admin (no employee record) shows a null link.
+    assert items["admin@example.com"]["linked_employee"] is None
+
+
 def test_employee_cannot_list_users_403(client, auth_header):
     headers = auth_header("emp@example.com", role=UserRole.employee)
     assert client.get("/api/v1/users", headers=headers).status_code == 403

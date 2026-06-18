@@ -8,6 +8,7 @@ const VARIANT: Record<WorkReportStatus, "success" | "danger" | "warning" | "info
   submitted: "info",
   approved: "success",
   rejected: "danger",
+  granted: "warning",
 };
 
 export function StatusBadge({ status }: { status: WorkReportStatus }) {

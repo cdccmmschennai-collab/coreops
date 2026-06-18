@@ -2,13 +2,11 @@ import { z } from "zod";
 
 import type { UserCreateBody, UserUpdateBody } from "./types";
 
-export const USER_ROLES = ["admin", "manager", "employee", "viewer"] as const;
+export const USER_ROLES = ["project_manager", "employee"] as const;
 
 export const USER_ROLE_LABEL: Record<(typeof USER_ROLES)[number], string> = {
-  admin: "Admin",
-  manager: "Manager",
+  project_manager: "Project Manager",
   employee: "Employee",
-  viewer: "Viewer",
 };
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;

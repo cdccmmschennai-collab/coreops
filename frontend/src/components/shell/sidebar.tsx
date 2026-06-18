@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BarChart3,
   Bell,
   CalendarDays,
   FolderKanban,
   Home,
   Users,
   FileText,
+  ListTodo,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -27,6 +27,7 @@ interface NavItem {
   capability?: Capability;
   soon?: boolean;
   count?: number;
+  alsoMatch?: string[];
 }
 
 const WORKSPACE: NavItem[] = [
@@ -34,8 +35,8 @@ const WORKSPACE: NavItem[] = [
   { label: "Employees",     href: "/employees",     icon: Users,        capability: "employee.view" },
   { label: "Projects",      href: "/projects",      icon: FolderKanban, capability: "project.view" },
   { label: "Attendance",    href: "/attendance",    icon: CalendarDays },
-  { label: "Reports",       href: "/reports",       icon: FileText },
-  { label: "Analytics",     href: "/analytics",     icon: BarChart3,    capability: "analytics.view" },
+  { label: "Tasks",         href: "/tasks",         icon: ListTodo,     capability: "task.view", alsoMatch: ["/tasks/all"] },
+  { label: "Reports",       href: "/reports",       icon: FileText,     capability: "report.nav", alsoMatch: ["/work-reports"] },
   { label: "Notifications", href: "/notifications", icon: Bell },
 ];
 
@@ -111,7 +112,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <NavLink
           key={item.href}
           item={item}
-          active={pathname === item.href || pathname.startsWith(`${item.href}/`)}
+          active={
+            pathname === item.href ||
+            pathname.startsWith(`${item.href}/`) ||
+            (item.alsoMatch?.some(
+              (p) => pathname === p || pathname.startsWith(`${p}/`)
+            ) ?? false)
+          }
         />
       ))}
 

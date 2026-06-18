@@ -10,7 +10,7 @@ import { EMPTY_PROJECT_FORM } from "@/features/projects/schemas";
 export default function NewProjectPage() {
   return (
     <RequireCapability capability="project.manage">
-      <Link href="/projects" className="text-sm text-primary hover:underline">
+      <Link href="/projects/list" className="text-sm text-primary hover:underline">
         ← Projects
       </Link>
       <PageHeader className="mt-2" title="New project" subtitle="Create a project record." />

@@ -1,10 +1,14 @@
 import { Card } from "@/components/ui/card";
 
 const ROLES = [
-  { name: "Admin",    desc: "Full access. Manage members, projects, roles, and workspace settings.", count: null },
-  { name: "Manager",  desc: "Review team work reports, manage projects they own, view team attendance.", count: null },
-  { name: "Employee", desc: "Submit and edit own work reports, view own attendance.",                   count: null },
-  { name: "Viewer",   desc: "Read-only access to projects and team activity.",                          count: null },
+  {
+    name: "Project Manager",
+    desc: "Full access - manage employees, projects, roles, and master data, and review work reports, attendance, and leave.",
+  },
+  {
+    name: "Employee",
+    desc: "Submit and edit own work reports, view own attendance, request leave, and access assigned projects.",
+  },
 ] as const;
 
 export function RolesTab() {

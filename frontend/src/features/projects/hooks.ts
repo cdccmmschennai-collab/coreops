@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { projectsApi } from "./api";
 import { projectsKeys } from "./keys";
 import type {
+  PlannedDateUpdateBody,
   ProjectCreateBody,
   ProjectListParams,
   ProjectMemberCreateBody,
@@ -50,6 +51,34 @@ export function useArchiveProject() {
   return useMutation({
     mutationFn: (id: string) => projectsApi.archive(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: projectsKeys.all }),
+  });
+}
+
+export function useUpdatePlannedDate(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PlannedDateUpdateBody) => projectsApi.updatePlannedDate(id, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectsKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.plannedDateChanges(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.all });
+    },
+  });
+}
+
+export function usePlannedDateChanges(id: string | undefined) {
+  return useQuery({
+    queryKey: projectsKeys.plannedDateChanges(id ?? ""),
+    queryFn: () => projectsApi.listPlannedDateChanges(id as string),
+    enabled: !!id,
+  });
+}
+
+export function useProjectTimeline(id: string | undefined) {
+  return useQuery({
+    queryKey: projectsKeys.timeline(id ?? ""),
+    queryFn: () => projectsApi.listTimeline(id as string),
+    enabled: !!id,
   });
 }
 

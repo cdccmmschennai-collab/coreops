@@ -9,9 +9,11 @@ from app.core.deps import require_role
 from app.modules.users import service
 from app.modules.users.models import User
 from app.modules.users.schemas import (
+    LinkedEmployee,
     PasswordUpdate,
     RoleUpdate,
     UserCreate,
+    UserListItem,
     UserOut,
     UserPage,
     UserUpdate,
@@ -30,20 +32,26 @@ def list_users(
     _admin: User = AdminUser,
     db: Session = Depends(get_db),
 ) -> UserPage:
-    rows, total = service.list_users(db, q, limit, offset)
-    return UserPage(
-        items=[UserOut.model_validate(u) for u in rows],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    rows, total, emp_map = service.list_users(db, q, limit, offset)
+    items: list[UserListItem] = []
+    for u in rows:
+        emp = emp_map.get(u.id)
+        items.append(
+            UserListItem(
+                **UserOut.model_validate(u).model_dump(),
+                linked_employee=(
+                    LinkedEmployee.model_validate(emp) if emp is not None else None
+                ),
+            )
+        )
+    return UserPage(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=UserOut, status_code=201)
 def create_user(
-    body: UserCreate, _admin: User = AdminUser, db: Session = Depends(get_db)
+    body: UserCreate, admin: User = AdminUser, db: Session = Depends(get_db)
 ) -> UserOut:
-    return UserOut.model_validate(service.create_user(db, body))
+    return UserOut.model_validate(service.create_user(db, body, admin))
 
 
 @router.get("/{user_id}", response_model=UserOut)
@@ -77,8 +85,8 @@ def set_role(
 def set_password(
     user_id: uuid.UUID,
     body: PasswordUpdate,
-    _admin: User = AdminUser,
+    admin: User = AdminUser,
     db: Session = Depends(get_db),
 ) -> Response:
-    service.set_password(db, user_id, body.new_password)
+    service.set_password(db, user_id, body.new_password, admin)
     return Response(status_code=204)

@@ -9,6 +9,23 @@ export type ProjectUpdateBody = components["schemas"]["ProjectUpdate"];
 export type ProjectMember = components["schemas"]["ProjectMemberOut"];
 export type ProjectMemberRole = components["schemas"]["ProjectMemberRole"];
 export type ProjectMemberCreateBody = components["schemas"]["ProjectMemberCreate"];
+export type PlannedDateUpdateBody = components["schemas"]["PlannedDateUpdate"];
+export type PlannedDateChange = components["schemas"]["PlannedDateChangeOut"];
+export type ProjectTimelineEvent = components["schemas"]["TimelineEventOut"];
+
+// Display labels for project member roles. Stored/API values are kept as-is
+// (team_lead, contributor, qc) — only the rendered text differs.
+// Keyed by the active roles only; legacy/unknown values fall back to the raw value
+// via projectMemberRoleLabel().
+export const PROJECT_MEMBER_ROLE_LABEL: Partial<Record<ProjectMemberRole, string>> = {
+  team_lead: "Lead",
+  contributor: "Contributor",
+  qc: "QC",
+};
+
+export function projectMemberRoleLabel(role: ProjectMemberRole): string {
+  return PROJECT_MEMBER_ROLE_LABEL[role] ?? role;
+}
 
 export interface ProjectListParams {
   q: string;

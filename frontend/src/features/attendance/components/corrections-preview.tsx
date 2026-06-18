@@ -18,8 +18,8 @@ const ROWS: {
   status: string;
   variant: "warning" | "success";
 }[] = [
-  { date: "May 21", reason: "Forgot to punch out — left at 19:30", submitted: "2 days ago", status: "pending review", variant: "warning" },
-  { date: "May 14", reason: "Holiday marked as absent — Buddha Purnima", submitted: "1 week ago", status: "approved", variant: "success" },
+  { date: "May 21", reason: "Forgot to punch out - left at 19:30", submitted: "2 days ago", status: "pending review", variant: "warning" },
+  { date: "May 14", reason: "Holiday marked as absent - Buddha Purnima", submitted: "1 week ago", status: "approved", variant: "success" },
   { date: "May 06", reason: "Punch in counted twice (09:00 + 09:04)", submitted: "1 week ago", status: "approved", variant: "success" },
 ];
 

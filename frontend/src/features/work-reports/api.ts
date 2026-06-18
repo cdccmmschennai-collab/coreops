@@ -1,11 +1,14 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  TaskCompletionUpdateBody,
   WorkReport,
   WorkReportCreateBody,
+  WorkReportEditRequestBody,
   WorkReportListParams,
   WorkReportPage,
   WorkReportRejectBody,
+  WorkReportTask,
   WorkReportUpdateBody,
 } from "./types";
 
@@ -29,8 +32,15 @@ export const workReportsApi = {
   update: (id: string, body: WorkReportUpdateBody) =>
     api.patch<WorkReport>(`/work-reports/${id}`, body),
   submit: (id: string) => api.post<WorkReport>(`/work-reports/${id}/submit`),
-  approve: (id: string) => api.post<WorkReport>(`/work-reports/${id}/approve`),
+  requestEdit: (id: string, body: WorkReportEditRequestBody) =>
+    api.post<WorkReport>(`/work-reports/${id}/request-edit`, body),
   reject: (id: string, body: WorkReportRejectBody) =>
     api.post<WorkReport>(`/work-reports/${id}/reject`, body),
+  grantEdit: (id: string) => api.post<WorkReport>(`/work-reports/${id}/grant-edit`),
   remove: (id: string) => api.del<void>(`/work-reports/${id}`),
+  // Toggles a TASK_BASED row's completion checkbox — independent of the
+  // parent report's status (works even on a submitted/locked report), since
+  // these activities often complete days after the report was filed.
+  toggleTaskCompletion: (taskId: string, body: TaskCompletionUpdateBody) =>
+    api.patch<WorkReportTask>(`/work-reports/tasks/${taskId}/completion`, body),
 };

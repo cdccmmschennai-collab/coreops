@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.employees.models import EmployeeStatus
+from app.modules.users.models import UserRole
 
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
@@ -19,6 +20,7 @@ class EmployeeOut(BaseModel):
     last_name: str
     full_name: str
     work_email: str | None = None
+    personal_email: str | None = None
     phone: str | None = None
     department: str | None = None
     designation: str | None = None
@@ -35,6 +37,7 @@ class EmployeeCreate(BaseModel):
     last_name: str = Field(min_length=1)
     user_id: uuid.UUID | None = None
     work_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
+    personal_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
     phone: str | None = None
     department: str | None = None
     designation: str | None = None
@@ -48,6 +51,7 @@ class EmployeeUpdate(BaseModel):
     first_name: str | None = Field(default=None, min_length=1)
     last_name: str | None = Field(default=None, min_length=1)
     work_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
+    personal_email: str | None = Field(default=None, pattern=EMAIL_PATTERN)
     phone: str | None = None
     department: str | None = None
     designation: str | None = None
@@ -62,3 +66,56 @@ class EmployeePage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------- account management ----------
+
+class AccountCreate(BaseModel):
+    """Create a new login account and link it to the employee."""
+    email: str = Field(pattern=EMAIL_PATTERN)
+    password: str = Field(min_length=8)
+    role: UserRole = UserRole.employee
+
+
+class AccountPasswordReset(BaseModel):
+    new_password: str = Field(min_length=8)
+
+
+class AccountStatusUpdate(BaseModel):
+    is_active: bool
+
+
+class AccountRoleUpdate(BaseModel):
+    """Change the role of the employee's linked account."""
+    role: UserRole
+
+
+class AccountLink(BaseModel):
+    """Relink the employee to a different existing user account."""
+    user_id: uuid.UUID
+
+
+# ---------- self-service profile ----------
+
+class EmployeeProfile(BaseModel):
+    """Business-identity view embedded in /auth/me.
+
+    Manager and office are resolved to display names server-side so that an
+    employee (who may not read other employee/office rows) still sees them.
+    """
+    id: uuid.UUID
+    employee_code: str
+    first_name: str
+    last_name: str
+    full_name: str
+    work_email: str | None = None
+    personal_email: str | None = None
+    phone: str | None = None
+    department: str | None = None
+    designation: str | None = None
+    manager_id: uuid.UUID | None = None
+    manager_name: str | None = None
+    office_id: uuid.UUID | None = None
+    office_name: str | None = None
+    date_of_joining: date | None = None
+    status: EmployeeStatus

@@ -48,12 +48,12 @@ export function RejectDialog({
   async function onSubmit(values: ReviewNoteValues) {
     try {
       await mutation.mutateAsync(values);
-      toast.success("Report rejected");
+      toast.success("Report sent back for changes");
       form.reset();
       onDone?.();
       onOpenChange(false);
     } catch (error) {
-      toast.error(error instanceof AppError ? error.message : "Could not reject report.");
+      toast.error(error instanceof AppError ? error.message : "Could not send the report back.");
     }
   }
 
@@ -66,7 +66,7 @@ export function RejectDialog({
     <AlertDialog open={open} onOpenChange={handleOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Reject report?</AlertDialogTitle>
+          <AlertDialogTitle>Send report back?</AlertDialogTitle>
           <AlertDialogDescription>
             Explain what needs to change. The author can edit and resubmit.
           </AlertDialogDescription>
@@ -80,7 +80,7 @@ export function RejectDialog({
                 <FormItem>
                   <FormLabel>Reason</FormLabel>
                   <FormControl>
-                    <Textarea rows={4} placeholder="Reason for rejection" {...field} />
+                    <Textarea rows={4} placeholder="What needs to change?" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -89,7 +89,7 @@ export function RejectDialog({
             <AlertDialogFooter>
               <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
               <Button type="submit" variant="danger" loading={mutation.isPending}>
-                Reject
+                Send back
               </Button>
             </AlertDialogFooter>
           </form>

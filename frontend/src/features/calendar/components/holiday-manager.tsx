@@ -126,7 +126,7 @@ export function HolidayManager() {
         <CardHeader className="border-b border-border p-4">
           <CardTitle className="text-base flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-violet-600" />
-            Upcoming Holidays — {new Date().getFullYear()}
+            Upcoming Holidays - {new Date().getFullYear()}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">

@@ -1,3 +1,12 @@
+/** Format a numeric/decimal-string value (e.g. benchmark counts, which the API
+ * may return as Decimal-backed strings/floats like "250.00") as a whole
+ * number for display — "250.00" → "250". Falls back to "—" when missing. */
+export function formatInt(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) ? String(n) : "—";
+}
+
 /** Format a whole-minute duration as "Xh Ym" (e.g. 540 → "9h 0m"). */
 export function formatMinutes(minutes: number): string {
   const safe = Math.max(0, Math.trunc(minutes));

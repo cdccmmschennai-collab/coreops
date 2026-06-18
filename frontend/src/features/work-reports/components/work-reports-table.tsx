@@ -14,10 +14,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { formatMinutes } from "@/lib/format";
 
 import { StatusBadge } from "./status-badge";
+import { projectSummary } from "../project-summary";
 import type { WorkReport, WorkReportPage } from "../types";
 
 interface WorkReportsTableProps {
@@ -40,7 +40,6 @@ export function WorkReportsTable({
   emptyAction,
 }: WorkReportsTableProps) {
   const router = useRouter();
-  const { byId } = useEmployeeOptions();
   const cols = showEmployee ? 5 : 4;
   const rows = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
@@ -53,9 +52,9 @@ export function WorkReportsTable({
           <TableRow>
             <TableHead>Date</TableHead>
             {showEmployee && <TableHead>Employee</TableHead>}
+            <TableHead>Projects</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Total</TableHead>
-            <TableHead className="text-right">Tasks</TableHead>
           </TableRow>
         </TableHeader>
 
@@ -63,27 +62,33 @@ export function WorkReportsTable({
 
         {showRows && (
           <TableBody>
-            {rows.map((r: WorkReport) => (
-              <TableRow
-                key={r.id}
-                className="cursor-pointer"
-                onClick={() => router.push(`/work-reports/${r.id}`)}
-              >
-                <TableCell className="font-medium tabular">{r.report_date}</TableCell>
-                {showEmployee && (
-                  <TableCell className="text-muted-foreground">
-                    {byId.get(r.employee_id) ?? "—"}
+            {rows.map((r: WorkReport) => {
+              const proj = projectSummary(r);
+              return (
+                <TableRow
+                  key={r.id}
+                  className="cursor-pointer"
+                  onClick={() => router.push(`/work-reports/${r.id}`)}
+                >
+                  <TableCell className="font-medium tabular">{r.report_date}</TableCell>
+                  {showEmployee && (
+                    <TableCell className="text-muted-foreground">
+                      {r.employee_name ?? "—"}
+                    </TableCell>
+                  )}
+                  <TableCell
+                    className="max-w-[260px] truncate text-sm text-muted-foreground"
+                    title={proj.title}
+                  >
+                    {proj.label}
                   </TableCell>
-                )}
-                <TableCell>
-                  <StatusBadge status={r.status} />
-                </TableCell>
-                <TableCell className="tabular">{formatMinutes(r.total_minutes)}</TableCell>
-                <TableCell className="text-right tabular text-muted-foreground">
-                  {r.tasks.length}
-                </TableCell>
-              </TableRow>
-            ))}
+                  <TableCell>
+                    <StatusBadge status={r.status} />
+                  </TableCell>
+                  <TableCell className="tabular">{formatMinutes(r.total_minutes)}</TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         )}
       </Table>

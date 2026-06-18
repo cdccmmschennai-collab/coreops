@@ -11,7 +11,7 @@ import {
 import { PreviewBanner } from "@/features/attendance/components/preview-banner";
 
 const ROWS = [
-  { name: "Lin Chen",  date: "May 21", reason: "Forgot to punch out — left at 19:30",               applied: "2 days ago" },
+  { name: "Lin Chen",  date: "May 21", reason: "Forgot to punch out - left at 19:30",               applied: "2 days ago" },
   { name: "Riya Shah", date: "May 19", reason: "Punch system was down between 09:00 and 09:20",     applied: "Yesterday" },
 ];
 

@@ -9,6 +9,7 @@ from the client.
 """
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,14 +25,30 @@ _MAX_DAY_MINUTES = 1440
 
 class WorkReportTaskIn(BaseModel):
     project_id: uuid.UUID
-    description: str = Field(min_length=1, max_length=_DESCRIPTION_MAX)
-    # minutes_spent is optional — Google Form has no time field
+    # Optional link to an assigned task (must be assigned to the author).
+    task_id: uuid.UUID | None = None
+    # Day remarks — optional free text (the daily report has no mandatory note)
+    description: str = Field(default="", max_length=_DESCRIPTION_MAX)
+    # minutes_spent = project-activity hours; task_minutes_spent = task hours.
     minutes_spent: int | None = Field(default=None, ge=0, le=_MAX_DAY_MINUTES)
+    task_minutes_spent: int | None = Field(default=None, ge=0, le=_MAX_DAY_MINUTES)
     activity_type: str | None = Field(default=None, max_length=200)
     tags_count: int = Field(default=0, ge=0)
     docs_count: int = Field(default=0, ge=0)
     bom_count: int = Field(default=0, ge=0)
     spares_count: int = Field(default=0, ge=0)
+    # Activity Master selection — replaces free-text activity_type going forward.
+    # NUMERIC sub-activities are benchmarked against whichever of
+    # tags_count/docs_count/bom_count/spares_count above the master's
+    # relevant_count_field names — there is no separate actual-count input.
+    sub_activity_id: uuid.UUID | None = None
+    # TASK_BASED sub-activities only: the completion checkbox. started_date/
+    # due_date/completed_date are never client-supplied — see service.py.
+    is_completed: bool = False
+    # Independent of the project's own assigned plant — which plant the
+    # employee actually worked at that day. Planning Plant code/description
+    # auto-derive server-side; never client-supplied.
+    maintenance_plant_id: uuid.UUID | None = None
 
 
 class WorkReportTaskOut(BaseModel):
@@ -39,13 +56,52 @@ class WorkReportTaskOut(BaseModel):
 
     id: uuid.UUID
     project_id: uuid.UUID
+    task_id: uuid.UUID | None = None
+    task_title: str | None = None
+    # Snapshot fields (populated at save time; null for records predating migration 0017).
+    project_name: str | None = None
+    project_code: str | None = None
+    project_job_code_code: str | None = None
     description: str
     minutes_spent: int | None = None
+    task_minutes_spent: int | None = None
     activity_type: str | None = None
     tags_count: int = 0
     docs_count: int = 0
     bom_count: int = 0
     spares_count: int = 0
+    # Activity Master (snapshots frozen at save time; null for rows predating
+    # this feature, or rows whose sub-activity carries no benchmark).
+    sub_activity_id: uuid.UUID | None = None
+    sub_activity_name: str | None = None
+    activity_name: str | None = None
+    # Frozen at submit time — see work_reports/service.py `_apply_benchmarks`.
+    benchmark_value_snapshot: Decimal | None = None
+    benchmark_period_days_snapshot: int | None = None
+    benchmark_type_snapshot: str | None = None
+    # Which count field (tags/docs/bom/spares) fed the calc above.
+    relevant_count_field_snapshot: str | None = None
+    deficit: Decimal | None = None
+    productivity_pct: Decimal | None = None
+    # TASK_BASED tracking: started_date/due_date are computed server-side the
+    # moment a TASK_BASED sub-activity is attached (see _validate_tasks);
+    # is_completed/completed_date are set via the completion-toggle endpoint.
+    started_date: date | None = None
+    due_date: date | None = None
+    is_completed: bool = False
+    completed_date: date | None = None
+    # Computed fresh on every read (never stored) — see
+    # activity_master.service.compute_overdue.
+    is_overdue: bool = False
+    days_overdue: int = 0
+    # Maintenance Plant the employee worked at, frozen at save time (see
+    # work_reports/service.py `_validate_tasks`). Independent of the
+    # project's own assigned plant.
+    maintenance_plant_id: uuid.UUID | None = None
+    maintenance_plant_code: str | None = None
+    maintenance_plant_description: str | None = None
+    planning_plant_code: str | None = None
+    planning_plant_description: str | None = None
 
 
 class WorkReportCreate(BaseModel):
@@ -85,11 +141,26 @@ class WorkReportReject(BaseModel):
     review_note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
 
 
+class WorkReportEditRequest(BaseModel):
+    # Author's reason for requesting edit access on a submitted report.
+    note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
+
+
+class TaskCompletionUpdate(BaseModel):
+    """Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*
+    way a TASK_BASED row's completion is changed once the parent report is
+    submitted/locked, since these activities often complete days after the
+    report they were logged on. Independent of report.status by design."""
+
+    is_completed: bool
+
+
 class WorkReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     employee_id: uuid.UUID
+    employee_name: str | None = None
     report_date: date
     status: WorkReportStatus
     # Google Form fields
@@ -111,6 +182,11 @@ class WorkReportOut(BaseModel):
     reviewed_by: uuid.UUID | None = None
     reviewed_at: datetime | None = None
     review_note: str | None = None
+    edit_requested_at: datetime | None = None
+    edit_request_note: str | None = None
+    # Per-actor: True when the current user may reject / grant edit on this report
+    # (PM for any report; team lead for reports on their projects). Set in service.
+    can_review: bool = False
     created_at: datetime
 
 

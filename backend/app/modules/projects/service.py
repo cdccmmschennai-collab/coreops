@@ -5,32 +5,39 @@ RBAC (this module):
   employee         read access, scoped to assigned projects only
 """
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.audit import service as audit
+from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
+from app.modules.plants.models import MaintenancePlant, PlanningPlant
 from app.modules.projects.models import (
     Project,
     ProjectMember,
     ProjectMemberRole,
+    ProjectPlannedDateChange,
     ProjectStatus,
+    ProjectTimelineEvent,
+    TimelineEventType,
 )
-from app.modules.projects.schemas import ProjectCreate, ProjectUpdate
+from app.modules.projects.schemas import PlannedDateUpdate, ProjectCreate, ProjectUpdate
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
 
 def _push_notification(db: Session, user_id: uuid.UUID, type_: str, title: str,
-                       message: str, entity_id: uuid.UUID | None = None) -> None:
+                       message: str, entity_id: uuid.UUID | None = None,
+                       target_url: str | None = None) -> None:
     try:
         from app.modules.notifications.service import create_notification
         create_notification(db, user_id=user_id, type_=type_, title=title, message=message,
-                            entity_type="project", entity_id=entity_id)
+                            entity_type="project", entity_id=entity_id, target_url=target_url)
         db.commit()
     except Exception:
         db.rollback()
@@ -106,6 +113,9 @@ def list_projects(
     projects = list(rows)
     _attach_member_counts(db, projects)
     _attach_job_codes(db, projects)
+    _attach_maintenance_plants(db, projects)
+    for p in projects:
+        p.days_running = _compute_days_running(p)  # type: ignore[attr-defined]
     return projects, total
 
 
@@ -125,6 +135,33 @@ def _attach_job_codes(db: Session, projects: list[Project]) -> None:
         jc = by_id.get(p.job_code_id) if p.job_code_id else None
         p.job_code_code = jc.code if jc else None   # type: ignore[attr-defined]
         p.job_code_name = jc.name if jc else None   # type: ignore[attr-defined]
+
+
+def _attach_maintenance_plants(db: Session, projects: list[Project]) -> None:
+    """Bulk-fetch maintenance plants (+ their parent planning plant) and
+    attach the flattened code/description fields, same pattern as
+    _attach_job_codes."""
+    mp_ids = {p.maintenance_plant_id for p in projects if p.maintenance_plant_id}
+    if not mp_ids:
+        for p in projects:
+            p.maintenance_plant_code = None   # type: ignore[attr-defined]
+            p.maintenance_plant_description = None   # type: ignore[attr-defined]
+            p.planning_plant_code = None   # type: ignore[attr-defined]
+            p.planning_plant_description = None   # type: ignore[attr-defined]
+        return
+    rows = db.execute(
+        select(MaintenancePlant, PlanningPlant)
+        .join(PlanningPlant, MaintenancePlant.planning_plant_id == PlanningPlant.id)
+        .where(MaintenancePlant.id.in_(mp_ids))
+    ).all()
+    by_id = {mp.id: (mp, pp) for mp, pp in rows}
+    for p in projects:
+        entry = by_id.get(p.maintenance_plant_id) if p.maintenance_plant_id else None
+        mp, pp = entry if entry else (None, None)
+        p.maintenance_plant_code = mp.code if mp else None   # type: ignore[attr-defined]
+        p.maintenance_plant_description = mp.description if mp else None   # type: ignore[attr-defined]
+        p.planning_plant_code = pp.code if pp else None   # type: ignore[attr-defined]
+        p.planning_plant_description = pp.description if pp else None   # type: ignore[attr-defined]
 
 
 def _attach_member_counts(db: Session, projects: list[Project]) -> None:
@@ -173,12 +210,85 @@ def get_project(db: Session, actor: User, project_id: uuid.UUID) -> Project:
         )
     ).scalar_one()
     _attach_job_codes(db, [project])
+    _attach_maintenance_plants(db, [project])
+    project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     return project
 
 
 def _validate_dates(start: date | None, end: date | None) -> None:
     if start is not None and end is not None and end < start:
-        raise AppError("validation_error", "End date cannot be before start date.", 422)
+        raise AppError("validation_error", "Planned completion date cannot be before start date.", 422)
+
+
+def _compute_days_running(project: Project) -> int | None:
+    if project.start_date is None:
+        return None
+    return (datetime.now(timezone.utc).date() - project.start_date).days
+
+
+def _record_timeline(
+    db: Session,
+    project_id: uuid.UUID,
+    event_type: str,
+    actor: User,
+    details: dict | None = None,
+) -> None:
+    """Stage a timeline event in the current session. Caller must commit."""
+    event = ProjectTimelineEvent(
+        project_id=project_id,
+        event_type=event_type,
+        actor_id=actor.id,
+        actor_name=actor.email,
+        details=details or {},
+    )
+    db.add(event)
+
+
+def _assert_can_view_timeline(db: Session, actor: User, project: Project) -> None:
+    """Only PM and team leads on the project can view the timeline."""
+    if actor.role == UserRole.project_manager:
+        return
+    if actor.role == UserRole.employee:
+        me = _current_employee(db, actor)
+        if me is not None and db.execute(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.employee_id == me.id,
+                ProjectMember.role == ProjectMemberRole.team_lead,
+            )
+        ).first():
+            return
+    raise AppError("forbidden", "Only project managers and team leads can view the timeline.", 403)
+
+
+def _resolve_job_code(
+    db: Session, raw: str | None, project_name: str, actor_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """Map a free-text job code to a JobCode id.
+
+    Reuses an existing active job code when one matches (case-insensitive),
+    otherwise creates a new active job code on the fly so PM-entered codes
+    flow through the same master-data join used by reports and project views.
+    """
+    if raw is None:
+        return None
+    code = raw.strip()
+    if code == "":
+        return None
+    if len(code) > 30:
+        raise AppError("validation_error", "Job code must be 30 characters or fewer.", 422)
+    existing = db.execute(
+        select(JobCode).where(
+            func.lower(JobCode.code) == code.lower(),
+            JobCode.is_active.is_(True),
+        )
+    ).scalars().first()
+    if existing is not None:
+        return existing.id
+    jc = JobCode(code=code, name=(project_name or code)[:200], created_by=actor_id)
+    db.add(jc)
+    db.flush()
+    return jc.id
 
 
 def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
@@ -186,10 +296,23 @@ def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
         select(Project).where(Project.code == data.code, Project.deleted_at.is_(None))
     ).scalar_one_or_none():
         raise AppError("conflict", "A project with this code already exists.", 409)
-    _validate_dates(data.start_date, data.end_date)
+    _validate_dates(data.start_date, data.planned_completion_date)
 
-    project = Project(**data.model_dump(), created_by=actor.id, updated_by=actor.id)
+    payload = data.model_dump()
+    job_code_id = _resolve_job_code(db, payload.pop("job_code", None), data.name, actor.id)
+    project = Project(
+        **payload, job_code_id=job_code_id, created_by=actor.id, updated_by=actor.id
+    )
     db.add(project)
+    try:
+        db.flush()  # obtain project.id before adding timeline event
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "Project violates a uniqueness constraint.", 409)
+    _record_timeline(db, project.id, TimelineEventType.PROJECT_CREATED, actor, {
+        "project_name": project.name,
+        "code": project.code,
+    })
     try:
         db.commit()
     except IntegrityError:
@@ -197,7 +320,9 @@ def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
         raise AppError("conflict", "Project violates a uniqueness constraint.", 409)
     db.refresh(project)
     project.member_count = 0  # type: ignore[attr-defined]
+    project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     _attach_job_codes(db, [project])
+    _attach_maintenance_plants(db, [project])
     return project
 
 
@@ -214,6 +339,9 @@ def _validate_status_transition(current: ProjectStatus, new: ProjectStatus) -> N
         )
 
 
+_UNSET = object()
+
+
 def update_project(
     db: Session, actor: User, project_id: uuid.UUID, data: ProjectUpdate
 ) -> Project:
@@ -223,14 +351,92 @@ def update_project(
     if "status" in fields and fields["status"] is not None:
         _validate_status_transition(project.status, fields["status"])
 
+    # code is editable (PMs need to fix codes entered before this field
+    # existed) — but must stay unique among non-deleted projects, same rule
+    # create_project enforces.
+    if "code" in fields and fields["code"] != project.code:
+        if db.execute(
+            select(Project).where(
+                Project.code == fields["code"],
+                Project.deleted_at.is_(None),
+                Project.id != project.id,
+            )
+        ).scalar_one_or_none():
+            raise AppError("conflict", "A project with this code already exists.", 409)
+
+    # planned_completion_date via this endpoint is only allowed as an initial set.
+    # Once a date exists, changes must go through the dedicated endpoint (which
+    # requires a reason and records the change log / timeline event).
+    incoming_planned = fields.pop("planned_completion_date", _UNSET)
+    if incoming_planned is not _UNSET and project.planned_completion_date is None:
+        fields["planned_completion_date"] = incoming_planned
+
     new_start = fields.get("start_date", project.start_date)
-    new_end = fields.get("end_date", project.end_date)
-    _validate_dates(new_start, new_end)
+    new_planned = fields.get("planned_completion_date", project.planned_completion_date)
+    _validate_dates(new_start, new_planned)
+
+    if "job_code" in fields:
+        new_name = fields.get("name") or project.name
+        fields["job_code_id"] = _resolve_job_code(
+            db, fields.pop("job_code"), new_name, actor.id
+        )
 
     for key, value in fields.items():
         setattr(project, key, value)
     project.updated_by = actor.id
     db.add(project)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "A project with this code already exists.", 409)
+    db.refresh(project)
+    project.member_count = db.execute(  # type: ignore[attr-defined]
+        select(func.count()).select_from(ProjectMember).where(
+            ProjectMember.project_id == project.id
+        )
+    ).scalar_one()
+    _attach_job_codes(db, [project])
+    _attach_maintenance_plants(db, [project])
+    project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
+    return project
+
+
+def update_planned_completion_date(
+    db: Session, actor: User, project_id: uuid.UUID, data: PlannedDateUpdate
+) -> Project:
+    project = _fetch(db, project_id)
+    _validate_dates(project.start_date, data.new_date)
+
+    old_date = project.planned_completion_date
+    change = ProjectPlannedDateChange(
+        project_id=project_id,
+        old_date=old_date,
+        new_date=data.new_date,
+        changed_by=actor.id,
+        reason=data.reason,
+    )
+    db.add(change)
+    project.planned_completion_date = data.new_date
+    project.updated_by = actor.id
+    db.add(project)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_PLANNED_DATE_CHANGE,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={
+            "old_date": old_date.isoformat() if old_date else None,
+            "new_date": data.new_date.isoformat() if data.new_date else None,
+            "reason": data.reason,
+        },
+    )
+    _record_timeline(db, project_id, TimelineEventType.PLANNED_DATE_CHANGED, actor, {
+        "old_date": old_date.isoformat() if old_date else None,
+        "new_date": data.new_date.isoformat() if data.new_date else None,
+        "reason": data.reason,
+    })
     db.commit()
     db.refresh(project)
     project.member_count = db.execute(  # type: ignore[attr-defined]
@@ -239,7 +445,33 @@ def update_project(
         )
     ).scalar_one()
     _attach_job_codes(db, [project])
+    project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     return project
+
+
+def list_planned_date_changes(
+    db: Session, actor: User, project_id: uuid.UUID
+) -> list[ProjectPlannedDateChange]:
+    project = _fetch(db, project_id)
+    _assert_can_read(db, actor, project)
+    rows = db.execute(
+        select(ProjectPlannedDateChange)
+        .where(ProjectPlannedDateChange.project_id == project_id)
+        .order_by(ProjectPlannedDateChange.changed_at.desc())
+    ).scalars().all()
+    # Attach user display names
+    user_ids = {r.changed_by for r in rows}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        from app.modules.users.models import User as UserModel
+        user_rows = db.execute(
+            select(UserModel).where(UserModel.id.in_(user_ids))
+        ).scalars().all()
+        for u in user_rows:
+            names[u.id] = u.email
+    for r in rows:
+        r.changed_by_name = names.get(r.changed_by, "")  # type: ignore[attr-defined]
+    return list(rows)
 
 
 def archive_project(db: Session, actor: User, project_id: uuid.UUID) -> None:
@@ -314,6 +546,18 @@ def add_member(
         project_id=project_id, employee_id=employee_id, role=role, created_by=actor.id
     )
     db.add(member)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_MEMBER_ADD,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={"employee_id": str(employee_id), "role": role.value},
+    )
+    _record_timeline(db, project_id, TimelineEventType.MEMBER_ADDED, actor, {
+        "employee_name": employee.full_name,
+        "role": role.value,
+    })
     db.commit()
     db.refresh(member)
     member.employee_name = employee.full_name  # type: ignore[attr-defined]
@@ -323,6 +567,7 @@ def add_member(
             f"You were assigned to {project.name}",
             f"You have been added to project {project.name} ({project.code}) as {role.value}.",
             project.id,
+            f"/projects/{project.id}",
         )
     return member
 
@@ -343,10 +588,23 @@ def update_member_role(
     if member is None:
         raise AppError("not_found", "Membership not found.", 404)
 
+    prev_role = member.role
     if role == ProjectMemberRole.team_lead:
         _demote_existing_lead(db, project_id, except_id=member.id)
     member.role = role
     db.add(member)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_MEMBER_ROLE_CHANGE,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={
+            "employee_id": str(employee_id),
+            "from": prev_role.value,
+            "to": role.value,
+        },
+    )
     db.commit()
     db.refresh(member)
     employee = db.get(Employee, employee_id)
@@ -365,5 +623,36 @@ def remove_member(
     ).scalar_one_or_none()
     if member is None:
         raise AppError("not_found", "Membership not found.", 404)
+    member_role = member.role
+    employee = db.get(Employee, employee_id)
+    employee_name = employee.full_name if employee else str(employee_id)
     db.delete(member)
+    audit.record_audit(
+        db,
+        action=AuditAction.PROJECT_MEMBER_REMOVE,
+        actor=actor,
+        entity_type=EntityType.PROJECT,
+        entity_id=project_id,
+        details={"employee_id": str(employee_id), "role": member_role.value},
+    )
+    _record_timeline(db, project_id, TimelineEventType.MEMBER_REMOVED, actor, {
+        "employee_name": employee_name,
+        "role": member_role.value,
+    })
     db.commit()
+
+
+def list_timeline(
+    db: Session, actor: User, project_id: uuid.UUID
+) -> list[ProjectTimelineEvent]:
+    project = _fetch(db, project_id)
+    _assert_can_view_timeline(db, actor, project)
+    return list(
+        db.execute(
+            select(ProjectTimelineEvent)
+            .where(ProjectTimelineEvent.project_id == project_id)
+            .order_by(ProjectTimelineEvent.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )

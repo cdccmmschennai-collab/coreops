@@ -1,6 +1,8 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  PlannedDateChange,
+  PlannedDateUpdateBody,
   Project,
   ProjectCreateBody,
   ProjectListParams,
@@ -8,6 +10,7 @@ import type {
   ProjectMemberCreateBody,
   ProjectMemberRole,
   ProjectPage,
+  ProjectTimelineEvent,
   ProjectUpdateBody,
 } from "./types";
 
@@ -28,6 +31,13 @@ export const projectsApi = {
   update: (id: string, body: ProjectUpdateBody) =>
     api.patch<Project>(`/projects/${id}`, body),
   archive: (id: string) => api.del<void>(`/projects/${id}`),
+
+  updatePlannedDate: (id: string, body: PlannedDateUpdateBody) =>
+    api.patch<Project>(`/projects/${id}/planned-completion-date`, body),
+  listPlannedDateChanges: (id: string) =>
+    api.get<PlannedDateChange[]>(`/projects/${id}/planned-date-changes`),
+  listTimeline: (id: string) =>
+    api.get<ProjectTimelineEvent[]>(`/projects/${id}/timeline`),
 
   listMembers: (id: string) => api.get<ProjectMember[]>(`/projects/${id}/members`),
   addMember: (id: string, body: ProjectMemberCreateBody) =>

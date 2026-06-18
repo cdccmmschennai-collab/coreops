@@ -9,6 +9,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox } from "@/components/ui/combobox";
 import {
   Form,
@@ -28,12 +29,13 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { useActivityTypeOptions, useCreateActivityType } from "@/features/activity-types/hooks";
+import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
+import { useTasks } from "@/features/tasks/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
-import { formatMinutes } from "@/lib/format";
-import { can } from "@/lib/rbac";
+import { formatInt, formatMinutes } from "@/lib/format";
 
 import { useCreateWorkReport, useUpdateWorkReport } from "../hooks";
 import { useProjectOptions } from "../project-options";
@@ -43,6 +45,7 @@ import {
   EMPTY_TASK_ROW,
   WORK_LOCATION_LABEL,
   WORK_LOCATIONS,
+  hoursToMinutes,
   toCreateBody,
   toUpdateBody,
   workReportFormSchema,
@@ -55,58 +58,103 @@ interface WorkReportFormProps {
   reportId?: string;
 }
 
-const ALL_NONE = "__none__";
+const COUNT_FIELD_KEY = {
+  tags: "tags_count",
+  docs: "docs_count",
+  bom: "bom_count",
+  spares: "spares_count",
+} as const;
+
+/** "2026-06-16" + 2 -> "2026-06-18". Client-side preview only, for a
+ * TASK_BASED row that hasn't been saved yet — the server is authoritative
+ * once the row exists (it computes due_date the same way, on save). */
+function addDays(isoDate: string, days: number): string | null {
+  const d = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
 
-  const { employeeId, role } = useAuth();
+  const { employeeId } = useAuth();
   const { byId: empById } = useEmployeeOptions();
   const { items: projects, byId: projById } = useProjectOptions();
-  const { items: activityTypes } = useActivityTypeOptions();
-  const createActivityType = useCreateActivityType();
+  const { data: activities } = useActivities(true);
+  const { items: subActivities, byId: subActivityById } = useSubActivityOptions();
+  const { options: maintenancePlantOptions, byId: maintenancePlantById } = useMaintenancePlantOptions();
 
   const employeeName = employeeId ? (empById.get(employeeId) ?? "—") : "—";
-  const canCreateActivityType = can(role, "masterdata.manage");
 
-  // Project combobox options — show name + code + client for easy identification
-  const projectOptions = React.useMemo(
-    () =>
-      projects.map((p) => ({
-        value: p.id,
-        label: p.name,
-        sublabel: p.code,
-        description: p.client ?? undefined,
-        keywords: [p.code, p.name, p.client ?? "", p.job_code_code ?? ""],
-      })),
-    [projects],
-  );
-
-  // Activity type combobox options — code shown on the right
-  const activityOptions = React.useMemo(
-    () =>
-      activityTypes.map((a) => ({
-        value: a.name,   // stored as TEXT in work_report_tasks.activity_type
-        label: a.name,
-        sublabel: a.code ?? undefined,
-        keywords: [a.code ?? "", a.name, a.category],
-      })),
-    [activityTypes],
-  );
-
-  async function handleCreateActivityType(inputName: string) {
-    try {
-      await createActivityType.mutateAsync({
-        name: inputName,
-        category: "GENERAL",
-        requires_project: false,
-      });
-      toast.success(`Activity type "${inputName}" created`);
-    } catch (err) {
-      toast.error(err instanceof AppError ? err.message : "Could not create activity type.");
+  // Project combobox options — RBAC list + ghost entries for projects in
+  // existing tasks that are no longer accessible (archived / membership lost).
+  // Ghost entries are display-only; the backend still validates on submit.
+  const projectOptions = React.useMemo(() => {
+    const base = projects.map((p) => ({
+      value: p.id,
+      label: p.name,
+      sublabel: p.code,
+      description: p.client ?? undefined,
+      keywords: [p.code, p.name, p.client ?? "", p.job_code_code ?? ""],
+    }));
+    if (mode !== "edit") return base;
+    const inList = new Set(projects.map((p) => p.id));
+    const ghosts: (typeof base)[0][] = [];
+    const seen = new Set<string>();
+    for (const t of defaultValues.tasks) {
+      if (t.project_id && !inList.has(t.project_id) && t.project_name && !seen.has(t.project_id)) {
+        seen.add(t.project_id);
+        ghosts.push({
+          value: t.project_id,
+          label: t.project_name,            // string (narrowed by if guard)
+          sublabel: t.project_code ?? "",   // string (coerce undefined → "")
+          description: undefined,
+          keywords: [t.project_code ?? "", t.project_name],
+        });
+      }
     }
-  }
+    return [...base, ...ghosts];
+  }, [projects, mode, defaultValues.tasks]);
+
+  // The author's own assigned tasks (open / in-progress) for the task picker.
+  const { data: myTasksData } = useTasks({
+    mine: true, q: "", status: "", priority: "", limit: 100, offset: 0,
+  });
+  const myTaskById = React.useMemo(
+    () => new Map((myTasksData?.items ?? []).map((t) => [t.id, t])),
+    [myTasksData],
+  );
+  const taskOptions = React.useMemo(
+    () =>
+      (myTasksData?.items ?? [])
+        // Show assignable tasks incl. completed (you still log hours for them);
+        // only cancelled tasks are hidden.
+        .filter((t) => t.status !== "cancelled")
+        .map((t) => ({
+          value: t.id,
+          label: t.title,
+          sublabel: t.project_name ?? undefined,
+          keywords: [t.title, t.project_name ?? ""],
+        })),
+    [myTasksData],
+  );
+
+  // Activity Master combobox options (Activity → Sub-Activity cascade).
+  const activityOptions = React.useMemo(
+    () => (activities ?? []).map((a) => ({ value: a.id, label: a.name })),
+    [activities],
+  );
+  const subActivityOptionsByActivity = React.useMemo(() => {
+    const map = new Map<string, { value: string; label: string }[]>();
+    for (const s of subActivities) {
+      const list = map.get(s.activity_id) ?? [];
+      list.push({ value: s.id, label: s.name });
+      map.set(s.activity_id, list);
+    }
+    return map;
+  }, [subActivities]);
 
   const form = useForm<WorkReportFormValues>({
     resolver: zodResolver(workReportFormSchema),
@@ -117,20 +165,60 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     name: "tasks",
   });
 
+  // Backfill the UI-only `activity_id` filter for rows loaded from the API
+  // with a sub_activity_id already set (edit mode) — once the flat
+  // sub-activity options arrive, resolve which Activity each belongs to so
+  // the Sub-Activity select shows the right filtered list immediately.
+  React.useEffect(() => {
+    if (subActivityById.size === 0) return;
+    fields.forEach((_, index) => {
+      const row = form.getValues(`tasks.${index}`);
+      if (row.sub_activity_id && !row.activity_id) {
+        const sub = subActivityById.get(row.sub_activity_id);
+        if (sub) form.setValue(`tasks.${index}.activity_id`, sub.activity_id);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subActivityById, fields.length]);
+
   const createMutation = useCreateWorkReport();
   const updateMutation = useUpdateWorkReport(reportId ?? "");
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   const watchedTasks = form.watch("tasks");
-  const totalMinutes = (watchedTasks ?? []).reduce((sum, t) => {
-    const n = Number(t?.minutes_spent);
-    return sum + (Number.isFinite(n) && n > 0 ? n : 0);
-  }, 0);
+  const reportDate = form.watch("report_date");
+  const totalMinutes = (watchedTasks ?? []).reduce(
+    (sum, t) =>
+      sum + (hoursToMinutes(t?.duration_hours) ?? 0) + (hoursToMinutes(t?.task_hours) ?? 0),
+    0,
+  );
 
   const tasksError = form.formState.errors.tasks?.message;
 
   async function onSubmit(values: WorkReportFormValues) {
     setFormError(null);
+
+    // A NUMERIC sub-activity's relevant_count_field is the benchmark's
+    // actual-value source — it must be filled in (not left at the default
+    // 0) whenever that benchmark applies, so the deficit/productivity calc
+    // at submit time reflects real production, not an unfilled field.
+    let hasBenchmarkError = false;
+    values.tasks.forEach((t, i) => {
+      const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
+      const countField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
+      const key = countField ? COUNT_FIELD_KEY[countField] : null;
+      if (key && Number(t[key] || 0) <= 0) {
+        form.setError(`tasks.${i}.${key}`, {
+          message: `Required — ${sub!.name} has a benchmark target`,
+        });
+        hasBenchmarkError = true;
+      }
+    });
+    if (hasBenchmarkError) {
+      setFormError("Fill in the required benchmark count(s) highlighted below.");
+      return;
+    }
+
     try {
       const result =
         mode === "create"
@@ -172,7 +260,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="report_date"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Date</FormLabel>
+                    <FormLabel>
+                      Date <span className="text-destructive">*</span>
+                    </FormLabel>
                     <FormControl>
                       <Input type="date" {...field} disabled={mode === "edit"} />
                     </FormControl>
@@ -185,10 +275,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="day_status"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Day Status</FormLabel>
+                    <FormLabel>
+                      Day Status <span className="text-destructive">*</span>
+                    </FormLabel>
                     <Select
-                      value={field.value ?? ALL_NONE}
-                      onValueChange={(v) => field.onChange(v === ALL_NONE ? undefined : v)}
+                      value={field.value ?? undefined}
+                      onValueChange={(v) => field.onChange(v)}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -196,7 +288,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value={ALL_NONE}>— Not specified —</SelectItem>
                         {DAY_STATUSES.map((s) => (
                           <SelectItem key={s} value={s}>
                             {DAY_STATUS_LABEL[s]}
@@ -213,10 +304,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 name="location"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Office Location</FormLabel>
+                    <FormLabel>
+                      Office Location <span className="text-destructive">*</span>
+                    </FormLabel>
                     <Select
-                      value={field.value ?? ALL_NONE}
-                      onValueChange={(v) => field.onChange(v === ALL_NONE ? undefined : v)}
+                      value={field.value ?? undefined}
+                      onValueChange={(v) => field.onChange(v)}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -224,7 +317,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value={ALL_NONE}>— Not specified —</SelectItem>
                         {WORK_LOCATIONS.map((l) => (
                           <SelectItem key={l} value={l}>
                             {WORK_LOCATION_LABEL[l]}
@@ -238,7 +330,485 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               />
             </div>
 
-            {/* ── Row 2: Well Head, PM Plant ── */}
+            <Separator />
+
+            {/* ── Project Task Rows ── */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium">Project activities</h3>
+                {totalMinutes > 0 && (
+                  <span className="text-sm text-muted-foreground">
+                    Total:{" "}
+                    <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
+                  </span>
+                )}
+              </div>
+
+              {fields.map((field, index) => {
+                const selectedProjectId = watchedTasks?.[index]?.project_id;
+                const selectedProject = selectedProjectId
+                  ? projById.get(selectedProjectId)
+                  : undefined;
+                // Prefer the live RBAC-scoped project; fall back to the task snapshot
+                // (edit mode where the project is archived / no longer accessible).
+                const projectCodeLabel =
+                  selectedProject?.code ?? watchedTasks?.[index]?.project_code ?? "—";
+                const jobCodeLabel = selectedProject?.job_code_code ?? "—";
+
+                return (
+                  <div
+                    key={field.id}
+                    className="space-y-2 rounded-lg border border-border p-3"
+                  >
+                    {/* Task line shares Row A's grid so Task hours lands in the same
+                        column as Duration (the two hour fields stack one above the
+                        other); picking a task fills in the project. */}
+                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.task_id`}
+                        render={({ field: f }) => (
+                          <FormItem className="md:col-span-3">
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
+                              Task <span className="font-normal">(optional)</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Combobox
+                                value={f.value || ""}
+                                onValueChange={(v) => {
+                                  f.onChange(v);
+                                  const t = v ? myTaskById.get(v) : undefined;
+                                  if (t?.project_id) {
+                                    form.setValue(
+                                      `tasks.${index}.project_id`,
+                                      t.project_id,
+                                      { shouldValidate: true },
+                                    );
+                                  }
+                                }}
+                                options={taskOptions}
+                                placeholder="Select an assigned task…"
+                                searchPlaceholder="Search your tasks…"
+                                emptyMessage="No tasks assigned to you."
+                                allowClear
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Hours (task-based work; adds to the day total) — kept short
+                          ("Hours" not "Task hours") so the label stays on one line
+                          and this box aligns with the row below it. */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.task_hours`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="block whitespace-nowrap text-xs leading-none text-muted-foreground">
+                              Hours <span className="font-normal">(HH.MM)</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="e.g. 2.30"
+                                {...f}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    {/* Row A — one grid; columns collapse responsively:
+                          desktop → Name | Code | Job | Duration | Actions on one row.
+                        Duration here = project-based hours (distinct from Task hours). */}
+                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+
+                      {/* Project Name — searchable combobox (name + code) */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.project_id`}
+                        render={({ field: f }) => (
+                          <FormItem className="min-w-0">
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
+                              Project Name <span className="text-destructive">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Combobox
+                                value={f.value}
+                                onValueChange={f.onChange}
+                                options={projectOptions}
+                                placeholder="Select project…"
+                                searchPlaceholder="Search by name or code…"
+                                emptyMessage="No matching projects."
+                                allowClear={false}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Project Code — read-only metadata, auto-filled from selection */}
+                      <div className="space-y-2">
+                        <span className="block text-xs font-medium leading-none text-muted-foreground">
+                          Project Code
+                        </span>
+                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                          {projectCodeLabel}
+                        </div>
+                      </div>
+
+                      {/* Job Code — read-only metadata, auto-filled from selection */}
+                      <div className="space-y-2">
+                        <span className="block text-xs font-medium leading-none text-muted-foreground">
+                          Job Code
+                        </span>
+                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                          {jobCodeLabel}
+                        </div>
+                      </div>
+
+                      {/* Duration — project-based hours (decimals allowed) */}
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.duration_hours`}
+                        render={({ field: f }) => (
+                          <FormItem>
+                            <FormLabel className="block whitespace-nowrap text-xs leading-none text-muted-foreground">
+                              Duration <span className="font-normal">(HH.MM)</span> <span className="text-destructive">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                placeholder="e.g. 2.30"
+                                {...f}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Actions — delete. A spacer label (desktop only) keeps the
+                          button on the input baseline via the grid, not margins. */}
+                      <div className="flex flex-col gap-2 items-start md:items-start">
+                        <span
+                          className="hidden text-xs font-medium leading-none md:block"
+                          aria-hidden
+                        >
+                          &nbsp;
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => remove(index)}
+                          disabled={fields.length === 1}
+                          aria-label="Remove activity"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Row A2: Maintenance Plant — pick directly (searchable, like
+                        Activity/Sub-Activity); Planning Plant code/description
+                        auto-derive, read-only. Independent of the project's own
+                        assigned plant — which plant the employee actually worked
+                        at that day. Reuses Row A's exact column template so this
+                        row's fields line up under Project Name / Project Code,
+                        with Description (PP) spanning the remaining width. */}
+                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                      {(() => {
+                        const selectedPlantId = watchedTasks?.[index]?.maintenance_plant_id;
+                        const selectedPlant = selectedPlantId
+                          ? maintenancePlantById.get(selectedPlantId)
+                          : undefined;
+                        const planningPlantCode =
+                          selectedPlant?.planning_plant_code
+                          ?? watchedTasks?.[index]?.planning_plant_code
+                          ?? "—";
+                        const planningPlantDescription =
+                          selectedPlant?.planning_plant_description
+                          ?? watchedTasks?.[index]?.planning_plant_description
+                          ?? "—";
+                        return (
+                          <>
+                            <FormField
+                              control={form.control}
+                              name={`tasks.${index}.maintenance_plant_id`}
+                              render={({ field: f }) => (
+                                <FormItem className="min-w-0">
+                                  <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
+                                    Maintenance Plant
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Combobox
+                                      value={f.value || ""}
+                                      onValueChange={f.onChange}
+                                      options={maintenancePlantOptions}
+                                      placeholder="Select plant…"
+                                      searchPlaceholder="Search maintenance plants…"
+                                      emptyMessage="No matching plants."
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <div className="space-y-2">
+                              <span className="block text-xs font-medium leading-none text-muted-foreground">
+                                Planning Plant
+                              </span>
+                              <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                                {planningPlantCode}
+                              </div>
+                            </div>
+                            <div className="space-y-2 md:col-span-3">
+                              <span className="block text-xs font-medium leading-none text-muted-foreground">
+                                Description (PP)
+                              </span>
+                              <div className="flex h-9 items-center truncate rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
+                                {planningPlantDescription}
+                              </div>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Row B: Activity (25%) | Sub-Activity (75%) — own full-width row
+                        so long sub-activity names show in full, uncramped. Selections
+                        come from the Activity Master (Settings → Activity Master),
+                        never hardcoded here. */}
+                    <div className="grid grid-cols-[1fr_3fr] gap-2">
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.activity_id`}
+                        render={({ field: f }) => (
+                          <FormItem className="min-w-0">
+                            <FormLabel className="text-xs text-muted-foreground">
+                              Activity <span className="text-destructive">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Combobox
+                                value={f.value || ""}
+                                onValueChange={(v) => {
+                                  f.onChange(v);
+                                  // Changing the Activity invalidates any previously
+                                  // chosen Sub-Activity from a different Activity.
+                                  const currentSub = form.getValues(`tasks.${index}.sub_activity_id`);
+                                  if (currentSub && subActivityById.get(currentSub)?.activity_id !== v) {
+                                    form.setValue(`tasks.${index}.sub_activity_id`, "");
+                                    form.setValue(`tasks.${index}.sub_activity_name`, undefined);
+                                    form.setValue(`tasks.${index}.activity_name`, undefined);
+                                  }
+                                }}
+                                options={activityOptions}
+                                placeholder="Select activity…"
+                                searchPlaceholder="Search activities…"
+                                emptyMessage="No matching activities."
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name={`tasks.${index}.sub_activity_id`}
+                        render={({ field: f }) => {
+                          const selectedActivityId = watchedTasks?.[index]?.activity_id;
+                          const options = selectedActivityId
+                            ? subActivityOptionsByActivity.get(selectedActivityId) ?? []
+                            : [];
+                          return (
+                            <FormItem className="min-w-0">
+                              <FormLabel className="text-xs text-muted-foreground">
+                                Sub-Activity <span className="text-destructive">*</span>
+                              </FormLabel>
+                              <FormControl>
+                                <Combobox
+                                  value={f.value || ""}
+                                  onValueChange={(v) => {
+                                    f.onChange(v);
+                                    const sub = v ? subActivityById.get(v) : undefined;
+                                    form.setValue(`tasks.${index}.sub_activity_name`, sub?.name);
+                                    form.setValue(`tasks.${index}.activity_name`, sub?.activity_name);
+                                    // Server derives activity_type from the new selection.
+                                    form.setValue(`tasks.${index}.activity_type`, "");
+                                  }}
+                                  options={options}
+                                  placeholder={selectedActivityId ? "Select sub-activity…" : "Pick an Activity first"}
+                                  searchPlaceholder="Search sub-activities…"
+                                  emptyMessage="No matching sub-activities."
+                                  disabled={!selectedActivityId}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          );
+                        }}
+                      />
+                    </div>
+
+                    {/* Row B2: Tags / Docs / BOM / Spares — operational reporting,
+                        independent of the benchmark target shown on whichever field
+                        is relevant. None are required. Same full-row 4-col grid as
+                        "Maintenance counts" below, so the layout stays consistent
+                        regardless of label length (e.g. "Docs (Target: 1000/1d)"). */}
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      {(() => {
+                        const subId = watchedTasks?.[index]?.sub_activity_id;
+                        const sub = subId ? subActivityById.get(subId) : undefined;
+                        // The benchmark target is shown directly on whichever count
+                        // field the sub-activity names — there is no separate
+                        // "Actual Count" entry, so the same number is never typed twice.
+                        const targetField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
+
+                        return (
+                          [
+                            ["tags_count",   "Tags",   "tags"],
+                            ["docs_count",   "Docs",   "docs"],
+                            ["bom_count",    "BOM",    "bom"],
+                            ["spares_count", "Spares", "spares"],
+                          ] as const
+                        ).map(([name, label, countField]) => {
+                          const isTarget = targetField === countField;
+                          return (
+                            <FormField
+                              key={name}
+                              control={form.control}
+                              name={`tasks.${index}.${name}`}
+                              render={({ field: f }) => (
+                                <FormItem>
+                                  <FormLabel
+                                    className={
+                                      isTarget
+                                        ? "text-xs font-medium text-foreground"
+                                        : "text-xs text-muted-foreground"
+                                    }
+                                  >
+                                    {label}
+                                    {isTarget && (
+                                      <>
+                                        <span className="text-destructive"> *</span>
+                                        <span className="font-normal text-muted-foreground">
+                                          {" "}(Target: {formatInt(sub!.benchmark_value)}/{sub!.benchmark_period_days ?? 1}d)
+                                        </span>
+                                      </>
+                                    )}
+                                  </FormLabel>
+                                  <FormControl>
+                                    <Input
+                                      type="number"
+                                      min={0}
+                                      placeholder="0"
+                                      className={isTarget ? "border-primary" : undefined}
+                                      {...f}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          );
+                        });
+                      })()}
+                    </div>
+
+                    {/* Row B3: Day Remarks — own full-width row. */}
+                    <FormField
+                      control={form.control}
+                      name={`tasks.${index}.description`}
+                      render={({ field: f }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs text-muted-foreground">
+                            Day Remarks (optional)
+                          </FormLabel>
+                          <FormControl>
+                            <Input placeholder="What did you work on?" {...f} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    {/* Row C: TASK_BASED sub-activities only — a single
+                        completion checkbox. No status dropdown, no manual
+                        date entry: started_date/due_date/completed_date are
+                        all system-managed (see schemas.ts). NUMERIC
+                        sub-activities have no extra row here: the benchmark
+                        target is shown directly on the matching count field
+                        above (Tags/Docs/BOM/Spares), not a separate entry. */}
+                    {(() => {
+                      const subId = watchedTasks?.[index]?.sub_activity_id;
+                      const sub = subId ? subActivityById.get(subId) : undefined;
+                      if (sub?.benchmark_type !== "TASK_BASED") return null;
+
+                      const row = watchedTasks?.[index];
+                      // Prefer the server-computed due_date (existing row);
+                      // for a brand-new row not yet saved, preview it
+                      // client-side from the report date + allocated duration.
+                      const periodDays = sub.benchmark_period_days ?? 1;
+                      const previewDue = row?.due_date
+                        ? row.due_date
+                        : reportDate
+                          ? addDays(reportDate, periodDays)
+                          : null;
+
+                      return (
+                        <FormField
+                          control={form.control}
+                          name={`tasks.${index}.is_completed`}
+                          render={({ field: f }) => (
+                            <FormItem>
+                              <label className="flex items-center gap-2 text-sm">
+                                <FormControl>
+                                  <Checkbox
+                                    checked={f.value}
+                                    onChange={(e) => f.onChange(e.target.checked)}
+                                  />
+                                </FormControl>
+                                <span>Task Completed</span>
+                                <span className="text-xs text-muted-foreground">
+                                  (within {periodDays}d
+                                  {previewDue ? ` — due ${previewDue}` : ""})
+                                </span>
+                              </label>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+
+              {tasksError && (
+                <p className="text-xs font-medium text-destructive">{tasksError}</p>
+              )}
+
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => append({ ...EMPTY_TASK_ROW })}
+              >
+                <Plus className="h-4 w-4" />
+                Add activity
+              </Button>
+            </div>
+
+            <Separator />
+
+            {/* ── Well Head, PM Plant ── */}
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField
                 control={form.control}
@@ -274,7 +844,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               />
             </div>
 
-            {/* ── Row 3: Maintenance Counters ── */}
+            {/* ── Maintenance Counters ── */}
             <div>
               <p className="mb-2 text-sm font-medium">Maintenance counts</p>
               <div className="grid gap-3 sm:grid-cols-4">
@@ -306,244 +876,27 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
             <Separator />
 
-            {/* ── Project Task Rows ── */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium">Project activities</h3>
-                {totalMinutes > 0 && (
-                  <span className="text-sm text-muted-foreground">
-                    Total:{" "}
-                    <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
-                  </span>
-                )}
-              </div>
-
-              {fields.map((field, index) => {
-                const selectedProjectId = watchedTasks?.[index]?.project_id;
-                const selectedProject = selectedProjectId
-                  ? projById.get(selectedProjectId)
-                  : undefined;
-                const jobCodeLabel = selectedProject?.job_code_code ?? "—";
-
-                return (
-                  <div
-                    key={field.id}
-                    className="space-y-2 rounded-lg border border-border p-3"
-                  >
-                    {/* Row A: Project (searchable) | Job Code (read-only) | Duration | Remove */}
-                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_7rem_auto] sm:items-start">
-
-                      {/* Project — searchable combobox with name + code + client */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.project_id`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Project Name
-                            </FormLabel>
-                            <FormControl>
-                              <Combobox
-                                value={f.value}
-                                onValueChange={f.onChange}
-                                options={projectOptions}
-                                placeholder="Select project…"
-                                searchPlaceholder="Search by name, code, or client…"
-                                emptyMessage="No matching projects."
-                                allowClear={false}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Job Code — read-only display from selected project */}
-                      <div className="flex flex-col gap-1.5">
-                        <span className="text-xs font-medium text-muted-foreground">
-                          Job Code
-                        </span>
-                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm">
-                          {jobCodeLabel}
-                        </div>
-                      </div>
-
-                      {/* Duration */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.minutes_spent`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Duration (min)
-                            </FormLabel>
-                            <FormControl>
-                              <Input
-                                type="number"
-                                min={0}
-                                max={1440}
-                                placeholder="0"
-                                {...f}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="mt-6"
-                        onClick={() => remove(index)}
-                        disabled={fields.length === 1}
-                        aria-label="Remove activity"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    {/* Row B: Activity Type (searchable) | Description | Tags | Docs | BOM | Spares */}
-                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)_repeat(4,5rem)]">
-
-                      {/* Activity Type — searchable combobox; PM can create inline */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.activity_type`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Activity Type
-                            </FormLabel>
-                            <FormControl>
-                              <Combobox
-                                value={f.value || ""}
-                                onValueChange={(v) => f.onChange(v)}
-                                options={activityOptions}
-                                placeholder="Select activity type…"
-                                searchPlaceholder="Search by name or code…"
-                                emptyMessage="No matching activity types."
-                                allowClear
-                                allowCreate={canCreateActivityType}
-                                onCreateNew={async (name) => {
-                                  await handleCreateActivityType(name);
-                                  f.onChange(name);
-                                }}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Description */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.description`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="text-xs text-muted-foreground">
-                              Description
-                            </FormLabel>
-                            <FormControl>
-                              <Input placeholder="What did you work on?" {...f} />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Count fields */}
-                      {(
-                        [
-                          ["tags_count",   "Tags"],
-                          ["docs_count",   "Docs"],
-                          ["bom_count",    "BOM"],
-                          ["spares_count", "Spares"],
-                        ] as const
-                      ).map(([name, label]) => (
-                        <FormField
-                          key={name}
-                          control={form.control}
-                          name={`tasks.${index}.${name}`}
-                          render={({ field: f }) => (
-                            <FormItem>
-                              <FormLabel className="text-xs text-muted-foreground">
-                                {label}
-                              </FormLabel>
-                              <FormControl>
-                                <Input type="number" min={0} placeholder="0" {...f} />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {tasksError && (
-                <p className="text-xs font-medium text-destructive">{tasksError}</p>
+            {/* ── Query / Issues (end) ── */}
+            <FormField
+              control={form.control}
+              name="query_text"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Query / Issues{" "}
+                    <span className="font-normal text-muted-foreground">(optional)</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={3}
+                      placeholder="Any blockers or questions?"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
               )}
-
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => append({ ...EMPTY_TASK_ROW })}
-              >
-                <Plus className="h-4 w-4" />
-                Add activity
-              </Button>
-            </div>
-
-            <Separator />
-
-            {/* ── Remarks & Query ── */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                control={form.control}
-                name="remarks"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Day Remarks{" "}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Textarea
-                        rows={3}
-                        placeholder="What did you accomplish today?"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="query_text"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Query / Issues{" "}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Textarea
-                        rows={3}
-                        placeholder="Any blockers or questions?"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+            />
 
             <div className="flex justify-end gap-2 pt-2">
               <Button

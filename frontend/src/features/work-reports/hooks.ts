@@ -4,6 +4,7 @@ import { workReportsApi } from "./api";
 import { workReportKeys } from "./keys";
 import type {
   WorkReportCreateBody,
+  WorkReportEditRequestBody,
   WorkReportListParams,
   WorkReportRejectBody,
   WorkReportUpdateBody,
@@ -60,10 +61,10 @@ export function useSubmitWorkReport(id: string) {
   });
 }
 
-export function useApproveWorkReport(id: string) {
+export function useRequestEditWorkReport(id: string) {
   const invalidate = useReportActionInvalidation(id);
   return useMutation({
-    mutationFn: () => workReportsApi.approve(id),
+    mutationFn: (body: WorkReportEditRequestBody) => workReportsApi.requestEdit(id, body),
     onSuccess: invalidate,
   });
 }
@@ -76,10 +77,30 @@ export function useRejectWorkReport(id: string) {
   });
 }
 
+export function useGrantEditWorkReport(id: string) {
+  const invalidate = useReportActionInvalidation(id);
+  return useMutation({
+    mutationFn: () => workReportsApi.grantEdit(id),
+    onSuccess: invalidate,
+  });
+}
+
 export function useDeleteWorkReport() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => workReportsApi.remove(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: workReportKeys.all }),
+  });
+}
+
+/** Toggle a TASK_BASED row's completion checkbox. `reportId` is only used to
+ * invalidate that report's detail query — the mutation itself targets the
+ * task row directly and works regardless of the parent report's status. */
+export function useToggleTaskCompletion(reportId: string) {
+  const invalidate = useReportActionInvalidation(reportId);
+  return useMutation({
+    mutationFn: ({ taskId, isCompleted }: { taskId: string; isCompleted: boolean }) =>
+      workReportsApi.toggleTaskCompletion(taskId, { is_completed: isCompleted }),
+    onSuccess: invalidate,
   });
 }
