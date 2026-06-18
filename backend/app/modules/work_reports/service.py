@@ -360,15 +360,25 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
 
 
 # ---------- reads ----------------------------------------------------------
+_REVIEWABLE = {
+    WorkReportStatus.submitted,
+    WorkReportStatus.rejected,
+    WorkReportStatus.granted,
+}
+
+
 def _apply_scope(db: Session, actor: User, stmt):
     """Return (stmt, allowed). allowed=False short-circuits to an empty page.
 
-    PM sees only submitted reports.
-    TL sees own reports (all statuses) + submitted reports from their led projects.
+    PM sees submitted/rejected/granted reports (not other people's drafts —
+    those are private to the author until they choose to submit).
+    TL sees own reports (all statuses) + submitted/rejected/granted reports
+    from their led projects, so they can still track a report they sent
+    back or granted edit access to, not just the moment it's re-submitted.
     Everyone else sees only their own reports (all statuses).
     """
     if actor.role == UserRole.project_manager:
-        return stmt.where(DailyWorkReport.status == WorkReportStatus.submitted), True
+        return stmt.where(DailyWorkReport.status.in_(_REVIEWABLE)), True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
@@ -382,7 +392,7 @@ def _apply_scope(db: Session, actor: User, stmt):
                 DailyWorkReport.employee_id == me.id,
                 and_(
                     DailyWorkReport.id.in_(led_reports),
-                    DailyWorkReport.status == WorkReportStatus.submitted,
+                    DailyWorkReport.status.in_(_REVIEWABLE),
                 ),
             )
         ), True

@@ -14,6 +14,7 @@ from app.modules.work_reports import service as svc
 from app.modules.work_reports.models import WorkReportStatus
 from app.modules.work_reports.schemas import (
     WorkReportCreate,
+    WorkReportEditRequest,
     WorkReportReject,
     WorkReportTaskIn,
     WorkReportUpdate,
@@ -119,6 +120,54 @@ def test_edit_rejected_returns_to_draft(db, author, make_user):
     assert r.status == WorkReportStatus.draft
     assert r.total_minutes == 90
     assert r.review_note is None
+
+
+def test_pm_list_scope_includes_rejected_and_granted(db, author, make_user):
+    """A rejected/granted report must stay visible to the reviewer who acted
+    on it — disappearing the moment it leaves 'submitted' would make it
+    impossible to track what's been sent back or reopened."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
+    admin = make_user("admin@x.com", role=UserRole.project_manager)
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    svc.submit_work_report(db, u, r.id)
+    svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="redo"))
+
+    _, total = svc.list_work_reports(
+        db, admin, employee_id=None, project_id=None, status=None,
+        date_from=None, date_to=None, limit=50, offset=0,
+    )
+    assert total == 1
+
+    svc.submit_work_report(db, u, r.id)
+    svc.request_edit_work_report(db, u, r.id, WorkReportEditRequest(note="need to fix a typo"))
+    svc.grant_edit_work_report(db, admin, r.id)
+
+    _, total = svc.list_work_reports(
+        db, admin, employee_id=None, project_id=None, status=None,
+        date_from=None, date_to=None, limit=50, offset=0,
+    )
+    assert total == 1
+
+
+def test_team_lead_list_scope_includes_rejected_and_granted(
+    db, author, make_user, make_employee, make_project_member
+):
+    from app.modules.projects.models import ProjectMemberRole
+
+    lead_u, lead_e, p = author(email="lead@x.com", code="TL-1", proj_code="P-1", member=False)
+    make_project_member(project_id=p.id, employee_id=lead_e.id, role=ProjectMemberRole.team_lead)
+    emp_u, emp_e, _ = author(email="e@x.com", code="E-1", proj_code="P-2", member=False)
+    make_project_member(project_id=p.id, employee_id=emp_e.id, role=ProjectMemberRole.contributor)
+
+    r = svc.create_work_report(db, emp_u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    svc.submit_work_report(db, emp_u, r.id)
+    svc.reject_work_report(db, lead_u, r.id, WorkReportReject(review_note="redo"))
+
+    _, total = svc.list_work_reports(
+        db, lead_u, employee_id=None, project_id=None, status=None,
+        date_from=None, date_to=None, limit=50, offset=0,
+    )
+    assert total == 1
 
 
 # ---------- validation rules (§6) ------------------------------------------
