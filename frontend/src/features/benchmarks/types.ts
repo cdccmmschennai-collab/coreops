@@ -58,3 +58,51 @@ export interface MyAlerts {
   tasks: TaskStatusRow[];
   summary: MyAlertsSummary;
 }
+
+// ── PM team views (GET /benchmarks/team-alerts, project_manager only) ──────────
+
+// One employee's weekly benchmark rollup — the PM "compare performance" row.
+// productivity_pct is null when the employee logged no NUMERIC work this week.
+export interface TeamComparisonRow {
+  employee_id: string;
+  employee_name: string;
+  target: string;
+  actual: string;
+  pending: string;
+  productivity_pct: string | null;
+}
+
+export interface TeamBacklogRow {
+  employee_id: string;
+  employee_name: string;
+  date: string;
+  activity_name: string | null;
+  sub_activity_name: string;
+  actual: string;
+  target: string;
+  pending: string;
+  benchmark_unit: BenchmarkUnit | null;
+}
+
+export interface TeamOverdueRow {
+  employee_id: string;
+  employee_name: string;
+  activity_name: string | null;
+  sub_activity_name: string;
+  due_date: string;
+  days_overdue: number;
+}
+
+export interface TeamKpis {
+  total_employees: number;
+  weekly_productivity_pct: string | null;
+  total_pending_benchmarks: number;
+  total_overdue_activities: number;
+}
+
+export interface TeamAlerts {
+  comparison: TeamComparisonRow[];
+  backlog: TeamBacklogRow[];
+  overdue: TeamOverdueRow[];
+  kpis: TeamKpis;
+}

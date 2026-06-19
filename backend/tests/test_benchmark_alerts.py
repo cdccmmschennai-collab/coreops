@@ -279,3 +279,18 @@ def test_team_alerts_aggregates_across_employees(client, setup_author, activity_
     # plain average of each employee's productivity_pct.
     assert float(body["kpis"]["weekly_productivity_pct"]) == pytest.approx(expected_productivity)
     assert body["kpis"]["total_overdue_activities"] == 0
+
+    # Per-employee comparison (PM 'compare performance' table): one row per
+    # employee with benchmark activity, lowest productivity first (Bob 40% <
+    # Alice 80%). Same weighted formula as the org KPI, scoped per employee.
+    comparison = body["comparison"]
+    assert [r["employee_name"] for r in comparison] == [
+        bob["emp"].full_name,
+        alice["emp"].full_name,
+    ]
+    by_name = {r["employee_name"]: r for r in comparison}
+    assert float(by_name[alice["emp"].full_name]["productivity_pct"]) == pytest.approx(80.0)
+    assert float(by_name[bob["emp"].full_name]["productivity_pct"]) == pytest.approx(40.0)
+    assert float(by_name[alice["emp"].full_name]["actual"]) == 200.0
+    assert float(by_name[alice["emp"].full_name]["target"]) == 250.0
+    assert float(by_name[bob["emp"].full_name]["pending"]) == 150.0

@@ -363,12 +363,15 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
 def _apply_scope(db: Session, actor: User, stmt):
     """Return (stmt, allowed). allowed=False short-circuits to an empty page.
 
-    PM sees only submitted reports.
+    PM sees all non-draft reports (submitted/granted/rejected/approved) — drafts
+    are private to the author until filed. This keeps PM dashboards complete:
+    a report reopened for edit ('granted') or sent back ('rejected') still
+    represents real work and must remain visible.
     TL sees own reports (all statuses) + submitted reports from their led projects.
     Everyone else sees only their own reports (all statuses).
     """
     if actor.role == UserRole.project_manager:
-        return stmt.where(DailyWorkReport.status == WorkReportStatus.submitted), True
+        return stmt.where(DailyWorkReport.status != WorkReportStatus.draft), True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False

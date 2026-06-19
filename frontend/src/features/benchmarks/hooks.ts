@@ -9,3 +9,12 @@ export function useMyAlerts() {
     queryFn: () => benchmarksApi.myAlerts(),
   });
 }
+
+// PM-only (GET /benchmarks/team-alerts requires project_manager). Only mount
+// this from views already gated to managerial roles, or the request 403s.
+export function useTeamAlerts() {
+  return useQuery({
+    queryKey: benchmarksKeys.teamAlerts(),
+    queryFn: () => benchmarksApi.teamAlerts(),
+  });
+}
