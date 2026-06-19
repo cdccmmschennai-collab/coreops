@@ -17,6 +17,7 @@ Manager "team" = employees whose manager_id == the manager's employee id.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from itertools import groupby
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +39,7 @@ from app.modules.tasks.models import Task
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
     DailyWorkReport,
+    DayStatus,
     WorkReportStatus,
     WorkReportTask,
 )
@@ -436,6 +438,139 @@ def list_work_reports(
     reports = list(rows)
     _decorate(db, actor, reports)
     return reports, total
+
+
+DAY_STATUS_LABELS: dict[str, str] = {
+    DayStatus.on_duty.value: "On Duty",
+    DayStatus.office.value: "Office",
+    DayStatus.half_day.value: "Half Day",
+    DayStatus.on_leave.value: "On Leave",
+    DayStatus.wfh.value: "WFH",
+    DayStatus.permission.value: "Permission",
+    DayStatus.comp_off.value: "Comp Off",
+}
+
+
+def build_activity_rows(
+    db: Session,
+    actor: User,
+    *,
+    employee_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
+    activity_id: uuid.UUID | None = None,
+    sub_activity_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[dict]:
+    """Activity-level rows for the PM Weekly Activity Report (preview + Excel
+    export share this one source). One row per work_report_task, RBAC-scoped the
+    same way the report list is (`_apply_scope`: PM sees all non-draft). Built
+    from detailed task records — never from report summaries — so project code /
+    activity / counts / remarks stay accurate."""
+    scoped = select(DailyWorkReport.id)
+    scoped, allowed = _apply_scope(db, actor, scoped)
+    if not allowed:
+        return []
+
+    q = (
+        select(WorkReportTask, DailyWorkReport, Employee)
+        .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
+        .join(Employee, Employee.id == DailyWorkReport.employee_id)
+        .where(WorkReportTask.report_id.in_(scoped))
+    )
+    if employee_id is not None:
+        q = q.where(DailyWorkReport.employee_id == employee_id)
+    if project_id is not None:
+        q = q.where(WorkReportTask.project_id == project_id)
+    if sub_activity_id is not None:
+        q = q.where(WorkReportTask.sub_activity_id == sub_activity_id)
+    if activity_id is not None:
+        q = q.join(
+            ActivityMaster, ActivityMaster.id == WorkReportTask.sub_activity_id
+        ).where(ActivityMaster.parent_id == activity_id)
+    if date_from is not None:
+        q = q.where(DailyWorkReport.report_date >= date_from)
+    if date_to is not None:
+        q = q.where(DailyWorkReport.report_date <= date_to)
+    q = q.order_by(Employee.employee_code, DailyWorkReport.report_date, WorkReportTask.id)
+
+    rows: list[dict] = []
+    for task, report, emp in db.execute(q).all():
+        rows.append({
+            "employee_label": f"{emp.employee_code} - {emp.full_name}",
+            "report_date": report.report_date,
+            "day_status": (
+                DAY_STATUS_LABELS.get(report.day_status.value, report.day_status.value)
+                if report.day_status
+                else None
+            ),
+            "project_code": task.project_code,
+            "activity_type": task.activity_name,
+            "sub_activity_type": task.sub_activity_name,
+            "tags": task.tags_count,
+            "docs": task.docs_count,
+            "bom": task.bom_count,
+            "spares": task.spares_count,
+            "remarks": report.remarks,
+        })
+    return rows
+
+
+def build_activity_groups(
+    db: Session,
+    actor: User,
+    *,
+    employee_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
+    activity_id: uuid.UUID | None = None,
+    sub_activity_id: uuid.UUID | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> dict:
+    """Group the flat activity rows by Employee + Date into one row each, and
+    report the max activities on any single Employee+Date (drives the dynamic
+    activity-column count). Single source for the preview and the Excel export —
+    multiple activities on a day fill additional column groups on the same row."""
+    rows = build_activity_rows(
+        db,
+        actor,
+        employee_id=employee_id,
+        project_id=project_id,
+        activity_id=activity_id,
+        sub_activity_id=sub_activity_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    max_activities = 0
+    out_rows: list[dict] = []
+    # rows are ordered by employee_code, report_date, task id → contiguous groups.
+    for (emp_label, report_date), day_rows in groupby(
+        rows, key=lambda r: (r["employee_label"], r["report_date"])
+    ):
+        day_rows = list(day_rows)
+        activities = [
+            {
+                "project_code": r["project_code"],
+                "activity_type": r["activity_type"],
+                "sub_activity_type": r["sub_activity_type"],
+                "tags": r["tags"],
+                "docs": r["docs"],
+                "bom": r["bom"],
+                "spares": r["spares"],
+            }
+            for r in day_rows
+        ]
+        max_activities = max(max_activities, len(activities))
+        out_rows.append({
+            "employee_label": emp_label,
+            "report_date": report_date,
+            "day_status": day_rows[0]["day_status"],
+            "remarks": day_rows[0]["remarks"],
+            "activities": activities,
+        })
+
+    return {"max_activities": max_activities or 1, "rows": out_rows}
 
 
 def _assert_can_read(db: Session, actor: User, report: DailyWorkReport) -> None:
