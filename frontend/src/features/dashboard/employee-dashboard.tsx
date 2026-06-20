@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/features/auth/auth-provider";
+import { ProductivityWidget } from "@/features/benchmarks/components/productivity-widget";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList } from "@/features/work-reports/hooks";
@@ -167,6 +168,8 @@ export function EmployeeDashboard() {
         <Kpi label="Submitted" value={String(submitted)} />
         <Kpi label="Drafts" value={String(drafts)} />
       </KpiGrid>
+
+      <ProductivityWidget />
 
       {/* main two-column grid */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
