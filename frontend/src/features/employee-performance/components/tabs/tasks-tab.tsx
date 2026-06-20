@@ -41,7 +41,7 @@ export function TasksTab({ employeeId }: { employeeId: string }) {
             : "pending";
         out.push({
           id: t.id,
-          title: t.task_title || t.sub_activity_name || t.description || "Task",
+          title: t.task_title || t.sub_activity_name || t.description || "Activity",
           project: t.project_name ?? null,
           minutes: t.minutes_spent ?? 0,
           dueDate: t.due_date ?? null,
@@ -61,7 +61,7 @@ export function TasksTab({ employeeId }: { employeeId: string }) {
   return (
     <div className="space-y-4">
       <KpiGrid>
-        <Kpi label="Total tasks" value={String(tasks.length)} />
+        <Kpi label="Total activities" value={String(tasks.length)} />
         <Kpi label="Completed" value={String(completed)} />
         <Kpi label="Pending" value={String(pending)} />
         <Kpi label="Overdue" value={String(overdue)} />
@@ -69,12 +69,12 @@ export function TasksTab({ employeeId }: { employeeId: string }) {
 
       <Card className="overflow-hidden">
         <CardHeader className="border-b border-border px-5 py-3.5">
-          <CardTitle className="text-base">Tasks this week</CardTitle>
+          <CardTitle className="text-base">Activities this week</CardTitle>
         </CardHeader>
         <CardContent className="p-2">
           {tasks.length === 0 ? (
             <p className="px-3 py-8 text-center text-sm text-muted-foreground">
-              No tasks logged this week.
+              No activities logged this week.
             </p>
           ) : (
             <ul className="divide-y divide-border">

@@ -187,13 +187,16 @@ def _today() -> date:
 def _task_based_dates(report_date: date, snap: dict) -> tuple[date | None, date | None]:
     """started_date/due_date for a TASK_BASED row — never client-supplied.
     started_date is always the report's own date (stable across edits, since
-    report_date itself never changes); due_date is started_date plus the
-    sub-activity's allocated duration (activity_master.benchmark_period_days,
-    default 1 if unset)."""
+    report_date itself never changes). Benchmark activities are daily production
+    work, so due_date defaults to the *assigned date*: a 1-day activity
+    (benchmark_period_days = 1, the default) is due the same day it's reported,
+    never pushed to the next day. A multi-day activity spans forward — due on
+    started_date + (benchmark_period_days - 1), so a 2-day activity is due the
+    following day, and so on."""
     if not snap["is_task_based"]:
         return None, None
     started = report_date
-    due = started + timedelta(days=snap["benchmark_period_days"] or 1)
+    due = started + timedelta(days=(snap["benchmark_period_days"] or 1) - 1)
     return started, due
 
 

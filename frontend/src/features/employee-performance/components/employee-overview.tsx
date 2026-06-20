@@ -26,12 +26,8 @@ export function EmployeeOverview({ employeeId }: { employeeId: string }) {
     );
   }
 
-  const productivity =
-    data.productivity_pct != null ? `${Number(data.productivity_pct).toFixed(0)}%` : "—";
-
   return (
     <KpiGrid>
-      <Kpi label="Productivity" value={productivity} />
       <Kpi label="Hours this week" value={formatMinutes(data.hours_this_week_minutes)} />
       <Kpi label="Completed benchmarks" value={String(data.completed_benchmarks)} />
       <Kpi label="Pending" value={String(data.pending_benchmarks)} />

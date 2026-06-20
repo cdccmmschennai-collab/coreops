@@ -8,7 +8,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.service import (
@@ -18,7 +18,11 @@ from app.modules.activity_master.service import (
 )
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
-from app.modules.users.models import User
+from app.modules.users.models import User, UserRole
+
+# Managerial roles never author work reports, so they have no benchmark data —
+# they're excluded from the employee benchmark-tracking roster entirely.
+_NON_AUTHORING_ROLES = (UserRole.project_manager, UserRole.manager)
 
 
 def _daily_row(r: dict) -> dict:
@@ -86,24 +90,72 @@ def get_my_alerts(db: Session, actor: User, *, today: date | None = None) -> dic
     }
 
 
+def _reconcile_effective_pending(daily: list[dict]) -> dict[tuple, Decimal]:
+    """Per-row *effective* benchmark pending after backlog recovery, keyed by
+    (employee_id, date, sub_activity_id). Mirrors the frontend
+    reconciliation.ts: within each (employee, sub_activity), days are walked in
+    date order and a later day's surplus pays down earlier outstanding deficits
+    (oldest first); leftover surplus is dropped, never carried forward to a
+    future day. The ledger already keys one row per (employee, date,
+    sub_activity), so these keys are unique. The per-day productivity math
+    (actual/target) is intentionally left untouched."""
+    by_sub: dict[tuple[uuid.UUID, uuid.UUID], list[dict]] = {}
+    for r in daily:
+        by_sub.setdefault((r["employee_id"], r["sub_activity_id"]), []).append(r)
+
+    effective: dict[tuple, Decimal] = {}
+    for rows in by_sub.values():
+        ordered = sorted(rows, key=lambda r: r["date"])
+        outstanding: list[list] = []  # [row_key, remaining_deficit], oldest first
+        for row in ordered:
+            target = Decimal(str(row["target"]))
+            actual = Decimal(str(row["actual"]))
+            deficit = max(Decimal("0"), target - actual)
+            surplus = max(Decimal("0"), actual - target)
+            key = (row["employee_id"], row["date"], row["sub_activity_id"])
+            effective[key] = deficit
+            while surplus > 0 and outstanding:
+                head = outstanding[0]
+                applied = min(surplus, head[1])
+                head[1] -= applied
+                surplus -= applied
+                effective[head[0]] -= applied
+                if head[1] <= 0:
+                    outstanding.pop(0)
+            if deficit > 0:
+                outstanding.append([key, deficit])
+    return effective
+
+
+def _reconciled_pending_by_employee(daily: list[dict]) -> dict[uuid.UUID, Decimal]:
+    """Each employee's summed *reconciled* benchmark pending (see
+    _reconcile_effective_pending), so the comparison table agrees with the
+    per-employee detail view."""
+    by_emp: dict[uuid.UUID, Decimal] = {}
+    for (emp_id, _d, _s), pending in _reconcile_effective_pending(daily).items():
+        by_emp[emp_id] = by_emp.get(emp_id, Decimal("0")) + pending
+    return by_emp
+
+
 def _employee_comparison(daily: list[dict], names: dict[uuid.UUID, str]) -> list[dict]:
     """Per-employee weekly benchmark rollup for the PM 'compare employee
-    performance' table: each employee's summed target/actual/pending across
-    every NUMERIC sub-activity day this week, plus a productivity % using the
-    same weighted total-actual/total-target formula as the org KPI, scoped to
-    one employee (NOT a change to the frozen calculation — just grouped by
-    employee). Lowest productivity sorts first so a PM sees who needs
-    attention; employees with no benchmark target (no NUMERIC work this week)
-    have productivity_pct = None and sort last."""
+    performance' table: each employee's summed target/actual across every
+    NUMERIC sub-activity day this week, plus a productivity % using the same
+    weighted total-actual/total-target formula as the org KPI, scoped to one
+    employee. `pending` is the *reconciled* backlog (later-day surplus clears
+    earlier deficits) so this table matches the detail view. Lowest
+    productivity sorts first so a PM sees who needs attention; employees with
+    no benchmark target (no NUMERIC work this week) have productivity_pct =
+    None and sort last."""
+    reconciled = _reconciled_pending_by_employee(daily)
     agg: dict[uuid.UUID, dict] = {}
     for r in daily:
         a = agg.setdefault(
             r["employee_id"],
-            {"target": Decimal("0"), "actual": Decimal("0"), "pending": Decimal("0")},
+            {"target": Decimal("0"), "actual": Decimal("0")},
         )
         a["target"] += r["target"]
         a["actual"] += r["actual"]
-        a["pending"] += r["pending"]
 
     rows = []
     for emp_id, a in agg.items():
@@ -113,7 +165,7 @@ def _employee_comparison(daily: list[dict], names: dict[uuid.UUID, str]) -> list
             "employee_name": names.get(emp_id, "—"),
             "target": a["target"],
             "actual": a["actual"],
-            "pending": a["pending"],
+            "pending": reconciled.get(emp_id, Decimal("0")),
             "productivity_pct": pct,
         })
     rows.sort(
@@ -160,8 +212,13 @@ def get_employees_performance(
     daily = get_daily_benchmark_ledger(db, employee_ids=None, today=today)
 
     emps = db.execute(
-        select(Employee).where(
-            Employee.status == EmployeeStatus.active, Employee.deleted_at.is_(None)
+        select(Employee)
+        .outerjoin(User, Employee.user_id == User.id)
+        .where(
+            Employee.status == EmployeeStatus.active,
+            Employee.deleted_at.is_(None),
+            # Keep report-authoring staff (and any without a login); drop PMs/managers.
+            or_(User.id.is_(None), User.role.notin_(_NON_AUTHORING_ROLES)),
         )
     ).scalars().all()
     names = {e.id: e.full_name for e in emps}
@@ -264,7 +321,7 @@ def get_employee_benchmarks(
 def get_team_alerts(db: Session, actor: User, *, today: date | None = None) -> dict:
     """project_manager only — org-wide, no employee_ids filter."""
     daily = get_daily_benchmark_ledger(db, employee_ids=None, today=today)
-    shortfalls = [_daily_row(r) for r in daily if r["pending"] > 0]
+    effective = _reconcile_effective_pending(daily)
     overdue = get_overdue_activities(db, employee_ids=None, today=today)
 
     # Names for everyone who appears in any view: the comparison table covers
@@ -285,9 +342,20 @@ def get_team_alerts(db: Session, actor: User, *, today: date | None = None) -> d
         )
     ).scalars().all()
 
-    backlog = [
-        {**r, "employee_name": names.get(r["employee_id"], "—")} for r in shortfalls
-    ]
+    # Reconciled team backlog: only activities still incomplete after a later
+    # day's surplus has paid down earlier deficits, with the reconciled
+    # remaining quantity. Matches the comparison table and the detail view.
+    backlog = []
+    for r in daily:
+        remaining = effective.get(
+            (r["employee_id"], r["date"], r["sub_activity_id"]), r["pending"]
+        )
+        if remaining > 0:
+            row = _daily_row(r)
+            row["pending"] = remaining
+            row["employee_name"] = names.get(r["employee_id"], "—")
+            backlog.append(row)
+    backlog.sort(key=lambda r: (r["employee_name"], r["date"]))
     overdue_rows = [
         {**r, "employee_name": names.get(r["employee_id"], "—")} for r in overdue
     ]

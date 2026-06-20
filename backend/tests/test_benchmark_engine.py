@@ -203,9 +203,31 @@ def test_task_based_due_date_computed_on_draft_save(client, setup_author, activi
     created = client.post(BASE, headers=a["header"], json=payload).json()
     task = created["tasks"][0]
     assert task["started_date"] == TODAY
-    assert task["due_date"] == (TODAY_D + timedelta(days=2)).isoformat()
+    # 2-day activity spans the report day + the next day → due report_date + 1.
+    assert task["due_date"] == (TODAY_D + timedelta(days=1)).isoformat()
     assert task["is_completed"] is False
     assert task["completed_date"] is None
+    assert task["is_overdue"] is False
+
+
+def test_task_based_daily_due_date_is_assigned_date(client, setup_author, activity_admin):
+    """A daily benchmark activity (period 1, the default) is due the SAME day it
+    is reported — never pushed to the next day."""
+    a = setup_author()
+    _, sub = _make_sub_activity(
+        client, activity_admin, benchmark_type="TASK_BASED", name="MTL-ASSET PHOTO",
+    )
+    payload = {
+        "report_date": TODAY,
+        "tasks": [{
+            "project_id": str(a["project"].id), "description": "work",
+            "sub_activity_id": sub["id"],
+        }],
+    }
+    created = client.post(BASE, headers=a["header"], json=payload).json()
+    task = created["tasks"][0]
+    assert task["started_date"] == TODAY
+    assert task["due_date"] == TODAY        # same day, not TODAY + 1
     assert task["is_overdue"] is False
 
 

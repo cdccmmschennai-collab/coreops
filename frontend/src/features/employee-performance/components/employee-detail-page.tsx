@@ -18,7 +18,7 @@ const TABS: TabItem[] = [
   { value: "overview", label: "Overview" },
   { value: "benchmarks", label: "Benchmarks" },
   { value: "projects", label: "Projects" },
-  { value: "tasks", label: "Tasks" },
+  { value: "tasks", label: "Activities" },
   { value: "reports", label: "Reports" },
   { value: "attendance", label: "Attendance" },
 ];

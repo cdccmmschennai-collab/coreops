@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table";
 import { useAuth } from "@/features/auth/auth-provider";
 import { ProductivityWidget } from "@/features/benchmarks/components/productivity-widget";
+import { UnfinishedBenchmarkWork } from "@/features/benchmarks/components/unfinished-benchmark-work";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList } from "@/features/work-reports/hooks";
@@ -168,6 +169,8 @@ export function EmployeeDashboard() {
         <Kpi label="Submitted" value={String(submitted)} />
         <Kpi label="Drafts" value={String(drafts)} />
       </KpiGrid>
+
+      <UnfinishedBenchmarkWork />
 
       <ProductivityWidget />
 
