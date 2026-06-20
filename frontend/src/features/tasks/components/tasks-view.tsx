@@ -33,7 +33,7 @@ function parsePriority(value: string | null): TaskPriority | "" {
     : "";
 }
 
-export function TasksView({ mode }: { mode: "mine" | "all" }) {
+export function TasksView({ routeMode }: { routeMode: "mine" | "all" }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -42,6 +42,13 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
   // Team leads (non-PM) can assign within projects they lead.
   const { data: assignableProjects } = useAssignableProjects({ enabled: !canManage });
   const canAssign = canManage || (assignableProjects?.length ?? 0) > 0;
+  // A PM only ever assigns — they get a single assignee-facing view, no
+  // "My Tasks" tab. A plain contributor/QC only ever receives — single
+  // "My Tasks" view, no tabs. A team lead does both (a PM can assign a task
+  // to a team lead, and the lead assigns within their own led project), so
+  // they're the only role that gets to switch between the two via tabs.
+  const isTeamLead = canAssign && !canManage;
+  const mode: "mine" | "all" = canManage ? "all" : isTeamLead ? routeMode : "mine";
 
   const params: TaskListParams = {
     mine: mode === "mine",
@@ -107,13 +114,6 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
 
   const count = query.data?.total;
 
-  const pmTabs = canManage
-    ? [
-        { value: "/tasks", label: "My Tasks" },
-        { value: "/tasks/all", label: "All Tasks", count },
-      ]
-    : [];
-
   return (
     <>
       <PageHeader
@@ -128,7 +128,7 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
         actions={addButton}
       />
 
-      {pmTabs.length > 0 && (
+      {isTeamLead && (
         <Tabs
           className="mb-4"
           value={mode === "all" ? "/tasks/all" : "/tasks"}
@@ -136,7 +136,10 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
             const qs = searchParams.toString();
             router.push(qs ? `${href}?${qs}` : href);
           }}
-          items={pmTabs}
+          items={[
+            { value: "/tasks", label: "My Tasks" },
+            { value: "/tasks/all", label: "All Tasks" },
+          ]}
         />
       )}
 
@@ -154,11 +157,11 @@ export function TasksView({ mode }: { mode: "mine" | "all" }) {
         isError={query.isError}
         onRetry={() => void query.refetch()}
         onPageChange={onPageChange}
-        canManage={canManage && mode === "all"}
+        canManage={canManage}
         currentEmployeeId={employeeId}
-        onRequestCancel={canManage ? onRequestCancel : undefined}
-        onStatusChange={mode === "mine" ? onStatusChange : undefined}
-        emptyAction={canManage && mode === "all" ? addButton : undefined}
+        onRequestCancel={canAssign ? onRequestCancel : undefined}
+        onStatusChange={onStatusChange}
+        emptyAction={mode === "all" ? addButton : undefined}
       />
     </>
   );

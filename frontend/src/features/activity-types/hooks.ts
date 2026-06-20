@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { activityTypesApi, type ActivityTypeCreateBody, type ActivityTypeUpdateBody } from "./api";
+import { useQuery } from "@tanstack/react-query";
+import { activityTypesApi } from "./api";
 import { activityTypeKeys } from "./keys";
 import type { ActivityTypeListParams } from "./types";
 
@@ -16,28 +16,4 @@ export function useActivityTypeOptions() {
   const items = query.data?.items ?? [];
   const byId = new Map(items.map((a) => [a.id, a]));
   return { items, byId, isLoading: query.isLoading };
-}
-
-export function useCreateActivityType() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: ActivityTypeCreateBody) => activityTypesApi.create(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: activityTypeKeys.all }),
-  });
-}
-
-export function useUpdateActivityType(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: ActivityTypeUpdateBody) => activityTypesApi.update(id, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: activityTypeKeys.all }),
-  });
-}
-
-export function useDeactivateActivityType() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => activityTypesApi.deactivate(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: activityTypeKeys.all }),
-  });
 }

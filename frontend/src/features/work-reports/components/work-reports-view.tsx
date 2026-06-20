@@ -1,16 +1,20 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
+import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useAssignableProjects } from "@/features/tasks/hooks";
 import { can, isManagerial } from "@/lib/rbac";
 
 import {
   WorkReportsFilters,
+  type EmployeeFilterOption,
   type WorkReportFilterValues,
 } from "./work-reports-filters";
 import { WorkReportsTable } from "./work-reports-table";
@@ -30,12 +34,33 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { role, employeeId } = useAuth();
-  // PMs get the employee filter dropdown; team leads (who are `employee` role)
-  // don't, but still get the Employee column once their project-scoped list
-  // returns reports authored by others (see showEmployeeColumn below).
-  const showEmployeeFilter = isManagerial(role);
+  const { role, employee, employeeId } = useAuth();
+  const isManager = isManagerial(role);
+  // Team leads (who are `employee` role) get the same filter once they lead
+  // a project — degraded back to a plain contributor, assignableProjects is
+  // empty and they fall back to seeing only their own reports.
+  const { data: assignableProjects } = useAssignableProjects({ enabled: !isManager });
+  const isTeamLead = !isManager && (assignableProjects?.length ?? 0) > 0;
+  const showEmployeeFilter = isManager || isTeamLead;
   const canCreate = can(role, "report.submit");
+
+  const { items: orgEmployees } = useEmployeeOptions();
+  const employeeOptions: EmployeeFilterOption[] = React.useMemo(() => {
+    if (isManager) {
+      return orgEmployees.map((e) => ({ id: e.id, label: `${e.full_name} · ${e.employee_code}` }));
+    }
+    if (!isTeamLead) return [];
+    // Scoped to the team lead's own led-project teammates (+ themselves) —
+    // not the org-wide list, which they're not RBAC-permitted to browse.
+    const seen = new Map<string, string>();
+    if (employeeId && employee) seen.set(employeeId, employee.full_name);
+    for (const project of assignableProjects ?? []) {
+      for (const member of project.members) {
+        if (!seen.has(member.employee_id)) seen.set(member.employee_id, member.name);
+      }
+    }
+    return Array.from(seen, ([id, label]) => ({ id, label }));
+  }, [isManager, isTeamLead, orgEmployees, assignableProjects, employee, employeeId]);
 
   const params: WorkReportListParams = {
     employee_id: showEmployeeFilter ? searchParams.get("employee_id") ?? "" : "",
@@ -77,7 +102,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
     showEmployeeFilter || items.some((r) => r.employee_id !== employeeId);
 
   const count = query.data?.total;
-  const scopeLabel = isManagerial(role)
+  const scopeLabel = isManager
     ? "All employees"
     : showEmployeeColumn
       ? "Projects you lead"
@@ -111,6 +136,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
             to: params.to,
           }}
           showEmployee={showEmployeeFilter}
+          employeeOptions={employeeOptions}
           onChange={onFilterChange}
         />
       </div>

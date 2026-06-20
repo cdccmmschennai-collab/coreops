@@ -12,7 +12,7 @@ import type {
 
 function toQuery(p: TaskListParams): string {
   const sp = new URLSearchParams();
-  if (p.mine) sp.set("mine", "true");
+  if (p.mine !== undefined) sp.set("mine", String(p.mine));
   if (p.q) sp.set("q", p.q);
   if (p.status) sp.set("status", p.status);
   if (p.priority) sp.set("priority", p.priority);

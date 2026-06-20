@@ -11,27 +11,8 @@ function toQuery(p: ActivityTypeListParams): string {
   return sp.toString();
 }
 
-export interface ActivityTypeCreateBody {
-  code?: string | null;
-  name: string;
-  category: "GENERAL" | "PROJECT" | "TAG_ESTIMATION";
-  requires_project: boolean;
-  is_active?: boolean;
-}
-
-export interface ActivityTypeUpdateBody {
-  name?: string;
-  category?: "GENERAL" | "PROJECT" | "TAG_ESTIMATION";
-  requires_project?: boolean;
-  is_active?: boolean;
-}
-
 export const activityTypesApi = {
   list: (params: ActivityTypeListParams = {}) =>
     api.get<ActivityTypePage>(`/activity-types?${toQuery(params)}`),
   get: (id: string) => api.get<ActivityType>(`/activity-types/${id}`),
-  create: (body: ActivityTypeCreateBody) => api.post<ActivityType>("/activity-types", body),
-  update: (id: string, body: ActivityTypeUpdateBody) =>
-    api.patch<ActivityType>(`/activity-types/${id}`, body),
-  deactivate: (id: string) => api.del<ActivityType>(`/activity-types/${id}`),
 };

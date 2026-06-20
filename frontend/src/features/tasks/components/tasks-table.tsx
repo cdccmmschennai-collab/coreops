@@ -65,7 +65,8 @@ export function TasksTable({
   const rows = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
   const showEmpty = !isLoading && !isError && rows.length === 0;
-  const cols = mode === "all" ? (canManage ? 6 : 5) : canManage ? 6 : 5;
+  const hasActionsCol = canManage || !!onStatusChange || !!onRequestCancel;
+  const cols = hasActionsCol ? 6 : 5;
 
   if (isError) {
     return <ErrorState title="Couldn't load tasks" onRetry={onRetry} />;
@@ -82,7 +83,7 @@ export function TasksTable({
             <TableHead>Priority</TableHead>
             <TableHead>Due date</TableHead>
             <TableHead>Status</TableHead>
-            {(canManage || onStatusChange) && (
+            {hasActionsCol && (
               <TableHead className="w-12 text-right">Actions</TableHead>
             )}
           </TableRow>
@@ -112,12 +113,13 @@ export function TasksTable({
                 <TableCell>
                   <StatusBadge status={task.status} />
                 </TableCell>
-                {(canManage || onStatusChange) && (
+                {hasActionsCol && (
                   <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                     <RowActions
                       task={task}
                       canManage={canManage}
                       isAssignee={task.assigned_to_employee_id === currentEmployeeId}
+                      isAssigner={task.assigned_by_employee_id === currentEmployeeId}
                       onRequestCancel={onRequestCancel}
                       onStatusChange={onStatusChange}
                     />
@@ -157,12 +159,14 @@ function RowActions({
   task,
   canManage,
   isAssignee,
+  isAssigner,
   onRequestCancel,
   onStatusChange,
 }: {
   task: Task;
   canManage: boolean;
   isAssignee: boolean;
+  isAssigner: boolean;
   onRequestCancel?: (task: Task) => void;
   onStatusChange?: (task: Task, status: Task["status"]) => void;
 }) {
@@ -192,6 +196,30 @@ function RowActions({
               Cancel task
             </DropdownMenuItem>
           )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  // A team lead may cancel a task they assigned out, but can't otherwise
+  // edit it (the API only allows the assigner a cancel, not a full edit).
+  if (isAssigner && !isAssignee && onRequestCancel) {
+    if (!isActive) return null;
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-8 w-8">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            onClick={() => onRequestCancel(task)}
+          >
+            <XCircle className="mr-2 h-4 w-4" />
+            Cancel task
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     );

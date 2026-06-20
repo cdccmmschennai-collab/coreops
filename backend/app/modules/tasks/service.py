@@ -179,7 +179,7 @@ def list_tasks(
     db: Session,
     actor: User,
     *,
-    mine: bool,
+    mine: bool | None,
     q: str | None,
     status: TaskStatus | None,
     priority: TaskPriority | None,
@@ -194,14 +194,22 @@ def list_tasks(
         me = _current_employee(db, actor)
         if me is None:
             return [], 0
-        # Contributors see tasks assigned to them; team leads also see the
-        # tasks they assigned out (assigned_by themselves).
-        stmt = stmt.where(
-            or_(
-                Task.assigned_to_employee_id == me.id,
-                Task.assigned_by_employee_id == me.id,
+        # Explicit `mine` distinguishes "My Tasks" (assigned to me, the
+        # contributor view) from "All Tasks" (assigned by me — only ever
+        # non-empty for a team lead, since only team leads/PMs can assign).
+        # Omitted (None) keeps the old combined view for any caller that
+        # doesn't know about the distinction.
+        if mine is None:
+            stmt = stmt.where(
+                or_(
+                    Task.assigned_to_employee_id == me.id,
+                    Task.assigned_by_employee_id == me.id,
+                )
             )
-        )
+        elif mine:
+            stmt = stmt.where(Task.assigned_to_employee_id == me.id)
+        else:
+            stmt = stmt.where(Task.assigned_by_employee_id == me.id)
     elif mine:
         me = _current_employee(db, actor)
         if me is None:

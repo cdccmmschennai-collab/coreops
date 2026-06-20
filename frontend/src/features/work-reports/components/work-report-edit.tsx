@@ -51,7 +51,10 @@ export function WorkReportEdit({ id }: { id: string }) {
     );
   }
 
-  const isEditable = report.status === "draft" || report.status === "rejected";
+  const isEditable =
+    report.status === "draft" ||
+    report.status === "rejected" ||
+    report.status === "granted";
   if (!isEditable) {
     return (
       <ErrorState

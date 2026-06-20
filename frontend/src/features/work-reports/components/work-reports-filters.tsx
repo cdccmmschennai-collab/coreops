@@ -8,7 +8,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useEmployeeOptions } from "@/features/attendance/employee-options";
 
 import { useProjectOptions } from "../project-options";
 import { WORK_REPORT_STATUSES, WORK_REPORT_STATUS_LABEL } from "../schemas";
@@ -22,18 +21,24 @@ export interface WorkReportFilterValues {
   to: string;
 }
 
+export interface EmployeeFilterOption {
+  id: string;
+  label: string;
+}
+
 const ALL = "all";
 
 export function WorkReportsFilters({
   values,
   showEmployee,
+  employeeOptions,
   onChange,
 }: {
   values: WorkReportFilterValues;
   showEmployee: boolean;
+  employeeOptions: EmployeeFilterOption[];
   onChange: (patch: Partial<WorkReportFilterValues>) => void;
 }) {
-  const { items: employees } = useEmployeeOptions();
   const { items: projects } = useProjectOptions();
 
   return (
@@ -48,9 +53,9 @@ export function WorkReportsFilters({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All employees</SelectItem>
-            {employees.map((e) => (
+            {employeeOptions.map((e) => (
               <SelectItem key={e.id} value={e.id}>
-                {e.full_name} · {e.employee_code}
+                {e.label}
               </SelectItem>
             ))}
           </SelectContent>

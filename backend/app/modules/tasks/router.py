@@ -31,7 +31,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 @router.get("", response_model=TaskPage)
 def list_tasks(
-    mine: bool = Query(default=False),
+    mine: bool | None = Query(default=None),
     q: str | None = Query(default=None),
     status: TaskStatus | None = Query(default=None),
     priority: TaskPriority | None = Query(default=None),
