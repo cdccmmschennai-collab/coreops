@@ -15,6 +15,7 @@ export interface DailyBenchmarkRow {
   activity_name: string | null;
   sub_activity_name: string;
   project_name: string | null;
+  project_code: string | null;
   hours_minutes: number;
   actual: string;
   target: string;
@@ -37,6 +38,7 @@ export interface TaskStatusRow {
   activity_name: string | null;
   sub_activity_name: string;
   project_name: string | null;
+  project_code: string | null;
   report_date: string;
   due_date: string;
   completed_date: string | null;

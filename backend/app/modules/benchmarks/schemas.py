@@ -21,6 +21,7 @@ class DailyBenchmarkRowOut(BaseModel):
     activity_name: str | None
     sub_activity_name: str
     project_name: str | None
+    project_code: str | None
     hours_minutes: int
     actual: Decimal
     target: Decimal
@@ -49,6 +50,7 @@ class TaskStatusOut(BaseModel):
     activity_name: str | None
     sub_activity_name: str
     project_name: str | None
+    project_code: str | None
     report_date: date
     due_date: date
     completed_date: date | None

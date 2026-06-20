@@ -133,6 +133,7 @@ def get_daily_benchmark_ledger(
             ActivityMaster.benchmark_value,
             ActivityMaster.relevant_count_field,
             WorkReportTask.project_name,
+            WorkReportTask.project_code,
             actual_expr.label("actual"),
             hours_expr.label("hours_minutes"),
         )
@@ -166,11 +167,15 @@ def get_daily_benchmark_ledger(
             "relevant_count_field": r.relevant_count_field,
         }
         dkey = (r.employee_id, r.report_date, r.sub_activity_id)
-        bucket = day_by_key.setdefault(dkey, {"actual": Decimal("0"), "hours_minutes": 0, "projects": []})
+        bucket = day_by_key.setdefault(
+            dkey, {"actual": Decimal("0"), "hours_minutes": 0, "projects": [], "project_codes": []}
+        )
         bucket["actual"] += Decimal(r.actual or 0)
         bucket["hours_minutes"] += int(r.hours_minutes or 0)
         if r.project_name and r.project_name not in bucket["projects"]:
             bucket["projects"].append(r.project_name)
+        if r.project_code and r.project_code not in bucket["project_codes"]:
+            bucket["project_codes"].append(r.project_code)
 
     activity_ids = {m["activity_id"] for m in meta.values() if m["activity_id"]}
     activity_names: dict[uuid.UUID, str] = {}
@@ -189,6 +194,7 @@ def get_daily_benchmark_ledger(
         target = Decimal(str(m["benchmark_value"] or 0))
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
+        project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None
         pending = max(Decimal("0"), target - actual)
         out.append({
             "employee_id": employee_id,
@@ -199,6 +205,7 @@ def get_daily_benchmark_ledger(
             "sub_activity_name": m["sub_activity_name"],
             "benchmark_unit": m["relevant_count_field"],
             "project_name": project_name,
+            "project_code": project_code,
             "hours_minutes": bucket["hours_minutes"],
             "target": target,
             "actual": actual,
@@ -296,6 +303,7 @@ def get_task_status_activities(
             WorkReportTask.activity_name,
             WorkReportTask.sub_activity_name,
             WorkReportTask.project_name,
+            WorkReportTask.project_code,
             DailyWorkReport.report_date,
             WorkReportTask.due_date,
             WorkReportTask.completed_date,
@@ -326,6 +334,7 @@ def get_task_status_activities(
             "activity_name": r.activity_name,
             "sub_activity_name": r.sub_activity_name,
             "project_name": r.project_name,
+            "project_code": r.project_code,
             "report_date": r.report_date,
             "due_date": r.due_date,
             "completed_date": r.completed_date,

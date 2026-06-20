@@ -36,6 +36,7 @@ def _daily_row(r: dict) -> dict:
         "activity_name": r["activity_name"],
         "sub_activity_name": r["sub_activity_name"],
         "project_name": r["project_name"],
+        "project_code": r["project_code"],
         "hours_minutes": r["hours_minutes"],
         "actual": r["actual"],
         "target": r["target"],
