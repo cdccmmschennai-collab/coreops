@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ChevronRight, PencilLine, PlusCircle, PowerOff } from "lucide-react";
+import { ChevronDown, ChevronRight, PencilLine, PlusCircle, Power, PowerOff } from "lucide-react";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -44,6 +44,8 @@ import {
   useCreateSubActivity,
   useDeactivateActivity,
   useDeactivateSubActivity,
+  useReactivateActivity,
+  useReactivateSubActivity,
   useSubActivities,
   useUpdateActivity,
   useUpdateSubActivity,
@@ -447,6 +449,7 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
 
   const query = useSubActivities(activity.id, false);
   const deactivateMutation = useDeactivateSubActivity();
+  const reactivateMutation = useReactivateSubActivity();
 
   const items = query.data ?? [];
 
@@ -461,6 +464,15 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
       toast.success(`"${sub.name}" deactivated`);
     } catch (err) {
       toast.error(err instanceof AppError ? err.message : "Could not deactivate.");
+    }
+  }
+
+  async function handleReactivate(sub: ActivityMaster) {
+    try {
+      await reactivateMutation.mutateAsync(sub.id);
+      toast.success(`"${sub.name}" reactivated`);
+    } catch (err) {
+      toast.error(err instanceof AppError ? err.message : "Could not reactivate.");
     }
   }
 
@@ -533,7 +545,7 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
                     >
                       <PencilLine className="h-3.5 w-3.5" />
                     </Button>
-                    {sub.is_active && (
+                    {sub.is_active ? (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -543,6 +555,17 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
                         disabled={deactivateMutation.isPending}
                       >
                         <PowerOff className="h-3.5 w-3.5" />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-success hover:text-success"
+                        onClick={() => void handleReactivate(sub)}
+                        aria-label="Reactivate"
+                        disabled={reactivateMutation.isPending}
+                      >
+                        <Power className="h-3.5 w-3.5" />
                       </Button>
                     )}
                   </div>
@@ -566,6 +589,7 @@ export function ActivityMasterManager() {
 
   const query = useActivities(false);
   const deactivateMutation = useDeactivateActivity();
+  const reactivateMutation = useReactivateActivity();
 
   const items = query.data ?? [];
   const filtered = items.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()));
@@ -581,6 +605,15 @@ export function ActivityMasterManager() {
       toast.success(`"${a.name}" deactivated`);
     } catch (err) {
       toast.error(err instanceof AppError ? err.message : "Could not deactivate.");
+    }
+  }
+
+  async function handleReactivate(a: ActivityMaster) {
+    try {
+      await reactivateMutation.mutateAsync(a.id);
+      toast.success(`"${a.name}" reactivated`);
+    } catch (err) {
+      toast.error(err instanceof AppError ? err.message : "Could not reactivate.");
     }
   }
 
@@ -667,7 +700,7 @@ export function ActivityMasterManager() {
                         >
                           <PencilLine className="h-3.5 w-3.5" />
                         </Button>
-                        {a.is_active && (
+                        {a.is_active ? (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -677,6 +710,17 @@ export function ActivityMasterManager() {
                             disabled={deactivateMutation.isPending}
                           >
                             <PowerOff className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-success hover:text-success"
+                            onClick={() => void handleReactivate(a)}
+                            aria-label="Reactivate"
+                            disabled={reactivateMutation.isPending}
+                          >
+                            <Power className="h-3.5 w-3.5" />
                           </Button>
                         )}
                       </div>
