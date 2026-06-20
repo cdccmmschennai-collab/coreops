@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { CalendarOff, Download, Plus } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,8 +28,18 @@ type TabKey = "calendar" | "history" | "leave" | "corrections" | "holidays";
 export function AttendanceView() {
   const { role, employeeId } = useAuth();
   const canManage = can(role, "attendance.manage");
+  const canRequestLeave = Boolean(employeeId) && can(role, "leave.request");
   const [tab, setTab] = React.useState<TabKey>("calendar");
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
+
+  // Deep-link: /attendance?leave=request opens the Request Leave dialog
+  // (used by the employee dashboard "Leave request" quick action).
+  const searchParams = useSearchParams();
+  React.useEffect(() => {
+    if (searchParams.get("leave") === "request" && canRequestLeave) {
+      setLeaveDialogOpen(true);
+    }
+  }, [searchParams, canRequestLeave]);
 
   const actions = (
     <>
@@ -36,7 +47,7 @@ export function AttendanceView() {
         <Download className="h-4 w-4" />
         Export
       </Button>
-      {employeeId && can(role, "leave.request") && (
+      {canRequestLeave && (
         <Button variant="secondary" onClick={() => setLeaveDialogOpen(true)}>
           <CalendarOff className="h-4 w-4" />
           Request Leave

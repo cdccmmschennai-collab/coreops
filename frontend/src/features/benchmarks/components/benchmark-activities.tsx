@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -159,6 +160,25 @@ export function BenchmarkActivities() {
     return [...numeric, ...taskItems];
   }, [daily, tasks, recon]);
 
+  // Clicking the header row collapses / expands the whole activities table.
+  // Collapsed by default — the employee opens it to view the list.
+  const [collapsed, setCollapsed] = React.useState(true);
+
+  // Measure the content so expand/collapse animates to an exact pixel height.
+  // (Animating a real px height is smooth; the grid-rows `0fr→1fr` trick
+  // sub-pixel-rounds each frame, which is what made it visibly "shake".)
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [contentHeight, setContentHeight] = React.useState<number>();
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setContentHeight(el.offsetHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [items]);
+
   if (isLoading) return null;
 
   const inProgressCount = items.filter((i) => i.status === "in_progress").length;
@@ -166,8 +186,35 @@ export function BenchmarkActivities() {
 
   return (
     <Card className="mb-4 overflow-hidden">
-      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0 border-b border-border px-5 py-3.5">
-        <CardTitle className="text-base">Benchmark Activities ({items.length})</CardTitle>
+      <CardHeader
+        className={`flex-row items-center justify-between gap-3 space-y-0 px-5 py-3.5 ${
+          items.length > 0 && !collapsed ? "border-b border-border" : ""
+        }`}
+        role={items.length > 0 ? "button" : undefined}
+        tabIndex={items.length > 0 ? 0 : undefined}
+        aria-expanded={items.length > 0 ? !collapsed : undefined}
+        onClick={items.length > 0 ? () => setCollapsed((c) => !c) : undefined}
+        onKeyDown={
+          items.length > 0
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setCollapsed((c) => !c);
+                }
+              }
+            : undefined
+        }
+        style={items.length > 0 ? { cursor: "pointer" } : undefined}
+      >
+        <CardTitle className="flex items-center gap-1.5 text-base">
+          {items.length > 0 &&
+            (collapsed ? (
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+            ))}
+          Benchmark Activities ({items.length})
+        </CardTitle>
         {items.length > 0 && (
           <span className="text-xs text-muted-foreground">
             <span className="text-primary">{inProgressCount} In Progress</span>
@@ -182,8 +229,12 @@ export function BenchmarkActivities() {
           No benchmark activities requiring attention.
         </CardContent>
       ) : (
-        <div className="max-h-[28rem] overflow-auto">
-          <table className="w-full caption-bottom text-sm">
+        <div
+          className="overflow-hidden transition-[height] duration-300 ease-out motion-reduce:transition-none"
+          style={{ height: collapsed ? 0 : contentHeight }}
+        >
+          <div ref={scrollRef} className="max-h-[28rem] overflow-auto">
+            <table className="w-full caption-bottom text-sm">
             <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card [&_th]:shadow-[inset_0_-1px_0_hsl(var(--border))]">
               <TableRow className="hover:bg-transparent">
                 <TableHead className="w-20">Date</TableHead>
@@ -221,6 +272,7 @@ export function BenchmarkActivities() {
               ))}
             </TableBody>
           </table>
+          </div>
         </div>
       )}
     </Card>
