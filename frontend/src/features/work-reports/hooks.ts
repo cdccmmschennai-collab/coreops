@@ -10,11 +10,15 @@ import type {
   WorkReportUpdateBody,
 } from "./types";
 
-export function useWorkReportList(params: WorkReportListParams) {
+export function useWorkReportList(
+  params: WorkReportListParams,
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: workReportKeys.list(params),
     queryFn: () => workReportsApi.list(params),
     placeholderData: (prev) => prev,
+    enabled: options?.enabled ?? true,
   });
 }
 

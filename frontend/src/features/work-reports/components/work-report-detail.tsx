@@ -430,10 +430,10 @@ export function WorkReportDetail({ id }: { id: string }) {
                       <Stat label="Spares" value={t.spares_count ?? 0} />
                     </div>
 
-                    {/* Per-activity day remarks */}
+                    {/* Per-activity remarks */}
                     {t.description && (
                       <div className="mt-4 border-t border-border pt-3">
-                        <p className="text-xs text-muted-foreground">Day Remarks</p>
+                        <p className="text-xs text-muted-foreground">Remarks</p>
                         <p className="mt-1 whitespace-pre-wrap text-sm">{t.description}</p>
                       </div>
                     )}
@@ -443,11 +443,11 @@ export function WorkReportDetail({ id }: { id: string }) {
             </CardContent>
           </Card>
 
-          {/* Day Remarks (report-level; present on older reports) */}
+          {/* Remarks (report-level, one per day) */}
           {report.remarks && (
             <Card>
               <CardHeader>
-                <CardTitle>Day Remarks</CardTitle>
+                <CardTitle>Remarks</CardTitle>
               </CardHeader>
               <CardContent className="whitespace-pre-wrap text-sm text-muted-foreground">
                 {report.remarks}

@@ -35,9 +35,9 @@ import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { useTasks } from "@/features/tasks/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
-import { formatInt, formatMinutes } from "@/lib/format";
+import { formatInt } from "@/lib/format";
 
-import { useCreateWorkReport, useUpdateWorkReport } from "../hooks";
+import { useCreateWorkReport, useUpdateWorkReport, useWorkReportList } from "../hooks";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_STATUS_LABEL,
@@ -45,7 +45,6 @@ import {
   EMPTY_TASK_ROW,
   WORK_LOCATION_LABEL,
   WORK_LOCATIONS,
-  hoursToMinutes,
   toCreateBody,
   toUpdateBody,
   workReportFormSchema,
@@ -187,11 +186,39 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
   const watchedTasks = form.watch("tasks");
   const reportDate = form.watch("report_date");
-  const totalMinutes = (watchedTasks ?? []).reduce(
-    (sum, t) =>
-      sum + (hoursToMinutes(t?.duration_hours) ?? 0) + (hoursToMinutes(t?.task_hours) ?? 0),
-    0,
+
+  // One report per employee per day: in create mode, look up whether the
+  // selected date already has a report (backend also enforces this with a
+  // unique constraint / 409). When one exists we surface a notice with a link
+  // to open it, rather than letting the author create a duplicate.
+  const existingForDate = useWorkReportList(
+    {
+      employee_id: employeeId ?? "",
+      project_id: "",
+      status: "",
+      from: reportDate,
+      to: reportDate,
+      limit: 1,
+      offset: 0,
+    },
+    { enabled: mode === "create" && !!employeeId && !!reportDate },
   );
+  // Only trust a freshly-resolved result for the *current* date — never the
+  // loading placeholder (which still holds the previous date's rows), so a date
+  // with no report never trips the notice while its query is in flight.
+  const existingReportForDate =
+    mode === "create" && existingForDate.isSuccess && !existingForDate.isPlaceholderData
+      ? existingForDate.data.items.find((r) => r.report_date === reportDate)
+      : undefined;
+
+  // Editable reports (draft / sent back / edit-granted) open straight in the
+  // editor to add/edit activities; a locked report opens read-only, where the
+  // author can still Request edit.
+  const EDITABLE_STATUSES = ["draft", "rejected", "granted"];
+  const pathForExisting = (r: { id: string; status: string }) =>
+    EDITABLE_STATUSES.includes(r.status)
+      ? `/work-reports/${r.id}/edit`
+      : `/work-reports/${r.id}`;
 
   const tasksError = form.formState.errors.tasks?.message;
 
@@ -227,6 +254,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       toast.success(mode === "create" ? "Draft saved" : "Changes saved");
       router.push(`/work-reports/${result.id}`);
     } catch (error) {
+      // Safety net: if the date was claimed between load and submit, the
+      // backend returns 409 — open the existing report rather than dead-ending.
+      if (mode === "create" && error instanceof AppError && error.status === 409) {
+        const found = existingForDate.data?.items.find((r) => r.report_date === values.report_date);
+        if (found) {
+          toast.info(`A report for ${values.report_date} already exists — opening it.`);
+          router.replace(pathForExisting(found));
+          return;
+        }
+      }
       setFormError(
         error instanceof AppError ? error.message : "Something went wrong. Please try again.",
       );
@@ -242,6 +279,23 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
             className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
             {formError}
+          </div>
+        )}
+        {existingReportForDate && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
+            <span>
+              You already have a{" "}
+              {existingReportForDate.status === "draft" ? "draft report" : "report"} for{" "}
+              <span className="font-medium">{reportDate}</span>. Only one report per day is allowed —
+              open it to add or edit activities.
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => router.push(pathForExisting(existingReportForDate))}
+            >
+              Open report
+            </Button>
           </div>
         )}
         <Form {...form}>
@@ -334,15 +388,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
             {/* ── Project Task Rows ── */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium">Project activities</h3>
-                {totalMinutes > 0 && (
-                  <span className="text-sm text-muted-foreground">
-                    Total:{" "}
-                    <span className="tabular font-medium">{formatMinutes(totalMinutes)}</span>
-                  </span>
-                )}
-              </div>
+              <h3 className="text-sm font-medium">Project activities</h3>
 
               {fields.map((field, index) => {
                 const selectedProjectId = watchedTasks?.[index]?.project_id;
@@ -358,17 +404,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 return (
                   <div
                     key={field.id}
-                    className="space-y-2 rounded-lg border border-border p-3"
+                    className="space-y-5 rounded-lg border border-border p-4"
                   >
-                    {/* Task line shares Row A's grid so Task hours lands in the same
-                        column as Duration (the two hour fields stack one above the
-                        other); picking a task fills in the project. */}
-                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                    {/* Task picker (optional — picking it fills in the project)
+                        with the row's remove control on the same line. */}
+                    <div className="flex items-end gap-2">
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.task_id`}
                         render={({ field: f }) => (
-                          <FormItem className="md:col-span-3">
+                          <FormItem className="min-w-0 flex-1">
                             <FormLabel className="block text-xs leading-none text-muted-foreground">
                               Task <span className="font-normal">(optional)</span>
                             </FormLabel>
@@ -397,36 +442,22 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                           </FormItem>
                         )}
                       />
-
-                      {/* Hours (task-based work; adds to the day total) — kept short
-                          ("Hours" not "Task hours") so the label stays on one line
-                          and this box aligns with the row below it. */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.task_hours`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="block whitespace-nowrap text-xs leading-none text-muted-foreground">
-                              Hours <span className="font-normal">(HH.MM)</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="e.g. 2.30"
-                                {...f}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => remove(index)}
+                        disabled={fields.length === 1}
+                        aria-label="Remove activity"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
 
-                    {/* Row A — one grid; columns collapse responsively:
-                          desktop → Name | Code | Job | Duration | Actions on one row.
-                        Duration here = project-based hours (distinct from Task hours). */}
-                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                    {/* Row A — Project Name | Project Code | Job Code.
+                        Project Code / Job Code are read-only, auto-filled from the
+                        selected project. */}
+                    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1.4fr)_120px_120px]">
 
                       {/* Project Name — searchable combobox (name + code) */}
                       <FormField
@@ -473,58 +504,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         </div>
                       </div>
 
-                      {/* Duration — project-based hours (decimals allowed) */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.duration_hours`}
-                        render={({ field: f }) => (
-                          <FormItem>
-                            <FormLabel className="block whitespace-nowrap text-xs leading-none text-muted-foreground">
-                              Duration <span className="font-normal">(HH.MM)</span> <span className="text-destructive">*</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                placeholder="e.g. 2.30"
-                                {...f}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Actions — delete. A spacer label (desktop only) keeps the
-                          button on the input baseline via the grid, not margins. */}
-                      <div className="flex flex-col gap-2 items-start md:items-start">
-                        <span
-                          className="hidden text-xs font-medium leading-none md:block"
-                          aria-hidden
-                        >
-                          &nbsp;
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => remove(index)}
-                          disabled={fields.length === 1}
-                          aria-label="Remove activity"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
                     </div>
 
                     {/* Row A2: Maintenance Plant — pick directly (searchable, like
                         Activity/Sub-Activity); Planning Plant code/description
                         auto-derive, read-only. Independent of the project's own
                         assigned plant — which plant the employee actually worked
-                        at that day. Reuses Row A's exact column template so this
-                        row's fields line up under Project Name / Project Code,
-                        with Description (PP) spanning the remaining width. */}
-                    <div className="grid grid-cols-1 items-start gap-3 md:grid-cols-[minmax(0,1.4fr)_120px_120px_110px_40px]">
+                        at that day. Maintenance Plant lines up under Project Name,
+                        Planning Plant under Project Code, with Description (PP)
+                        spanning the remaining width. */}
+                    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)]">
                       {(() => {
                         const selectedPlantId = watchedTasks?.[index]?.maintenance_plant_id;
                         const selectedPlant = selectedPlantId
@@ -546,7 +535,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                               render={({ field: f }) => (
                                 <FormItem className="min-w-0">
                                   <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
-                                    Maintenance Plant
+                                    Maintenance Plant <span className="text-destructive">*</span>
                                   </FormLabel>
                                   <FormControl>
                                     <Combobox
@@ -570,7 +559,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 {planningPlantCode}
                               </div>
                             </div>
-                            <div className="space-y-2 md:col-span-3">
+                            <div className="space-y-2">
                               <span className="block text-xs font-medium leading-none text-muted-foreground">
                                 Description (PP)
                               </span>
@@ -587,13 +576,13 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         so long sub-activity names show in full, uncramped. Selections
                         come from the Activity Master (Settings → Activity Master),
                         never hardcoded here. */}
-                    <div className="grid grid-cols-[1fr_3fr] gap-2">
+                    <div className="grid grid-cols-[1fr_3fr] gap-4">
                       <FormField
                         control={form.control}
                         name={`tasks.${index}.activity_id`}
                         render={({ field: f }) => (
                           <FormItem className="min-w-0">
-                            <FormLabel className="text-xs text-muted-foreground">
+                            <FormLabel className="block text-xs leading-none text-muted-foreground">
                               Activity <span className="text-destructive">*</span>
                             </FormLabel>
                             <FormControl>
@@ -630,7 +619,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                             : [];
                           return (
                             <FormItem className="min-w-0">
-                              <FormLabel className="text-xs text-muted-foreground">
+                              <FormLabel className="block text-xs leading-none text-muted-foreground">
                                 Sub-Activity <span className="text-destructive">*</span>
                               </FormLabel>
                               <FormControl>
@@ -658,12 +647,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       />
                     </div>
 
-                    {/* Row B2: Tags / Docs / BOM / Spares — operational reporting,
-                        independent of the benchmark target shown on whichever field
-                        is relevant. None are required. Same full-row 4-col grid as
-                        "Maintenance counts" below, so the layout stays consistent
-                        regardless of label length (e.g. "Docs (Target: 1000/1d)"). */}
-                    <div className="grid gap-3 sm:grid-cols-4">
+                    {/* Row B2: Tags / Docs / BOM / Spares. The sub-activity's
+                        benchmarked count is starred/highlighted with its target;
+                        the rest are optional operational counts. */}
+                    <div className="grid gap-4 sm:grid-cols-4">
                       {(() => {
                         const subId = watchedTasks?.[index]?.sub_activity_id;
                         const sub = subId ? subActivityById.get(subId) : undefined;
@@ -691,8 +678,8 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                   <FormLabel
                                     className={
                                       isTarget
-                                        ? "text-xs font-medium text-foreground"
-                                        : "text-xs text-muted-foreground"
+                                        ? "block text-xs font-medium leading-none text-foreground"
+                                        : "block text-xs leading-none text-muted-foreground"
                                     }
                                   >
                                     {label}
@@ -723,14 +710,14 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       })()}
                     </div>
 
-                    {/* Row B3: Day Remarks — own full-width row. */}
+                    {/* Row B3: Remarks — per-activity free text (own full-width row). */}
                     <FormField
                       control={form.control}
                       name={`tasks.${index}.description`}
                       render={({ field: f }) => (
                         <FormItem>
-                          <FormLabel className="text-xs text-muted-foreground">
-                            Day Remarks (optional)
+                          <FormLabel className="block text-xs leading-none text-muted-foreground">
+                            Remarks (optional)
                           </FormLabel>
                           <FormControl>
                             <Input placeholder="What did you work on?" {...f} />
@@ -808,74 +795,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
             <Separator />
 
-            {/* ── Well Head, PM Plant ── */}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <FormField
-                control={form.control}
-                name="well_head_no"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Well Head No.{" "}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="If worked on well head" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="pm_plant"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      PM Plant{" "}
-                      <span className="font-normal text-muted-foreground">(optional)</span>
-                    </FormLabel>
-                    <FormControl>
-                      <Input placeholder="PM plant identifier" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-
-            {/* ── Maintenance Counters ── */}
-            <div>
-              <p className="mb-2 text-sm font-medium">Maintenance counts</p>
-              <div className="grid gap-3 sm:grid-cols-4">
-                {(
-                  [
-                    ["task_list_count",        "Task List"],
-                    ["task_list_op_count",     "Task List Ops"],
-                    ["maintenance_item_count", "Maint. Items"],
-                    ["maintenance_plan_count", "Maint. Plans"],
-                  ] as const
-                ).map(([name, label]) => (
-                  <FormField
-                    key={name}
-                    control={form.control}
-                    name={name}
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="text-xs">{label}</FormLabel>
-                        <FormControl>
-                          <Input type="number" min={0} placeholder="0" {...field} />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <Separator />
-
             {/* ── Query / Issues (end) ── */}
             <FormField
               control={form.control}
@@ -907,7 +826,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               >
                 Cancel
               </Button>
-              <Button type="submit" loading={isPending}>
+              <Button type="submit" loading={isPending} disabled={!!existingReportForDate}>
                 {mode === "create" ? "Save Draft" : "Save changes"}
               </Button>
             </div>
