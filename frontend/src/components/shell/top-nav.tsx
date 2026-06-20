@@ -1,10 +1,19 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LogOut, Menu, Settings, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,16 +27,29 @@ import {
 import { useAuth } from "@/features/auth/auth-provider";
 import { USER_ROLE_LABEL } from "@/features/users/schemas";
 import { NotificationBell } from "@/features/notifications/components/notification-bell";
+import { useMyCompliance } from "@/features/report-compliance/hooks";
 import { emailInitials, nameInitials } from "@/lib/initials";
 
 export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { user, employee, role, logout } = useAuth();
   const router = useRouter();
+  const { data: compliance } = useMyCompliance();
+  const [guardOpen, setGuardOpen] = React.useState(false);
 
-  async function handleLogout() {
+  async function proceedLogout() {
     await logout();
     toast.success("Signed out");
     router.replace("/login");
+  }
+
+  function handleLogout() {
+    // Logout guard: if the employee worked today (has attendance) but hasn't
+    // submitted today's report, nudge them first. Friction only — never blocks.
+    if (compliance?.has_attendance_today && !compliance.has_report_today) {
+      setGuardOpen(true);
+      return;
+    }
+    void proceedLogout();
   }
 
   return (
@@ -114,6 +136,36 @@ export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           </DropdownMenu>
         )}
       </div>
+
+      <AlertDialog open={guardOpen} onOpenChange={setGuardOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Daily Report Not Submitted</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have not submitted today&apos;s work report.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setGuardOpen(false);
+                void proceedLogout();
+              }}
+            >
+              Logout Anyway
+            </Button>
+            <Button
+              onClick={() => {
+                setGuardOpen(false);
+                router.push("/work-reports/new");
+              }}
+            >
+              Submit Report
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </header>
   );
 }

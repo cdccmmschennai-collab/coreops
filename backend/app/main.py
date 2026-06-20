@@ -29,6 +29,8 @@ from app.modules.users.router import router as users_router
 from app.modules.project_activities.router import router as project_activities_router
 from app.modules.project_deliverables.router import router as deliverables_router
 from app.modules.project_submissions.router import router as submissions_router
+from app.modules.report_compliance.router import router as report_compliance_router
+from app.modules.reports_export.router import router as reports_export_router
 from app.modules.tasks.router import router as tasks_router
 from app.modules.work_reports.router import router as work_reports_router
 from app.shared.errors import register_error_handlers
@@ -72,6 +74,8 @@ def create_app() -> FastAPI:
     app.include_router(attendance_router, prefix=settings.API_V1_PREFIX)
     app.include_router(attendance_employee_router, prefix=settings.API_V1_PREFIX)
     app.include_router(work_reports_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(reports_export_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(report_compliance_router, prefix=settings.API_V1_PREFIX)
     app.include_router(offices_router, prefix=settings.API_V1_PREFIX)
     app.include_router(leave_router, prefix=settings.API_V1_PREFIX)
     app.include_router(calendar_router, prefix=settings.API_V1_PREFIX)
