@@ -16,6 +16,9 @@ from app.shared.base import TimestampMixin, UUIDMixin
 
 class CalendarEventType(str, enum.Enum):
     holiday = "holiday"
+    cdc_holiday = "cdc_holiday"
+    natural_hazard = "natural_hazard"
+    working_day = "working_day"
     event = "event"
 
 

@@ -30,10 +30,23 @@ export function firstDowMonday(y: number, m: number): number {
   return (new Date(y, m, 1).getDay() + 6) % 7;
 }
 
-/** True if the given Y/M/D is a Saturday or Sunday. */
+/** Which occurrence of its weekday a date is within the month (day 1–7 → 1st,
+ * 8–14 → 2nd, …). Works for Saturdays since they fall 7 days apart. */
+function weekdayOccurrence(d: number): number {
+  return Math.floor((d - 1) / 7) + 1;
+}
+
+/** True if the given Y/M/D is a non-working (off) day under the office calendar.
+ * Sundays are always off; Saturdays are off only on the 2nd and 4th of the
+ * month — the 1st, 3rd and 5th Saturdays are working office days. */
 export function isWeekend(y: number, m: number, d: number): boolean {
   const dow = new Date(y, m, d).getDay();
-  return dow === 0 || dow === 6;
+  if (dow === 0) return true; // Sunday — always off
+  if (dow === 6) {
+    const nth = weekdayOccurrence(d);
+    return nth === 2 || nth === 4; // 2nd & 4th Saturday off; 1st/3rd/5th working
+  }
+  return false;
 }
 
 export function prevMonth(y: number, m: number): { y: number; m: number } {

@@ -68,6 +68,14 @@ export function useDeactivateActivity() {
   });
 }
 
+export function useReactivateActivity() {
+  const invalidate = useInvalidateActivityMaster();
+  return useMutation({
+    mutationFn: (id: string) => activityMasterApi.updateActivity(id, { is_active: true }),
+    onSuccess: invalidate,
+  });
+}
+
 export function useCreateSubActivity(activityId: string) {
   const invalidate = useInvalidateActivityMaster();
   return useMutation({
@@ -88,6 +96,14 @@ export function useDeactivateSubActivity() {
   const invalidate = useInvalidateActivityMaster();
   return useMutation({
     mutationFn: (id: string) => activityMasterApi.deactivateSubActivity(id),
+    onSuccess: invalidate,
+  });
+}
+
+export function useReactivateSubActivity() {
+  const invalidate = useInvalidateActivityMaster();
+  return useMutation({
+    mutationFn: (id: string) => activityMasterApi.updateSubActivity(id, { is_active: true }),
     onSuccess: invalidate,
   });
 }
