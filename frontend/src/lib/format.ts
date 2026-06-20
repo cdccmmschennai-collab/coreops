@@ -15,12 +15,38 @@ export function formatMinutes(minutes: number): string {
   return `${h}h ${m}m`;
 }
 
-/** Format an ISO datetime as a short local "HH:MM" (or "—" when missing). */
+/** Pull the literal wall-clock parts out of an ISO datetime WITHOUT any
+ * timezone conversion. CoreOps operates entirely in IST: times are entered and
+ * stored as the wall-clock the user typed, so we echo those exact digits rather
+ * than letting the browser/server timezone shift them (which is what
+ * `Date.toLocale*` does). */
+function parseWallClock(
+  iso: string,
+): { year: number; month: number; day: number; hour: number; minute: number } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(iso);
+  if (!m) return null;
+  return {
+    year: Number(m[1]),
+    month: Number(m[2]),
+    day: Number(m[3]),
+    hour: Number(m[4]),
+    minute: Number(m[5]),
+  };
+}
+
+/** Render a 24h hour/minute as a 12h "hh:MM AM/PM" clock string. */
+function to12Hour(hour: number, minute: number): string {
+  const period = hour < 12 ? "AM" : "PM";
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${String(h12).padStart(2, "0")}:${String(minute).padStart(2, "0")} ${period}`;
+}
+
+/** Format an ISO datetime as a 12h IST wall-clock "hh:MM AM/PM" (or "—"). */
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const wc = parseWallClock(iso);
+  if (!wc) return "—";
+  return to12Hour(wc.hour, wc.minute);
 }
 
 /** Format an ISO datetime as a short local "MMM D, YYYY, HH:MM" (or "—" when missing). */
