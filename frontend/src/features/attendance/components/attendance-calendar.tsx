@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/format";
 
 import { useCalendarEvents } from "@/features/calendar/hooks";
+import { isOffEvent } from "@/features/calendar/types";
 
 import { useAttendanceList } from "../hooks";
 import {
@@ -51,7 +52,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     offset: 0,
   });
 
-  const holidayQuery = useCalendarEvents({ from, to, event_type: "holiday", limit: 100 });
+  const eventsQuery = useCalendarEvents({ from, to, limit: 100 });
 
   const byDate = React.useMemo(() => {
     const map = new Map<string, Attendance>();
@@ -59,11 +60,23 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     return map;
   }, [query.data]);
 
-  const holidayByDate = React.useMemo(() => {
+  // Office-closing events (holiday / CDC holiday / natural hazard) keyed by date.
+  const offByDate = React.useMemo(() => {
     const map = new Map<string, string>();
-    for (const ev of holidayQuery.data?.items ?? []) map.set(ev.event_date, ev.title);
+    for (const ev of eventsQuery.data?.items ?? []) {
+      if (isOffEvent(ev.event_type)) map.set(ev.event_date, ev.title);
+    }
     return map;
-  }, [holidayQuery.data]);
+  }, [eventsQuery.data]);
+
+  // "Office open on a normally-off day" overrides, keyed by date.
+  const workingByDate = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ev of eventsQuery.data?.items ?? []) {
+      if (ev.event_type === "working_day") map.set(ev.event_date, ev.title);
+    }
+    return map;
+  }, [eventsQuery.data]);
 
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
   const todayRecord = byDate.get(todayIso);
@@ -126,11 +139,19 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                 if (day == null) return <div key={i} className="min-h-[86px]" />;
                 const iso = isoDate(view.y, view.m, day);
                 const record = byDate.get(iso);
-                const holidayTitle = holidayByDate.get(iso);
+                const holidayTitle = offByDate.get(iso);
+                const workingTitle = workingByDate.get(iso);
+                // A declared working day overrides weekends and holidays — the
+                // office is open, so the day renders as a normal working day.
                 const status: StatusKey | undefined =
                   record?.status ??
-                  (holidayTitle ? "holiday" : undefined) ??
-                  (isWeekend(view.y, view.m, day) ? "weekend" : undefined);
+                  (workingTitle
+                    ? undefined
+                    : holidayTitle
+                      ? "holiday"
+                      : isWeekend(view.y, view.m, day)
+                        ? "weekend"
+                        : undefined);
                 const s = status ? STATUS[status] : null;
                 const isToday = iso === todayIso;
                 return (
@@ -159,15 +180,26 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                         </span>
                       )}
                     </div>
-                    {holidayTitle && !record && (
+                    {holidayTitle && !workingTitle && !record && (
                       <p className="mt-1 text-[10px] font-medium text-violet-700 leading-tight line-clamp-2">
                         {holidayTitle}
+                      </p>
+                    )}
+                    {workingTitle && !record && (
+                      <p className="mt-1 text-[10px] font-medium text-emerald-700 leading-tight line-clamp-2">
+                        {workingTitle}
                       </p>
                     )}
                     {s && (
                       <div className={cn("mt-auto flex items-center gap-1.5 text-[11px] font-medium", s.text)}>
                         <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
                         {s.label}
+                      </div>
+                    )}
+                    {workingTitle && !record && (
+                      <div className="mt-auto flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        Working
                       </div>
                     )}
                   </div>

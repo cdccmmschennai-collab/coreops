@@ -16,6 +16,14 @@ from app.modules.calendar.schemas import CalendarEventCreate, CalendarEventUpdat
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
+_EVENT_TYPE_LABEL = {
+    "holiday": "Holiday",
+    "cdc_holiday": "CDC Holiday",
+    "natural_hazard": "Natural Hazard",
+    "working_day": "Working Day",
+    "event": "Company event",
+}
+
 
 def _notify_all_users(db: Session, ev: CalendarEvent) -> None:
     try:
@@ -23,7 +31,7 @@ def _notify_all_users(db: Session, ev: CalendarEvent) -> None:
         user_ids = db.execute(
             select(User.id).where(User.deleted_at.is_(None), User.is_active.is_(True))
         ).scalars().all()
-        label = "Holiday" if ev.event_type.value == "holiday" else "Company event"
+        label = _EVENT_TYPE_LABEL.get(ev.event_type.value, "Company event")
         for uid in user_ids:
             create_notification(
                 db,
