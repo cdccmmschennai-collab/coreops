@@ -85,6 +85,46 @@ def test_employee_lists_only_own_tasks(client, make_user, make_employee, login):
     assert data["items"][0]["title"] == "Mine"
 
 
+def test_team_lead_mine_vs_assigned_tabs_are_distinct(
+    client, make_user, make_employee, make_project, make_project_member, login
+):
+    """A team lead is both a receiver (PM can assign them work) and an
+    assigner (they hand out work in their led project). `mine=true` must
+    show only what's assigned to them; `mine=false` must show only what
+    they handed out — the two must not bleed into each other."""
+    pm_header, _pm_emp = _pm_setup(make_user, make_employee, login)
+    header, lead, member, project = _project_with_lead(
+        make_user, make_employee, make_project, make_project_member, login
+    )
+
+    # PM assigns a task to the lead.
+    res = client.post(
+        "/api/v1/tasks", headers=pm_header, json=_task_payload(lead.id, title="From PM")
+    )
+    assert res.status_code == 201, res.text
+
+    # Lead assigns a task to their project member.
+    res = client.post(
+        "/api/v1/tasks",
+        headers=header,
+        json=_task_payload(member.id, project_id=str(project.id), title="To member"),
+    )
+    assert res.status_code == 201, res.text
+
+    mine = client.get("/api/v1/tasks?mine=true", headers=header).json()
+    assert mine["total"] == 1
+    assert mine["items"][0]["title"] == "From PM"
+
+    assigned = client.get("/api/v1/tasks?mine=false", headers=header).json()
+    assert assigned["total"] == 1
+    assert assigned["items"][0]["title"] == "To member"
+
+    # Omitting `mine` keeps the old combined view (back-compat for callers
+    # that don't know about the split).
+    combined = client.get("/api/v1/tasks", headers=header).json()
+    assert combined["total"] == 2
+
+
 def test_pm_lists_all_tasks(client, make_user, make_employee, login):
     pm_header, _ = _pm_setup(make_user, make_employee, login)
     emp1 = make_employee(employee_code="E-1", user_id=make_user("e1@example.com", role=UserRole.employee).id)
