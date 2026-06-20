@@ -207,8 +207,8 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
               <Clock className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="font-medium">General</span>
             </div>
-            <div className="tabular text-sm">09:00 – 18:00</div>
-            <div className="mt-1 text-xs text-muted-foreground">Asia/Kolkata · 9h day · 1h lunch</div>
+            <div className="tabular text-sm">09:00 – 17:30</div>
+            <div className="mt-1 text-xs text-muted-foreground">Asia/Kolkata · 8h day · 30m lunch</div>
           </CardContent>
         </Card>
 
