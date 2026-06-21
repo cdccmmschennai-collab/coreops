@@ -35,7 +35,7 @@ export interface EmployeeOverview {
   employee_id: string;
   employee_name: string;
   productivity_pct: string | null;
-  hours_this_week_minutes: number;
+  days_worked_this_week: number;
   completed_benchmarks: number;
   pending_benchmarks: number;
   overdue_activities: number;

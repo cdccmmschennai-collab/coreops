@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { complianceKeys } from "@/features/report-compliance/hooks";
+
 import { workReportsApi } from "./api";
 import { workReportKeys } from "./keys";
 import type {
@@ -34,7 +36,12 @@ export function useCreateWorkReport() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkReportCreateBody) => workReportsApi.create(body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: workReportKeys.all }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workReportKeys.all });
+      // A create may submit today's report — refresh the compliance snapshot so
+      // the 5:15 reminder and logout guard see it immediately.
+      qc.invalidateQueries({ queryKey: complianceKeys.me() });
+    },
   });
 }
 
@@ -45,6 +52,7 @@ export function useUpdateWorkReport(id: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workReportKeys.all });
       qc.invalidateQueries({ queryKey: workReportKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: complianceKeys.me() });
     },
   });
 }
@@ -54,6 +62,8 @@ function useReportActionInvalidation(id: string) {
   return () => {
     qc.invalidateQueries({ queryKey: workReportKeys.all });
     qc.invalidateQueries({ queryKey: workReportKeys.detail(id) });
+    // Submit / delete / status changes affect today's compliance state.
+    qc.invalidateQueries({ queryKey: complianceKeys.me() });
   };
 }
 
@@ -93,7 +103,10 @@ export function useDeleteWorkReport() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => workReportsApi.remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: workReportKeys.all }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workReportKeys.all });
+      qc.invalidateQueries({ queryKey: complianceKeys.me() });
+    },
   });
 }
 

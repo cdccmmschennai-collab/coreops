@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import type { WorkReport } from "@/features/work-reports/types";
-import { formatMinutes } from "@/lib/format";
 
 import { useEmployeeWeekReports } from "../../hooks";
 
@@ -46,7 +45,6 @@ export function ReportsTab({ employeeId }: { employeeId: string }) {
             <TableRow>
               <TableHead>Date</TableHead>
               <TableHead>Project</TableHead>
-              <TableHead className="text-right">Hours</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -59,7 +57,6 @@ export function ReportsTab({ employeeId }: { employeeId: string }) {
               >
                 <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{projectLabel(r)}</TableCell>
-                <TableCell className="tabular text-right">{formatMinutes(r.total_minutes)}</TableCell>
                 <TableCell>
                   <StatusBadge status={r.status} />
                 </TableCell>

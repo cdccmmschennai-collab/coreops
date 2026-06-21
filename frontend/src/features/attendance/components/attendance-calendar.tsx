@@ -2,13 +2,12 @@
 
 import * as React from "react";
 import { ChevronLeft, ChevronRight, Clock } from "lucide-react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { nowInIST } from "@/lib/ist";
 import { cn } from "@/lib/utils";
-import { formatTime } from "@/lib/format";
 
 import { useCalendarEvents } from "@/features/calendar/hooks";
 import { isOffEvent } from "@/features/calendar/types";
@@ -39,7 +38,7 @@ const STATUS: Record<StatusKey, { cell: string; text: string; dot: string; label
 };
 
 export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
-  const today = React.useMemo(() => new Date(), []);
+  const today = React.useMemo(() => nowInIST(), []);
   const [view, setView] = React.useState({ y: today.getFullYear(), m: today.getMonth() });
 
   const { from, to } = monthRange(view.y, view.m);
@@ -79,7 +78,6 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
   }, [eventsQuery.data]);
 
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
-  const todayRecord = byDate.get(todayIso);
 
   const total = daysInMonth(view.y, view.m);
   const lead = firstDowMonday(view.y, view.m);
@@ -174,11 +172,6 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                       {isToday && (
                         <span className="text-[9px] font-bold tracking-wider text-primary">TODAY</span>
                       )}
-                      {record && record.total_minutes > 0 && (
-                        <span className="ml-auto tabular text-[10px] text-muted-foreground">
-                          {Math.round(record.total_minutes / 60)}h
-                        </span>
-                      )}
                     </div>
                     {holidayTitle && !workingTitle && !record && (
                       <p className="mt-1 text-[10px] font-medium text-violet-700 leading-tight line-clamp-2">
@@ -241,30 +234,6 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
             </div>
             <div className="tabular text-sm">09:00 – 17:30</div>
             <div className="mt-1 text-xs text-muted-foreground">Asia/Kolkata · 8h day · 30m lunch</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="border-b border-border p-4">
-            <CardTitle className="text-base">Today&apos;s punch</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3.5">
-            <div className="mb-2 flex justify-between text-sm">
-              <span className="text-muted-foreground">IN</span>
-              <span className="tabular font-medium">{formatTime(todayRecord?.check_in_at)}</span>
-            </div>
-            <div className="mb-3 flex justify-between text-sm">
-              <span className="text-muted-foreground">OUT</span>
-              <span className="tabular font-medium">{formatTime(todayRecord?.check_out_at)}</span>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              onClick={() => toast.info("Punch in/out - coming soon")}
-            >
-              Punch out
-            </Button>
           </CardContent>
         </Card>
       </div>

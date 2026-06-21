@@ -36,6 +36,8 @@ class OverdueActivityOut(BaseModel):
     work_report_task_id: uuid.UUID
     activity_name: str | None
     sub_activity_name: str
+    project_code: str | None
+    report_date: date
     due_date: date
     days_overdue: int
 
@@ -156,7 +158,7 @@ class EmployeeOverviewOut(BaseModel):
     employee_id: uuid.UUID
     employee_name: str
     productivity_pct: Decimal | None
-    hours_this_week_minutes: int
+    days_worked_this_week: int
     completed_benchmarks: int
     pending_benchmarks: int
     overdue_activities: int

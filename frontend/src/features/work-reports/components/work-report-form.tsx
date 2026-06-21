@@ -71,7 +71,12 @@ function addDays(isoDate: string, days: number): string | null {
   const d = new Date(`${isoDate}T00:00:00`);
   if (Number.isNaN(d.getTime())) return null;
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  // Format from local parts (not toISOString, which would shift the day by the
+  // UTC offset and land a day early in IST).
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {

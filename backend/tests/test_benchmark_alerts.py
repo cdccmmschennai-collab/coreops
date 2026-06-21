@@ -193,25 +193,35 @@ def test_my_alerts_shows_overdue(client, db, setup_author, activity_admin):
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
 
+    from app.modules.activity_master.service import compute_week_bounds
+    from app.modules.benchmarks.service import get_my_alerts
     from app.modules.work_reports.models import WorkReportTask
 
+    # Overdue is now current-week-scoped (resets every Monday), so drive the
+    # check with an explicit mid-week reference: a task due at week_start is 2
+    # days overdue by Wednesday. Injecting `today` keeps this deterministic on
+    # any day the suite runs — "today − 2d" would otherwise fall in the prior
+    # week (and stop counting) when run on a Monday/weekend.
+    week_start, _ = compute_week_bounds(TODAY_D)
+    ref_today = week_start + timedelta(days=2)
+
     row = db.get(WorkReportTask, created["tasks"][0]["id"])
-    row.due_date = TODAY_D - timedelta(days=2)
+    row.due_date = week_start
     db.add(row)
     db.commit()
 
-    body = client.get(ALERTS_BASE + "/my-alerts", headers=a["header"]).json()
-    assert len(body["overdue"]) == 1
-    assert body["overdue"][0]["sub_activity_name"] == "Audit Query"
-    assert body["overdue"][0]["days_overdue"] == 2
-    assert body["summary"]["overdue_activities_count"] == 1
+    alerts = get_my_alerts(db, a["user"], today=ref_today)
+    assert len(alerts["overdue"]) == 1
+    assert alerts["overdue"][0]["sub_activity_name"] == "Audit Query"
+    assert alerts["overdue"][0]["days_overdue"] == 2
+    assert alerts["summary"]["overdue_activities_count"] == 1
 
     client.patch(
         f"{BASE}/tasks/{created['tasks'][0]['id']}/completion",
         json={"is_completed": True}, headers=a["header"],
     )
-    body_after = client.get(ALERTS_BASE + "/my-alerts", headers=a["header"]).json()
-    assert body_after["overdue"] == []
+    alerts_after = get_my_alerts(db, a["user"], today=ref_today)
+    assert alerts_after["overdue"] == []
 
 
 def test_my_alerts_employee_cannot_see_others(client, setup_author, activity_admin):

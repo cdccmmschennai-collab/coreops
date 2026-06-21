@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
-import { formatDateTime, formatInt, formatMinutes } from "@/lib/format";
+import { formatDateTime, formatInt } from "@/lib/format";
 import { can } from "@/lib/rbac";
 
 import { DeleteDialog } from "./delete-dialog";
@@ -279,7 +279,6 @@ export function WorkReportDetail({ id }: { id: string }) {
             {locationLabel && <Row label="Location" value={locationLabel} />}
             {report.well_head_no && <Row label="Well Head No." value={report.well_head_no} />}
             {report.pm_plant && <Row label="PM Plant" value={report.pm_plant} />}
-            <Row label="Total" value={report.total_minutes > 0 ? formatMinutes(report.total_minutes) : "—"} />
             <Row label="Submitted" value={formatDateTime(report.submitted_at)} />
             {(report.status === "approved" ||
               report.status === "rejected" ||
@@ -308,37 +307,21 @@ export function WorkReportDetail({ id }: { id: string }) {
                 const jobCodeCode = t.project_job_code_code ?? fallback?.job_code_code ?? "—";
                 return (
                   <div key={t.id} className="rounded-lg border border-border p-4">
-                    {/* Header: project + duration */}
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="font-medium leading-snug">{projectName}</p>
-                        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
-                          <span>{projectCode}</span>
-                          <span aria-hidden>·</span>
-                          <span>{jobCodeCode}</span>
-                        </p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-xs text-muted-foreground">Duration</p>
-                        <p className="font-medium tabular">
-                          {t.minutes_spent != null ? formatMinutes(t.minutes_spent) : "—"}
-                        </p>
-                      </div>
+                    {/* Header: project */}
+                    <div className="min-w-0">
+                      <p className="font-medium leading-snug">{projectName}</p>
+                      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
+                        <span>{projectCode}</span>
+                        <span aria-hidden>·</span>
+                        <span>{jobCodeCode}</span>
+                      </p>
                     </div>
 
-                    {/* Linked task (if any) + its hours */}
+                    {/* Linked task (if any) */}
                     {t.task_title && (
-                      <div className="mt-4 flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <p className="text-xs text-muted-foreground">Task</p>
-                          <p className="text-sm font-medium">{t.task_title}</p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="text-xs text-muted-foreground">Task hours</p>
-                          <p className="text-sm font-medium tabular">
-                            {t.task_minutes_spent != null ? formatMinutes(t.task_minutes_spent) : "—"}
-                          </p>
-                        </div>
+                      <div className="mt-4 min-w-0">
+                        <p className="text-xs text-muted-foreground">Task</p>
+                        <p className="text-sm font-medium">{t.task_title}</p>
                       </div>
                     )}
 

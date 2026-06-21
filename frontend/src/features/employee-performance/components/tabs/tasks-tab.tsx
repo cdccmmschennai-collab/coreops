@@ -6,23 +6,60 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatMinutes } from "@/lib/format";
+
+import type { WorkReportTask } from "@/features/work-reports/types";
 
 import { useEmployeeWeekReports } from "../../hooks";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function formatDateShort(iso: string | null): string {
-  if (!iso) return "—";
+function formatDateShort(iso: string | null): string | null {
+  if (!iso) return null;
   const [y, m, d] = iso.split("-").map(Number);
   return `${new Date(y, m - 1, d).getDate()} ${MONTHS[m - 1]}`;
 }
 
+const COUNT_LABEL: Record<string, string> = {
+  tags: "Tags", docs: "Docs", bom: "BOM", spares: "Spares",
+};
+
+/** The numeric value of the ONE count this sub-activity's benchmark tracks, or
+ * null when the row tracks no benchmark field. */
+function relevantCountValue(t: WorkReportTask): number | null {
+  const field = t.relevant_count_field_snapshot;
+  if (!field) return null;
+  return (
+    field === "tags" ? t.tags_count
+    : field === "docs" ? t.docs_count
+    : field === "bom" ? t.bom_count
+    : field === "spares" ? t.spares_count
+    : null
+  );
+}
+
+/** Only the ONE count that belongs to this sub-activity (the field its benchmark
+ * tracks), e.g. "100 Tags" — never all four. Null for rows with no tracked field. */
+function relevantCount(t: WorkReportTask): string | null {
+  const field = t.relevant_count_field_snapshot;
+  if (!field) return null;
+  return `${relevantCountValue(t) ?? 0} ${COUNT_LABEL[field] ?? field}`;
+}
+
+/** A NUMERIC benchmark row is "met" when its tracked count reaches the target —
+ * mirrors the backend rule (target > 0 and actual >= target). Returns null for
+ * non-benchmark (task-based) rows, which use the manual is_completed flag. */
+function benchmarkMet(t: WorkReportTask): boolean | null {
+  const target = Number(t.benchmark_value_snapshot ?? 0);
+  if (!t.relevant_count_field_snapshot || !(target > 0)) return null;
+  return (relevantCountValue(t) ?? 0) >= target;
+}
+
 interface TaskItem {
   id: string;
+  activity: string | null;
   title: string;
-  project: string | null;
-  minutes: number;
-  dueDate: string | null;
+  projectCode: string | null;
+  date: string | null;
+  count: string | null;
   status: "completed" | "overdue" | "pending";
 }
 
@@ -34,17 +71,22 @@ export function TasksTab({ employeeId }: { employeeId: string }) {
     const out: TaskItem[] = [];
     for (const report of data?.items ?? []) {
       for (const t of report.tasks) {
-        const status: TaskItem["status"] = t.is_completed
-          ? "completed"
-          : t.is_overdue
-            ? "overdue"
-            : "pending";
+        // NUMERIC benchmark rows are "completed" when the target is met; only
+        // task-based rows (benchmarkMet === null) fall back to the manual flag.
+        const met = benchmarkMet(t);
+        const status: TaskItem["status"] =
+          met === true || (met === null && t.is_completed)
+            ? "completed"
+            : met === null && t.is_overdue
+              ? "overdue"
+              : "pending";
         out.push({
           id: t.id,
-          title: t.task_title || t.sub_activity_name || t.description || "Activity",
-          project: t.project_name ?? null,
-          minutes: t.minutes_spent ?? 0,
-          dueDate: t.due_date ?? null,
+          activity: t.activity_name ?? null,
+          title: t.sub_activity_name || t.task_title || t.description || "Activity",
+          projectCode: t.project_code ?? null,
+          date: report.report_date,
+          count: relevantCount(t),
           status,
         });
       }
@@ -81,10 +123,14 @@ export function TasksTab({ employeeId }: { employeeId: string }) {
               {tasks.map((t) => (
                 <li key={t.id} className="flex items-center justify-between gap-3 px-2.5 py-2.5">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">{t.title}</p>
+                    <p className="text-sm text-foreground [overflow-wrap:anywhere]">
+                      {t.activity && (
+                        <span className="font-normal text-muted-foreground">{t.activity} / </span>
+                      )}
+                      <span className="font-bold">{t.title}</span>
+                    </p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {t.project ?? "—"} · {formatMinutes(t.minutes)}
-                      {t.dueDate && ` · due ${formatDateShort(t.dueDate)}`}
+                      {[t.projectCode, formatDateShort(t.date), t.count].filter(Boolean).join(" · ")}
                     </p>
                   </div>
                   <Badge

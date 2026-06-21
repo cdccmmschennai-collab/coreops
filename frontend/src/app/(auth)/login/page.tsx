@@ -15,7 +15,6 @@ export default function LoginPage() {
         <blockquote className="max-w-md font-serif text-2xl leading-snug">
           “Daily reports take 90 seconds and managers finally see what shipped.”
         </blockquote>
-        <p className="mt-4 text-sm text-white/70">SOC 2 · SAML SSO · audit log</p>
       </div>
     </div>
   );

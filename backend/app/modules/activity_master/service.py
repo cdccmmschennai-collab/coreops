@@ -225,10 +225,16 @@ def get_overdue_activities(
     due_date has passed and which are not completed. due_date/is_completed
     are set at draft save (not deferred to submit), so this includes draft
     and submitted reports alike — an abandoned draft with a passed due date
-    is still overdue."""
+    is still overdue.
+
+    Scoped to the CURRENT week (Mon..Fri) like the benchmark ledger: only
+    tasks whose due_date falls in this week (week_start <= due_date < today)
+    count, so overdue resets every Monday alongside the numeric benchmark
+    backlog rather than carrying stale deadlines forward indefinitely."""
     from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
 
     today = today or date.today()
+    week_start, _ = compute_week_bounds(today)
 
     stmt = (
         select(
@@ -236,6 +242,8 @@ def get_overdue_activities(
             WorkReportTask.id.label("work_report_task_id"),
             WorkReportTask.activity_name,
             WorkReportTask.sub_activity_name,
+            WorkReportTask.project_code,
+            DailyWorkReport.report_date,
             WorkReportTask.due_date,
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
@@ -243,6 +251,7 @@ def get_overdue_activities(
         .where(
             ActivityMaster.benchmark_type == "TASK_BASED",
             WorkReportTask.due_date.is_not(None),
+            WorkReportTask.due_date >= week_start,
             WorkReportTask.due_date < today,
             WorkReportTask.is_completed.is_(False),
         )
@@ -261,6 +270,8 @@ def get_overdue_activities(
             "work_report_task_id": r.work_report_task_id,
             "activity_name": r.activity_name,
             "sub_activity_name": r.sub_activity_name,
+            "project_code": r.project_code,
+            "report_date": r.report_date,
             "due_date": r.due_date,
             "days_overdue": days_overdue,
         })

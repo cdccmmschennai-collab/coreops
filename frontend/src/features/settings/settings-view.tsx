@@ -11,24 +11,18 @@ import { ActivityMasterManager } from "@/features/activity-master/components/act
 import { AuditLogView } from "@/features/audit/components/audit-log-view";
 import { UsersView } from "@/features/users/components/users-view";
 
-import { AdminCorrectionsPreview } from "./components/admin-corrections-preview";
-import { LeaveApprovalsPreview } from "./components/leave-approvals-preview";
 import { RolesTab } from "./components/roles-tab";
 
 type TabKey =
   | "users"
   | "roles"
   | "activity-master"
-  | "leave"
-  | "corrections"
   | "audit";
 
 const TABS = [
   { value: "users",           label: "Users & Roles" },
   { value: "roles",           label: "Roles" },
   { value: "activity-master", label: "Activity Master" },
-  { value: "leave",           label: "Leave approvals" },
-  { value: "corrections",     label: "Attendance corrections",  count: 2 },
   { value: "audit",           label: "Audit log" },
 ];
 
@@ -36,8 +30,12 @@ function SettingsContent() {
   const pathname  = usePathname();
   const sp        = useSearchParams();
   // Read once on mount; subsequent switches are local state, not a router
-  // navigation, so they don't trigger a server round-trip for every tab.
-  const [tab, setTabState] = React.useState<TabKey>((sp.get("tab") ?? "users") as TabKey);
+  // navigation, so they don't trigger a server round-trip for every tab. A stale
+  // tab from a bookmarked URL (e.g. a removed tab) falls back to "users".
+  const [tab, setTabState] = React.useState<TabKey>(() => {
+    const requested = sp.get("tab");
+    return TABS.some((t) => t.value === requested) ? (requested as TabKey) : "users";
+  });
 
   function setTab(next: string) {
     setTabState(next as TabKey);
@@ -58,8 +56,6 @@ function SettingsContent() {
       {tab === "users"           && <Suspense><UsersView hideHeader /></Suspense>}
       {tab === "roles"           && <RolesTab />}
       {tab === "activity-master" && <ActivityMasterManager />}
-      {tab === "leave"           && <LeaveApprovalsPreview />}
-      {tab === "corrections"     && <AdminCorrectionsPreview />}
       {tab === "audit"           && <AuditLogView />}
     </RequireCapability>
   );

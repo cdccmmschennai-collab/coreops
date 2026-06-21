@@ -8,14 +8,16 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.service import (
+    compute_week_bounds,
     get_daily_benchmark_ledger,
     get_overdue_activities,
     get_task_status_activities,
 )
+from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.users.models import User, UserRole
@@ -289,7 +291,7 @@ def get_employee_overview(
     daily = get_daily_benchmark_ledger(db, employee_ids={employee_id}, today=today)
     overdue = get_overdue_activities(db, employee_ids={employee_id}, today=today)
 
-    hours = sum(r["hours_minutes"] for r in daily)
+    days_worked = _days_worked_this_week(db, employee_id, today=today)
     pending = sum(1 for r in daily if r["pending"] > 0)
     completed = sum(1 for r in daily if r["target"] > 0 and r["actual"] >= r["target"])
 
@@ -297,11 +299,31 @@ def get_employee_overview(
         "employee_id": employee_id,
         "employee_name": name,
         "productivity_pct": _aggregate_productivity(daily),
-        "hours_this_week_minutes": hours,
+        "days_worked_this_week": days_worked,
         "completed_benchmarks": completed,
         "pending_benchmarks": pending,
         "overdue_activities": len(overdue),
     }
+
+
+def _days_worked_this_week(
+    db: Session, employee_id: uuid.UUID, *, today: date | None = None
+) -> int:
+    """Count distinct days this week (Mon..Fri) the employee actually worked,
+    i.e. has a present/half_day attendance record. Mirrors the Mon..Fri week
+    used by the benchmark ledger so "this week" means the same thing across the
+    overview."""
+    week_start, week_end = compute_week_bounds(today or date.today())
+    return db.execute(
+        select(func.count(func.distinct(AttendanceRecord.attendance_date))).where(
+            AttendanceRecord.employee_id == employee_id,
+            AttendanceRecord.status.in_(
+                (AttendanceStatus.present, AttendanceStatus.half_day)
+            ),
+            AttendanceRecord.attendance_date >= week_start,
+            AttendanceRecord.attendance_date <= week_end,
+        )
+    ).scalar_one()
 
 
 def get_employee_benchmarks(

@@ -2,7 +2,6 @@
 
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatMinutes } from "@/lib/format";
 
 import { useEmployeeOverview } from "../hooks";
 
@@ -28,7 +27,7 @@ export function EmployeeOverview({ employeeId }: { employeeId: string }) {
 
   return (
     <KpiGrid>
-      <Kpi label="Hours this week" value={formatMinutes(data.hours_this_week_minutes)} />
+      <Kpi label="Days worked this week" value={`${data.days_worked_this_week}d`} />
       <Kpi label="Completed benchmarks" value={String(data.completed_benchmarks)} />
       <Kpi label="Pending" value={String(data.pending_benchmarks)} />
       <Kpi label="Overdue" value={String(data.overdue_activities)} />

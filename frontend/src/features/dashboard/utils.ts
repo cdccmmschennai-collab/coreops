@@ -1,29 +1,35 @@
-// Shared date/format helpers for the dashboards.
+// Shared date/format helpers for the dashboards. All "today"/"this week" logic
+// is anchored to IST (see @/lib/ist) — the office runs on Asia/Kolkata.
+
+import { istTodayISO, nowInIST } from "@/lib/ist";
 
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return istTodayISO();
 }
 
 export function weekStartISO(): string {
-  const now = new Date();
+  const now = nowInIST();
   const dow = now.getDay();
   const mon = new Date(now);
   mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
-  return mon.toISOString().slice(0, 10);
+  const y = mon.getFullYear();
+  const m = String(mon.getMonth() + 1).padStart(2, "0");
+  const d = String(mon.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 export function greeting(): string {
-  const h = new Date().getHours();
+  const h = nowInIST().getHours();
   if (h < 12) return "Good morning";
   if (h < 18) return "Good afternoon";
   return "Good evening";
 }
 
-/** True when an ISO timestamp falls on the local calendar's current day. */
+/** True when an ISO timestamp falls on the current IST calendar day. */
 export function isToday(iso: string | null | undefined): boolean {
   if (!iso) return false;
   const d = new Date(iso);
-  const now = new Date();
+  const now = nowInIST();
   return (
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&

@@ -3,6 +3,10 @@ export type DeliverableStatus = "pending" | "in_progress" | "completed";
 export interface Deliverable {
   id: string;
   project_id: string;
+  /** Populated by the backend on the global list endpoint only (null elsewhere). */
+  project_name: string | null;
+  /** Populated by the backend on the global list endpoint only (null elsewhere). */
+  project_code: string | null;
   name: string;
   description: string | null;
   target_date: string | null;

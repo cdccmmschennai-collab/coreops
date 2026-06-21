@@ -27,6 +27,8 @@ export interface OverdueActivity {
   work_report_task_id: string;
   activity_name: string | null;
   sub_activity_name: string;
+  project_code: string | null;
+  report_date: string;
   due_date: string;
   days_overdue: number;
 }

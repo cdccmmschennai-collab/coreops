@@ -45,6 +45,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3100}
+      # Business timezone — the benchmark "week" (Mon..Fri) is computed from
+      # date.today(); without this the container runs in UTC and the week
+      # rolls over 5.5h late (IST midnight Monday). Keeps backend in step with
+      # the browser-local week shown by the frontend.
+      TZ: ${TZ:-Asia/Kolkata}
     ports:
       - "${BACKEND_PORT:-8100}:8000"
     depends_on:
@@ -66,6 +71,7 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-wms}:${POSTGRES_PASSWORD:-wms}@db:5432/${POSTGRES_DB:-wms}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
+      TZ: ${TZ:-Asia/Kolkata}
     depends_on:
       db:
         condition: service_healthy
@@ -80,6 +86,10 @@ services:
   frontend:
     build: ./frontend
     env_file: ./frontend/.env.local
+    # Single-office (Chennai) deployment: pin the container clock to IST so any
+    # server-side date logic and logs match the backend (also Asia/Kolkata).
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
     ports:
       - "${FRONTEND_PORT:-3100}:3100"
     depends_on:

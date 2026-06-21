@@ -12,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { nowInIST } from "@/lib/ist";
 
 import { useMyAlerts } from "../hooks";
 import { computeReconciliation, rowKey } from "../reconciliation";
@@ -44,7 +45,7 @@ function formatDay(iso: string): string {
   return DOW_SHORT[parseLocal(iso).getDay()];
 }
 function todayMidnight(): Date {
-  const n = new Date();
+  const n = nowInIST();
   return new Date(n.getFullYear(), n.getMonth(), n.getDate());
 }
 // Whole-day difference between a due date and today (local). >0 future, 0 today,
