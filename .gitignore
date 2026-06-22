@@ -40,7 +40,8 @@ secrets/
 *.swp
 .Rhistory
 
-wms_backup.sql
+# DB dumps / backups (regenerable from migrations — never commit)
+*backup*.sql
 Datas/
 rbac_evidence/
 verify_rbac.js

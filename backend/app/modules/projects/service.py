@@ -138,26 +138,39 @@ def _attach_job_codes(db: Session, projects: list[Project]) -> None:
 
 
 def _attach_maintenance_plants(db: Session, projects: list[Project]) -> None:
-    """Bulk-fetch maintenance plants (+ their parent planning plant) and
-    attach the flattened code/description fields, same pattern as
-    _attach_job_codes."""
+    """Bulk-fetch plant info and attach the flattened code/description fields,
+    same pattern as _attach_job_codes.
+
+    Planning Plant precedence: the project's direct planning_plant_id (project
+    master link) wins; if absent we fall back to the parent Planning Plant of
+    the legacy maintenance_plant_id. Maintenance Plant fields come only from
+    maintenance_plant_id and are null for project-master rows (the Maintenance
+    Plant is chosen at usage time, not stored on the project)."""
+    # Direct Planning Plant link (project master).
+    pp_ids = {p.planning_plant_id for p in projects if p.planning_plant_id}
+    planning_by_id: dict = {}
+    if pp_ids:
+        planning_by_id = {
+            pp.id: pp for pp in db.execute(
+                select(PlanningPlant).where(PlanningPlant.id.in_(pp_ids))
+            ).scalars().all()
+        }
+
+    # Legacy direct Maintenance Plant link (+ its parent Planning Plant).
     mp_ids = {p.maintenance_plant_id for p in projects if p.maintenance_plant_id}
-    if not mp_ids:
-        for p in projects:
-            p.maintenance_plant_code = None   # type: ignore[attr-defined]
-            p.maintenance_plant_description = None   # type: ignore[attr-defined]
-            p.planning_plant_code = None   # type: ignore[attr-defined]
-            p.planning_plant_description = None   # type: ignore[attr-defined]
-        return
-    rows = db.execute(
-        select(MaintenancePlant, PlanningPlant)
-        .join(PlanningPlant, MaintenancePlant.planning_plant_id == PlanningPlant.id)
-        .where(MaintenancePlant.id.in_(mp_ids))
-    ).all()
-    by_id = {mp.id: (mp, pp) for mp, pp in rows}
+    mp_by_id: dict = {}
+    if mp_ids:
+        rows = db.execute(
+            select(MaintenancePlant, PlanningPlant)
+            .join(PlanningPlant, MaintenancePlant.planning_plant_id == PlanningPlant.id)
+            .where(MaintenancePlant.id.in_(mp_ids))
+        ).all()
+        mp_by_id = {mp.id: (mp, pp) for mp, pp in rows}
+
     for p in projects:
-        entry = by_id.get(p.maintenance_plant_id) if p.maintenance_plant_id else None
-        mp, pp = entry if entry else (None, None)
+        mp, mp_pp = mp_by_id.get(p.maintenance_plant_id, (None, None)) if p.maintenance_plant_id else (None, None)
+        pp = planning_by_id.get(p.planning_plant_id) if p.planning_plant_id else None
+        pp = pp or mp_pp   # direct link wins, else the maintenance plant's parent
         p.maintenance_plant_code = mp.code if mp else None   # type: ignore[attr-defined]
         p.maintenance_plant_description = mp.description if mp else None   # type: ignore[attr-defined]
         p.planning_plant_code = pp.code if pp else None   # type: ignore[attr-defined]

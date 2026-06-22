@@ -203,9 +203,31 @@ def test_task_based_due_date_computed_on_draft_save(client, setup_author, activi
     created = client.post(BASE, headers=a["header"], json=payload).json()
     task = created["tasks"][0]
     assert task["started_date"] == TODAY
-    assert task["due_date"] == (TODAY_D + timedelta(days=2)).isoformat()
+    # 2-day activity spans the report day + the next day → due report_date + 1.
+    assert task["due_date"] == (TODAY_D + timedelta(days=1)).isoformat()
     assert task["is_completed"] is False
     assert task["completed_date"] is None
+    assert task["is_overdue"] is False
+
+
+def test_task_based_daily_due_date_is_assigned_date(client, setup_author, activity_admin):
+    """A daily benchmark activity (period 1, the default) is due the SAME day it
+    is reported — never pushed to the next day."""
+    a = setup_author()
+    _, sub = _make_sub_activity(
+        client, activity_admin, benchmark_type="TASK_BASED", name="MTL-ASSET PHOTO",
+    )
+    payload = {
+        "report_date": TODAY,
+        "tasks": [{
+            "project_id": str(a["project"].id), "description": "work",
+            "sub_activity_id": sub["id"],
+        }],
+    }
+    created = client.post(BASE, headers=a["header"], json=payload).json()
+    task = created["tasks"][0]
+    assert task["started_date"] == TODAY
+    assert task["due_date"] == TODAY        # same day, not TODAY + 1
     assert task["is_overdue"] is False
 
 
@@ -347,77 +369,198 @@ def test_inactive_sub_activity_rejected_on_create(client, setup_author, activity
     assert res.status_code == 422
 
 
-# ── NUMERIC_BENCHMARK notification upsert/resolve on submit ────────────────
+# ── get_daily_benchmark_ledger / get_overdue_activities (live, no storage) ──
 
-def test_submit_under_benchmark_creates_notification(client, db, setup_author, activity_admin):
+def test_daily_pending_is_flat_per_day_and_resets_next_week(client, db, setup_author, activity_admin):
+    """250/day benchmark, 200/day actual every day: each day's pending is a
+    flat 50 (not a growing cumulative total) — that's the daily-ledger
+    redesign. The week's total (sum of daily rows) is still 250, matching
+    the old cumulative model only because there's no surplus day here."""
+    from app.modules.activity_master.service import get_daily_benchmark_ledger
+
     a = setup_author()
     _, sub = _make_sub_activity(
         client, activity_admin, benchmark_type="NUMERIC", benchmark_value=250,
         relevant_count_field="tags", name="FMTL-REWORK",
     )
-    payload = {
-        "report_date": TODAY,
-        "tasks": [{
-            "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"], "tags_count": 200,
-        }],
-    }
-    created = client.post(BASE, headers=a["header"], json=payload).json()
-    client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
+    # A fully past week (last calendar week) so every report_date <= today
+    # (the API rejects future report dates) while staying inside the
+    # current/previous-month edit window.
+    this_week_monday = TODAY_D - timedelta(days=TODAY_D.weekday())
+    monday = this_week_monday - timedelta(days=7)
+    for i in range(5):
+        report_date = monday + timedelta(days=i)
+        payload = {
+            "report_date": report_date.isoformat(),
+            "tasks": [{
+                "project_id": str(a["project"].id), "description": "work",
+                "sub_activity_id": sub["id"], "tags_count": 200,
+            }],
+        }
+        created = client.post(BASE, headers=a["header"], json=payload).json()
+        client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
 
-    notif = db.execute(
-        select(Notification).where(
-            Notification.user_id == a["user"].id,
-            Notification.type == "NUMERIC_BENCHMARK",
-        )
-    ).scalar_one()
-    assert notif.severity == "WARNING"
-    assert notif.resolved_at is None
-    assert "50" in notif.message
+        ledger = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=report_date)
+        assert len(ledger) == i + 1  # one row per elapsed day so far
+        today_row = next(r for r in ledger if r["date"] == report_date)
+        assert float(today_row["target"]) == 250
+        assert float(today_row["actual"]) == 200
+        assert float(today_row["pending"]) == 50  # flat, not cumulative
+        assert today_row["benchmark_unit"] == "tags"
+
+    friday = monday + timedelta(days=4)
+    full_week = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=friday)
+    assert len(full_week) == 5
+    assert sum(float(r["pending"]) for r in full_week) == 250
+    assert sum(float(r["actual"]) for r in full_week) == 1000
+    assert sum(float(r["target"]) for r in full_week) == 1250
+
+    next_monday = monday + timedelta(days=7)
+    ledger_next_week = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=next_monday)
+    assert ledger_next_week == []  # no submissions yet this new week — clean reset
 
 
-def test_resubmit_meeting_benchmark_resolves_notification(client, db, setup_author, activity_admin):
+def test_daily_pending_does_not_let_a_surplus_day_offset_a_deficit_day(client, db, setup_author, activity_admin):
+    """120/day benchmark; Mon 100, Tue 110, Wed 90, Thu 130 (surplus), Fri 120.
+    Per-day pending: 20, 10, 30, 0, 0 -> weekly total 60. A cumulative model
+    would have netted Thursday's +10 against the week's total and landed on
+    50 instead — the daily ledger must NOT do that."""
+    from app.modules.activity_master.service import get_daily_benchmark_ledger
+
+    a = setup_author()
+    _, sub = _make_sub_activity(
+        client, activity_admin, benchmark_type="NUMERIC", benchmark_value=120,
+        relevant_count_field="tags", name="FMTL-REWORK",
+    )
+    this_week_monday = TODAY_D - timedelta(days=TODAY_D.weekday())
+    monday = this_week_monday - timedelta(days=7)
+    counts = [100, 110, 90, 130, 120]
+    expected_daily_pending = [20, 10, 30, 0, 0]
+    for i, count in enumerate(counts):
+        report_date = monday + timedelta(days=i)
+        payload = {
+            "report_date": report_date.isoformat(),
+            "tasks": [{
+                "project_id": str(a["project"].id), "description": "work",
+                "sub_activity_id": sub["id"], "tags_count": count,
+            }],
+        }
+        created = client.post(BASE, headers=a["header"], json=payload).json()
+        client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
+
+    friday = monday + timedelta(days=4)
+    ledger = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=friday)
+    assert len(ledger) == 5
+    by_date = {r["date"]: r for r in ledger}
+    for i, report_date in enumerate(monday + timedelta(days=i) for i in range(5)):
+        assert float(by_date[report_date]["pending"]) == expected_daily_pending[i]
+
+    weekly_pending_total = sum(float(r["pending"]) for r in ledger)
+    assert weekly_pending_total == 60  # not 50 — no cross-day netting
+
+
+def test_daily_ledger_omits_skipped_day_no_synthetic_rows(client, db, setup_author, activity_admin):
+    """An employee who reports Monday and Wednesday but skips Tuesday gets
+    rows only for the days actually reported — Tuesday is absent, not
+    synthesized as a zero-actual / full-pending row. Benchmark performance
+    reflects only activities actually reported."""
+    from app.modules.activity_master.service import get_daily_benchmark_ledger
+
     a = setup_author()
     _, sub = _make_sub_activity(
         client, activity_admin, benchmark_type="NUMERIC", benchmark_value=250,
         relevant_count_field="tags", name="FMTL-REWORK",
     )
+    this_week_monday = TODAY_D - timedelta(days=TODAY_D.weekday())
+    monday = this_week_monday - timedelta(days=7)
+    for offset in (0, 2):  # Monday, Wednesday — Tuesday skipped entirely
+        report_date = monday + timedelta(days=offset)
+        payload = {
+            "report_date": report_date.isoformat(),
+            "tasks": [{
+                "project_id": str(a["project"].id), "description": "work",
+                "sub_activity_id": sub["id"], "tags_count": 200,
+            }],
+        }
+        created = client.post(BASE, headers=a["header"], json=payload).json()
+        client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
+
+    wednesday = monday + timedelta(days=2)
+    ledger = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=wednesday)
+    assert len(ledger) == 2  # Mon, Wed only — skipped Tuesday is not synthesized
+    dates = {r["date"] for r in ledger}
+    assert dates == {monday, wednesday}
+    assert (monday + timedelta(days=1)) not in dates  # no Tuesday row
+    for r in ledger:
+        assert float(r["actual"]) == 200
+        assert float(r["pending"]) == 50
+
+
+def test_daily_ledger_scoped_by_employee_ids(client, db, setup_author, activity_admin):
+    from app.modules.activity_master.service import get_daily_benchmark_ledger
+
+    a = setup_author(email="emp1@x.com", code="E-1")
+    other = setup_author(email="emp2@x.com", code="E-2", proj_code="P-2")
+    _, sub = _make_sub_activity(
+        client, activity_admin, benchmark_type="NUMERIC", benchmark_value=100,
+        relevant_count_field="tags", name="X",
+    )
+    for actor in (a, other):
+        payload = {
+            "report_date": TODAY,
+            "tasks": [{
+                "project_id": str(actor["project"].id), "description": "work",
+                "sub_activity_id": sub["id"], "tags_count": 10,
+            }],
+        }
+        created = client.post(BASE, headers=actor["header"], json=payload).json()
+        client.post(f"{BASE}/{created['id']}/submit", headers=actor["header"])
+
+    scoped = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=TODAY_D)
+    assert all(r["employee_id"] == a["emp"].id for r in scoped)
+    assert len(scoped) >= 1
+
+    empty = get_daily_benchmark_ledger(db, employee_ids=set(), today=TODAY_D)
+    assert empty == []
+
+
+def test_overdue_activities_lists_past_due_incomplete_rows(client, db, setup_author, activity_admin):
+    from app.modules.activity_master.service import get_overdue_activities
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_type="TASK_BASED", name="AUDIT QUERY")
     payload = {
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"], "tags_count": 200,
+            "sub_activity_id": sub["id"],
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
-    client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
+    assert get_overdue_activities(db, employee_ids={a["emp"].id}, today=TODAY_D) == []
 
-    # Reviewer sends it back, author fixes the count and resubmits.
-    client.post(
-        f"{BASE}/{created['id']}/reject", json={"review_note": "fix count"}, headers=activity_admin,
-    )
+    row = db.get(WorkReportTask, created["tasks"][0]["id"])
+    row.due_date = TODAY_D - timedelta(days=2)
+    db.add(row)
+    db.commit()
+
+    overdue = get_overdue_activities(db, employee_ids={a["emp"].id}, today=TODAY_D)
+    assert len(overdue) == 1
+    assert overdue[0]["sub_activity_name"] == "AUDIT QUERY"
+    assert overdue[0]["days_overdue"] == 2
+
+    # Completing it removes it from the live overdue list.
     client.patch(
-        f"{BASE}/{created['id']}",
-        json={"tasks": [{
-            "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"], "tags_count": 250,
-        }]},
-        headers=a["header"],
+        f"{BASE}/tasks/{created['tasks'][0]['id']}/completion",
+        json={"is_completed": True}, headers=a["header"],
     )
-    client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
-
-    notif = db.execute(
-        select(Notification).where(
-            Notification.user_id == a["user"].id,
-            Notification.type == "NUMERIC_BENCHMARK",
-        )
-    ).scalar_one()
-    assert notif.resolved_at is not None
+    assert get_overdue_activities(db, employee_ids={a["emp"].id}, today=TODAY_D) == []
 
 
-def test_upsert_notification_updates_existing_row_in_place(client, db, setup_author, activity_admin):
-    """Two consecutive shortfalls for the same sub-activity update one
-    notification row rather than creating a second one."""
+def test_no_persisted_notification_on_benchmark_shortfall(client, db, setup_author, activity_admin):
+    """Confirms the old submit-time NUMERIC_BENCHMARK notification was
+    removed in favor of the live queries above."""
     a = setup_author()
     _, sub = _make_sub_activity(
         client, activity_admin, benchmark_type="NUMERIC", benchmark_value=250,
@@ -431,18 +574,6 @@ def test_upsert_notification_updates_existing_row_in_place(client, db, setup_aut
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
-    client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
-    client.post(
-        f"{BASE}/{created['id']}/reject", json={"review_note": "n/a"}, headers=activity_admin,
-    )
-    client.patch(
-        f"{BASE}/{created['id']}",
-        json={"tasks": [{
-            "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"], "tags_count": 150,
-        }]},
-        headers=a["header"],
-    )
     client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
 
     rows = db.execute(
@@ -451,5 +582,4 @@ def test_upsert_notification_updates_existing_row_in_place(client, db, setup_aut
             Notification.type == "NUMERIC_BENCHMARK",
         )
     ).scalars().all()
-    assert len(rows) == 1
-    assert "100" in rows[0].message  # latest deficit (250-150), not the first (50)
+    assert rows == []

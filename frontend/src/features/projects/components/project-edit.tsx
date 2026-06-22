@@ -39,6 +39,7 @@ export function ProjectEdit({ id }: { id: string }) {
     code: project.code,
     name: project.name,
     job_code: project.job_code_code ?? "",
+    planning_plant_id: project.planning_plant_id ?? "",
     maintenance_plant_id: project.maintenance_plant_id ?? "",
     client: project.client ?? "",
     description: project.description ?? "",

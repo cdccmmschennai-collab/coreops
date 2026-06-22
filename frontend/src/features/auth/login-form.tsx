@@ -61,7 +61,7 @@ export function LoginForm() {
   return (
     <div className="w-full max-w-sm">
       <div className="mb-8">
-        <Brand />
+        <Brand logoHeight={36} />
         <h1 className="mt-6 font-serif text-2xl font-semibold tracking-tight">
           Sign in to your workspace
         </h1>

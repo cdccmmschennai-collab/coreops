@@ -14,8 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatMinutes } from "@/lib/format";
-
 import { StatusBadge } from "./status-badge";
 import { projectSummary } from "../project-summary";
 import type { WorkReport, WorkReportPage } from "../types";
@@ -40,7 +38,7 @@ export function WorkReportsTable({
   emptyAction,
 }: WorkReportsTableProps) {
   const router = useRouter();
-  const cols = showEmployee ? 5 : 4;
+  const cols = showEmployee ? 4 : 3;
   const rows = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
   const showEmpty = !isLoading && !isError && rows.length === 0;
@@ -50,11 +48,10 @@ export function WorkReportsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Date</TableHead>
-            {showEmployee && <TableHead>Employee</TableHead>}
+            <TableHead className="w-32">Date</TableHead>
+            {showEmployee && <TableHead className="w-48">Employee</TableHead>}
             <TableHead>Projects</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Total</TableHead>
+            <TableHead className="w-32">Status</TableHead>
           </TableRow>
         </TableHeader>
 
@@ -76,16 +73,12 @@ export function WorkReportsTable({
                       {r.employee_name ?? "—"}
                     </TableCell>
                   )}
-                  <TableCell
-                    className="max-w-[260px] truncate text-sm text-muted-foreground"
-                    title={proj.title}
-                  >
+                  <TableCell className="text-sm font-medium text-foreground" title={proj.title}>
                     {proj.label}
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={r.status} />
                   </TableCell>
-                  <TableCell className="tabular">{formatMinutes(r.total_minutes)}</TableCell>
                 </TableRow>
               );
             })}

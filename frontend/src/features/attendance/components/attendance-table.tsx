@@ -23,7 +23,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatMinutes } from "@/lib/format";
 
 import { StatusBadge } from "./status-badge";
 import { useEmployeeOptions } from "../employee-options";
@@ -52,7 +51,7 @@ export function AttendanceTable({
 }: AttendanceTableProps) {
   const router = useRouter();
   const { byId } = useEmployeeOptions();
-  const cols = canManage ? 6 : 5;
+  const cols = canManage ? 4 : 3;
   const rows = data?.items ?? [];
   const showRows = !isLoading && !isError && rows.length > 0;
   const showEmpty = !isLoading && !isError && rows.length === 0;
@@ -65,8 +64,6 @@ export function AttendanceTable({
             <TableHead>Employee</TableHead>
             <TableHead>Date</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>Total</TableHead>
-            <TableHead>Overtime</TableHead>
             {canManage && <TableHead className="w-12 text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
@@ -89,10 +86,6 @@ export function AttendanceTable({
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={r.status} />
-                </TableCell>
-                <TableCell className="tabular">{formatMinutes(r.total_minutes)}</TableCell>
-                <TableCell className="tabular text-muted-foreground">
-                  {formatMinutes(r.overtime_minutes)}
                 </TableCell>
                 {canManage && (
                   <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>

@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { nowInIST } from "@/lib/ist";
 
 import { useMyCompliance } from "../hooks";
 
@@ -37,12 +38,12 @@ export function DailyReportReminder() {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const snoozedUntil = React.useRef(0);
-  const [now, setNow] = React.useState(() => new Date());
+  const [now, setNow] = React.useState(() => nowInIST());
 
-  // Re-evaluate every minute so the reminder appears when 17:15 passes while the
-  // app is already open (not only on the next data refetch).
+  // Re-evaluate every minute so the reminder appears when 17:15 IST passes while
+  // the app is already open (not only on the next data refetch).
   React.useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    const id = window.setInterval(() => setNow(nowInIST()), 60_000);
     return () => window.clearInterval(id);
   }, []);
 

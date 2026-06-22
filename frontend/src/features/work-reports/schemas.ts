@@ -105,15 +105,6 @@ const durationHoursSchema = z
     "Enter time as HH.MM (e.g. 2.30) — minutes 00–59, max 24h",
   );
 
-// Same as above, but the project-activity Duration field is required.
-const requiredDurationHoursSchema = z
-  .string()
-  .refine((v) => v.trim() !== "", "Duration is required")
-  .refine((v) => {
-    const mins = hoursToMinutes(v);
-    return mins !== null && mins <= MAX_DAY_MINUTES;
-  }, "Enter time as HH.MM (e.g. 2.30) — minutes 00–59, max 24h");
-
 // Count inputs: string → non-negative int, empty = 0
 const countSchema = z
   .string()
@@ -141,7 +132,10 @@ const taskSchema = z
       .max(DESCRIPTION_MAX, `Keep under ${DESCRIPTION_MAX} characters`)
       .optional()
       .default(""),
-    duration_hours: requiredDurationHoursSchema,
+    // Project-activity hours. The input was retired from the day-based form;
+    // the column is kept (sent as null) so existing data round-trips and the
+    // field can be reinstated without a migration.
+    duration_hours: durationHoursSchema,
     // Legacy free-text activity label. Kept for backward round-tripping of
     // rows saved before the Activity Master existed; new rows are selected
     // via activity_id/sub_activity_id below and the server derives this.
@@ -168,9 +162,9 @@ const taskSchema = z
     due_date: z.string().optional(),
     completed_date: z.string().optional(),
     // Maintenance Plant the employee worked at — independent of the
-    // project's own assigned plant. Pick it directly; Planning Plant
+    // project's own assigned plant. Required: pick it directly; Planning Plant
     // code/description auto-derive (display-only, never sent to the backend).
-    maintenance_plant_id: z.string().optional().default(""),
+    maintenance_plant_id: z.string().min(1, "Maintenance Plant is required"),
     maintenance_plant_code: z.string().optional(),
     maintenance_plant_description: z.string().optional(),
     planning_plant_code: z.string().optional(),

@@ -69,9 +69,17 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     job_code_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_codes.id", ondelete="SET NULL"), nullable=True
     )
-    # The plant this project is assigned to. Pick the Maintenance Plant
-    # directly; its Planning Plant code/description are joined in by the
-    # service (_attach_maintenance_plants), same pattern as job_code.
+    # The Planning Plant this project belongs to (project master link). The
+    # project carries the Planning Plant directly; Maintenance Plants hang off
+    # the Planning Plant (maintenance_plants.planning_plant_id) and are picked
+    # at usage time once that master data is loaded — not stored on the project.
+    planning_plant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("planning_plants.id", ondelete="SET NULL"), nullable=True
+    )
+    # Legacy direct Maintenance Plant link (pre-master-data). Retained for
+    # backward compatibility; new project master rows leave this null and use
+    # planning_plant_id instead. Its Planning Plant code/description are joined
+    # in by the service (_attach_maintenance_plants), same pattern as job_code.
     maintenance_plant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("maintenance_plants.id", ondelete="SET NULL"), nullable=True
     )
@@ -91,6 +99,7 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         ),
         Index("projects_status_idx", "status", postgresql_where=text("deleted_at IS NULL")),
         Index("projects_job_code_idx", "job_code_id", postgresql_where=text("deleted_at IS NULL")),
+        Index("projects_planning_plant_idx", "planning_plant_id"),
         Index("projects_maintenance_plant_idx", "maintenance_plant_id"),
     )
 

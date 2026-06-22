@@ -155,38 +155,7 @@ export function AttendanceForm({ mode, defaultValues, recordId }: AttendanceForm
                 )}
               />
               <div className="hidden sm:block" aria-hidden />
-              <FormField
-                control={form.control}
-                name="check_in_at"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Check-in</FormLabel>
-                    <FormControl>
-                      <Input type="datetime-local" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="check_out_at"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Check-out</FormLabel>
-                    <FormControl>
-                      <Input type="datetime-local" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
             </div>
-
-            <p className="text-xs text-muted-foreground">
-              Total and overtime minutes are calculated automatically from check-in
-              and check-out.
-            </p>
 
             <div className="flex justify-end gap-2 pt-2">
               <Button

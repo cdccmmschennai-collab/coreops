@@ -29,8 +29,15 @@ def list_planning_plants(
 @router.get("/maintenance-plants", response_model=list[MaintenancePlantOut])
 def list_maintenance_plants(
     active_only: bool = Query(default=True),
+    planning_plant_code: str | None = Query(
+        default=None,
+        description="Return only Maintenance Plants belonging to this Planning Plant code "
+        "(e.g. '2400'). Used by the project-scoped dropdown on the work-report form.",
+    ),
     _user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[MaintenancePlantOut]:
-    rows = service.list_maintenance_plants(db, active_only=active_only)
+    rows = service.list_maintenance_plants(
+        db, active_only=active_only, planning_plant_code=planning_plant_code
+    )
     return [MaintenancePlantOut.model_validate(r) for r in rows]

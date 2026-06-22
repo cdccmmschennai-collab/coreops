@@ -8,11 +8,24 @@ import { EmptyState } from "@/components/feedback/empty-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/features/auth/auth-provider";
 import { can } from "@/lib/rbac";
 import { cn } from "@/lib/utils";
 
 import { useCalendarEvents, useCreateCalendarEvent, useDeleteCalendarEvent } from "../hooks";
+import {
+  EVENT_TYPE_BADGE,
+  EVENT_TYPE_LABEL,
+  SELECTABLE_EVENT_TYPES,
+  type CalendarEventType,
+} from "../types";
 
 /** Returns ISO strings for the current year (± 6 months window). */
 function yearWindow() {
@@ -46,6 +59,7 @@ export function HolidayManager() {
 
   const [date, setDate] = React.useState("");
   const [title, setTitle] = React.useState("");
+  const [type, setType] = React.useState<CalendarEventType>("holiday");
   const [adding, setAdding] = React.useState(false);
 
   const events = query.data?.items ?? [];
@@ -59,14 +73,15 @@ export function HolidayManager() {
       await createMutation.mutateAsync({
         event_date: date,
         title: title.trim(),
-        event_type: "holiday",
+        event_type: type,
       });
-      toast.success("Holiday added");
+      toast.success(`${EVENT_TYPE_LABEL[type]} added`);
       setDate("");
       setTitle("");
+      setType("holiday");
       setAdding(false);
     } catch {
-      toast.error("Failed to add holiday");
+      toast.error("Failed to add entry");
     }
   }
 
@@ -75,7 +90,7 @@ export function HolidayManager() {
       await deleteMutation.mutateAsync(id);
       toast.success(`"${name}" removed`);
     } catch {
-      toast.error("Failed to remove holiday");
+      toast.error("Failed to remove entry");
     }
   }
 
@@ -85,14 +100,14 @@ export function HolidayManager() {
         <Card>
           <CardHeader className="border-b border-border p-4">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Add Holiday</CardTitle>
+              <CardTitle className="text-base">Add Calendar Entry</CardTitle>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setAdding((v) => !v)}
               >
                 <Plus className="h-4 w-4" />
-                {adding ? "Cancel" : "New Holiday"}
+                {adding ? "Cancel" : "New Entry"}
               </Button>
             </div>
           </CardHeader>
@@ -106,8 +121,24 @@ export function HolidayManager() {
                   required
                   className="w-44"
                 />
+                <Select value={type} onValueChange={(v) => setType(v as CalendarEventType)}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SELECTABLE_EVENT_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {EVENT_TYPE_LABEL[t]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Input
-                  placeholder="Holiday name (e.g. Pongal)"
+                  placeholder={
+                    type === "working_day"
+                      ? "Reason (e.g. Project deadline)"
+                      : "Name (e.g. Pongal)"
+                  }
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   required
@@ -126,7 +157,7 @@ export function HolidayManager() {
         <CardHeader className="border-b border-border p-4">
           <CardTitle className="text-base flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-violet-600" />
-            Upcoming Holidays - {new Date().getFullYear()}
+            Upcoming - {new Date().getFullYear()}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
@@ -155,8 +186,13 @@ export function HolidayManager() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                      Holiday
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                        EVENT_TYPE_BADGE[ev.event_type],
+                      )}
+                    >
+                      {EVENT_TYPE_LABEL[ev.event_type]}
                     </span>
                     {canManage && (
                       <Button
@@ -201,18 +237,28 @@ export function HolidayManager() {
                         {formatEventDate(ev.event_date)}
                       </p>
                     </div>
-                    {canManage && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                        onClick={() => void handleDelete(ev.id, ev.title)}
-                        disabled={deleteMutation.isPending}
-                        aria-label={`Remove ${ev.title}`}
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                          EVENT_TYPE_BADGE[ev.event_type],
+                        )}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
+                        {EVENT_TYPE_LABEL[ev.event_type]}
+                      </span>
+                      {canManage && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={() => void handleDelete(ev.id, ev.title)}
+                          disabled={deleteMutation.isPending}
+                          aria-label={`Remove ${ev.title}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </li>
                 ))}
             </ul>

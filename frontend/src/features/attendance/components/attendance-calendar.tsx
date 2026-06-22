@@ -2,15 +2,15 @@
 
 import * as React from "react";
 import { ChevronLeft, ChevronRight, Clock } from "lucide-react";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { nowInIST } from "@/lib/ist";
 import { cn } from "@/lib/utils";
-import { formatTime } from "@/lib/format";
 
 import { useCalendarEvents } from "@/features/calendar/hooks";
+import { isOffEvent } from "@/features/calendar/types";
 
 import { useAttendanceList } from "../hooks";
 import {
@@ -38,7 +38,7 @@ const STATUS: Record<StatusKey, { cell: string; text: string; dot: string; label
 };
 
 export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
-  const today = React.useMemo(() => new Date(), []);
+  const today = React.useMemo(() => nowInIST(), []);
   const [view, setView] = React.useState({ y: today.getFullYear(), m: today.getMonth() });
 
   const { from, to } = monthRange(view.y, view.m);
@@ -51,7 +51,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     offset: 0,
   });
 
-  const holidayQuery = useCalendarEvents({ from, to, event_type: "holiday", limit: 100 });
+  const eventsQuery = useCalendarEvents({ from, to, limit: 100 });
 
   const byDate = React.useMemo(() => {
     const map = new Map<string, Attendance>();
@@ -59,14 +59,25 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     return map;
   }, [query.data]);
 
-  const holidayByDate = React.useMemo(() => {
+  // Office-closing events (holiday / CDC holiday / natural hazard) keyed by date.
+  const offByDate = React.useMemo(() => {
     const map = new Map<string, string>();
-    for (const ev of holidayQuery.data?.items ?? []) map.set(ev.event_date, ev.title);
+    for (const ev of eventsQuery.data?.items ?? []) {
+      if (isOffEvent(ev.event_type)) map.set(ev.event_date, ev.title);
+    }
     return map;
-  }, [holidayQuery.data]);
+  }, [eventsQuery.data]);
+
+  // "Office open on a normally-off day" overrides, keyed by date.
+  const workingByDate = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ev of eventsQuery.data?.items ?? []) {
+      if (ev.event_type === "working_day") map.set(ev.event_date, ev.title);
+    }
+    return map;
+  }, [eventsQuery.data]);
 
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
-  const todayRecord = byDate.get(todayIso);
 
   const total = daysInMonth(view.y, view.m);
   const lead = firstDowMonday(view.y, view.m);
@@ -126,11 +137,19 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                 if (day == null) return <div key={i} className="min-h-[86px]" />;
                 const iso = isoDate(view.y, view.m, day);
                 const record = byDate.get(iso);
-                const holidayTitle = holidayByDate.get(iso);
+                const holidayTitle = offByDate.get(iso);
+                const workingTitle = workingByDate.get(iso);
+                // A declared working day overrides weekends and holidays — the
+                // office is open, so the day renders as a normal working day.
                 const status: StatusKey | undefined =
                   record?.status ??
-                  (holidayTitle ? "holiday" : undefined) ??
-                  (isWeekend(view.y, view.m, day) ? "weekend" : undefined);
+                  (workingTitle
+                    ? undefined
+                    : holidayTitle
+                      ? "holiday"
+                      : isWeekend(view.y, view.m, day)
+                        ? "weekend"
+                        : undefined);
                 const s = status ? STATUS[status] : null;
                 const isToday = iso === todayIso;
                 return (
@@ -153,21 +172,27 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                       {isToday && (
                         <span className="text-[9px] font-bold tracking-wider text-primary">TODAY</span>
                       )}
-                      {record && record.total_minutes > 0 && (
-                        <span className="ml-auto tabular text-[10px] text-muted-foreground">
-                          {Math.round(record.total_minutes / 60)}h
-                        </span>
-                      )}
                     </div>
-                    {holidayTitle && !record && (
+                    {holidayTitle && !workingTitle && !record && (
                       <p className="mt-1 text-[10px] font-medium text-violet-700 leading-tight line-clamp-2">
                         {holidayTitle}
+                      </p>
+                    )}
+                    {workingTitle && !record && (
+                      <p className="mt-1 text-[10px] font-medium text-emerald-700 leading-tight line-clamp-2">
+                        {workingTitle}
                       </p>
                     )}
                     {s && (
                       <div className={cn("mt-auto flex items-center gap-1.5 text-[11px] font-medium", s.text)}>
                         <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
                         {s.label}
+                      </div>
+                    )}
+                    {workingTitle && !record && (
+                      <div className="mt-auto flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                        Working
                       </div>
                     )}
                   </div>
@@ -207,32 +232,8 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
               <Clock className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="font-medium">General</span>
             </div>
-            <div className="tabular text-sm">09:00 – 18:00</div>
-            <div className="mt-1 text-xs text-muted-foreground">Asia/Kolkata · 9h day · 1h lunch</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="border-b border-border p-4">
-            <CardTitle className="text-base">Today&apos;s punch</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3.5">
-            <div className="mb-2 flex justify-between text-sm">
-              <span className="text-muted-foreground">IN</span>
-              <span className="tabular font-medium">{formatTime(todayRecord?.check_in_at)}</span>
-            </div>
-            <div className="mb-3 flex justify-between text-sm">
-              <span className="text-muted-foreground">OUT</span>
-              <span className="tabular font-medium">{formatTime(todayRecord?.check_out_at)}</span>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              onClick={() => toast.info("Punch in/out - coming soon")}
-            >
-              Punch out
-            </Button>
+            <div className="tabular text-sm">09:00 – 17:30</div>
+            <div className="mt-1 text-xs text-muted-foreground">Asia/Kolkata · 8h day · 30m lunch</div>
           </CardContent>
         </Card>
       </div>

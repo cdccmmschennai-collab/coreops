@@ -12,7 +12,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
-import { formatMinutes, formatTime } from "@/lib/format";
 import { can } from "@/lib/rbac";
 
 import { DeleteDialog } from "./delete-dialog";
@@ -96,10 +95,6 @@ export function AttendanceDetail({ id }: { id: string }) {
           <Row label="Employee" value={employeeName} />
           <Row label="Date" value={record.attendance_date} />
           <Row label="Status" value={<StatusBadge status={record.status} />} />
-          <Row label="Check-in" value={formatTime(record.check_in_at)} />
-          <Row label="Check-out" value={formatTime(record.check_out_at)} />
-          <Row label="Total" value={formatMinutes(record.total_minutes)} />
-          <Row label="Overtime" value={formatMinutes(record.overtime_minutes)} />
         </CardContent>
       </Card>
 

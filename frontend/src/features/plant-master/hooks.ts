@@ -11,15 +11,23 @@ export function usePlanningPlants(activeOnly = true) {
   });
 }
 
-/** Flat list of every active Maintenance Plant, with its parent Planning
- * Plant's code/description joined in — the source for the Combobox used on
- * both the Project form and the Work Report task row. Pick the Maintenance
- * Plant directly; Planning Plant info auto-derives from `byId`. */
-export function useMaintenancePlantOptions(activeOnly = true) {
+/** Maintenance Plant options for a Combobox, with each plant's parent Planning
+ * Plant code/description joined in.
+ *
+ * Pass `planningPlantCode` to scope the list to a single Planning Plant — the
+ * work-report task row uses this so a user only ever sees the Maintenance
+ * Plants of the selected project's Planning Plant. Omit it to load all plants.
+ * When `enabled` is false the fetch is skipped (no project selected yet). */
+export function useMaintenancePlantOptions(
+  activeOnly = true,
+  planningPlantCode?: string,
+  enabled = true,
+) {
   const query = useQuery({
-    queryKey: plantMasterKeys.maintenancePlants(activeOnly),
-    queryFn: () => plantMasterApi.listMaintenancePlants(activeOnly),
+    queryKey: plantMasterKeys.maintenancePlants(activeOnly, planningPlantCode),
+    queryFn: () => plantMasterApi.listMaintenancePlants(activeOnly, planningPlantCode),
     staleTime: 5 * 60 * 1000,
+    enabled,
   });
   const items = query.data ?? [];
   const byId = new Map(items.map((mp) => [mp.id, mp]));

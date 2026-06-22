@@ -2,12 +2,11 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, Plus } from "lucide-react";
+import { ArrowRight, CalendarOff, FileText, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -18,59 +17,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/features/auth/auth-provider";
+import { BenchmarkActivities } from "@/features/benchmarks/components/benchmark-activities";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList } from "@/features/work-reports/hooks";
 import { projectSummary } from "@/features/work-reports/project-summary";
-import { formatMinutes } from "@/lib/format";
 
 import { greeting, todayISO, weekStartISO } from "./utils";
 
-const DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const CHART_COLORS = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#6366f1"];
 
 // ── sub-components ────────────────────────────────────────────────────────────
-
-function WeekBars({ data }: { data: { date: string; minutes: number }[] }) {
-  const maxMin = Math.max(...data.map((d) => d.minutes), 1);
-  const maxH    = Math.ceil((maxMin / 60) / 3) * 3; // round up to nearest 3h
-
-  return (
-    <svg viewBox="0 0 560 180" width="100%" style={{ display: "block" }}>
-      {/* grid lines */}
-      <g stroke="hsl(var(--border))" strokeDasharray="2 3" fill="none">
-        {[20, 60, 100, 140].map((y) => (
-          <line key={y} x1="36" y1={y} x2="556" y2={y} />
-        ))}
-      </g>
-      {/* y-axis labels */}
-      <g fontSize="10" fill="hsl(var(--muted-foreground))" textAnchor="end" fontFamily="var(--font-mono)">
-        {[maxH, (maxH * 2) / 3, maxH / 3, 0].map((h, i) => (
-          <text key={i} x="32" y={20 + i * 40}>{h}h</text>
-        ))}
-      </g>
-      {/* bars */}
-      {data.map((d, i) => {
-        const x   = 60 + i * 72;
-        const pct = d.minutes / (maxH * 60);
-        const barH = Math.max(pct * 120, d.minutes > 0 ? 2 : 0);
-        const y   = 140 - barH;
-        return (
-          <g key={i}>
-            {d.minutes > 0 && (
-              <rect x={x} y={y} width="44" height={barH} rx="3"
-                fill="hsl(var(--primary))" opacity={0.85} />
-            )}
-            <text x={x + 22} y="162" fontSize="10" textAnchor="middle"
-              fill="hsl(var(--muted-foreground))" fontFamily="var(--font-mono)">
-              {DOW_SHORT[i]}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
 
 function ProjectDot({ i }: { i: number }) {
   return (
@@ -93,55 +50,28 @@ export function EmployeeDashboard() {
   const today     = React.useMemo(todayISO, []);
   const weekStart = React.useMemo(weekStartISO, []);
 
-  // work reports this week (own)
-  const weekReports = useWorkReportList({
-    employee_id: employeeId ?? "",
-    project_id: "",
-    status: "",
-    from: weekStart,
-    to: today,
-    limit: 100,
-    offset: 0,
-  });
-
-  // recent reports (own, last 7)
+  // recent reports (own, latest 5)
   const recentReports = useWorkReportList({
     employee_id: employeeId ?? "",
     project_id: "",
     status: "",
     from: "",
     to: "",
-    limit: 7,
+    limit: 5,
     offset: 0,
   });
 
-  // active projects sidebar
+  // active projects (full-width section)
   const projects = useProjects({ q: "", status: "active", limit: 6, offset: 0 });
 
-  // ── KPI computations ──────────────────────────────────────────────────────
-  const weekItems  = weekReports.data?.items ?? [];
-  const hoursTotal = weekItems.reduce((s, r) => s + r.total_minutes, 0);
-  const submitted  = weekItems.filter((r) => r.status !== "draft").length;
-  const drafts     = weekItems.filter((r) => r.status === "draft").length;
-
-  // ── week chart data (Mon–Sun) ─────────────────────────────────────────────
-  const chartData = React.useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of weekItems) map.set(r.report_date, r.total_minutes);
-    return DOW_SHORT.map((_, i) => {
-      const d = new Date(weekStart);
-      d.setDate(d.getDate() + i);
-      const iso = d.toISOString().slice(0, 10);
-      return { date: iso, minutes: map.get(iso) ?? 0 };
-    });
-  }, [weekItems, weekStart]);
-
-  const weekLabel = React.useMemo(() => {
-    const start = new Date(weekStart);
-    const end   = new Date(weekStart);
-    end.setDate(end.getDate() + 6);
-    return `${start.toLocaleDateString([], { month: "short", day: "numeric" })} – ${end.toLocaleDateString([], { month: "short", day: "numeric" })}`;
-  }, [weekStart]);
+  // latest 5, sorted by report date descending
+  const recentItems = React.useMemo(
+    () =>
+      [...(recentReports.data?.items ?? [])]
+        .sort((a, b) => b.report_date.localeCompare(a.report_date))
+        .slice(0, 5),
+    [recentReports.data?.items],
+  );
 
   return (
     <>
@@ -158,19 +88,40 @@ export function EmployeeDashboard() {
         }
       />
 
-      <KpiGrid>
-        <Kpi
-          label="Hours logged this week"
-          value={formatMinutes(hoursTotal)}
-        />
-        <Kpi label="Reports this week" value={String(weekItems.length)} />
-        <Kpi label="Submitted" value={String(submitted)} />
-        <Kpi label="Drafts" value={String(drafts)} />
-      </KpiGrid>
+      <BenchmarkActivities />
 
-      {/* main two-column grid */}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        {/* recent reports */}
+      {/* active projects — full width */}
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-border px-5 py-3.5">
+          <CardTitle className="text-base">Active projects</CardTitle>
+        </CardHeader>
+        <CardContent className="p-2">
+          {projects.isLoading ? (
+            <div className="space-y-1 p-2">
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+            </div>
+          ) : (
+            (projects.data?.items ?? []).map((p, i) => (
+              <Link
+                key={p.id}
+                href={`/projects/${p.id}`}
+                className="flex items-center gap-3 rounded-md px-2.5 py-2.5 text-sm text-foreground transition-colors hover:bg-secondary"
+              >
+                <ProjectDot i={i} />
+                <span className="min-w-0 flex-1">{p.name}</span>
+                <span className="tabular shrink-0 text-xs text-muted-foreground">{p.code}</span>
+              </Link>
+            ))
+          )}
+          {!projects.isLoading && (projects.data?.items ?? []).length === 0 && (
+            <p className="px-3 py-4 text-sm text-muted-foreground">No active projects.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* recent reports + quick actions */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        {/* recent reports (latest 5) */}
         <Card className="overflow-hidden">
           <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
             <CardTitle className="text-base">Recent work reports</CardTitle>
@@ -187,13 +138,12 @@ export function EmployeeDashboard() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
-                  <TableHead>Projects</TableHead>
-                  <TableHead>Hours</TableHead>
+                  <TableHead>Project</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(recentReports.data?.items ?? []).map((r) => {
+                {recentItems.map((r) => {
                   const proj = projectSummary(r);
                   return (
                     <TableRow
@@ -203,19 +153,18 @@ export function EmployeeDashboard() {
                     >
                       <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                       <TableCell
-                        className="max-w-[240px] truncate text-sm text-muted-foreground"
+                        className="max-w-[320px] truncate text-sm text-muted-foreground"
                         title={proj.title}
                       >
                         {proj.label}
                       </TableCell>
-                      <TableCell className="tabular">{formatMinutes(r.total_minutes)}</TableCell>
                       <TableCell><StatusBadge status={r.status} /></TableCell>
                     </TableRow>
                   );
                 })}
-                {(recentReports.data?.items ?? []).length === 0 && (
+                {recentItems.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
                       No work reports yet.{" "}
                       <Link href="/work-reports/new" className="text-primary hover:underline">
                         Create your first report
@@ -226,54 +175,6 @@ export function EmployeeDashboard() {
               </TableBody>
             </Table>
           )}
-        </Card>
-
-        {/* my projects */}
-        <Card className="overflow-hidden">
-          <CardHeader className="border-b border-border px-5 py-3.5">
-            <CardTitle className="text-base">Active projects</CardTitle>
-          </CardHeader>
-          <CardContent className="p-2">
-            {projects.isLoading ? (
-              <div className="space-y-1 p-2">
-                {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
-              </div>
-            ) : (
-              (projects.data?.items ?? []).map((p, i) => (
-                <Link
-                  key={p.id}
-                  href={`/projects/${p.id}`}
-                  className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-secondary"
-                >
-                  <ProjectDot i={i} />
-                  <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                  <span className="tabular text-xs text-muted-foreground">{p.code}</span>
-                </Link>
-              ))
-            )}
-            {!projects.isLoading && (projects.data?.items ?? []).length === 0 && (
-              <p className="px-3 py-4 text-sm text-muted-foreground">No active projects.</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* bottom two-column grid */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        {/* hours chart */}
-        <Card>
-          <CardHeader className="border-b border-border px-5 py-3.5">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Hours this week</CardTitle>
-              <span className="text-xs text-muted-foreground">{weekLabel}</span>
-            </div>
-          </CardHeader>
-          <CardContent className="px-5 pb-4 pt-4">
-            {weekReports.isLoading
-              ? <Skeleton className="h-[180px] w-full" />
-              : <WeekBars data={chartData} />
-            }
-          </CardContent>
         </Card>
 
         {/* quick actions */}
@@ -292,7 +193,10 @@ export function EmployeeDashboard() {
                 <Link href="/attendance"><ArrowRight className="h-4 w-4" /> View attendance</Link>
               </Button>
               <Button asChild className="justify-start" variant="secondary">
-                <Link href="/reports"><ArrowRight className="h-4 w-4" /> All my reports</Link>
+                <Link href="/reports"><FileText className="h-4 w-4" /> All my reports</Link>
+              </Button>
+              <Button asChild className="justify-start" variant="secondary">
+                <Link href="/attendance?leave=request"><CalendarOff className="h-4 w-4" /> Leave request</Link>
               </Button>
             </div>
           </CardContent>
