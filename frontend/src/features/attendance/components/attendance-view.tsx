@@ -14,6 +14,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { useAuth } from "@/features/auth/auth-provider";
 import { LeaveRequestDialog } from "@/features/leave/components/leave-request-dialog";
 import { LeaveTab } from "@/features/leave/components/leave-tab";
+import { features } from "@/lib/env";
 import { can } from "@/lib/rbac";
 
 import { HolidayManager } from "@/features/calendar/components/holiday-manager";
@@ -68,7 +69,7 @@ export function AttendanceView() {
     <>
       <PageHeader
         title="Attendance"
-        subtitle="Track presence, shifts, and leave. Corrections can be requested up to 7 days back."
+        subtitle="Track presence, shifts, and leave."
         actions={actions}
       />
 
@@ -82,7 +83,12 @@ export function AttendanceView() {
           { value: "calendar", label: "Calendar" },
           { value: "history", label: "History" },
           { value: "leave", label: "Leave" },
-          { value: "corrections", label: "Corrections" },
+          // Corrections is deferred until biometric / automated attendance
+          // capture exists (attendance is entered manually today). Hidden
+          // behind a feature flag; see features.attendanceCorrections.
+          ...(features.attendanceCorrections
+            ? [{ value: "corrections", label: "Corrections" }]
+            : []),
           { value: "holidays", label: "Holidays" },
         ]}
       />
@@ -98,7 +104,7 @@ export function AttendanceView() {
         ))}
       {tab === "history" && <AttendanceHistory />}
       {tab === "leave" && <LeaveTab />}
-      {tab === "corrections" && <CorrectionsPreview />}
+      {features.attendanceCorrections && tab === "corrections" && <CorrectionsPreview />}
       {tab === "holidays" && <HolidayManager />}
 
       {/* Request Leave modal */}
