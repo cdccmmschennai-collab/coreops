@@ -16,6 +16,7 @@ class ProjectOut(BaseModel):
     job_code_id: uuid.UUID | None = None
     job_code_code: str | None = None   # populated by service join
     job_code_name: str | None = None   # populated by service join
+    planning_plant_id: uuid.UUID | None = None
     maintenance_plant_id: uuid.UUID | None = None
     maintenance_plant_code: str | None = None          # populated by service join
     maintenance_plant_description: str | None = None   # populated by service join
@@ -36,6 +37,7 @@ class ProjectCreate(BaseModel):
     code: str = Field(min_length=1)
     name: str = Field(min_length=1)
     job_code: str | None = None   # free text; resolved to a JobCode by the service
+    planning_plant_id: uuid.UUID | None = None   # project master link to a Planning Plant
     maintenance_plant_id: uuid.UUID | None = None
     client: str | None = None
     description: str | None = None
@@ -49,6 +51,7 @@ class ProjectUpdate(BaseModel):
     code: str | None = Field(default=None, min_length=1)
     name: str | None = Field(default=None, min_length=1)
     job_code: str | None = None   # free text; resolved to a JobCode by the service
+    planning_plant_id: uuid.UUID | None = None   # project master link to a Planning Plant
     maintenance_plant_id: uuid.UUID | None = None
     client: str | None = None
     description: str | None = None

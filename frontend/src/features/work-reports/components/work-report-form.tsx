@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm } from "react-hook-form";
+import { useFieldArray, useForm, type Control } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -79,6 +79,82 @@ function addDays(isoDate: string, days: number): string | null {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Maintenance Plant picker for one task row. The options are scoped to the
+ * selected project's Planning Plant — the dropdown reloads (a fresh,
+ * planning-plant-filtered fetch) whenever that code changes, so a user never
+ * sees Maintenance Plants from other Planning Plants. Planning Plant +
+ * Description (PP) are determined by the project and shown read-only.
+ */
+function MaintenancePlantField({
+  control,
+  index,
+  planningPlantCode,
+  planningPlantDescription,
+}: {
+  control: Control<WorkReportFormValues>;
+  index: number;
+  planningPlantCode?: string;
+  planningPlantDescription?: string;
+}) {
+  const hasPlanningPlant = !!planningPlantCode;
+  const { options, isLoading } = useMaintenancePlantOptions(
+    true,
+    planningPlantCode,
+    hasPlanningPlant,
+  );
+
+  return (
+    <>
+      <FormField
+        control={control}
+        name={`tasks.${index}.maintenance_plant_id`}
+        render={({ field: f }) => (
+          <FormItem className="min-w-0">
+            <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
+              Maintenance Plant <span className="text-destructive">*</span>
+            </FormLabel>
+            <FormControl>
+              <Combobox
+                value={f.value || ""}
+                onValueChange={f.onChange}
+                options={options}
+                placeholder={
+                  hasPlanningPlant
+                    ? isLoading
+                      ? "Loading plants…"
+                      : "Select plant…"
+                    : "Select a project first"
+                }
+                searchPlaceholder="Search maintenance plants…"
+                emptyMessage="No plants for this Planning Plant."
+                disabled={!hasPlanningPlant}
+              />
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        )}
+      />
+      <div className="space-y-2">
+        <span className="block text-xs font-medium leading-none text-muted-foreground">
+          Planning Plant
+        </span>
+        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+          {planningPlantCode ?? "—"}
+        </div>
+      </div>
+      <div className="space-y-2">
+        <span className="block text-xs font-medium leading-none text-muted-foreground">
+          Description (PP)
+        </span>
+        <div className="flex h-9 items-center truncate rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
+          {planningPlantDescription ?? "—"}
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
@@ -88,7 +164,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const { items: projects, byId: projById } = useProjectOptions();
   const { data: activities } = useActivities(true);
   const { items: subActivities, byId: subActivityById } = useSubActivityOptions();
-  const { options: maintenancePlantOptions, byId: maintenancePlantById } = useMaintenancePlantOptions();
 
   const employeeName = employeeId ? (empById.get(employeeId) ?? "—") : "—";
 
@@ -191,6 +266,18 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
   const watchedTasks = form.watch("tasks");
   const reportDate = form.watch("report_date");
+
+  // Reset a row's Maintenance Plant selection (and its derived snapshots) —
+  // called whenever the row's project changes, since the available plants are
+  // scoped to the new project's Planning Plant.
+  const clearRowPlant = React.useCallback(
+    (index: number) => {
+      form.setValue(`tasks.${index}.maintenance_plant_id`, "");
+      form.setValue(`tasks.${index}.planning_plant_code`, undefined);
+      form.setValue(`tasks.${index}.planning_plant_description`, undefined);
+    },
+    [form],
+  );
 
   // One report per employee per day: in create mode, look up whether the
   // selected date already has a report (backend also enforces this with a
@@ -429,11 +516,15 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                   f.onChange(v);
                                   const t = v ? myTaskById.get(v) : undefined;
                                   if (t?.project_id) {
+                                    const current = form.getValues(`tasks.${index}.project_id`);
                                     form.setValue(
                                       `tasks.${index}.project_id`,
                                       t.project_id,
                                       { shouldValidate: true },
                                     );
+                                    // Picking a task can switch the project (and thus
+                                    // its Planning Plant) — clear the stale plant.
+                                    if (current !== t.project_id) clearRowPlant(index);
                                   }
                                 }}
                                 options={taskOptions}
@@ -476,7 +567,14 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                             <FormControl>
                               <Combobox
                                 value={f.value}
-                                onValueChange={f.onChange}
+                                onValueChange={(v) => {
+                                  const changed = v !== f.value;
+                                  f.onChange(v);
+                                  // Maintenance Plant options depend on the project's
+                                  // Planning Plant — clear any prior selection so a
+                                  // plant from the old Planning Plant can't linger.
+                                  if (changed) clearRowPlant(index);
+                                }}
                                 options={projectOptions}
                                 placeholder="Select project…"
                                 searchPlaceholder="Search by name or code…"
@@ -511,70 +609,28 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
                     </div>
 
-                    {/* Row A2: Maintenance Plant — pick directly (searchable, like
-                        Activity/Sub-Activity); Planning Plant code/description
-                        auto-derive, read-only. Independent of the project's own
-                        assigned plant — which plant the employee actually worked
-                        at that day. Maintenance Plant lines up under Project Name,
-                        Planning Plant under Project Code, with Description (PP)
-                        spanning the remaining width. */}
+                    {/* Row A2: Maintenance Plant — scoped to the selected project's
+                        Planning Plant (the dropdown refetches when the project's
+                        Planning Plant changes; a user never sees plants from other
+                        Planning Plants). Planning Plant + Description (PP) are
+                        determined by the project and shown read-only. Maintenance
+                        Plant lines up under Project Name, Planning Plant under
+                        Project Code, Description (PP) spans the remaining width. */}
                     <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)]">
-                      {(() => {
-                        const selectedPlantId = watchedTasks?.[index]?.maintenance_plant_id;
-                        const selectedPlant = selectedPlantId
-                          ? maintenancePlantById.get(selectedPlantId)
-                          : undefined;
-                        const planningPlantCode =
-                          selectedPlant?.planning_plant_code
+                      <MaintenancePlantField
+                        control={form.control}
+                        index={index}
+                        planningPlantCode={
+                          selectedProject?.planning_plant_code
                           ?? watchedTasks?.[index]?.planning_plant_code
-                          ?? "—";
-                        const planningPlantDescription =
-                          selectedPlant?.planning_plant_description
+                          ?? undefined
+                        }
+                        planningPlantDescription={
+                          selectedProject?.planning_plant_description
                           ?? watchedTasks?.[index]?.planning_plant_description
-                          ?? "—";
-                        return (
-                          <>
-                            <FormField
-                              control={form.control}
-                              name={`tasks.${index}.maintenance_plant_id`}
-                              render={({ field: f }) => (
-                                <FormItem className="min-w-0">
-                                  <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
-                                    Maintenance Plant <span className="text-destructive">*</span>
-                                  </FormLabel>
-                                  <FormControl>
-                                    <Combobox
-                                      value={f.value || ""}
-                                      onValueChange={f.onChange}
-                                      options={maintenancePlantOptions}
-                                      placeholder="Select plant…"
-                                      searchPlaceholder="Search maintenance plants…"
-                                      emptyMessage="No matching plants."
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                            <div className="space-y-2">
-                              <span className="block text-xs font-medium leading-none text-muted-foreground">
-                                Planning Plant
-                              </span>
-                              <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-                                {planningPlantCode}
-                              </div>
-                            </div>
-                            <div className="space-y-2">
-                              <span className="block text-xs font-medium leading-none text-muted-foreground">
-                                Description (PP)
-                              </span>
-                              <div className="flex h-9 items-center truncate rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
-                                {planningPlantDescription}
-                              </div>
-                            </div>
-                          </>
-                        );
-                      })()}
+                          ?? undefined
+                        }
+                      />
                     </div>
 
                     {/* Row B: Activity (25%) | Sub-Activity (75%) — own full-width row

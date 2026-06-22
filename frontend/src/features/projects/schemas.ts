@@ -23,8 +23,10 @@ export const projectFormSchema = z
     code: z.string().trim().min(1, "Project code is required"),
     name: z.string().trim().min(1, "Project name is required"),
     job_code: z.string().trim().optional().default(""),
-    // Maintenance Plant is the only real selection; Planning Plant code +
-    // description are display-only, derived client-side from it.
+    // A project belongs to a Planning Plant (project master). Description (PP)
+    // is display-only, derived client-side from the selected Planning Plant.
+    planning_plant_id: z.string().optional().default(""),
+    // Maintenance Plant — scoped to the selected Planning Plant's plants.
     maintenance_plant_id: z.string().optional().default(""),
     client: z.string().trim(),
     description: z.string().trim(),
@@ -49,6 +51,7 @@ export const EMPTY_PROJECT_FORM: ProjectFormValues = {
   code: "",
   name: "",
   job_code: "",
+  planning_plant_id: "",
   maintenance_plant_id: "",
   client: "",
   description: "",
@@ -65,6 +68,7 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
     code: v.code,
     name: v.name,
     job_code: orNull(v.job_code),
+    planning_plant_id: orNull(v.planning_plant_id),
     maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
     client: orNull(v.client),
@@ -85,6 +89,7 @@ export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
     code: v.code,
     name: v.name,
     job_code: orNull(v.job_code),
+    planning_plant_id: orNull(v.planning_plant_id),
     maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
     client: orNull(v.client),

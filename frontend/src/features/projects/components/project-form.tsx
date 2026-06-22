@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
+import { useMaintenancePlantOptions, usePlanningPlants } from "@/features/plant-master/hooks";
 import { AppError } from "@/lib/api-client";
 
 import { useCreateProject, useUpdateProject } from "../hooks";
@@ -58,11 +58,26 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
   const updateMutation = useUpdateProject(projectId ?? "");
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const { options: maintenancePlantOptions, byId: maintenancePlantById } = useMaintenancePlantOptions();
-  const watchedMaintenancePlantId = form.watch("maintenance_plant_id");
-  const selectedMaintenancePlant = watchedMaintenancePlantId
-    ? maintenancePlantById.get(watchedMaintenancePlantId)
+  const { data: planningPlants } = usePlanningPlants();
+  const planningPlantOptions = React.useMemo(
+    () =>
+      (planningPlants ?? []).map((pp) => ({
+        value: pp.id,
+        label: pp.code,
+        sublabel: pp.description,
+      })),
+    [planningPlants],
+  );
+  const watchedPlanningPlantId = form.watch("planning_plant_id");
+  const selectedPlanningPlant = watchedPlanningPlantId
+    ? (planningPlants ?? []).find((pp) => pp.id === watchedPlanningPlantId)
     : undefined;
+
+  // Maintenance Plant options scoped to the selected Planning Plant — refetched
+  // whenever the Planning Plant code changes; disabled until one is chosen.
+  const planningPlantCode = selectedPlanningPlant?.code;
+  const { options: maintenancePlantOptions, isLoading: maintenancePlantsLoading } =
+    useMaintenancePlantOptions(true, planningPlantCode, !!planningPlantCode);
 
   function handleError(error: unknown) {
     if (error instanceof AppError) {
@@ -191,9 +206,50 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                 )}
               />
 
-              {/* Maintenance Plant — pick directly (searchable, ~100 options);
-                  Planning Plant code/description auto-derive, read-only. */}
+              {/* Planning Plant + Maintenance Plant. A project belongs to one
+                  Planning Plant (project master); the Maintenance Plant dropdown is
+                  scoped to that Planning Plant's plants and reloads when it changes.
+                  Description (PP) auto-derives from the Planning Plant, read-only. */}
               <div className="grid gap-4 sm:col-span-2 sm:grid-cols-3">
+                <FormField
+                  control={form.control}
+                  name="planning_plant_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="block text-sm font-medium leading-none text-muted-foreground">
+                        Planning Plant
+                      </FormLabel>
+                      <FormControl>
+                        <Combobox
+                          value={field.value || ""}
+                          onValueChange={(v) => {
+                            const changed = v !== field.value;
+                            field.onChange(v);
+                            // Maintenance Plants depend on the Planning Plant — clear
+                            // any prior selection so a plant from the old PP can't linger.
+                            if (changed) form.setValue("maintenance_plant_id", "");
+                          }}
+                          options={planningPlantOptions}
+                          placeholder="Select planning plant…"
+                          searchPlaceholder="Search planning plants…"
+                          emptyMessage="No matching plants."
+                          allowClear
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium leading-none text-muted-foreground">
+                    Description (PP)
+                  </label>
+                  <Input
+                    value={selectedPlanningPlant?.description ?? ""}
+                    disabled
+                    readOnly
+                  />
+                </div>
                 <FormField
                   control={form.control}
                   name="maintenance_plant_id"
@@ -207,31 +263,23 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                           value={field.value || ""}
                           onValueChange={field.onChange}
                           options={maintenancePlantOptions}
-                          placeholder="Select plant…"
+                          placeholder={
+                            planningPlantCode
+                              ? maintenancePlantsLoading
+                                ? "Loading plants…"
+                                : "Select plant…"
+                              : "Select a planning plant first"
+                          }
                           searchPlaceholder="Search maintenance plants…"
-                          emptyMessage="No matching plants."
+                          emptyMessage="No plants for this Planning Plant."
+                          disabled={!planningPlantCode}
+                          allowClear
                         />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
                   )}
                 />
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium leading-none text-muted-foreground">
-                    Planning Plant
-                  </label>
-                  <Input value={selectedMaintenancePlant?.planning_plant_code ?? ""} disabled readOnly />
-                </div>
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium leading-none text-muted-foreground">
-                    Description (PP)
-                  </label>
-                  <Input
-                    value={selectedMaintenancePlant?.planning_plant_description ?? ""}
-                    disabled
-                    readOnly
-                  />
-                </div>
               </div>
 
               {/* Dates */}

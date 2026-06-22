@@ -616,6 +616,57 @@ export interface paths {
         patch: operations["update_task_completion_api_v1_work_reports_tasks__task_id__completion_patch"];
         trace?: never;
     };
+    "/api/v1/reports-export/activity-rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity Rows */
+        get: operations["activity_rows_api_v1_reports_export_activity_rows_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports-export/activity-rows.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Activity Rows Xlsx */
+        get: operations["activity_rows_xlsx_api_v1_reports_export_activity_rows_xlsx_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/report-compliance/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Compliance */
+        get: operations["my_compliance_api_v1_report_compliance_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/offices": {
         parameters: {
             query?: never;
@@ -968,6 +1019,103 @@ export interface paths {
         head?: never;
         /** Update Sub Activity */
         patch: operations["update_sub_activity_api_v1_activity_master_sub_activities__activity_master_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/benchmarks/my-alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Alerts */
+        get: operations["my_alerts_api_v1_benchmarks_my_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/team-alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Team Alerts */
+        get: operations["team_alerts_api_v1_benchmarks_team_alerts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/employees-performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Employees Performance
+         * @description Layer 1 — comparison table. Comparison columns only (reuses the frozen
+         *     _employee_comparison rollup); no overview/analytics fields here.
+         */
+        get: operations["employees_performance_api_v1_benchmarks_employees_performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/employees/{employee_id}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Employee Overview
+         * @description Layer 2/3 — shared overview aggregation for the drawer and the route's
+         *     Overview tab.
+         */
+        get: operations["employee_overview_api_v1_benchmarks_employees__employee_id__overview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/employees/{employee_id}/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Employee Benchmarks
+         * @description Layer 3 Benchmarks tab — full weekly ledger + overdue for one employee,
+         *     so the client reconciles backlog (same logic as the employee's own widget).
+         */
+        get: operations["employee_benchmarks_api_v1_benchmarks_employees__employee_id__benchmarks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/job-codes": {
@@ -1335,6 +1483,23 @@ export interface components {
             /** Is Active */
             is_active: boolean;
         };
+        /** ActivityCell */
+        ActivityCell: {
+            /** Project Code */
+            project_code: string | null;
+            /** Activity Type */
+            activity_type: string | null;
+            /** Sub Activity Type */
+            sub_activity_type: string | null;
+            /** Tags */
+            tags: number;
+            /** Docs */
+            docs: number;
+            /** Bom */
+            bom: number;
+            /** Spares */
+            spares: number;
+        };
         /**
          * ActivityCreate
          * @description Top-level Activity. parent_id is implicit (None) — never accepted here.
@@ -1418,6 +1583,29 @@ export interface components {
             sort_order?: number | null;
             /** Is Active */
             is_active?: boolean | null;
+        };
+        /** ActivityReportOut */
+        ActivityReportOut: {
+            /** Max Activities */
+            max_activities: number;
+            /** Rows */
+            rows: components["schemas"]["ActivityRow"][];
+        };
+        /** ActivityRow */
+        ActivityRow: {
+            /** Employee Label */
+            employee_label: string;
+            /**
+             * Report Date
+             * Format: date
+             */
+            report_date: string;
+            /** Day Status */
+            day_status: string | null;
+            /** Remarks */
+            remarks: string | null;
+            /** Activities */
+            activities: components["schemas"]["ActivityCell"][];
         };
         /** ActivityTypeCreate */
         ActivityTypeCreate: {
@@ -1694,7 +1882,7 @@ export interface components {
          * CalendarEventType
          * @enum {string}
          */
-        CalendarEventType: "holiday" | "event";
+        CalendarEventType: "holiday" | "cdc_holiday" | "natural_hazard" | "working_day" | "event";
         /** CalendarEventUpdate */
         CalendarEventUpdate: {
             /** Event Date */
@@ -1714,6 +1902,44 @@ export interface components {
             current_password: string;
             /** New Password */
             new_password: string;
+        };
+        /**
+         * DailyBenchmarkRowOut
+         * @description One row of 'My Alerts' / 'Team Benchmark Backlog' — a single day's
+         *     actual/target/pending for one NUMERIC sub-activity, with pending > 0
+         *     (a clean day doesn't show up in this list, though it still counts
+         *     toward the weekly productivity %). `sub_activity_name` is the "Activity
+         *     Name" shown in the UI examples (e.g. "FMTL Rework").
+         */
+        DailyBenchmarkRowOut: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /** Activity Name */
+            activity_name: string | null;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /** Project Name */
+            project_name: string | null;
+            /** Project Code */
+            project_code: string | null;
+            /** Hours Minutes */
+            hours_minutes: number;
+            /** Actual */
+            actual: string;
+            /** Target */
+            target: string;
+            /** Pending */
+            pending: string;
+            /** Benchmark Unit */
+            benchmark_unit: string | null;
         };
         /**
          * DayStatus
@@ -1794,6 +2020,35 @@ export interface components {
             /** Completion Date */
             completion_date?: string | null;
         };
+        /**
+         * EmployeeBenchmarksOut
+         * @description One employee's FULL weekly daily ledger (every NUMERIC sub-activity day,
+         *     not just the pending ones) + overdue, so the client can run the same
+         *     backlog reconciliation the employee's own widget does — later-day surplus
+         *     paying down earlier deficits. Raw per-day pending lives in `daily`;
+         *     reconciliation is applied client-side (display only).
+         */
+        EmployeeBenchmarksOut: {
+            /** Daily */
+            daily: components["schemas"]["DailyBenchmarkRowOut"][];
+            /** Overdue */
+            overdue: components["schemas"]["OverdueActivityOut"][];
+        };
+        /**
+         * EmployeeComplianceOut
+         * @description The acting employee's own report-compliance snapshot for today plus
+         *     any unfiled previous working days (within the editable submission window).
+         */
+        EmployeeComplianceOut: {
+            /** Has Attendance Today */
+            has_attendance_today: boolean;
+            /** Has Report Today */
+            has_report_today: boolean;
+            /** Pending Count */
+            pending_count: number;
+            /** Pending Dates */
+            pending_dates: string[];
+        };
         /** EmployeeCreate */
         EmployeeCreate: {
             /** Employee Code */
@@ -1863,6 +2118,30 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * EmployeeOverviewOut
+         * @description Shared payload for Layer 2 (drawer) + Layer 3 (Overview tab). Single
+         *     source so the two surfaces can never diverge.
+         */
+        EmployeeOverviewOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Productivity Pct */
+            productivity_pct: string | null;
+            /** Days Worked This Week */
+            days_worked_this_week: number;
+            /** Completed Benchmarks */
+            completed_benchmarks: number;
+            /** Pending Benchmarks */
+            pending_benchmarks: number;
+            /** Overdue Activities */
+            overdue_activities: number;
+        };
         /** EmployeePage */
         EmployeePage: {
             /** Items */
@@ -1873,6 +2152,35 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /**
+         * EmployeePerformanceRowOut
+         * @description One row of the PM comparison table (Layer 1). Comparison columns ONLY —
+         *     inspection/overview fields deliberately live on EmployeeOverviewOut so the
+         *     table can't grow into an analytics surface. `productivity` is None when the
+         *     employee logged no NUMERIC benchmark work this week; `status` is derived
+         *     from it via the frozen thresholds in service._status_from_pct.
+         */
+        EmployeePerformanceRowOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Target */
+            target: string;
+            /** Actual */
+            actual: string;
+            /** Pending */
+            pending: string;
+            /** Productivity */
+            productivity: string | null;
+            /** Status */
+            status: string;
         };
         /**
          * EmployeeProfile
@@ -1945,6 +2253,17 @@ export interface components {
             /** Date Of Joining */
             date_of_joining?: string | null;
             status?: components["schemas"]["EmployeeStatus"] | null;
+        };
+        /** EmployeesPerformancePageOut */
+        EmployeesPerformancePageOut: {
+            /** Items */
+            items: components["schemas"]["EmployeePerformanceRowOut"][];
+            /** Total */
+            total: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -2156,6 +2475,27 @@ export interface components {
             /** Employee Id */
             employee_id?: string | null;
         };
+        /** MyAlertsOut */
+        MyAlertsOut: {
+            /** Shortfalls */
+            shortfalls: components["schemas"]["DailyBenchmarkRowOut"][];
+            /** Daily */
+            daily: components["schemas"]["DailyBenchmarkRowOut"][];
+            /** Overdue */
+            overdue: components["schemas"]["OverdueActivityOut"][];
+            /** Tasks */
+            tasks: components["schemas"]["TaskStatusOut"][];
+            summary: components["schemas"]["MyAlertsSummaryOut"];
+        };
+        /** MyAlertsSummaryOut */
+        MyAlertsSummaryOut: {
+            /** Pending Benchmarks Count */
+            pending_benchmarks_count: number;
+            /** Overdue Activities Count */
+            overdue_activities_count: number;
+            /** Productivity Pct */
+            productivity_pct: string | null;
+        };
         /** NotificationOut */
         NotificationOut: {
             /**
@@ -2289,6 +2629,36 @@ export interface components {
             break_minutes?: number | null;
             /** Is Active */
             is_active?: boolean | null;
+        };
+        /**
+         * OverdueActivityOut
+         * @description One row of 'My Alerts' / 'Team Overdue Activities' — a TASK_BASED
+         *     work-report-task row past its due_date and not completed.
+         */
+        OverdueActivityOut: {
+            /**
+             * Work Report Task Id
+             * Format: uuid
+             */
+            work_report_task_id: string;
+            /** Activity Name */
+            activity_name: string | null;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /** Project Code */
+            project_code: string | null;
+            /**
+             * Report Date
+             * Format: date
+             */
+            report_date: string;
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            /** Days Overdue */
+            days_overdue: number;
         };
         /** PasswordUpdate */
         PasswordUpdate: {
@@ -2453,6 +2823,8 @@ export interface components {
             name: string;
             /** Job Code */
             job_code?: string | null;
+            /** Planning Plant Id */
+            planning_plant_id?: string | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
             /** Client */
@@ -2530,6 +2902,8 @@ export interface components {
             job_code_code?: string | null;
             /** Job Code Name */
             job_code_name?: string | null;
+            /** Planning Plant Id */
+            planning_plant_id?: string | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
             /** Maintenance Plant Code */
@@ -2588,6 +2962,8 @@ export interface components {
             name?: string | null;
             /** Job Code */
             job_code?: string | null;
+            /** Planning Plant Id */
+            planning_plant_id?: string | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
             /** Client */
@@ -2908,6 +3284,46 @@ export interface components {
          * @enum {string}
          */
         TaskStatus: "open" | "in_progress" | "completed" | "cancelled";
+        /**
+         * TaskStatusOut
+         * @description One row of 'My Alerts' / 'Overdue Tasks' panel — a TASK_BASED
+         *     work-report-task row, broader than OverdueActivityOut: also covers
+         *     due-today and rows completed this week, with `status` driving the
+         *     Pending/Due Today/Completed badge in the UI.
+         */
+        TaskStatusOut: {
+            /**
+             * Work Report Task Id
+             * Format: uuid
+             */
+            work_report_task_id: string;
+            /** Activity Name */
+            activity_name: string | null;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /** Project Name */
+            project_name: string | null;
+            /** Project Code */
+            project_code: string | null;
+            /**
+             * Report Date
+             * Format: date
+             */
+            report_date: string;
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            /** Completed Date */
+            completed_date: string | null;
+            /** Hours Minutes */
+            hours_minutes: number;
+            /** Status */
+            status: string;
+            /** Days Overdue */
+            days_overdue: number;
+        };
         /** TaskStatusUpdate */
         TaskStatusUpdate: {
             status: components["schemas"]["TaskStatus"];
@@ -2924,6 +3340,99 @@ export interface components {
             /** Due Date */
             due_date?: string | null;
             status?: components["schemas"]["TaskStatus"] | null;
+        };
+        /** TeamAlertsOut */
+        TeamAlertsOut: {
+            /** Comparison */
+            comparison: components["schemas"]["TeamComparisonRowOut"][];
+            /** Backlog */
+            backlog: components["schemas"]["TeamBacklogRowOut"][];
+            /** Overdue */
+            overdue: components["schemas"]["TeamOverdueRowOut"][];
+            kpis: components["schemas"]["TeamKpisOut"];
+        };
+        /** TeamBacklogRowOut */
+        TeamBacklogRowOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Name */
+            employee_name: string;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Activity Name */
+            activity_name: string | null;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /** Actual */
+            actual: string;
+            /** Target */
+            target: string;
+            /** Pending */
+            pending: string;
+            /** Benchmark Unit */
+            benchmark_unit: string | null;
+        };
+        /**
+         * TeamComparisonRowOut
+         * @description One row of the PM 'compare employee performance' table — an employee's
+         *     weekly benchmark rollup (summed target/actual/pending + productivity %).
+         *     productivity_pct is None when the employee logged no NUMERIC benchmark
+         *     work this week (no target to measure against).
+         */
+        TeamComparisonRowOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Target */
+            target: string;
+            /** Actual */
+            actual: string;
+            /** Pending */
+            pending: string;
+            /** Productivity Pct */
+            productivity_pct: string | null;
+        };
+        /** TeamKpisOut */
+        TeamKpisOut: {
+            /** Total Employees */
+            total_employees: number;
+            /** Weekly Productivity Pct */
+            weekly_productivity_pct: string | null;
+            /** Total Pending Benchmarks */
+            total_pending_benchmarks: number;
+            /** Total Overdue Activities */
+            total_overdue_activities: number;
+        };
+        /** TeamOverdueRowOut */
+        TeamOverdueRowOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Activity Name */
+            activity_name: string | null;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            /** Days Overdue */
+            days_overdue: number;
         };
         /** TimelineEventOut */
         TimelineEventOut: {
@@ -5030,6 +5539,98 @@ export interface operations {
             };
         };
     };
+    activity_rows_api_v1_reports_export_activity_rows_get: {
+        parameters: {
+            query?: {
+                employee_id?: string | null;
+                project_id?: string | null;
+                activity_id?: string | null;
+                sub_activity_id?: string | null;
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    activity_rows_xlsx_api_v1_reports_export_activity_rows_xlsx_get: {
+        parameters: {
+            query?: {
+                employee_id?: string | null;
+                project_id?: string | null;
+                activity_id?: string | null;
+                sub_activity_id?: string | null;
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_compliance_api_v1_report_compliance_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeComplianceOut"];
+                };
+            };
+        };
+    };
     list_offices_api_v1_offices_get: {
         parameters: {
             query?: {
@@ -6124,6 +6725,143 @@ export interface operations {
             };
         };
     };
+    my_alerts_api_v1_benchmarks_my_alerts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyAlertsOut"];
+                };
+            };
+        };
+    };
+    team_alerts_api_v1_benchmarks_team_alerts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamAlertsOut"];
+                };
+            };
+        };
+    };
+    employees_performance_api_v1_benchmarks_employees_performance_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                search?: string;
+                sort?: string;
+                order?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeesPerformancePageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    employee_overview_api_v1_benchmarks_employees__employee_id__overview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeOverviewOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    employee_benchmarks_api_v1_benchmarks_employees__employee_id__benchmarks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeBenchmarksOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_job_codes_api_v1_job_codes_get: {
         parameters: {
             query?: {
@@ -6844,7 +7582,7 @@ export interface operations {
     list_tasks_api_v1_tasks_get: {
         parameters: {
             query?: {
-                mine?: boolean;
+                mine?: boolean | null;
                 q?: string | null;
                 status?: components["schemas"]["TaskStatus"] | null;
                 priority?: components["schemas"]["TaskPriority"] | null;
@@ -7068,6 +7806,8 @@ export interface operations {
         parameters: {
             query?: {
                 active_only?: boolean;
+                /** @description Return only Maintenance Plants belonging to this Planning Plant code (e.g. '2400'). Used by the project-scoped dropdown on the work-report form. */
+                planning_plant_code?: string | null;
             };
             header?: never;
             path?: never;

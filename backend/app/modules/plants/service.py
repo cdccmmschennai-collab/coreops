@@ -22,13 +22,26 @@ def list_planning_plants(db: Session, *, active_only: bool = True) -> list[Plann
     return list(db.execute(stmt).scalars().all())
 
 
-def list_maintenance_plants(db: Session, *, active_only: bool = True) -> list[dict]:
+def list_maintenance_plants(
+    db: Session,
+    *,
+    active_only: bool = True,
+    planning_plant_code: str | None = None,
+) -> list[dict]:
+    """List Maintenance Plants, flattened with their parent Planning Plant.
+
+    When `planning_plant_code` is given, only the Maintenance Plants belonging
+    to that Planning Plant are returned — the project-scoped dropdown for the
+    work-report form (a user must never see plants from other Planning Plants).
+    """
     Parent = aliased(PlanningPlant)
     stmt = select(MaintenancePlant, Parent.code, Parent.description).join(
         Parent, MaintenancePlant.planning_plant_id == Parent.id
     )
     if active_only:
         stmt = stmt.where(MaintenancePlant.is_active.is_(True), Parent.is_active.is_(True))
+    if planning_plant_code is not None:
+        stmt = stmt.where(Parent.code == planning_plant_code.strip())
     stmt = stmt.order_by(Parent.code, MaintenancePlant.code)
     rows = db.execute(stmt).all()
     return [
