@@ -106,7 +106,7 @@ export function HolidayManager() {
                 size="sm"
                 onClick={() => setAdding((v) => !v)}
               >
-                <Plus className="h-4 w-4" />
+                {!adding && <Plus className="h-4 w-4" />}
                 {adding ? "Cancel" : "New Entry"}
               </Button>
             </div>
