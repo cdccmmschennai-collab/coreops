@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Pencil, Trash2, X } from "lucide-react";
 import { useForm } from "react-hook-form";
@@ -387,7 +388,12 @@ export function DeliverablesTab({ projectId, projectArchived }: DeliverableTabPr
                 {deliverables.map((d) => (
                   <TableRow key={d.id}>
                     <TableCell className="font-medium">
-                      <div>{d.name}</div>
+                      <Link
+                        href={`/projects/deliverables/${d.id}`}
+                        className="text-primary hover:underline"
+                      >
+                        {d.name}
+                      </Link>
                       {d.description && (
                         <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
                           {d.description}

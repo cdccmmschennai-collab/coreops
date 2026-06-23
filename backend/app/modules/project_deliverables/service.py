@@ -7,13 +7,21 @@ RBAC:
   non-member       no access
 """
 import uuid
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.audit import service as audit
+from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
-from app.modules.project_deliverables.models import DeliverableStatus, ProjectDeliverable
+from app.modules.project_deliverables.models import (
+    DeliverableChange,
+    DeliverableChangeField,
+    DeliverableStatus,
+    ProjectDeliverable,
+)
 from app.modules.project_deliverables.schemas import DeliverableCreate, DeliverableUpdate
 from app.modules.projects.models import Project, ProjectMember, ProjectMemberRole
 from app.modules.users.models import User, UserRole
@@ -190,6 +198,10 @@ def create_deliverable(
     return d
 
 
+def _date_str(value: date | None) -> str | None:
+    return value.isoformat() if value else None
+
+
 def update_deliverable(
     db: Session,
     actor: User,
@@ -201,12 +213,119 @@ def update_deliverable(
     _assert_can_manage(db, actor, project_id)
 
     d = _fetch_deliverable(db, project_id, deliverable_id)
-    for field, value in data.model_dump(exclude_unset=True).items():
+
+    payload = data.model_dump(exclude_unset=True)
+    raw_reason = payload.pop("reason", None)
+    reason = raw_reason.strip() if isinstance(raw_reason, str) else None
+
+    # Detect tracked changes (planned start date, due date, status reversal)
+    # against the current values before applying the update.
+    tracked: list[tuple[str, str | None, str | None]] = []
+
+    if "planned_start_date" in payload and payload["planned_start_date"] != d.planned_start_date:
+        tracked.append((
+            DeliverableChangeField.PLANNED_START_DATE,
+            _date_str(d.planned_start_date),
+            _date_str(payload["planned_start_date"]),
+        ))
+
+    if "target_date" in payload and payload["target_date"] != d.target_date:
+        tracked.append((
+            DeliverableChangeField.DUE_DATE,
+            _date_str(d.target_date),
+            _date_str(payload["target_date"]),
+        ))
+
+    if "status" in payload and payload["status"] != d.status:
+        # Only a reversal *out of* completed is a tracked change requiring a reason.
+        if d.status == DeliverableStatus.completed and payload["status"] != DeliverableStatus.completed:
+            tracked.append((
+                DeliverableChangeField.STATUS,
+                d.status.value,
+                payload["status"].value,
+            ))
+
+    if tracked and not reason:
+        raise AppError(
+            "validation_error",
+            "A reason is required when changing the planned start date, due date, "
+            "or reverting a completed deliverable.",
+            422,
+        )
+
+    for field, value in payload.items():
         setattr(d, field, value)
+
+    for field_name, old_value, new_value in tracked:
+        db.add(
+            DeliverableChange(
+                deliverable_id=d.id,
+                field=field_name,
+                old_value=old_value,
+                new_value=new_value,
+                changed_by=actor.id,
+                reason=reason,
+            )
+        )
+        audit.record_audit(
+            db,
+            action=AuditAction.DELIVERABLE_FIELD_CHANGE,
+            actor=actor,
+            entity_type=EntityType.DELIVERABLE,
+            entity_id=d.id,
+            details={
+                "field": field_name,
+                "old": old_value,
+                "new": new_value,
+                "reason": reason,
+            },
+        )
+
     db.commit()
     db.refresh(d)
     _attach_owner_names(db, [d])
     return d
+
+
+def get_deliverable(
+    db: Session, actor: User, deliverable_id: uuid.UUID
+) -> ProjectDeliverable:
+    """Fetch a single deliverable by id (project resolved from the row)."""
+    d = db.get(ProjectDeliverable, deliverable_id)
+    if d is None:
+        raise AppError("not_found", "Deliverable not found.", 404)
+    _fetch_project(db, d.project_id)
+    _assert_member(db, actor, d.project_id)
+    _attach_owner_names(db, [d])
+    _attach_project_names(db, [d])
+    return d
+
+
+def list_deliverable_changes(
+    db: Session, actor: User, deliverable_id: uuid.UUID
+) -> list[DeliverableChange]:
+    d = db.get(ProjectDeliverable, deliverable_id)
+    if d is None:
+        raise AppError("not_found", "Deliverable not found.", 404)
+    _fetch_project(db, d.project_id)
+    _assert_member(db, actor, d.project_id)
+
+    rows = db.execute(
+        select(DeliverableChange)
+        .where(DeliverableChange.deliverable_id == deliverable_id)
+        .order_by(DeliverableChange.changed_at.desc())
+    ).scalars().all()
+
+    user_ids = {r.changed_by for r in rows}
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        user_rows = db.execute(
+            select(User).where(User.id.in_(user_ids))
+        ).scalars().all()
+        names = {u.id: u.email for u in user_rows}
+    for r in rows:
+        r.changed_by_name = names.get(r.changed_by, "")  # type: ignore[attr-defined]
+    return list(rows)
 
 
 def delete_deliverable(

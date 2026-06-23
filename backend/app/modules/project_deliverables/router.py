@@ -1,6 +1,8 @@
 """Project deliverable endpoints.
 
   GET    /deliverables                                   list all (scoped)
+  GET    /deliverables/{id}                              detail (member+)
+  GET    /deliverables/{id}/changes                      change history (member+)
   GET    /projects/{project_id}/deliverables            list (member+)
   POST   /projects/{project_id}/deliverables            create (PM / team lead)
   PATCH  /projects/{project_id}/deliverables/{id}       update (PM / team lead)
@@ -15,6 +17,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.modules.project_deliverables import service
 from app.modules.project_deliverables.schemas import (
+    DeliverableChangeOut,
     DeliverableCreate,
     DeliverableOut,
     DeliverableUpdate,
@@ -34,6 +37,29 @@ def list_all_deliverables(
 ) -> list[DeliverableOut]:
     rows = service.list_all_deliverables(db, current)
     return [DeliverableOut.model_validate(r) for r in rows]
+
+
+@_global.get("/{deliverable_id}", response_model=DeliverableOut)
+def get_deliverable(
+    deliverable_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DeliverableOut:
+    return DeliverableOut.model_validate(
+        service.get_deliverable(db, current, deliverable_id)
+    )
+
+
+@_global.get("/{deliverable_id}/changes", response_model=list[DeliverableChangeOut])
+def list_deliverable_changes(
+    deliverable_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[DeliverableChangeOut]:
+    return [
+        DeliverableChangeOut.model_validate(c)
+        for c in service.list_deliverable_changes(db, current, deliverable_id)
+    ]
 
 
 @_projects.get("/{project_id}/deliverables", response_model=list[DeliverableOut])

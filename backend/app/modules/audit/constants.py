@@ -10,6 +10,7 @@ class EntityType:
     EMPLOYEE = "employee"
     PROJECT = "project"
     PROJECT_MEMBER = "project_member"
+    DELIVERABLE = "deliverable"
     TASK = "task"
 
 
@@ -44,6 +45,9 @@ class AuditAction:
 
     # --- project dates (Tier B) ---
     PROJECT_PLANNED_DATE_CHANGE = "project.planned_date.change"
+
+    # --- deliverable change tracking (Tier B) ---
+    DELIVERABLE_FIELD_CHANGE = "deliverable.field.change"
 
     # --- task assignment & lifecycle (Tier B) ---
     TASK_ASSIGN = "task.assign"

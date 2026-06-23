@@ -2,6 +2,7 @@ import { api } from "@/lib/api-client";
 
 import type {
   Deliverable,
+  DeliverableChange,
   DeliverableCreateBody,
   DeliverableUpdateBody,
 } from "./types";
@@ -9,6 +10,12 @@ import type {
 export const deliverablesApi = {
   listAll: () =>
     api.get<Deliverable[]>(`/deliverables`),
+
+  get: (id: string) =>
+    api.get<Deliverable>(`/deliverables/${id}`),
+
+  changes: (id: string) =>
+    api.get<DeliverableChange[]>(`/deliverables/${id}/changes`),
 
   list: (projectId: string) =>
     api.get<Deliverable[]>(`/projects/${projectId}/deliverables`),
