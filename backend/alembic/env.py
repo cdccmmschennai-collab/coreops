@@ -31,6 +31,7 @@ import app.modules.job_codes.models  # noqa: E402,F401 (already imported but ens
 import app.modules.tasks.models  # noqa: E402,F401
 import app.modules.project_submissions.models  # noqa: E402,F401
 import app.modules.project_activities.models  # noqa: E402,F401
+import app.modules.leave_balances.models  # noqa: E402,F401
 
 target_metadata = Base.metadata
 
