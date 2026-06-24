@@ -10,8 +10,8 @@ Adds manually-maintained leave balances (Phase 1 — no accrual/automation).
 
 The history table is intentionally immutable (only created_at is tracked).
 
-Revision ID: 0045_employee_leave_balances
-Revises: 0044_project_planning_plant
+Revision ID: 0046_employee_leave_balances
+Revises: 0045_deliverable_changes
 Create Date: 2026-06-24
 """
 from typing import Sequence, Union
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0045_employee_leave_balances"
-down_revision: Union[str, None] = "0044_project_planning_plant"
+revision: str = "0046_employee_leave_balances"
+down_revision: Union[str, None] = "0045_deliverable_changes"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -49,6 +49,17 @@ export function AttendanceView() {
     }
   }, [searchParams, canRequestLeave]);
 
+  // Deep-link: /attendance?tab=leave selects a tab on load (used by the PM
+  // dashboard "Leave requests" shortcut). leave-balance is manager-only.
+  React.useEffect(() => {
+    const t = searchParams.get("tab") as TabKey | null;
+    if (!t) return;
+    const allowed: TabKey[] = ["calendar", "history", "leave", "holidays"];
+    if (canManage) allowed.push("leave-balance");
+    if (features.attendanceCorrections) allowed.push("corrections");
+    if (allowed.includes(t)) setTab(t);
+  }, [searchParams, canManage]);
+
   const actions = (
     <>
       <Button variant="secondary" onClick={() => toast.info("Export - coming soon")}>
