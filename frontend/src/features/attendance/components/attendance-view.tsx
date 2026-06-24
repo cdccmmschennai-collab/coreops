@@ -14,6 +14,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { useAuth } from "@/features/auth/auth-provider";
 import { LeaveRequestDialog } from "@/features/leave/components/leave-request-dialog";
 import { LeaveTab } from "@/features/leave/components/leave-tab";
+import { LeaveBalanceTab } from "@/features/leave-balances/components/leave-balance-tab";
 import { features } from "@/lib/env";
 import { can } from "@/lib/rbac";
 
@@ -24,7 +25,13 @@ import { AttendanceHistory } from "./attendance-history";
 import { AttendanceKpis } from "./attendance-kpis";
 import { CorrectionsPreview } from "./corrections-preview";
 
-type TabKey = "calendar" | "history" | "leave" | "corrections" | "holidays";
+type TabKey =
+  | "calendar"
+  | "history"
+  | "leave"
+  | "leave-balance"
+  | "corrections"
+  | "holidays";
 
 export function AttendanceView() {
   const { role, employeeId } = useAuth();
@@ -83,6 +90,8 @@ export function AttendanceView() {
           { value: "calendar", label: "Calendar" },
           { value: "history", label: "History" },
           { value: "leave", label: "Leave" },
+          // Leave Balance is a manager/admin-only maintenance view.
+          ...(canManage ? [{ value: "leave-balance", label: "Leave Balance" }] : []),
           // Corrections is deferred until biometric / automated attendance
           // capture exists (attendance is entered manually today). Hidden
           // behind a feature flag; see features.attendanceCorrections.
@@ -104,6 +113,7 @@ export function AttendanceView() {
         ))}
       {tab === "history" && <AttendanceHistory />}
       {tab === "leave" && <LeaveTab />}
+      {tab === "leave-balance" && canManage && <LeaveBalanceTab />}
       {features.attendanceCorrections && tab === "corrections" && <CorrectionsPreview />}
       {tab === "holidays" && <HolidayManager />}
 
