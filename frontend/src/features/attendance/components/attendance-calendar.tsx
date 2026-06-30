@@ -33,6 +33,7 @@ const STATUS: Record<StatusKey, { cell: string; text: string; dot: string; label
   absent:   { cell: "bg-red-50",     text: "text-red-700",     dot: "bg-red-500",     label: "Absent" },
   half_day: { cell: "bg-slate-100",  text: "text-slate-700",   dot: "bg-slate-500",   label: "Half day" },
   leave:    { cell: "bg-amber-50",   text: "text-amber-700",   dot: "bg-amber-500",   label: "Leave" },
+  comp_off: { cell: "bg-teal-50",    text: "text-teal-700",    dot: "bg-teal-500",    label: "Comp off" },
   holiday:  { cell: "bg-violet-50",  text: "text-violet-700",  dot: "bg-violet-500",  label: "Holiday" },
   weekend:  { cell: "bg-slate-50",   text: "text-muted-foreground", dot: "bg-slate-300", label: "Weekend" },
 };

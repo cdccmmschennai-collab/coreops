@@ -7,6 +7,7 @@ export const ATTENDANCE_STATUSES = [
   "absent",
   "half_day",
   "leave",
+  "comp_off",
   "holiday",
   "weekend",
 ] as const;
@@ -16,6 +17,7 @@ export const ATTENDANCE_STATUS_LABEL: Record<(typeof ATTENDANCE_STATUSES)[number
   absent: "Absent",
   half_day: "Half day",
   leave: "Leave",
+  comp_off: "Comp off",
   holiday: "Holiday",
   weekend: "Weekend",
 };

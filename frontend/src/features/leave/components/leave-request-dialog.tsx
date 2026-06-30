@@ -27,11 +27,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
 
 import { useCreateLeave } from "../hooks";
-import { LEAVE_TYPE_LABEL, LEAVE_TYPES } from "../types";
+import { LEAVE_TYPE_LABEL, LEAVE_TYPES, SELECTABLE_LEAVE_TYPES } from "../types";
 
 const schema = z
   .object({
-    leave_type: z.enum(["casual", "sick", "annual", "comp_off", "unpaid", "other"]),
+    leave_type: z.enum(SELECTABLE_LEAVE_TYPES),
     start_date: z.string().min(1, "Start date is required"),
     end_date: z.string().min(1, "End date is required"),
     reason: z.string().trim().max(2000),

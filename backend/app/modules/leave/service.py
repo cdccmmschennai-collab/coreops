@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.models import LeaveRequest, LeaveStatus
@@ -35,8 +36,36 @@ from app.shared.errors import AppError
 DELIVERABLE_IMPACT_WINDOW = timedelta(days=2)
 
 
+# Attendance statuses that mean the employee actually worked that day — you
+# can't take (or be granted) leave for a day you've already attended.
+_WORKED_ATTENDANCE = (AttendanceStatus.present, AttendanceStatus.half_day)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _worked_attendance_dates(
+    db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
+) -> list[date]:
+    """Dates in [start_date, end_date] where the employee is marked present /
+    working — the days a leave request must not cover."""
+    return list(
+        db.execute(
+            select(AttendanceRecord.attendance_date)
+            .where(
+                AttendanceRecord.employee_id == employee_id,
+                AttendanceRecord.status.in_(_WORKED_ATTENDANCE),
+                AttendanceRecord.attendance_date >= start_date,
+                AttendanceRecord.attendance_date <= end_date,
+            )
+            .order_by(AttendanceRecord.attendance_date)
+        ).scalars()
+    )
+
+
+def _format_dates(dates: list[date]) -> str:
+    return ", ".join(d.isoformat() for d in dates)
 
 
 def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
@@ -177,6 +206,15 @@ def create_leave_request(
     if data.end_date < data.start_date:
         raise AppError("validation_error", "End date cannot be before start date.", 422)
 
+    worked = _worked_attendance_dates(db, me.id, data.start_date, data.end_date)
+    if worked:
+        raise AppError(
+            "validation_error",
+            f"You're marked present on {_format_dates(worked)} - you can't request "
+            "leave for a day you've already attended.",
+            422,
+        )
+
     req = LeaveRequest(
         employee_id=me.id,
         leave_type=data.leave_type,
@@ -215,6 +253,15 @@ def update_leave_request(
     new_end = fields.get("end_date", req.end_date)
     if new_end < new_start:
         raise AppError("validation_error", "End date cannot be before start date.", 422)
+
+    worked = _worked_attendance_dates(db, me.id, new_start, new_end)
+    if worked:
+        raise AppError(
+            "validation_error",
+            f"You're marked present on {_format_dates(worked)} - you can't request "
+            "leave for a day you've already attended.",
+            422,
+        )
 
     for key, value in fields.items():
         setattr(req, key, value)
@@ -257,6 +304,17 @@ def approve_leave_request(
     _assert_can_review(db, actor, req)
     if req.status != LeaveStatus.pending:
         raise AppError("validation_error", "Only pending requests can be approved.", 422)
+
+    # Guard against approving leave for days the employee was actually present
+    # (e.g. a request filed before attendance was marked). Reject it instead.
+    worked = _worked_attendance_dates(db, req.employee_id, req.start_date, req.end_date)
+    if worked:
+        raise AppError(
+            "validation_error",
+            f"This employee is marked present on {_format_dates(worked)}; their leave "
+            "can't be approved. Reject the request instead.",
+            422,
+        )
 
     reviewer = _current_employee(db, actor)
     req.status = LeaveStatus.approved

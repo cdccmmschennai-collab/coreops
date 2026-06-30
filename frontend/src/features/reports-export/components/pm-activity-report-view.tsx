@@ -57,6 +57,9 @@ export function PmActivityReportView() {
   const { data, isLoading, isFetching } = useActivityRows(filters);
   const rows = data?.rows ?? [];
   const totalActivities = rows.reduce((s, row) => s + row.activities.length, 0);
+  // Leave-type days are day-status-only rows (zero activities) but must still
+  // show and export — so gate on the row count, not the activity count.
+  const hasRows = rows.length > 0;
 
   const subOptions = (subActivities.data ?? []).filter(
     (s) => !filters.activity_id || s.activity_id === filters.activity_id,
@@ -78,7 +81,7 @@ export function PmActivityReportView() {
   }
 
   const exportButton = (
-    <Button onClick={onExport} disabled={exporting || totalActivities === 0}>
+    <Button onClick={onExport} disabled={exporting || !hasRows}>
       <Download className="h-4 w-4" />
       {exporting ? "Exporting…" : "Export Excel"}
     </Button>
@@ -146,9 +149,9 @@ export function PmActivityReportView() {
           the Excel export. */}
       {isLoading ? (
         <Skeleton className="h-[420px] w-full" />
-      ) : totalActivities === 0 ? (
+      ) : !hasRows ? (
         <div className="rounded-lg border border-border px-3 py-16 text-center text-sm text-muted-foreground">
-          No activity records match the current filters.
+          No records match the current filters.
         </div>
       ) : (
         <div className="relative max-h-[65vh] overflow-auto rounded-lg border border-border">

@@ -33,6 +33,9 @@ class AttendanceStatus(str, enum.Enum):
     leave = "leave"
     holiday = "holiday"
     weekend = "weekend"
+    # Comp-off: a day off granted by the manager in lieu of worked overtime.
+    # Not a "worked" day (does not require a work report, doesn't block leave).
+    comp_off = "comp_off"
 
 
 class AttendanceRecord(UUIDMixin, TimestampMixin, Base):

@@ -534,6 +534,54 @@ def build_activity_rows(
             "spares": task.spares_count,
             "remarks": report.remarks,
         })
+
+    # Leave-type reports (week off / leave / company holiday / comp-off) carry no
+    # task lines, so the task join above skips them. Surface each as a single
+    # day-status-only row — Day Status + Day Remarks filled, every activity
+    # column blank — so the PM still sees the employee was off that day, both in
+    # the dashboard preview and the Excel export. Skipped when filtering by a
+    # task attribute (project / activity / sub-activity), since a no-activity day
+    # can never match those.
+    if project_id is None and activity_id is None and sub_activity_id is None:
+        nq = (
+            select(DailyWorkReport, Employee)
+            .join(Employee, Employee.id == DailyWorkReport.employee_id)
+            .where(
+                DailyWorkReport.id.in_(scoped),
+                ~select(WorkReportTask.id)
+                .where(WorkReportTask.report_id == DailyWorkReport.id)
+                .exists(),
+            )
+        )
+        if employee_id is not None:
+            nq = nq.where(DailyWorkReport.employee_id == employee_id)
+        if date_from is not None:
+            nq = nq.where(DailyWorkReport.report_date >= date_from)
+        if date_to is not None:
+            nq = nq.where(DailyWorkReport.report_date <= date_to)
+        for report, emp in db.execute(nq).all():
+            rows.append({
+                "employee_label": f"{emp.employee_code} - {emp.full_name}",
+                "report_date": report.report_date,
+                "day_status": (
+                    DAY_STATUS_LABELS.get(report.day_status.value, report.day_status.value)
+                    if report.day_status
+                    else None
+                ),
+                "project_code": None,
+                "activity_type": None,
+                "sub_activity_type": None,
+                "tags": None,
+                "docs": None,
+                "bom": None,
+                "spares": None,
+                "remarks": report.remarks,
+            })
+
+    # Keep employee+date rows contiguous so the groupby in build_activity_groups
+    # forms correct groups and leave days interleave chronologically (stable sort
+    # preserves task order within a day).
+    rows.sort(key=lambda r: (r["employee_label"], r["report_date"]))
     return rows
 
 
@@ -570,6 +618,9 @@ def build_activity_groups(
         rows, key=lambda r: (r["employee_label"], r["report_date"])
     ):
         day_rows = list(day_rows)
+        # A leave-type day contributes one day-status-only row with no activity
+        # (project/activity/sub all empty) — keep it out of the activities list
+        # so the day shows with Day Status + Remarks but zero activities.
         activities = [
             {
                 "project_code": r["project_code"],
@@ -581,6 +632,9 @@ def build_activity_groups(
                 "spares": r["spares"],
             }
             for r in day_rows
+            if r["project_code"] is not None
+            or r["activity_type"] is not None
+            or r["sub_activity_type"] is not None
         ]
         max_activities = max(max_activities, len(activities))
         out_rows.append({

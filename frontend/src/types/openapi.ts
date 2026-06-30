@@ -1770,7 +1770,7 @@ export interface components {
          * AttendanceStatus
          * @enum {string}
          */
-        AttendanceStatus: "present" | "absent" | "half_day" | "leave" | "holiday" | "weekend";
+        AttendanceStatus: "present" | "absent" | "half_day" | "leave" | "comp_off" | "holiday" | "weekend";
         /** AttendanceUpdate */
         AttendanceUpdate: {
             status?: components["schemas"]["AttendanceStatus"] | null;
