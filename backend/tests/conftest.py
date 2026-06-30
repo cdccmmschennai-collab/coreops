@@ -113,7 +113,7 @@ def auth_header(client, make_user):
     def _login(email: str = "user@example.com", password: str = "password123",
                role: UserRole = UserRole.employee) -> dict:
         make_user(email, password, role)
-        res = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+        res = client.post("/api/v1/auth/login", json={"identifier": email, "password": password})
         assert res.status_code == 200, res.text
         return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
@@ -125,7 +125,7 @@ def login(client):
     """Log in an EXISTING user; returns the auth header."""
 
     def _login(email: str, password: str = "password123") -> dict:
-        res = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+        res = client.post("/api/v1/auth/login", json={"identifier": email, "password": password})
         assert res.status_code == 200, res.text
         return {"Authorization": f"Bearer {res.json()['access_token']}"}
 

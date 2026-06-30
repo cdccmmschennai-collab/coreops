@@ -23,16 +23,21 @@ import { loginSchema, type LoginInput } from "@/features/auth/schemas";
 import { AppError } from "@/lib/api-client";
 import type { TokenResponse } from "@/types/api";
 
+type LoginCandidate = { employee_code: string; name: string };
+
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/dashboard";
   const auth = useAuth();
   const [formError, setFormError] = React.useState<string | null>(null);
+  // When a typed name matches several accounts the backend returns candidates
+  // instead of failing; we show them so the user can pick the right account.
+  const [candidates, setCandidates] = React.useState<LoginCandidate[] | null>(null);
 
   const form = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { email: "", password: "" },
+    defaultValues: { identifier: "", password: "" },
   });
 
   // Already signed in → leave the login page.
@@ -44,19 +49,37 @@ export function LoginForm() {
     mutationFn: (input) => authApi.login(input),
     onSuccess: async (data) => {
       setFormError(null);
+      setCandidates(null);
       await auth.login(data.access_token);
       router.replace(next);
     },
     onError: (error) => {
+      if (error instanceof AppError && error.code === "ambiguous_identifier") {
+        const list = (error.details?.candidates as LoginCandidate[] | undefined) ?? [];
+        setCandidates(list);
+        setFormError(null);
+        return;
+      }
+      setCandidates(null);
       if (error instanceof AppError && error.status === 429) {
         setFormError("Too many attempts. Please wait a few minutes and try again.");
       } else if (error instanceof AppError && error.status === 401) {
-        setFormError("Invalid email or password.");
+        setFormError("Invalid login or password.");
       } else {
         setFormError(error.message || "Something went wrong. Please try again.");
       }
     },
   });
+
+  // Re-submit with the chosen account's employee code + the password already
+  // entered (the field still holds it; no need to re-type).
+  const selectCandidate = (candidate: LoginCandidate) => {
+    setFormError(null);
+    mutation.mutate({
+      identifier: candidate.employee_code,
+      password: form.getValues("password"),
+    });
+  };
 
   return (
     <div className="w-full max-w-sm">
@@ -82,20 +105,23 @@ export function LoginForm() {
       <Form {...form}>
         <form
           className="space-y-4"
-          onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+          onSubmit={form.handleSubmit((values) => {
+            setCandidates(null);
+            mutation.mutate(values);
+          })}
           noValidate
         >
           <FormField
             control={form.control}
-            name="email"
+            name="identifier"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Work email</FormLabel>
+                <FormLabel>Email</FormLabel>
                 <FormControl>
                   <Input
-                    type="email"
-                    autoComplete="email"
-                    placeholder="you@company.com"
+                    type="text"
+                    autoComplete="username"
+                    placeholder="Enter your Email / Emp ID / Name"
                     {...field}
                   />
                 </FormControl>
@@ -110,7 +136,12 @@ export function LoginForm() {
               <FormItem>
                 <FormLabel>Password</FormLabel>
                 <FormControl>
-                  <Input type="password" autoComplete="current-password" {...field} />
+                  <Input
+                    type="password"
+                    autoComplete="current-password"
+                    placeholder="Enter your password"
+                    {...field}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -121,6 +152,30 @@ export function LoginForm() {
           </Button>
         </form>
       </Form>
+
+      {candidates && candidates.length > 0 && (
+        <div className="mt-4 rounded-md border border-border bg-muted/40 p-3">
+          <p className="mb-2 text-sm font-medium">
+            Multiple accounts match that name. Select yours:
+          </p>
+          <ul className="space-y-2">
+            {candidates.map((candidate) => (
+              <li key={candidate.employee_code}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="flex w-full items-center justify-between"
+                  disabled={mutation.isPending}
+                  onClick={() => selectCandidate(candidate)}
+                >
+                  <span>{candidate.name}</span>
+                  <span className="text-muted-foreground">{candidate.employee_code}</span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

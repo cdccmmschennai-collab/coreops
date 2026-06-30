@@ -16,7 +16,9 @@ EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 # ---------- Auth ----------
 class LoginRequest(BaseModel):
-    email: str = Field(pattern=EMAIL_PATTERN)
+    # Identifier may be an email, an employee_code, or an employee first_name —
+    # resolved server-side. No format validation here beyond non-empty.
+    identifier: str = Field(min_length=1)
     password: str = Field(min_length=1)
 
 
