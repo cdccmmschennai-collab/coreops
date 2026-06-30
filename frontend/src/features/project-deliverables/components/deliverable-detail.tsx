@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { CalendarClock, RefreshCcw } from "lucide-react";
+import { CalendarClock, CheckCircle2, RefreshCcw } from "lucide-react";
 
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/shell/page-header";
@@ -72,7 +72,13 @@ function InfoRow({
 
 // ── timeline (change history, answers what / why / who) ──────────────────────────
 
-function Timeline({ deliverableId }: { deliverableId: string }) {
+function Timeline({
+  deliverableId,
+  activityName,
+}: {
+  deliverableId: string;
+  activityName: string;
+}) {
   const query = useDeliverableChanges(deliverableId);
   const changes: DeliverableChange[] = query.data ?? [];
 
@@ -93,25 +99,36 @@ function Timeline({ deliverableId }: { deliverableId: string }) {
         ) : (
           <ol className="relative border-l border-border">
             {changes.map((c) => {
+              const isCompletion =
+                c.field === "status" && c.new_value === "completed";
               const label = DELIVERABLE_CHANGE_FIELD_LABEL[c.field] ?? c.field;
-              const icon =
-                c.field === "status" ? (
-                  <RefreshCcw className="h-3.5 w-3.5" />
-                ) : (
-                  <CalendarClock className="h-3.5 w-3.5" />
-                );
+              const icon = isCompletion ? (
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+              ) : c.field === "status" ? (
+                <RefreshCcw className="h-3.5 w-3.5" />
+              ) : (
+                <CalendarClock className="h-3.5 w-3.5" />
+              );
               return (
                 <li key={c.id} className="mb-6 ml-4 last:mb-0">
                   <span className="absolute -left-[1.1rem] flex h-[1.4rem] w-[1.4rem] items-center justify-center rounded-full border border-border bg-card text-muted-foreground">
                     {icon}
                   </span>
-                  <p className="text-sm font-medium">
-                    {label} changed {renderChangeValue(c.field, c.old_value)} →{" "}
-                    {renderChangeValue(c.field, c.new_value)}
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Reason: {c.reason}
-                  </p>
+                  {isCompletion ? (
+                    <p className="text-sm font-medium">
+                      {activityName} has been delivered.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-sm font-medium">
+                        {label} changed {renderChangeValue(c.field, c.old_value)} →{" "}
+                        {renderChangeValue(c.field, c.new_value)}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Reason: {c.reason}
+                      </p>
+                    </>
+                  )}
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {c.changed_by_name || "System"} · {fmtDateTime(c.changed_at)}
                   </p>
@@ -207,7 +224,7 @@ export function DeliverableDetail({ id }: { id: string }) {
         </Card>
 
         {/* Timeline */}
-        <Timeline deliverableId={deliverable.id} />
+        <Timeline deliverableId={deliverable.id} activityName={deliverable.name} />
       </div>
     </>
   );

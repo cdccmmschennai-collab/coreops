@@ -2,9 +2,9 @@ import { Badge } from "@/components/ui/badge";
 
 import { DELIVERABLE_STATUS_LABEL, type DeliverableStatus } from "../types";
 
-const VARIANT: Record<DeliverableStatus, "neutral" | "warning" | "success"> = {
-  pending: "neutral",
-  in_progress: "warning",
+const VARIANT: Record<DeliverableStatus, "warning" | "success"> = {
+  // Planned reuses the former "In Progress" styling; Completed is unchanged.
+  planned: "warning",
   completed: "success",
 };
 

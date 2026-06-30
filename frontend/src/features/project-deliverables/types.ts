@@ -1,4 +1,4 @@
-export type DeliverableStatus = "pending" | "in_progress" | "completed";
+export type DeliverableStatus = "planned" | "completed";
 
 export interface Deliverable {
   id: string;
@@ -57,8 +57,7 @@ export interface DeliverableChange {
 }
 
 export const DELIVERABLE_STATUS_LABEL: Record<DeliverableStatus, string> = {
-  pending: "Pending",
-  in_progress: "In Progress",
+  planned: "Planned",
   completed: "Completed",
 };
 

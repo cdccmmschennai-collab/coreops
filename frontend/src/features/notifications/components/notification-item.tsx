@@ -4,8 +4,10 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  CalendarClock,
   CalendarDays,
   CheckCircle,
+  ClipboardList,
   Clock,
   FileText,
   FolderKanban,
@@ -47,6 +49,9 @@ const TYPE_CONFIG: Record<
   report_approved:       { Icon: CheckCircle,   color: "green" },
   report_rejected:       { Icon: XCircle,       color: "red" },
   project_assigned:      { Icon: FolderKanban,  color: "blue" },
+  deliverable_planned:   { Icon: ClipboardList, color: "blue" },
+  deliverable_date_updated:{ Icon: CalendarClock, color: "amber" },
+  deliverable_completed: { Icon: CheckCircle,   color: "green" },
   calendar_event_created:{ Icon: CalendarDays,  color: "violet" },
   employee_created:      { Icon: UserPlus,      color: "green" },
   NUMERIC_BENCHMARK:     { Icon: AlertTriangle, color: "amber" },

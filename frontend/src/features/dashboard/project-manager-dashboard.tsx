@@ -19,11 +19,10 @@ import type { Deliverable } from "@/features/project-deliverables/types";
 
 import { greeting } from "./utils";
 
-// Active work first (in_progress, then pending), completed last.
+// Active work (planned) first, completed last.
 const STATUS_ORDER: Record<Deliverable["status"], number> = {
-  in_progress: 0,
-  pending: 1,
-  completed: 2,
+  planned: 0,
+  completed: 1,
 };
 
 /**

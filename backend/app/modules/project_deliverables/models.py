@@ -22,8 +22,7 @@ from app.shared.base import TimestampMixin, UUIDMixin
 
 
 class DeliverableStatus(str, enum.Enum):
-    pending = "pending"
-    in_progress = "in_progress"
+    planned = "planned"
     completed = "completed"
 
 
@@ -49,7 +48,7 @@ class ProjectDeliverable(UUIDMixin, TimestampMixin, Base):
             values_callable=lambda e: [m.value for m in e],
         ),
         nullable=False,
-        server_default=DeliverableStatus.pending.value,
+        server_default=DeliverableStatus.planned.value,
     )
     completion_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 

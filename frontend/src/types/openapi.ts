@@ -1956,7 +1956,7 @@ export interface components {
             target_date?: string | null;
             /** Owner Employee Id */
             owner_employee_id?: string | null;
-            /** @default pending */
+            /** @default planned */
             status: components["schemas"]["DeliverableStatus"];
             /** Completion Date */
             completion_date?: string | null;
@@ -2005,7 +2005,7 @@ export interface components {
          * DeliverableStatus
          * @enum {string}
          */
-        DeliverableStatus: "pending" | "in_progress" | "completed";
+        DeliverableStatus: "planned" | "completed";
         /** DeliverableUpdate */
         DeliverableUpdate: {
             /** Name */
