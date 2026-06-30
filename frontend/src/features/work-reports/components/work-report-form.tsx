@@ -521,7 +521,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     <span className="font-medium">
                       {dayStatus ? DAY_STATUS_LABEL[dayStatus] : ""}
                     </span>{" "}
-                    — you&apos;re off, so activities, benchmarks and pending tracking
+                    - you&apos;re off, so activities, benchmarks and pending tracking
                     don&apos;t apply. Add any Remarks or a Query below if needed.
                   </p>
                 </div>

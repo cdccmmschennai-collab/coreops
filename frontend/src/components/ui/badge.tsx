@@ -13,6 +13,7 @@ const badgeVariants = cva(
         success: "border-success/20 bg-success/10 text-success",
         warning: "border-warning/20 bg-warning/10 text-warning",
         danger: "border-destructive/20 bg-destructive/10 text-destructive",
+        teal: "border-teal-500/20 bg-teal-500/10 text-teal-700",
         outline: "border-border text-foreground",
       },
     },
@@ -32,6 +33,7 @@ const DOT_COLOR: Record<string, string> = {
   success: "bg-success",
   warning: "bg-warning",
   danger: "bg-destructive",
+  teal: "bg-teal-500",
   outline: "bg-muted-foreground",
 };
 

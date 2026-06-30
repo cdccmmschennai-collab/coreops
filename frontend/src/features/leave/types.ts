@@ -71,6 +71,8 @@ export interface LeaveListParams {
   offset: number;
 }
 
+// Full label map — keeps `sick`/`unpaid` so any historical requests still
+// render correctly even though they're no longer offered when filing a new one.
 export const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
   casual: "Casual",
   sick: "Sick",
@@ -80,4 +82,10 @@ export const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
   other: "Other",
 };
 
-export const LEAVE_TYPES: LeaveType[] = ["casual", "sick", "annual", "comp_off", "unpaid", "other"];
+// Selectable types when filing a leave request (Casual / Annual / Comp Off / Other).
+// `sick` and `unpaid` are intentionally excluded — display-only legacy values.
+export const SELECTABLE_LEAVE_TYPES = ["casual", "annual", "comp_off", "other"] as const;
+
+export type SelectableLeaveType = (typeof SELECTABLE_LEAVE_TYPES)[number];
+
+export const LEAVE_TYPES: LeaveType[] = [...SELECTABLE_LEAVE_TYPES];
