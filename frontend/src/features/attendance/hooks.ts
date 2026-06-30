@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { attendanceApi } from "./api";
 import { attendanceKeys } from "./keys";
 import type {
+  AttendanceBulkSaveBody,
   AttendanceCreateBody,
   AttendanceListParams,
   AttendanceUpdateBody,
@@ -48,5 +49,27 @@ export function useDeleteAttendance() {
   return useMutation({
     mutationFn: (id: string) => attendanceApi.remove(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: attendanceKeys.all }),
+  });
+}
+
+/** The PM roster sheet for a date (active employees merged with saved records).
+ * Disabled until a date is chosen. */
+export function useAttendanceSheet(date: string | undefined) {
+  return useQuery({
+    queryKey: attendanceKeys.sheet(date ?? ""),
+    queryFn: () => attendanceApi.getSheet(date as string),
+    enabled: !!date,
+  });
+}
+
+export function useBulkSaveAttendance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AttendanceBulkSaveBody) => attendanceApi.bulkSave(body),
+    onSuccess: (data) => {
+      // Refresh lists/calendar and seed the sheet cache with the saved state.
+      qc.invalidateQueries({ queryKey: attendanceKeys.all });
+      qc.setQueryData(attendanceKeys.sheet(data.attendance_date), data);
+    },
   });
 }

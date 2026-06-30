@@ -7,6 +7,12 @@ export type AttendancePage = components["schemas"]["AttendancePage"];
 export type AttendanceCreateBody = components["schemas"]["AttendanceCreate"];
 export type AttendanceUpdateBody = components["schemas"]["AttendanceUpdate"];
 
+// Bulk / sheet (PM roster workflow)
+export type AttendanceSheet = components["schemas"]["AttendanceSheet"];
+export type AttendanceSheetRow = components["schemas"]["AttendanceSheetRow"];
+export type AttendanceBulkSaveBody = components["schemas"]["AttendanceBulkSave"];
+export type AttendanceBulkRecord = components["schemas"]["AttendanceBulkRecord"];
+
 export interface AttendanceListParams {
   employee_id: string;
   status: AttendanceStatus | "";

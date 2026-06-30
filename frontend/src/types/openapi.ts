@@ -458,6 +458,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attendance/sheet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Attendance Sheet */
+        get: operations["get_attendance_sheet_api_v1_attendance_sheet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attendance/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bulk Save Attendance */
+        post: operations["bulk_save_attendance_api_v1_attendance_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attendance/{record_id}": {
         parameters: {
             query?: never;
@@ -721,6 +755,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leave-requests/deliverable-impact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deliverable Impact
+         * @description Decision-support: which of the given (displayed) leave requests overlap
+         *     a Planned project deliverable. Project-manager only; informational.
+         */
+        post: operations["deliverable_impact_api_v1_leave_requests_deliverable_impact_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/leave-requests/{req_id}": {
         parameters: {
             query?: never;
@@ -784,6 +839,74 @@ export interface paths {
         put?: never;
         /** Reject Leave Request */
         post: operations["reject_leave_request_api_v1_leave_requests__req_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-balances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Leave Balances */
+        get: operations["list_leave_balances_api_v1_leave_balances_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-balances/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My Leave Balance */
+        get: operations["get_my_leave_balance_api_v1_leave_balances_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-balances/{employee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Leave Balance */
+        post: operations["set_leave_balance_api_v1_leave_balances__employee_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-balances/{employee_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Leave Balance History */
+        get: operations["list_leave_balance_history_api_v1_leave_balances__employee_id__history_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1278,6 +1401,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/deliverables/{deliverable_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Deliverable */
+        get: operations["get_deliverable_api_v1_deliverables__deliverable_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/deliverables/{deliverable_id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Deliverable Changes */
+        get: operations["list_deliverable_changes_api_v1_deliverables__deliverable_id__changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/submissions": {
         parameters: {
             query?: never;
@@ -1705,6 +1862,29 @@ export interface components {
             /** Members */
             members: components["schemas"]["AssignableMember"][];
         };
+        /** AttendanceBulkRecord */
+        AttendanceBulkRecord: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            status: components["schemas"]["AttendanceStatus"];
+            /** Check In At */
+            check_in_at?: string | null;
+            /** Check Out At */
+            check_out_at?: string | null;
+        };
+        /** AttendanceBulkSave */
+        AttendanceBulkSave: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Records */
+            records: components["schemas"]["AttendanceBulkRecord"][];
+        };
         /** AttendanceCreate */
         AttendanceCreate: {
             /**
@@ -1766,11 +1946,58 @@ export interface components {
             /** Offset */
             offset: number;
         };
+        /** AttendanceSheet */
+        AttendanceSheet: {
+            /**
+             * Attendance Date
+             * Format: date
+             */
+            attendance_date: string;
+            /** Exists */
+            exists: boolean;
+            /** Rows */
+            rows: components["schemas"]["AttendanceSheetRow"][];
+        };
+        /**
+         * AttendanceSheetRow
+         * @description One employee's line on the day's attendance sheet.
+         *
+         *     record_id is None when no attendance is saved for this employee/date yet
+         *     (the row defaults to ``present``). total/overtime minutes are derived.
+         */
+        AttendanceSheetRow: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Employee Name */
+            employee_name: string;
+            status: components["schemas"]["AttendanceStatus"];
+            /** Record Id */
+            record_id?: string | null;
+            /** Check In At */
+            check_in_at?: string | null;
+            /** Check Out At */
+            check_out_at?: string | null;
+            /**
+             * Total Minutes
+             * @default 0
+             */
+            total_minutes: number;
+            /**
+             * Overtime Minutes
+             * @default 0
+             */
+            overtime_minutes: number;
+        };
         /**
          * AttendanceStatus
          * @enum {string}
          */
-        AttendanceStatus: "present" | "absent" | "half_day" | "leave" | "comp_off" | "holiday" | "weekend";
+        AttendanceStatus: "present" | "absent" | "half_day" | "leave" | "holiday" | "weekend" | "comp_off";
         /** AttendanceUpdate */
         AttendanceUpdate: {
             status?: components["schemas"]["AttendanceStatus"] | null;
@@ -1946,12 +2173,84 @@ export interface components {
          * @enum {string}
          */
         DayStatus: "leave" | "company_holiday" | "work_from_home" | "week_off" | "work_at_office" | "comp_off" | "overtime_compensation" | "overtime_salary" | "permission_first_half_1hr" | "permission_second_half_1hr" | "permission_first_half_2hr" | "permission_second_half_2hr";
+        /** DeliverableChangeOut */
+        DeliverableChangeOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Deliverable Id
+             * Format: uuid
+             */
+            deliverable_id: string;
+            /** Field */
+            field: string;
+            /** Old Value */
+            old_value?: string | null;
+            /** New Value */
+            new_value?: string | null;
+            /**
+             * Changed By
+             * Format: uuid
+             */
+            changed_by: string;
+            /**
+             * Changed By Name
+             * @default
+             */
+            changed_by_name: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
+        };
+        /**
+         * DeliverableConflictOut
+         * @description One Planned deliverable whose target date falls within ±2 days of a
+         *     leave request, on a project the requesting employee is assigned to.
+         */
+        DeliverableConflictOut: {
+            /**
+             * Deliverable Id
+             * Format: uuid
+             */
+            deliverable_id: string;
+            /** Deliverable Name */
+            deliverable_name: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Name */
+            project_name?: string | null;
+            /** Project Code */
+            project_code?: string | null;
+            /** Status */
+            status: string;
+            /** Target Date */
+            target_date?: string | null;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Name */
+            employee_name?: string | null;
+        };
         /** DeliverableCreate */
         DeliverableCreate: {
             /** Name */
             name: string;
             /** Description */
             description?: string | null;
+            /** Planned Start Date */
+            planned_start_date?: string | null;
             /** Target Date */
             target_date?: string | null;
             /** Owner Employee Id */
@@ -1960,6 +2259,16 @@ export interface components {
             status: components["schemas"]["DeliverableStatus"];
             /** Completion Date */
             completion_date?: string | null;
+        };
+        /** DeliverableImpactRequest */
+        DeliverableImpactRequest: {
+            /** Leave Request Ids */
+            leave_request_ids?: string[];
+        };
+        /** DeliverableImpactResponse */
+        DeliverableImpactResponse: {
+            /** Items */
+            items: components["schemas"]["LeaveDeliverableImpactOut"][];
         };
         /** DeliverableOut */
         DeliverableOut: {
@@ -1981,6 +2290,8 @@ export interface components {
             name: string;
             /** Description */
             description?: string | null;
+            /** Planned Start Date */
+            planned_start_date?: string | null;
             /** Target Date */
             target_date?: string | null;
             /** Owner Employee Id */
@@ -2012,6 +2323,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Planned Start Date */
+            planned_start_date?: string | null;
             /** Target Date */
             target_date?: string | null;
             /** Owner Employee Id */
@@ -2019,6 +2332,8 @@ export interface components {
             status?: components["schemas"]["DeliverableStatus"] | null;
             /** Completion Date */
             completion_date?: string | null;
+            /** Reason */
+            reason?: string | null;
         };
         /**
          * EmployeeBenchmarksOut
@@ -2325,6 +2640,92 @@ export interface components {
             /** Is Active */
             is_active?: boolean | null;
         };
+        /** LeaveBalanceHistoryOut */
+        LeaveBalanceHistoryOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Old Balance */
+            old_balance?: number | null;
+            /** New Balance */
+            new_balance: number;
+            /** Reason */
+            reason: string;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Updated By Name */
+            updated_by_name?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** LeaveBalanceHistoryPage */
+        LeaveBalanceHistoryPage: {
+            /** Items */
+            items: components["schemas"]["LeaveBalanceHistoryOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /**
+         * LeaveBalanceOut
+         * @description One employee's balance row for the manager list.
+         */
+        LeaveBalanceOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Available Leave */
+            available_leave: number;
+            /** Last Updated */
+            last_updated?: string | null;
+        };
+        /** LeaveBalancePage */
+        LeaveBalancePage: {
+            /** Items */
+            items: components["schemas"]["LeaveBalanceOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** LeaveBalanceUpdate */
+        LeaveBalanceUpdate: {
+            /** Available Leave */
+            available_leave: number;
+            /** Reason */
+            reason: string;
+        };
+        /** LeaveDeliverableImpactOut */
+        LeaveDeliverableImpactOut: {
+            /**
+             * Leave Request Id
+             * Format: uuid
+             */
+            leave_request_id: string;
+            /** Conflicts */
+            conflicts: components["schemas"]["DeliverableConflictOut"][];
+        };
         /** LeaveRequestCreate */
         LeaveRequestCreate: {
             leave_type: components["schemas"]["LeaveType"];
@@ -2435,8 +2836,8 @@ export interface components {
         };
         /** LoginRequest */
         LoginRequest: {
-            /** Email */
-            email: string;
+            /** Identifier */
+            identifier: string;
             /** Password */
             password: string;
         };
@@ -2495,6 +2896,21 @@ export interface components {
             overdue_activities_count: number;
             /** Productivity Pct */
             productivity_pct: string | null;
+        };
+        /**
+         * MyLeaveBalanceOut
+         * @description The signed-in employee's own available leave (read-only).
+         */
+        MyLeaveBalanceOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Available Leave */
+            available_leave: number;
+            /** Last Updated */
+            last_updated?: string | null;
         };
         /** NotificationOut */
         NotificationOut: {
@@ -3593,7 +4009,7 @@ export interface components {
             /** Summary */
             summary?: string | null;
             /** Tasks */
-            tasks: components["schemas"]["WorkReportTaskIn"][];
+            tasks?: components["schemas"]["WorkReportTaskIn"][];
         };
         /** WorkReportEditRequest */
         WorkReportEditRequest: {
@@ -5075,6 +5491,70 @@ export interface operations {
             };
         };
     };
+    get_attendance_sheet_api_v1_attendance_sheet_get: {
+        parameters: {
+            query: {
+                date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceSheet"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_save_attendance_api_v1_attendance_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttendanceBulkSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceSheet"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_attendance_api_v1_attendance__record_id__get: {
         parameters: {
             query?: never;
@@ -5831,6 +6311,39 @@ export interface operations {
             };
         };
     };
+    deliverable_impact_api_v1_leave_requests_deliverable_impact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeliverableImpactRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableImpactResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_leave_request_api_v1_leave_requests__req_id__get: {
         parameters: {
             query?: never;
@@ -5985,6 +6498,129 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_leave_balances_api_v1_leave_balances_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                sort_dir?: string;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveBalancePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_leave_balance_api_v1_leave_balances_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyLeaveBalanceOut"];
+                };
+            };
+        };
+    };
+    set_leave_balance_api_v1_leave_balances__employee_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LeaveBalanceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveBalanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_leave_balance_history_api_v1_leave_balances__employee_id__history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveBalanceHistoryPage"];
                 };
             };
             /** @description Validation Error */
@@ -7375,6 +8011,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeliverableOut"][];
+                };
+            };
+        };
+    };
+    get_deliverable_api_v1_deliverables__deliverable_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deliverable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_deliverable_changes_api_v1_deliverables__deliverable_id__changes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                deliverable_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliverableChangeOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

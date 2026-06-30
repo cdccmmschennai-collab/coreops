@@ -2,9 +2,11 @@ import { api } from "@/lib/api-client";
 
 import type {
   Attendance,
+  AttendanceBulkSaveBody,
   AttendanceCreateBody,
   AttendanceListParams,
   AttendancePage,
+  AttendanceSheet,
   AttendanceUpdateBody,
 } from "./types";
 
@@ -27,4 +29,8 @@ export const attendanceApi = {
   update: (id: string, body: AttendanceUpdateBody) =>
     api.patch<Attendance>(`/attendance/${id}`, body),
   remove: (id: string) => api.del<void>(`/attendance/${id}`),
+  getSheet: (date: string) =>
+    api.get<AttendanceSheet>(`/attendance/sheet?date=${date}`),
+  bulkSave: (body: AttendanceBulkSaveBody) =>
+    api.post<AttendanceSheet>("/attendance/bulk", body),
 };
