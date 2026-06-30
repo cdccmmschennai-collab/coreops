@@ -45,6 +45,7 @@ import {
   EMPTY_TASK_ROW,
   WORK_LOCATION_LABEL,
   WORK_LOCATIONS,
+  isNoActivityDayStatus,
   toCreateBody,
   toUpdateBody,
   workReportFormSchema,
@@ -239,10 +240,29 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     resolver: zodResolver(workReportFormSchema),
     defaultValues,
   });
-  const { fields, append, remove } = useFieldArray({
+  const { fields, append, remove, replace } = useFieldArray({
     control: form.control,
     name: "tasks",
   });
+
+  // Leave-type day statuses (week off / leave / company holiday / comp-off):
+  // the employee did no project work, so the activity editor is frozen out —
+  // no rows, no benchmark, no pending — and only Remarks + Query stay active.
+  const dayStatus = form.watch("day_status");
+  const noActivity = isNoActivityDayStatus(dayStatus);
+  const prevNoActivity = React.useRef(noActivity);
+  React.useEffect(() => {
+    if (noActivity === prevNoActivity.current) return;
+    prevNoActivity.current = noActivity;
+    if (noActivity) {
+      // Drop activity rows + clear Office Location — none of it applies on leave.
+      replace([]);
+      form.setValue("location", undefined, { shouldValidate: true });
+    } else if (form.getValues("tasks").length === 0) {
+      // Switched back to a working day with no rows — restore one empty row.
+      replace([{ ...EMPTY_TASK_ROW }]);
+    }
+  }, [noActivity, replace, form]);
 
   // Backfill the UI-only `activity_id` filter for rows loaded from the API
   // with a sub_activity_id already set (edit mode) — once the flat
@@ -252,6 +272,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     if (subActivityById.size === 0) return;
     fields.forEach((_, index) => {
       const row = form.getValues(`tasks.${index}`);
+      // `fields` can be momentarily out of sync with form values (e.g. right
+      // after the task rows are cleared for a leave-type day) — skip if so.
+      if (!row) return;
       if (row.sub_activity_id && !row.activity_id) {
         const sub = subActivityById.get(row.sub_activity_id);
         if (sub) form.setValue(`tasks.${index}.activity_id`, sub.activity_id);
@@ -451,11 +474,17 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Office Location <span className="text-destructive">*</span>
+                      Office Location{" "}
+                      {noActivity ? (
+                        <span className="font-normal text-muted-foreground">(n/a)</span>
+                      ) : (
+                        <span className="text-destructive">*</span>
+                      )}
                     </FormLabel>
                     <Select
                       value={field.value ?? undefined}
                       onValueChange={(v) => field.onChange(v)}
+                      disabled={noActivity}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -482,6 +511,22 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
             <div className="space-y-3">
               <h3 className="text-sm font-medium">Project activities</h3>
 
+              {noActivity ? (
+                <div className="rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">
+                    No project activities for this day
+                  </p>
+                  <p className="mt-1">
+                    You selected{" "}
+                    <span className="font-medium">
+                      {dayStatus ? DAY_STATUS_LABEL[dayStatus] : ""}
+                    </span>{" "}
+                    — you&apos;re off, so activities, benchmarks and pending tracking
+                    don&apos;t apply. Add any Remarks or a Query below if needed.
+                  </p>
+                </div>
+              ) : (
+                <>
               {fields.map((field, index) => {
                 const selectedProjectId = watchedTasks?.[index]?.project_id;
                 const selectedProject = selectedProjectId
@@ -852,9 +897,33 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 <Plus className="h-4 w-4" />
                 Add activity
               </Button>
+                </>
+              )}
             </div>
 
             <Separator />
+
+            {/* ── Remarks (general — primary note for leave-type days) ── */}
+            <FormField
+              control={form.control}
+              name="remarks"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Remarks{" "}
+                    <span className="font-normal text-muted-foreground">(optional)</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={3}
+                      placeholder="Anything to note about this day?"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             {/* ── Query / Issues (end) ── */}
             <FormField

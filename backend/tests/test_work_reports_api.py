@@ -116,7 +116,7 @@ def test_create_with_day_status_and_location(client, setup_author):
     a = setup_author()
     payload = {
         "report_date": TODAY,
-        "day_status": "wfh",
+        "day_status": "work_from_home",
         "location": "chennai",
         "remarks": "Working from home today",
         "query_text": "Need access to the server",
@@ -125,7 +125,7 @@ def test_create_with_day_status_and_location(client, setup_author):
     res = client.post(BASE, headers=a["header"], json=payload)
     assert res.status_code == 201, res.text
     body = res.json()
-    assert body["day_status"] == "wfh"
+    assert body["day_status"] == "work_from_home"
     assert body["location"] == "chennai"
     assert body["remarks"] == "Working from home today"
     assert body["query_text"] == "Need access to the server"

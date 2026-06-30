@@ -60,20 +60,13 @@ def sub(name, type=None, value=None, period=None, unit=None, remarks=None, count
 # ── source dataset (ATTN-PLANT-ACTIVITY-SUB ACTIVITY-20260615.xlsx, sheet ACTIVITY) ──
 
 ACTIVITIES = [
-    {"name": "LEAVE", "subs": [sub("LEAVE")]},
-    {"name": "COMPANY HOLIDAY", "subs": [sub("COMPANY HOLIDAY")]},
-    {"name": "WORK FROM HOME", "subs": [sub("WORK FROM HOME")]},
-    {"name": "WEEK OFF", "subs": [sub("WEEK OFF")]},
-    {"name": "WORK AT OFFICE", "subs": [sub("WORK AT OFFICE")]},
-    {"name": "COMP-OFF", "subs": [sub("COMP-OFF")]},
-    {"name": "OVERTIME HOURS-COMPENSATION", "subs": [sub("OVERTIME HOURS-COMPENSATION")]},
-    {"name": "OVERTIME HOURS-SALARY", "subs": [sub("OVERTIME HOURS-SALARY")]},
-    {"name": "PERMISSION", "subs": [
-        sub("PERMISSION-FIRST HALF 1HR"),
-        sub("PERMISSION-SECOND HALF 1HR"),
-        sub("PERMISSION-FIRST HALF 2HR"),
-        sub("PERMISSION-SECOND HALF 2HR"),
-    ]},
+    # NOTE: the attendance/admin lines (LEAVE, COMPANY HOLIDAY, WORK FROM HOME,
+    # WEEK OFF, WORK AT OFFICE, COMP-OFF, OVERTIME HOURS-COMPENSATION/SALARY,
+    # PERMISSION) were intentionally removed from the Activity Master — they now
+    # live as work-report **Day Status** options instead (migration 0048), so
+    # they no longer belong in the Activity / Sub-Activity pickers. Existing rows
+    # are soft-deactivated by scripts/deactivate_attendance_activities.py. Do not
+    # re-add them here.
     {"name": "PROJECT MEETING", "subs": [
         sub("PROJECT MEETING-FMTL", TASK_BASED),
         sub("PROJECT MEETING-MTL", TASK_BASED),

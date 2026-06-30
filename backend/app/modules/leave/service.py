@@ -12,7 +12,7 @@ Workflow:
   rejected → (re-open by editing → back to pending? No: employee must create new)
 """
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,9 +20,19 @@ from sqlalchemy.orm import Session
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.models import LeaveRequest, LeaveStatus
-from app.modules.leave.schemas import LeaveRequestCreate, LeaveRequestUpdate, LeaveReviewBody
+from app.modules.leave.schemas import (
+    DeliverableConflictOut,
+    LeaveDeliverableImpactOut,
+    LeaveRequestCreate,
+    LeaveRequestUpdate,
+    LeaveReviewBody,
+)
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
+
+# Number of calendar days before/after a deliverable's planned date that a
+# leave day must fall within to count as a Deliverable Impact.
+DELIVERABLE_IMPACT_WINDOW = timedelta(days=2)
 
 
 def _now() -> datetime:
@@ -291,3 +301,125 @@ def reject_leave_request(
         f"/attendance?tab=leave&id={req.id}",
     )
     return req
+
+
+# ---------- deliverable impact (decision support) --------------------------
+
+def deliverable_impacts(
+    db: Session, actor: User, leave_request_ids: list[uuid.UUID]
+) -> list[LeaveDeliverableImpactOut]:
+    """For the given leave requests, find Planned deliverables whose target
+    date falls within ±2 days of the requested leave, on projects the
+    requesting employee is assigned to.
+
+    Informational only — never blocks approval. Computed in a handful of bulk
+    queries for the whole displayed page (no per-row querying).
+    """
+    from app.modules.project_deliverables.models import (
+        DeliverableStatus,
+        ProjectDeliverable,
+    )
+    from app.modules.projects.models import Project, ProjectMember
+
+    if actor.role != UserRole.project_manager:
+        raise AppError(
+            "forbidden", "Only project managers can review deliverable impact.", 403
+        )
+    if not leave_request_ids:
+        return []
+
+    reqs = (
+        db.execute(
+            select(LeaveRequest).where(LeaveRequest.id.in_(leave_request_ids))
+        )
+        .scalars()
+        .all()
+    )
+    if not reqs:
+        return []
+
+    employee_ids = {r.employee_id for r in reqs}
+
+    # employee → set of project ids they belong to
+    member_rows = db.execute(
+        select(ProjectMember.employee_id, ProjectMember.project_id).where(
+            ProjectMember.employee_id.in_(employee_ids)
+        )
+    ).all()
+    projects_by_emp: dict[uuid.UUID, set[uuid.UUID]] = {}
+    project_ids: set[uuid.UUID] = set()
+    for emp_id, proj_id in member_rows:
+        projects_by_emp.setdefault(emp_id, set()).add(proj_id)
+        project_ids.add(proj_id)
+    if not project_ids:
+        return []
+
+    # Bound the deliverable scan to the widest possible impact window across
+    # all displayed requests, so we never scan the whole deliverables table.
+    win_lo = min(r.start_date for r in reqs) - DELIVERABLE_IMPACT_WINDOW
+    win_hi = max(r.end_date for r in reqs) + DELIVERABLE_IMPACT_WINDOW
+
+    deliv_rows = db.execute(
+        select(
+            ProjectDeliverable.id.label("deliverable_id"),
+            ProjectDeliverable.project_id.label("project_id"),
+            ProjectDeliverable.name.label("deliverable_name"),
+            ProjectDeliverable.target_date.label("target_date"),
+            Project.name.label("project_name"),
+            Project.code.label("project_code"),
+        )
+        .join(Project, Project.id == ProjectDeliverable.project_id)
+        .where(
+            ProjectDeliverable.project_id.in_(project_ids),
+            ProjectDeliverable.status == DeliverableStatus.planned,
+            ProjectDeliverable.target_date.is_not(None),
+            ProjectDeliverable.target_date >= win_lo,
+            ProjectDeliverable.target_date <= win_hi,
+            Project.deleted_at.is_(None),
+        )
+    ).all()
+    delivs_by_project: dict[uuid.UUID, list] = {}
+    for d in deliv_rows:
+        delivs_by_project.setdefault(d.project_id, []).append(d)
+
+    emp_names = {
+        row.id: f"{row.first_name} {row.last_name}".strip()
+        for row in db.execute(
+            select(Employee.id, Employee.first_name, Employee.last_name).where(
+                Employee.id.in_(employee_ids)
+            )
+        ).all()
+    }
+
+    items: list[LeaveDeliverableImpactOut] = []
+    for r in reqs:
+        # Leave [start, end] conflicts with deliverable date D when the leave
+        # overlaps [D-2, D+2], i.e. D in [start-2, end+2].
+        lo = r.start_date - DELIVERABLE_IMPACT_WINDOW
+        hi = r.end_date + DELIVERABLE_IMPACT_WINDOW
+        seen: set[uuid.UUID] = set()
+        conflicts: list[DeliverableConflictOut] = []
+        for proj_id in projects_by_emp.get(r.employee_id, ()):
+            for d in delivs_by_project.get(proj_id, ()):
+                if d.deliverable_id in seen or not (lo <= d.target_date <= hi):
+                    continue
+                seen.add(d.deliverable_id)
+                conflicts.append(
+                    DeliverableConflictOut(
+                        deliverable_id=d.deliverable_id,
+                        deliverable_name=d.deliverable_name,
+                        project_id=d.project_id,
+                        project_name=d.project_name,
+                        project_code=d.project_code,
+                        status=DeliverableStatus.planned.value,
+                        target_date=d.target_date,
+                        employee_id=r.employee_id,
+                        employee_name=emp_names.get(r.employee_id),
+                    )
+                )
+        if conflicts:
+            conflicts.sort(key=lambda c: c.target_date or date.max)
+            items.append(
+                LeaveDeliverableImpactOut(leave_request_id=r.id, conflicts=conflicts)
+            )
+    return items

@@ -119,7 +119,9 @@ class WorkReportCreate(BaseModel):
     maintenance_plan_count: int | None = Field(default=None, ge=0)
     # Legacy field kept for backward compat; new UI sends remarks instead
     summary: str | None = Field(default=None, max_length=_SUMMARY_MAX)
-    tasks: list[WorkReportTaskIn] = Field(min_length=1)
+    # May be empty for leave-type day statuses (week off / leave / company
+    # holiday / comp-off); the service requires ≥1 activity for working days.
+    tasks: list[WorkReportTaskIn] = Field(default_factory=list)
 
 
 class WorkReportUpdate(BaseModel):
@@ -134,7 +136,9 @@ class WorkReportUpdate(BaseModel):
     maintenance_item_count: int | None = Field(default=None, ge=0)
     maintenance_plan_count: int | None = Field(default=None, ge=0)
     summary: str | None = Field(default=None, max_length=_SUMMARY_MAX)
-    tasks: list[WorkReportTaskIn] | None = Field(default=None, min_length=1)
+    # None = "tasks not part of this update"; an empty list is allowed for
+    # leave-type day statuses (the service clears any existing activity lines).
+    tasks: list[WorkReportTaskIn] | None = None
 
 
 class WorkReportReject(BaseModel):

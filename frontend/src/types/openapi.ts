@@ -1945,7 +1945,7 @@ export interface components {
          * DayStatus
          * @enum {string}
          */
-        DayStatus: "on_duty" | "office" | "half_day" | "on_leave" | "wfh" | "permission" | "comp_off";
+        DayStatus: "leave" | "company_holiday" | "work_from_home" | "week_off" | "work_at_office" | "comp_off" | "overtime_compensation" | "overtime_salary" | "permission_first_half_1hr" | "permission_second_half_1hr" | "permission_first_half_2hr" | "permission_second_half_2hr";
         /** DeliverableCreate */
         DeliverableCreate: {
             /** Name */

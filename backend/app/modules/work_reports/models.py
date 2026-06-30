@@ -48,13 +48,34 @@ class WorkReportStatus(str, enum.Enum):
 
 
 class DayStatus(str, enum.Enum):
-    on_duty = "on_duty"
-    office = "office"
-    half_day = "half_day"
-    on_leave = "on_leave"
-    wfh = "wfh"
-    permission = "permission"
+    # Company day-status taxonomy (replaces the original Google-Form placeholders
+    # in migration 0048). The four NO-ACTIVITY statuses (leave, company_holiday,
+    # week_off, comp_off) mean the employee did no project work that day — the
+    # report carries no task lines, no benchmark, and no overdue/pending tracking.
+    leave = "leave"
+    company_holiday = "company_holiday"
+    work_from_home = "work_from_home"
+    week_off = "week_off"
+    work_at_office = "work_at_office"
     comp_off = "comp_off"
+    overtime_compensation = "overtime_compensation"
+    overtime_salary = "overtime_salary"
+    permission_first_half_1hr = "permission_first_half_1hr"
+    permission_second_half_1hr = "permission_second_half_1hr"
+    permission_first_half_2hr = "permission_first_half_2hr"
+    permission_second_half_2hr = "permission_second_half_2hr"
+
+
+# Day statuses where the employee did no project work: the report needs no task
+# lines and is exempt from benchmark / overdue / pending calculations.
+NO_ACTIVITY_DAY_STATUSES = frozenset(
+    {
+        DayStatus.leave,
+        DayStatus.company_holiday,
+        DayStatus.week_off,
+        DayStatus.comp_off,
+    }
+)
 
 
 class WorkLocation(str, enum.Enum):

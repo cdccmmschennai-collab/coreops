@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
@@ -29,6 +30,7 @@ interface Props {
 
 /** Employee leave history with cancel action for pending requests. */
 export function LeaveHistory({ employeeId }: Props) {
+  const router = useRouter();
   const [offset, setOffset] = React.useState(0);
   const query = useLeaveList({
     employee_id: employeeId,
@@ -74,7 +76,11 @@ export function LeaveHistory({ employeeId }: Props) {
         </TableHeader>
         <TableBody>
           {items.map((req) => (
-            <TableRow key={req.id}>
+            <TableRow
+              key={req.id}
+              className="cursor-pointer hover:bg-muted/40"
+              onClick={() => router.push(`/attendance/leave/${req.id}`)}
+            >
               <TableCell className="font-medium">
                 {LEAVE_TYPE_LABEL[req.leave_type]}
               </TableCell>
@@ -89,7 +95,7 @@ export function LeaveHistory({ employeeId }: Props) {
               <TableCell className="max-w-[200px] truncate text-muted-foreground">
                 {req.manager_comment ?? "—"}
               </TableCell>
-              <TableCell>
+              <TableCell onClick={(e) => e.stopPropagation()}>
                 {req.status === "pending" && (
                   <Button
                     variant="ghost"
