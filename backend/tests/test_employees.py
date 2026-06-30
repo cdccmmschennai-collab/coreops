@@ -267,7 +267,7 @@ def test_reset_account_password(client, make_user, make_employee, login):
 
     # New password should work at login.
     login_res = client.post(
-        "/api/v1/auth/login", json={"email": "hire@company.com", "password": "NewPass9999"}
+        "/api/v1/auth/login", json={"identifier": "hire@company.com", "password": "NewPass9999"}
     )
     assert login_res.status_code == 200
 
@@ -290,7 +290,7 @@ def test_disable_and_enable_account(client, make_user, make_employee, login):
 
     # Disabled user cannot log in.
     login_res = client.post(
-        "/api/v1/auth/login", json={"email": "active@company.com", "password": "password123"}
+        "/api/v1/auth/login", json={"identifier": "active@company.com", "password": "password123"}
     )
     assert login_res.status_code == 401
 
@@ -418,7 +418,7 @@ def test_unlink_account(client, make_user, make_employee, login):
     # User row still exists and can still authenticate.
     assert client.post(
         "/api/v1/auth/login",
-        json={"email": "detach@company.com", "password": "password123"},
+        json={"identifier": "detach@company.com", "password": "password123"},
     ).status_code == 200
 
 

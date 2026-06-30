@@ -48,7 +48,7 @@ def test_admin_creates_user_then_that_user_logs_in(client, auth_header):
     assert res.status_code == 201, res.text
     assert res.json()["role"] == "employee"
     login = client.post(
-        "/api/v1/auth/login", json={"email": "new@example.com", "password": "password123"}
+        "/api/v1/auth/login", json={"identifier": "new@example.com", "password": "password123"}
     )
     assert login.status_code == 200
 
@@ -69,7 +69,7 @@ def test_set_password_then_login_with_new(client, auth_header, make_user):
         json={"new_password": "brand-new-pw"},
     )
     assert res.status_code == 204
-    assert client.post("/api/v1/auth/login", json={"email": "p@example.com", "password": "brand-new-pw"}).status_code == 200
+    assert client.post("/api/v1/auth/login", json={"identifier": "p@example.com", "password": "brand-new-pw"}).status_code == 200
 
 
 def test_set_role(client, auth_header, make_user):

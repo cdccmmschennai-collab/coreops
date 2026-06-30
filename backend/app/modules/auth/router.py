@@ -24,7 +24,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     ip = request.client.host if request.client else "unknown"
-    token, expires_in = service.authenticate(db, body.email, body.password, ip)
+    token, expires_in = service.authenticate(db, body.identifier, body.password, ip)
     return TokenResponse(access_token=token, expires_in=expires_in)
 
 

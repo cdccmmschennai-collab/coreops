@@ -65,17 +65,17 @@ def test_login_success_audited(client, make_user, login):
 
 def test_login_failure_audited_and_persisted(client, make_user):
     make_user("bad@x.com")
-    res = client.post("/api/v1/auth/login", json={"email": "bad@x.com", "password": "wrong"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "bad@x.com", "password": "wrong"})
     assert res.status_code == 401
     # The failure event must survive even though the request errored out.
     rows, total = _logs(action=AuditAction.LOGIN_FAILURE)
     assert total == 1
     assert rows[0].status == "failure"
-    assert rows[0].details["attempted_email"] == "bad@x.com"
+    assert rows[0].details["attempted_identifier"] == "bad@x.com"
 
 
 def test_login_unknown_email_audited_without_actor(client):
-    res = client.post("/api/v1/auth/login", json={"email": "nobody@x.com", "password": "x"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "nobody@x.com", "password": "x"})
     assert res.status_code == 401
     rows, total = _logs(action=AuditAction.LOGIN_FAILURE)
     assert total == 1

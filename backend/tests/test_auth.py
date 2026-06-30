@@ -4,7 +4,7 @@ from app.modules.users.models import UserRole
 
 def test_login_success_returns_token(client, make_user):
     make_user("a@example.com", "password123", UserRole.project_manager)
-    res = client.post("/api/v1/auth/login", json={"email": "a@example.com", "password": "password123"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "a@example.com", "password": "password123"})
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["token_type"] == "bearer"
@@ -14,20 +14,20 @@ def test_login_success_returns_token(client, make_user):
 
 def test_login_wrong_password_401(client, make_user):
     make_user("a@example.com", "password123")
-    res = client.post("/api/v1/auth/login", json={"email": "a@example.com", "password": "nope"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "a@example.com", "password": "nope"})
     assert res.status_code == 401
     assert res.json()["error"]["code"] == "invalid_credentials"
 
 
 def test_login_inactive_user_401(client, make_user):
     make_user("a@example.com", "password123", is_active=False)
-    res = client.post("/api/v1/auth/login", json={"email": "a@example.com", "password": "password123"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "a@example.com", "password": "password123"})
     assert res.status_code == 401
 
 
 def test_login_email_is_case_insensitive(client, make_user):
     make_user("Mixed@Example.com", "password123")
-    res = client.post("/api/v1/auth/login", json={"email": "mixed@example.com", "password": "password123"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "mixed@example.com", "password": "password123"})
     assert res.status_code == 200
 
 
@@ -66,16 +66,24 @@ def test_logout_revokes_token(client, auth_header):
 def test_login_throttled_after_repeated_failures(client, make_user):
     make_user("t@example.com", "password123")
     for _ in range(5):
-        client.post("/api/v1/auth/login", json={"email": "t@example.com", "password": "bad"})
-    res = client.post("/api/v1/auth/login", json={"email": "t@example.com", "password": "password123"})
+        client.post("/api/v1/auth/login", json={"identifier": "t@example.com", "password": "bad"})
+    res = client.post("/api/v1/auth/login", json={"identifier": "t@example.com", "password": "password123"})
     assert res.status_code == 429
     assert res.json()["error"]["code"] == "rate_limited"
 
 
-def test_login_validation_error_422(client):
-    res = client.post("/api/v1/auth/login", json={"email": "not-an-email", "password": "x"})
+def test_login_empty_identifier_422(client):
+    # identifier is free-form now (any non-empty string); only an empty/missing
+    # value is a validation error — a non-email string is a normal auth attempt.
+    res = client.post("/api/v1/auth/login", json={"identifier": "", "password": "x"})
     assert res.status_code == 422
     assert res.json()["error"]["code"] == "validation_error"
+
+
+def test_login_non_email_identifier_is_not_validation_error(client):
+    res = client.post("/api/v1/auth/login", json={"identifier": "not-an-email", "password": "x"})
+    assert res.status_code == 401
+    assert res.json()["error"]["code"] == "invalid_credentials"
 
 
 # --- change password (self-service) ---------------------------------------
@@ -91,11 +99,11 @@ def test_change_password_success_rotates_credentials(client, auth_header):
     # old password rejected, new password accepted
     assert client.post(
         "/api/v1/auth/login",
-        json={"email": "cp@example.com", "password": "password123"},
+        json={"identifier": "cp@example.com", "password": "password123"},
     ).status_code == 401
     assert client.post(
         "/api/v1/auth/login",
-        json={"email": "cp@example.com", "password": "newpassword123"},
+        json={"identifier": "cp@example.com", "password": "newpassword123"},
     ).status_code == 200
 
 
