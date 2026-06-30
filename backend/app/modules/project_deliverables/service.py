@@ -143,6 +143,61 @@ def list_all_deliverables(
     return list(rows)
 
 
+# ---------------------------------------------------------------------------
+# Notifications — every employee assigned to the project is told when a
+# deliverable is planned, its delivery date moves, or it is completed.
+# ---------------------------------------------------------------------------
+
+def _project_member_user_ids(db: Session, project_id: uuid.UUID) -> list[uuid.UUID]:
+    """Distinct user ids of all employees assigned to the project (skips
+    members without a login)."""
+    rows = db.execute(
+        select(Employee.user_id)
+        .join(ProjectMember, ProjectMember.employee_id == Employee.id)
+        .where(
+            ProjectMember.project_id == project_id,
+            Employee.user_id.is_not(None),
+        )
+    ).scalars().all()
+    return list({uid for uid in rows if uid is not None})
+
+
+def _notify_members(
+    db: Session,
+    project_id: uuid.UUID,
+    deliverable_id: uuid.UUID,
+    *,
+    type_: str,
+    title: str,
+    message: str,
+) -> None:
+    """Fan a deliverable event out to every project member. Best-effort: a
+    notification failure must not roll back the deliverable change the caller
+    already committed."""
+    try:
+        from app.modules.notifications.service import create_notification
+
+        target_url = f"/projects/deliverables/{deliverable_id}"
+        for uid in _project_member_user_ids(db, project_id):
+            create_notification(
+                db,
+                user_id=uid,
+                type_=type_,
+                title=title,
+                message=message,
+                entity_type="deliverable",
+                entity_id=deliverable_id,
+                target_url=target_url,
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _fmt(value: date | None) -> str:
+    return value.isoformat() if value else "—"
+
+
 def _attach_project_names(db: Session, rows: list[ProjectDeliverable]) -> None:
     proj_ids = {r.project_id for r in rows}
     if not proj_ids:
@@ -184,7 +239,7 @@ def create_deliverable(
     project_id: uuid.UUID,
     data: DeliverableCreate,
 ) -> ProjectDeliverable:
-    _fetch_project(db, project_id)
+    project = _fetch_project(db, project_id)
     _assert_can_manage(db, actor, project_id)
 
     d = ProjectDeliverable(
@@ -195,6 +250,20 @@ def create_deliverable(
     db.commit()
     db.refresh(d)
     _attach_owner_names(db, [d])
+
+    _notify_members(
+        db,
+        project_id,
+        d.id,
+        type_="deliverable_planned",
+        title="Deliverable Planned",
+        message=(
+            "A new deliverable has been planned for your project.\n"
+            f"Project: {project.name}\n"
+            f"Activity: {d.name}\n"
+            f"Planned Delivery Date: {_fmt(d.target_date)}"
+        ),
+    )
     return d
 
 
@@ -209,10 +278,14 @@ def update_deliverable(
     deliverable_id: uuid.UUID,
     data: DeliverableUpdate,
 ) -> ProjectDeliverable:
-    _fetch_project(db, project_id)
+    project = _fetch_project(db, project_id)
     _assert_can_manage(db, actor, project_id)
 
     d = _fetch_deliverable(db, project_id, deliverable_id)
+
+    # Snapshot the fields that drive notifications before the update is applied.
+    prev_target_date = d.target_date
+    prev_status = d.status
 
     payload = data.model_dump(exclude_unset=True)
     raw_reason = payload.pop("reason", None)
@@ -244,6 +317,15 @@ def update_deliverable(
                 d.status.value,
                 payload["status"].value,
             ))
+
+    # A forward move into "completed" is logged to the timeline too (so the
+    # delivery shows up), but needs no user-supplied reason — it carries a
+    # system reason and is recorded separately from `tracked`.
+    completing = (
+        "status" in payload
+        and payload["status"] == DeliverableStatus.completed
+        and d.status != DeliverableStatus.completed
+    )
 
     if tracked and not reason:
         raise AppError(
@@ -281,9 +363,69 @@ def update_deliverable(
             },
         )
 
+    if completing:
+        db.add(
+            DeliverableChange(
+                deliverable_id=d.id,
+                field=DeliverableChangeField.STATUS,
+                old_value=prev_status.value,
+                new_value=DeliverableStatus.completed.value,
+                changed_by=actor.id,
+                reason="This activity has been delivered.",
+            )
+        )
+        audit.record_audit(
+            db,
+            action=AuditAction.DELIVERABLE_FIELD_CHANGE,
+            actor=actor,
+            entity_type=EntityType.DELIVERABLE,
+            entity_id=d.id,
+            details={
+                "field": DeliverableChangeField.STATUS,
+                "old": prev_status.value,
+                "new": DeliverableStatus.completed.value,
+                "reason": "This activity has been delivered.",
+            },
+        )
+
     db.commit()
     db.refresh(d)
     _attach_owner_names(db, [d])
+
+    # Schedule-change notification: the planned delivery (target) date moved.
+    if "target_date" in payload and d.target_date != prev_target_date:
+        _notify_members(
+            db,
+            project_id,
+            d.id,
+            type_="deliverable_date_updated",
+            title="Delivery Date Updated",
+            message=(
+                "The planned delivery date for a deliverable has been updated.\n"
+                f"Previous Date: {_fmt(prev_target_date)}\n"
+                f"New Date: {_fmt(d.target_date)}"
+            ),
+        )
+
+    # Completion notification: the deliverable was just marked completed.
+    if (
+        "status" in payload
+        and d.status == DeliverableStatus.completed
+        and prev_status != DeliverableStatus.completed
+    ):
+        _notify_members(
+            db,
+            project_id,
+            d.id,
+            type_="deliverable_completed",
+            title="Deliverable Completed",
+            message=(
+                "A deliverable for your project has been marked as completed.\n"
+                f"Project: {project.name}\n"
+                f"Activity: {d.name}\n"
+                f"Completion Date: {_fmt(d.completion_date or date.today())}"
+            ),
+        )
     return d
 
 

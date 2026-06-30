@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import type { DeliverableCreateBody, DeliverableUpdateBody } from "./types";
 
-export const DELIVERABLE_STATUSES = ["pending", "in_progress", "completed"] as const;
+export const DELIVERABLE_STATUSES = ["planned", "completed"] as const;
 
 export const deliverableFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(500),
@@ -25,7 +25,7 @@ export const EMPTY_DELIVERABLE_FORM: DeliverableFormValues = {
   planned_start_date: "",
   target_date: "",
   owner_employee_id: "",
-  status: "pending",
+  status: "planned",
   completion_date: "",
   reason: "",
 };

@@ -32,7 +32,7 @@ class DeliverableCreate(BaseModel):
     planned_start_date: date | None = None
     target_date: date | None = None
     owner_employee_id: uuid.UUID | None = None
-    status: DeliverableStatus = DeliverableStatus.pending
+    status: DeliverableStatus = DeliverableStatus.planned
     completion_date: date | None = None
 
 
