@@ -2,11 +2,19 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, ChevronDown, ChevronRight } from "lucide-react";
 
 import { Pagination } from "@/components/data/pagination";
 import { SearchInput } from "@/components/data/search-input";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -22,13 +30,40 @@ import { formatInt } from "@/lib/format";
 import { useEmployeesPerformance } from "../hooks";
 import type { EmployeePerformanceRow, PerformanceSort } from "../types";
 
-const PAGE_SIZE = 5;
+const PAGE_SIZE = 7;
 const COLLAPSE_KEY = "employeePerformanceCollapsed";
+
+// Status filter — client-side, derived from each row's Pending value (the same
+// rule the Status badge uses). "all" shows everyone.
+type StatusFilter = "all" | "needs_review" | "on_track";
+
+/** True when the employee has pending work (→ "Needs Review", else "On Track"). */
+function needsReview(pending: string): boolean {
+  return Number(pending) > 0;
+}
 
 const MONTHS_SHORT = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
-function formatPct(pct: string | null): string {
-  return pct == null ? "—" : `${Number(pct).toFixed(0)}%`;
+/**
+ * Status is derived solely from the employee's Pending value: zero pending →
+ * "On Track", any pending → "Needs Review". Rendered with the shared Badge so
+ * it matches the rest of the dashboard (success = green pill, danger = red).
+ */
+function StatusBadge({ pending }: { pending: string }) {
+  if (needsReview(pending)) {
+    return (
+      <Badge variant="danger">
+        <AlertTriangle className="h-3 w-3" aria-hidden />
+        Needs Review
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="success">
+      <Check className="h-3 w-3" aria-hidden />
+      On Track
+    </Badge>
+  );
 }
 
 /**
@@ -58,8 +93,11 @@ export function PerformanceTable() {
   const router = useRouter();
   const [search, setSearch] = React.useState("");
   const [page, setPage] = React.useState(1);
-  const [sort, setSort] = React.useState<PerformanceSort>("productivity");
-  const [order, setOrder] = React.useState<"asc" | "desc">("asc");
+  // Default ordering: the employees with the most pending work surface first so
+  // the PM sees who needs attention at a glance (highest pending → lowest).
+  const [sort, setSort] = React.useState<PerformanceSort>("pending");
+  const [order, setOrder] = React.useState<"asc" | "desc">("desc");
+  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all");
 
   // Collapse state: default expanded on first visit, then persisted. Read in an
   // effect (not in the initializer) so server and first client render agree.
@@ -102,6 +140,15 @@ export function PerformanceTable() {
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
 
+  // Status filter runs client-side on the loaded rows so it's instant and needs
+  // no backend change. It stacks with the (server-side) search: rows already
+  // match the search query, and we further narrow them by status here.
+  const visibleRows = React.useMemo(() => {
+    if (statusFilter === "all") return rows;
+    const want = statusFilter === "needs_review";
+    return rows.filter((row) => needsReview(row.pending) === want);
+  }, [rows, statusFilter]);
+
   // Measure the content so expand/collapse animates to an exact pixel height
   // (same approach as the "Benchmark Activities" card). The content stays
   // mounted while collapsed — clipped to height 0 — so it can be re-measured
@@ -116,7 +163,7 @@ export function PerformanceTable() {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [rows, isLoading]);
+  }, [visibleRows, isLoading]);
 
   return (
     <Card className="overflow-hidden">
@@ -158,12 +205,27 @@ export function PerformanceTable() {
               <span className="font-semibold tabular text-foreground">{weekRangeLabel()}</span>
               <span className="text-xs text-muted-foreground">Mon–Fri</span>
             </div>
-            <SearchInput
-              value={search}
-              onChange={onSearch}
-              placeholder="Search name or code…"
-              className="w-56"
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <SearchInput
+                value={search}
+                onChange={onSearch}
+                placeholder="Search name or code…"
+                className="w-56"
+              />
+              <Select
+                value={statusFilter}
+                onValueChange={(value) => setStatusFilter(value as StatusFilter)}
+              >
+                <SelectTrigger className="w-[150px]" aria-label="Filter by status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="needs_review">Needs Review</SelectItem>
+                  <SelectItem value="on_track">On Track</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {isLoading && rows.length === 0 ? (
@@ -181,18 +243,18 @@ export function PerformanceTable() {
                     <TableHead className="text-right">Target</TableHead>
                     <TableHead className="text-right">Actual</TableHead>
                     <SortHead label="Pending" k="pending" sort={sort} order={order} onSort={toggleSort} align="right" />
-                    <SortHead label="Productivity" k="productivity" sort={sort} order={order} onSort={toggleSort} align="right" />
+                    <TableHead className="text-right">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((row) => (
+                  {visibleRows.map((row) => (
                     <Row
                       key={row.id}
                       row={row}
                       onClick={() => router.push(`/dashboard/employees/${row.id}`)}
                     />
                   ))}
-                  {rows.length === 0 && (
+                  {visibleRows.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
                         No employees match.
@@ -225,7 +287,11 @@ function Row({ row, onClick }: { row: EmployeePerformanceRow; onClick: () => voi
       <TableCell className="tabular text-right">{formatInt(row.target)}</TableCell>
       <TableCell className="tabular text-right">{formatInt(row.actual)}</TableCell>
       <TableCell className="tabular text-right">{formatInt(row.pending)}</TableCell>
-      <TableCell className="tabular text-right">{formatPct(row.productivity)}</TableCell>
+      <TableCell className="text-right">
+        <div className="flex justify-end">
+          <StatusBadge pending={row.pending} />
+        </div>
+      </TableCell>
     </TableRow>
   );
 }
