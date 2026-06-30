@@ -234,3 +234,118 @@ def delete_attendance(db: Session, actor: User, record_id: uuid.UUID) -> None:
     record = _fetch(db, record_id)
     db.delete(record)
     db.commit()
+
+
+# ---------- bulk / sheet (admin) -------------------------------------------
+def _active_employees(db: Session) -> list[Employee]:
+    """All non-deleted employees, ordered for a stable sheet (name, code)."""
+    return list(
+        db.execute(
+            select(Employee)
+            .where(Employee.deleted_at.is_(None))
+            .order_by(Employee.first_name, Employee.last_name, Employee.employee_code)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def get_attendance_sheet(db: Session, actor: User, attendance_date: date):
+    """Return one row per active employee, merged with saved records for the
+    date. Employees without a record default to ``present``. Returns
+    (rows, exists) where exists is True when any record exists for the date."""
+    employees = _active_employees(db)
+    records = {
+        r.employee_id: r
+        for r in db.execute(
+            select(AttendanceRecord).where(
+                AttendanceRecord.attendance_date == attendance_date
+            )
+        )
+        .scalars()
+        .all()
+    }
+    rows = []
+    for emp in employees:
+        rec = records.get(emp.id)
+        rows.append(
+            {
+                "employee_id": emp.id,
+                "employee_code": emp.employee_code,
+                "employee_name": emp.full_name,
+                "status": rec.status if rec else AttendanceStatus.present,
+                "record_id": rec.id if rec else None,
+                "check_in_at": rec.check_in_at if rec else None,
+                "check_out_at": rec.check_out_at if rec else None,
+                "total_minutes": rec.total_minutes if rec else 0,
+                "overtime_minutes": rec.overtime_minutes if rec else 0,
+            }
+        )
+    return rows, bool(records)
+
+
+def bulk_save_attendance(
+    db: Session, actor: User, attendance_date: date, records: list
+) -> None:
+    """Upsert every record in a single transaction (no partial saves).
+
+    Existing (employee, date) rows are updated; the rest are inserted. An
+    unknown/deleted employee or invalid check-in/out aborts the whole batch.
+    """
+    if not records:
+        return
+
+    employee_ids = [r.employee_id for r in records]
+    valid_ids = {
+        e for e in db.execute(
+            select(Employee.id).where(
+                Employee.id.in_(employee_ids), Employee.deleted_at.is_(None)
+            )
+        ).scalars().all()
+    }
+    unknown = set(employee_ids) - valid_ids
+    if unknown:
+        raise AppError("validation_error", "One or more employees were not found.", 422)
+
+    existing = {
+        r.employee_id: r
+        for r in db.execute(
+            select(AttendanceRecord).where(
+                AttendanceRecord.attendance_date == attendance_date,
+                AttendanceRecord.employee_id.in_(employee_ids),
+            )
+        )
+        .scalars()
+        .all()
+    }
+
+    for item in records:
+        if (
+            item.check_in_at is not None
+            and item.check_out_at is not None
+            and item.check_out_at < item.check_in_at
+        ):
+            raise AppError(
+                "validation_error", "Check-out cannot be before check-in.", 422
+            )
+        total, overtime = _compute_minutes(item.check_in_at, item.check_out_at)
+        record = existing.get(item.employee_id)
+        if record is None:
+            record = AttendanceRecord(
+                employee_id=item.employee_id,
+                attendance_date=attendance_date,
+                created_by=actor.id,
+            )
+            db.add(record)
+        record.status = item.status
+        record.check_in_at = item.check_in_at
+        record.check_out_at = item.check_out_at
+        record.total_minutes = total
+        record.overtime_minutes = overtime
+        record.updated_by = actor.id
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "Attendance violates a uniqueness constraint.", 409)

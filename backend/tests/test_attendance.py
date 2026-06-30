@@ -205,3 +205,127 @@ def test_employee_attendance_endpoint_scoped(
     assert client.get(f"/api/v1/employees/{other.id}/attendance", headers=h).status_code == 403
     admin = auth_header("admin@example.com", role=UserRole.project_manager)
     assert client.get(f"/api/v1/employees/{other.id}/attendance", headers=admin).status_code == 200
+
+
+# ---------- bulk: GET sheet ----------
+def test_sheet_no_attendance_defaults_present(client, auth_header, make_employee):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    e1 = make_employee(employee_code="S-1", first_name="John")
+    e2 = make_employee(employee_code="S-2", first_name="David")
+    res = client.get(f"/api/v1/attendance/sheet?date={DAY}", headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["attendance_date"] == DAY
+    assert body["exists"] is False
+    by_id = {r["employee_id"]: r for r in body["rows"]}
+    assert by_id[str(e1.id)]["status"] == "present"
+    assert by_id[str(e2.id)]["status"] == "present"
+    # Rows carry display fields the grid needs.
+    assert by_id[str(e1.id)]["employee_code"] == "S-1"
+    assert "employee_name" in by_id[str(e1.id)]
+
+
+def test_sheet_merges_saved_records(client, auth_header, make_employee, make_attendance):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    saved = make_employee(employee_code="S-3")
+    fresh = make_employee(employee_code="S-4")
+    make_attendance(
+        employee_id=saved.id, attendance_date=date(2026, 5, 1), status=AttendanceStatus.absent
+    )
+    body = client.get(f"/api/v1/attendance/sheet?date={DAY}", headers=h).json()
+    assert body["exists"] is True
+    by_id = {r["employee_id"]: r for r in body["rows"]}
+    assert by_id[str(saved.id)]["status"] == "absent"
+    # Employee with no record for the date still defaults to present.
+    assert by_id[str(fresh.id)]["status"] == "present"
+
+
+def test_sheet_excludes_deleted_employees(client, auth_header, make_employee, db):
+    from datetime import datetime, timezone
+
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    active = make_employee(employee_code="S-A")
+    gone = make_employee(employee_code="S-G")
+    gone.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    body = client.get(f"/api/v1/attendance/sheet?date={DAY}", headers=h).json()
+    ids = {r["employee_id"] for r in body["rows"]}
+    assert str(active.id) in ids
+    assert str(gone.id) not in ids
+
+
+def test_sheet_requires_project_manager(client, auth_header, make_employee):
+    make_employee(employee_code="S-R")
+    h = auth_header("emp@example.com", role=UserRole.employee)
+    assert client.get(f"/api/v1/attendance/sheet?date={DAY}", headers=h).status_code == 403
+
+
+# ---------- bulk: POST save ----------
+def _bulk(records, day=DAY):
+    return {"date": day, "records": records}
+
+
+def test_bulk_creates_records(client, auth_header, make_employee):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    e1 = make_employee(employee_code="B-1")
+    e2 = make_employee(employee_code="B-2")
+    body = _bulk(
+        [
+            {"employee_id": str(e1.id), "status": "present"},
+            {"employee_id": str(e2.id), "status": "absent"},
+        ]
+    )
+    res = client.post("/api/v1/attendance/bulk", headers=h, json=body)
+    assert res.status_code == 200, res.text
+    page = client.get("/api/v1/attendance", headers=h).json()
+    assert page["total"] == 2
+    by_id = {r["employee_id"]: r for r in client.get(f"/api/v1/attendance/sheet?date={DAY}", headers=h).json()["rows"]}
+    assert by_id[str(e1.id)]["status"] == "present"
+    assert by_id[str(e2.id)]["status"] == "absent"
+
+
+def test_bulk_updates_without_duplicates(client, auth_header, make_employee, make_attendance):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    e = make_employee(employee_code="B-3")
+    make_attendance(
+        employee_id=e.id, attendance_date=date(2026, 5, 1), status=AttendanceStatus.present
+    )
+    res = client.post(
+        "/api/v1/attendance/bulk",
+        headers=h,
+        json=_bulk([{"employee_id": str(e.id), "status": "leave"}]),
+    )
+    assert res.status_code == 200, res.text
+    page = client.get("/api/v1/attendance", headers=h).json()
+    # Upsert: still one row for the (employee, date), not a duplicate.
+    assert page["total"] == 1
+    assert page["items"][0]["status"] == "leave"
+
+
+def test_bulk_unknown_employee_422_no_partial_save(client, auth_header, make_employee):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    e = make_employee(employee_code="B-4")
+    res = client.post(
+        "/api/v1/attendance/bulk",
+        headers=h,
+        json=_bulk(
+            [
+                {"employee_id": str(e.id), "status": "present"},
+                {"employee_id": str(uuid.uuid4()), "status": "absent"},
+            ]
+        ),
+    )
+    assert res.status_code == 422
+    # Whole batch rolled back — the valid record must NOT have been created.
+    assert client.get("/api/v1/attendance", headers=h).json()["total"] == 0
+
+
+def test_bulk_requires_project_manager(client, auth_header, make_employee):
+    e = make_employee(employee_code="B-5")
+    h = auth_header("emp@example.com", role=UserRole.employee)
+    res = client.post(
+        "/api/v1/attendance/bulk",
+        headers=h,
+        json=_bulk([{"employee_id": str(e.id), "status": "present"}]),
+    )
+    assert res.status_code == 403

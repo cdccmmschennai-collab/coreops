@@ -18,9 +18,12 @@ from app.core.deps import get_current_user, require_role
 from app.modules.attendance import service
 from app.modules.attendance.models import AttendanceStatus
 from app.modules.attendance.schemas import (
+    AttendanceBulkSave,
     AttendanceCreate,
     AttendanceOut,
     AttendancePage,
+    AttendanceSheet,
+    AttendanceSheetRow,
     AttendanceUpdate,
 )
 from app.modules.users.models import User
@@ -65,6 +68,35 @@ def create_attendance(
     db: Session = Depends(get_db),
 ) -> AttendanceOut:
     return AttendanceOut.model_validate(service.create_attendance(db, admin, body))
+
+
+@router.get("/sheet", response_model=AttendanceSheet)
+def get_attendance_sheet(
+    date: date = Query(...),
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> AttendanceSheet:
+    rows, exists = service.get_attendance_sheet(db, admin, date)
+    return AttendanceSheet(
+        attendance_date=date,
+        exists=exists,
+        rows=[AttendanceSheetRow.model_validate(r) for r in rows],
+    )
+
+
+@router.post("/bulk", response_model=AttendanceSheet)
+def bulk_save_attendance(
+    body: AttendanceBulkSave,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> AttendanceSheet:
+    service.bulk_save_attendance(db, admin, body.date, body.records)
+    rows, exists = service.get_attendance_sheet(db, admin, body.date)
+    return AttendanceSheet(
+        attendance_date=body.date,
+        exists=exists,
+        rows=[AttendanceSheetRow.model_validate(r) for r in rows],
+    )
 
 
 @router.get("/{record_id}", response_model=AttendanceOut)
