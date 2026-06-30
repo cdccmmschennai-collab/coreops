@@ -4,8 +4,7 @@ import Link from "next/link";
 
 import { RequireCapability } from "@/components/auth/require-capability";
 import { PageHeader } from "@/components/shell/page-header";
-import { AttendanceForm } from "@/features/attendance/components/attendance-form";
-import { EMPTY_ATTENDANCE_FORM } from "@/features/attendance/schemas";
+import { AttendanceSheet } from "@/features/attendance/components/attendance-sheet";
 
 export default function NewAttendancePage() {
   return (
@@ -16,9 +15,9 @@ export default function NewAttendancePage() {
       <PageHeader
         className="mt-2"
         title="Record attendance"
-        subtitle="Add an attendance record for an employee."
+        subtitle="Record attendance for the whole team in one go."
       />
-      <AttendanceForm mode="create" defaultValues={EMPTY_ATTENDANCE_FORM} />
+      <AttendanceSheet />
     </RequireCapability>
   );
 }
