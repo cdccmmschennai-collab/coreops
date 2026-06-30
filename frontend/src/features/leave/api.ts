@@ -1,6 +1,7 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  DeliverableImpactResponse,
   LeaveListParams,
   LeaveRequest,
   LeaveRequestCreateBody,
@@ -32,4 +33,8 @@ export const leaveApi = {
     api.post<LeaveRequest>(`/leave-requests/${id}/approve`, body),
   reject: (id: string, body: LeaveReviewBody) =>
     api.post<LeaveRequest>(`/leave-requests/${id}/reject`, body),
+  deliverableImpact: (ids: string[]) =>
+    api.post<DeliverableImpactResponse>("/leave-requests/deliverable-impact", {
+      leave_request_ids: ids,
+    }),
 };

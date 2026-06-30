@@ -19,6 +19,8 @@ from app.core.deps import get_current_user, require_role
 from app.modules.leave import service
 from app.modules.leave.models import LeaveStatus
 from app.modules.leave.schemas import (
+    DeliverableImpactRequest,
+    DeliverableImpactResponse,
     LeaveRequestCreate,
     LeaveRequestOut,
     LeaveRequestPage,
@@ -68,6 +70,18 @@ def create_leave_request(
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(service.create_leave_request(db, current, body))
+
+
+@router.post("/deliverable-impact", response_model=DeliverableImpactResponse)
+def deliverable_impact(
+    body: DeliverableImpactRequest,
+    current: User = Depends(require_reviewer),
+    db: Session = Depends(get_db),
+) -> DeliverableImpactResponse:
+    """Decision-support: which of the given (displayed) leave requests overlap
+    a Planned project deliverable. Project-manager only; informational."""
+    items = service.deliverable_impacts(db, current, body.leave_request_ids)
+    return DeliverableImpactResponse(items=items)
 
 
 @router.get("/{req_id}", response_model=LeaveRequestOut)

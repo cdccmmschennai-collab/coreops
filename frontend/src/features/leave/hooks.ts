@@ -17,6 +17,25 @@ export function useLeaveList(params: LeaveListParams) {
   });
 }
 
+export function useLeaveRequest(id: string) {
+  return useQuery({
+    queryKey: leaveKeys.detail(id),
+    queryFn: () => leaveApi.get(id),
+    enabled: !!id,
+  });
+}
+
+/** Deliverable Impact for the currently displayed leave requests. Computed in
+ *  one bulk call for all `ids`; disabled when there are no rows. */
+export function useDeliverableImpact(ids: string[]) {
+  return useQuery({
+    queryKey: leaveKeys.deliverableImpact(ids),
+    queryFn: () => leaveApi.deliverableImpact(ids),
+    enabled: ids.length > 0,
+    placeholderData: (prev) => prev,
+  });
+}
+
 export function useCreateLeave() {
   const qc = useQueryClient();
   return useMutation({

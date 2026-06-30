@@ -38,6 +38,7 @@ from app.modules.projects.models import (
 from app.modules.tasks.models import Task
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
+    NO_ACTIVITY_DAY_STATUSES,
     DailyWorkReport,
     DayStatus,
     WorkReportStatus,
@@ -456,13 +457,18 @@ def list_work_reports(
 
 
 DAY_STATUS_LABELS: dict[str, str] = {
-    DayStatus.on_duty.value: "On Duty",
-    DayStatus.office.value: "Office",
-    DayStatus.half_day.value: "Half Day",
-    DayStatus.on_leave.value: "On Leave",
-    DayStatus.wfh.value: "WFH",
-    DayStatus.permission.value: "Permission",
-    DayStatus.comp_off.value: "Comp Off",
+    DayStatus.leave.value: "Leave",
+    DayStatus.company_holiday.value: "Company Holiday",
+    DayStatus.work_from_home.value: "Work From Home",
+    DayStatus.week_off.value: "Week Off",
+    DayStatus.work_at_office.value: "Work at Office",
+    DayStatus.comp_off.value: "Comp-off",
+    DayStatus.overtime_compensation.value: "Overtime Hours-Compensation",
+    DayStatus.overtime_salary.value: "Overtime Hours-Salary",
+    DayStatus.permission_first_half_1hr.value: "Permission-First Half 1HR",
+    DayStatus.permission_second_half_1hr.value: "Permission-Second Half 1HR",
+    DayStatus.permission_first_half_2hr.value: "Permission-First Half 2HR",
+    DayStatus.permission_second_half_2hr.value: "Permission-Second Half 2HR",
 }
 
 
@@ -635,7 +641,19 @@ def create_work_report(
             "conflict", "A work report for this date already exists.", 409
         )
 
-    total, snapshots = _validate_tasks(db, me.id, data.tasks)
+    # Leave-type day statuses (week off / leave / company holiday / comp-off)
+    # mean no project work was done — the report carries no task lines and is
+    # exempt from benchmark/overdue tracking. Any tasks the client sent are
+    # ignored; a working-day status still requires at least one activity.
+    no_activity = data.day_status in NO_ACTIVITY_DAY_STATUSES
+    tasks = [] if no_activity else list(data.tasks)
+    if not no_activity and not tasks:
+        raise AppError(
+            "validation_error",
+            "Add at least one activity, or choose a leave-type day status.",
+            422,
+        )
+    total, snapshots = _validate_tasks(db, me.id, tasks)
 
     report = DailyWorkReport(
         employee_id=me.id,
@@ -658,7 +676,7 @@ def create_work_report(
     )
     db.add(report)
     db.flush()
-    for task, snap in zip(data.tasks, snapshots):
+    for task, snap in zip(tasks, snapshots):
         started_date, due_date = _task_based_dates(data.report_date, snap)
         db.add(
             WorkReportTask(
@@ -719,7 +737,16 @@ def update_work_report(
 
     fields = data.model_dump(exclude_unset=True)
 
-    if "tasks" in fields and data.tasks is not None:
+    # A leave-type day status (current or being set in this update) means the
+    # report carries no project work: drop any task lines and zero the total,
+    # regardless of what tasks the client sent.
+    effective_day_status = data.day_status if "day_status" in fields else report.day_status
+    no_activity = effective_day_status in NO_ACTIVITY_DAY_STATUSES
+
+    if no_activity:
+        db.execute(delete(WorkReportTask).where(WorkReportTask.report_id == report.id))
+        report.total_minutes = 0
+    elif "tasks" in fields and data.tasks is not None:
         total, snapshots = _validate_tasks(db, me.id, data.tasks)
         # Preserve completed_date across a full task-row replace: re-saving a
         # report (e.g. for an unrelated field) shouldn't reset an
@@ -889,11 +916,14 @@ def submit_work_report(
         raise AppError(
             "validation_error", "Only draft or rejected reports can be submitted.", 422
         )
-    has_task = db.execute(
-        select(WorkReportTask.id).where(WorkReportTask.report_id == report.id).limit(1)
-    ).scalar_one_or_none()
-    if has_task is None:
-        raise AppError("validation_error", "Add at least one task before submitting.", 422)
+    # Leave-type days (week off / leave / company holiday / comp-off) legitimately
+    # carry no task lines — only working days must have at least one activity.
+    if report.day_status not in NO_ACTIVITY_DAY_STATUSES:
+        has_task = db.execute(
+            select(WorkReportTask.id).where(WorkReportTask.report_id == report.id).limit(1)
+        ).scalar_one_or_none()
+        if has_task is None:
+            raise AppError("validation_error", "Add at least one task before submitting.", 422)
 
     _apply_benchmarks(db, report)
     report.status = WorkReportStatus.submitted

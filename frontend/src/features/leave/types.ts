@@ -40,6 +40,28 @@ export interface LeaveReviewBody {
   comment?: string | null;
 }
 
+/** One Planned deliverable conflicting with a leave request (decision support). */
+export interface DeliverableConflict {
+  deliverable_id: string;
+  deliverable_name: string;
+  project_id: string;
+  project_name: string | null;
+  project_code: string | null;
+  status: string;
+  target_date: string | null;
+  employee_id: string;
+  employee_name: string | null;
+}
+
+export interface LeaveDeliverableImpact {
+  leave_request_id: string;
+  conflicts: DeliverableConflict[];
+}
+
+export interface DeliverableImpactResponse {
+  items: LeaveDeliverableImpact[];
+}
+
 export interface LeaveListParams {
   employee_id?: string;
   status?: LeaveStatus | "";

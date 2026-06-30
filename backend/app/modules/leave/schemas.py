@@ -49,3 +49,32 @@ class LeaveRequestPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------- deliverable impact (leave-review decision support) -------------
+
+class DeliverableConflictOut(BaseModel):
+    """One Planned deliverable whose target date falls within ±2 days of a
+    leave request, on a project the requesting employee is assigned to."""
+    deliverable_id: uuid.UUID
+    deliverable_name: str            # the deliverable / activity name
+    project_id: uuid.UUID
+    project_name: str | None = None
+    project_code: str | None = None
+    status: str                      # always 'planned' for now
+    target_date: date | None = None  # planned delivery date
+    employee_id: uuid.UUID
+    employee_name: str | None = None
+
+
+class LeaveDeliverableImpactOut(BaseModel):
+    leave_request_id: uuid.UUID
+    conflicts: list[DeliverableConflictOut]
+
+
+class DeliverableImpactRequest(BaseModel):
+    leave_request_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+
+
+class DeliverableImpactResponse(BaseModel):
+    items: list[LeaveDeliverableImpactOut]

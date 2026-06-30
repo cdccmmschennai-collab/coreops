@@ -28,26 +28,49 @@ export const WORK_REPORT_STATUS_LABEL: Record<WorkReportStatus, string> = {
 // ── day status ────────────────────────────────────────────────────────────────
 
 export const DAY_STATUSES = [
-  "on_duty",
-  "office",
-  "half_day",
-  "on_leave",
-  "wfh",
-  "permission",
+  "leave",
+  "company_holiday",
+  "work_from_home",
+  "week_off",
+  "work_at_office",
   "comp_off",
+  "overtime_compensation",
+  "overtime_salary",
+  "permission_first_half_1hr",
+  "permission_second_half_1hr",
+  "permission_first_half_2hr",
+  "permission_second_half_2hr",
 ] as const;
 
 export type DayStatus = (typeof DAY_STATUSES)[number];
 
 export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
-  on_duty: "On Duty",
-  office: "Office",
-  half_day: "Half Day",
-  on_leave: "On Leave",
-  wfh: "Work From Home",
-  permission: "Permission",
-  comp_off: "Comp Off",
+  leave: "Leave",
+  company_holiday: "Company Holiday",
+  work_from_home: "Work From Home",
+  week_off: "Week Off",
+  work_at_office: "Work at Office",
+  comp_off: "Comp-off",
+  overtime_compensation: "Overtime Hours-Compensation",
+  overtime_salary: "Overtime Hours-Salary",
+  permission_first_half_1hr: "Permission-First Half 1HR",
+  permission_second_half_1hr: "Permission-Second Half 1HR",
+  permission_first_half_2hr: "Permission-First Half 2HR",
+  permission_second_half_2hr: "Permission-Second Half 2HR",
 };
+
+// Day statuses where the employee did no project work: the report needs no
+// activities and is exempt from benchmark / overdue / pending tracking. Only
+// Remarks and Query stay active on the form for these.
+export const NO_ACTIVITY_DAY_STATUSES = new Set<DayStatus>([
+  "week_off",
+  "leave",
+  "company_holiday",
+  "comp_off",
+]);
+
+export const isNoActivityDayStatus = (s: DayStatus | undefined): boolean =>
+  s !== undefined && NO_ACTIVITY_DAY_STATUSES.has(s);
 
 // ── location ──────────────────────────────────────────────────────────────────
 
@@ -202,11 +225,17 @@ export const workReportFormSchema = z
     maintenance_plan_count: countSchema.default("0"),
     remarks:    z.string().max(REMARKS_MAX, `Keep under ${REMARKS_MAX} characters`).default(""),
     query_text: z.string().max(REMARKS_MAX, `Keep under ${REMARKS_MAX} characters`).default(""),
-    tasks: z.array(taskSchema).min(1, "Add at least one task"),
+    // Empty for leave-type day statuses (the form clears + freezes the activity
+    // editor); a working-day status requires ≥1 activity — enforced below.
+    tasks: z.array(taskSchema),
   })
   .superRefine((v, ctx) => {
-    // Required: Day Status + Office Location (enforced here so the inferred
-    // form type keeps these optional/undefined-friendly).
+    // Leave-type days (week off / leave / company holiday / comp-off): the
+    // employee did no project work, so Office Location and activities are not
+    // required — only Day Status, Remarks and Query apply.
+    const noActivity = isNoActivityDayStatus(v.day_status);
+
+    // Required: Day Status (always). Office Location only on working days.
     if (v.day_status === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -214,11 +243,18 @@ export const workReportFormSchema = z
         path: ["day_status"],
       });
     }
-    if (v.location === undefined) {
+    if (!noActivity && v.location === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Office Location is required",
         path: ["location"],
+      });
+    }
+    if (!noActivity && v.tasks.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Add at least one activity",
+        path: ["tasks"],
       });
     }
     const totalMin = v.tasks.reduce(

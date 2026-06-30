@@ -214,13 +214,13 @@ def test_create_with_day_status_and_location_persists(db, author):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
     create = WorkReportCreate(
         report_date=TODAY,
-        day_status=DayStatus.wfh,
+        day_status=DayStatus.work_from_home,
         location=WorkLocation.chennai,
         remarks="WFH today",
         tasks=[_task(p.id)],
     )
     r = svc.create_work_report(db, u, create)
-    assert r.day_status == DayStatus.wfh
+    assert r.day_status == DayStatus.work_from_home
     assert r.location == WorkLocation.chennai
     assert r.remarks == "WFH today"
 
