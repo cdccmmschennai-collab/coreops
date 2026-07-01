@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, type Control } from "react-hook-form";
-import { Plus, Trash2 } from "lucide-react";
+import { Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
+import { useCreateActivityRequest } from "@/features/activity-requests/hooks";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { useTasks } from "@/features/tasks/hooks";
@@ -240,10 +241,40 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     resolver: zodResolver(workReportFormSchema),
     defaultValues,
   });
-  const { fields, append, remove, replace } = useFieldArray({
+  const { fields, remove, replace } = useFieldArray({
     control: form.control,
     name: "tasks",
   });
+
+  // "Request PM to Add Another Activity" — instead of adding a second activity
+  // to the report, send the current activity row's selections to the project's
+  // PM as a request. Nothing is added to or removed from the report.
+  const createActivityRequest = useCreateActivityRequest();
+  async function requestAnotherActivity() {
+    const rows = form.getValues("tasks");
+    const row = rows[rows.length - 1];
+    if (!row?.project_id || !row?.sub_activity_id) {
+      toast.error("Select a project, activity and sub-activity first.");
+      return;
+    }
+    try {
+      await createActivityRequest.mutateAsync({
+        project_id: row.project_id,
+        activity_id: row.activity_id || null,
+        sub_activity_id: row.sub_activity_id,
+        task_id: row.task_id || null,
+        tags_count: Number(row.tags_count) || 0,
+        docs_count: Number(row.docs_count) || 0,
+        bom_count: Number(row.bom_count) || 0,
+        spares_count: Number(row.spares_count) || 0,
+      });
+      toast.success("Your request has been sent to your Project Manager.");
+    } catch (err) {
+      toast.error(
+        err instanceof AppError ? err.message : "Could not send your request.",
+      );
+    }
+  }
 
   // Leave-type day statuses (week off / leave / company holiday / comp-off):
   // the employee did no project work, so the activity editor is frozen out —
@@ -892,10 +923,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => append({ ...EMPTY_TASK_ROW })}
+                loading={createActivityRequest.isPending}
+                onClick={() => void requestAnotherActivity()}
               >
-                <Plus className="h-4 w-4" />
-                Add activity
+                <Send className="h-4 w-4" />
+                Request PM to Add Another Activity
               </Button>
                 </>
               )}

@@ -23,7 +23,8 @@ export type Capability =
   | "calendar.manage"     // project_manager: create/edit/delete company calendar events
   | "masterdata.manage"   // project_manager: manage activity types, job codes
   | "task.view"           // both: navigate to /tasks (my tasks)
-  | "task.manage";        // project_manager: create/edit/cancel tasks, all-tasks view
+  | "task.manage"         // project_manager: create/edit/cancel tasks, all-tasks view
+  | "activity.review";    // project_manager: approve/reject employee activity requests
 
 const MATRIX: Record<Capability, Role[]> = {
   "user.manage":          ["project_manager"],
@@ -41,6 +42,7 @@ const MATRIX: Record<Capability, Role[]> = {
   "masterdata.manage":    ["project_manager"],
   "task.view":            ["project_manager", "employee"],
   "task.manage":          ["project_manager"],
+  "activity.review":      ["project_manager"],
 };
 
 export function can(role: Role | undefined, capability: Capability): boolean {

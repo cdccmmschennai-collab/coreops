@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, ClipboardList, ListChecks } from "lucide-react";
+import { ArrowRight, CalendarOff, ClipboardList, ListChecks, ListPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { PerformanceTable } from "@/features/employee-performance/components/performance-table";
+import { useActivityRequestPendingCount } from "@/features/activity-requests/hooks";
 import { useLeaveList } from "@/features/leave/hooks";
 import { useAllDeliverables } from "@/features/project-deliverables/hooks";
 import { DeliverableStatusBadge } from "@/features/project-deliverables/components/status-badge";
@@ -45,6 +46,10 @@ export function ProjectManagerDashboard() {
   // Pending leave requests awaiting review — total drives the shortcut badge.
   const pendingLeave = useLeaveList({ status: "pending", limit: 1, offset: 0 });
   const pendingLeaveCount = pendingLeave.data?.total ?? 0;
+
+  // Pending activity requests awaiting the PM's decision — drives the card badge.
+  const activityRequestCount = useActivityRequestPendingCount();
+  const pendingActivityRequests = activityRequestCount.data?.count ?? 0;
 
   // Active deliverables first, then by nearest planned submission date.
   const deliverables = React.useMemo(
@@ -119,6 +124,32 @@ export function ProjectManagerDashboard() {
           </CardContent>
         </Card>
 
+        {/* right column: activity requests + shortcuts */}
+        <div className="flex flex-col gap-4">
+        {/* activity requests */}
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
+            <CardTitle className="text-base">Activity Requests</CardTitle>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/activity-requests">
+                View all <ArrowRight className="ml-1 h-3 w-3" />
+              </Link>
+            </Button>
+          </CardHeader>
+          <CardContent className="p-4">
+            <Button asChild className="w-full justify-start" variant="secondary">
+              <Link href="/activity-requests">
+                <ListPlus className="h-4 w-4" /> Pending requests
+                {pendingActivityRequests > 0 && (
+                  <Badge variant="warning" className="ml-auto">
+                    {pendingActivityRequests}
+                  </Badge>
+                )}
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+
         {/* shortcuts */}
         <Card>
           <CardHeader className="border-b border-border px-5 py-3.5">
@@ -149,6 +180,7 @@ export function ProjectManagerDashboard() {
             </div>
           </CardContent>
         </Card>
+        </div>
       </div>
     </>
   );
