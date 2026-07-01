@@ -60,4 +60,20 @@
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
   }
+  /* Thin horizontal scrollbar for single-line overflow areas (e.g. a combobox's
+     selected value) — appears only when content overflows, stays subtle. */
+  .scrollbar-thin-x {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin-x::-webkit-scrollbar {
+    height: 4px;
+  }
+  .scrollbar-thin-x::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin-x::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
 }

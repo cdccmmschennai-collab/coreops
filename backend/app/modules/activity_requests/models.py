@@ -38,6 +38,13 @@ class ActivityRequest(UUIDMixin, Base):
     employee_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
     )
+    # The work report this request belongs to. An approved request becomes a
+    # normal activity row in this report. Nullable only for legacy rows.
+    report_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("daily_work_reports.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
@@ -74,4 +81,5 @@ class ActivityRequest(UUIDMixin, Base):
         ),
         Index("activity_requests_employee_idx", "employee_id"),
         Index("activity_requests_status_idx", "status"),
+        Index("activity_requests_report_idx", "report_id"),
     )

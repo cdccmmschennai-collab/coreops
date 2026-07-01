@@ -150,7 +150,15 @@ export function Combobox({
             className,
           )}
         >
-          <span className="min-w-0 flex-1 truncate text-left">
+          {/* Selected value stays a single line; when it's longer than the
+              trigger it scrolls horizontally (thin scrollbar, shift-wheel /
+              trackpad) instead of being clipped — the layout/width is unchanged. */}
+          <span
+            className={cn(
+              "min-w-0 flex-1 whitespace-nowrap text-left",
+              selected ? "overflow-x-auto scrollbar-thin-x" : "truncate",
+            )}
+          >
             {selected ? (
               <>
                 <span className="text-foreground">{selected.label}</span>
@@ -230,7 +238,11 @@ export function Combobox({
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="truncate font-medium">{opt.label}</span>
+                        {/* Long option names stay truncated with an ellipsis; the
+                            native title tooltip reveals the full text on hover. */}
+                        <span className="truncate font-medium" title={opt.label}>
+                          {opt.label}
+                        </span>
                         {opt.sublabel && (
                           <span className="shrink-0 font-mono text-xs text-muted-foreground">
                             {opt.sublabel}
@@ -238,7 +250,10 @@ export function Combobox({
                         )}
                       </div>
                       {opt.description && (
-                        <div className="truncate text-xs text-muted-foreground">
+                        <div
+                          className="truncate text-xs text-muted-foreground"
+                          title={opt.description}
+                        >
                           {opt.description}
                         </div>
                       )}

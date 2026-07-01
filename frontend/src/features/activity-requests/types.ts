@@ -3,6 +3,7 @@ export type ActivityRequestStatus = "pending" | "approved" | "rejected";
 export interface ActivityRequest {
   id: string;
   employee_id: string;
+  report_id: string | null;
   project_id: string;
   activity_id: string | null;
   sub_activity_id: string;
@@ -22,9 +23,16 @@ export interface ActivityRequest {
   activity_name: string | null;
   sub_activity_name: string;
   task_title: string | null;
+  // The employee's current (first) activity already logged in the report, so
+  // the PM can compare it against the requested activity.
+  current_project_name: string | null;
+  current_project_code: string | null;
+  current_activity_name: string | null;
+  current_sub_activity_name: string | null;
 }
 
 export interface ActivityRequestCreateBody {
+  report_id: string;
   project_id: string;
   activity_id?: string | null;
   sub_activity_id: string;

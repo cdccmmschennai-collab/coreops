@@ -13,6 +13,7 @@ class ActivityRequestCreate(BaseModel):
     Carries the currently-selected activity row's details verbatim. No approval
     fields, no reason/remarks.
     """
+    report_id: uuid.UUID
     project_id: uuid.UUID
     activity_id: uuid.UUID | None = None
     sub_activity_id: uuid.UUID
@@ -28,6 +29,7 @@ class ActivityRequestOut(BaseModel):
 
     id: uuid.UUID
     employee_id: uuid.UUID
+    report_id: uuid.UUID | None
     project_id: uuid.UUID
     activity_id: uuid.UUID | None
     sub_activity_id: uuid.UUID
@@ -48,3 +50,11 @@ class ActivityRequestOut(BaseModel):
     activity_name: str | None = None
     sub_activity_name: str = ""
     task_title: str | None = None
+
+    # The employee's currently-logged (first) activity in the report — shown to
+    # the PM alongside the requested activity so they can compare. Resolved by
+    # the service; None when the report has no activity row yet.
+    current_project_name: str | None = None
+    current_project_code: str | None = None
+    current_activity_name: str | None = None
+    current_sub_activity_name: str | None = None

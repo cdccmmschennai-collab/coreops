@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Check, X } from "lucide-react";
+import Link from "next/link";
+import { ArrowDown, ArrowRight, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ErrorState } from "@/components/feedback/error-state";
@@ -10,14 +11,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { AppError } from "@/lib/api-client";
 
 import {
@@ -61,109 +54,144 @@ export function ActivityRequestsView() {
 
   return (
     <>
+      <Link href="/" className="text-sm text-primary hover:underline">
+        ← Home
+      </Link>
       <PageHeader
+        className="mt-2"
         title="Activity Requests"
         subtitle="Employees requesting to be added to another activity"
       />
 
-      <Card>
-        <CardContent className="p-0">
-          {query.isLoading ? (
-            <div className="space-y-2 p-4">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-5/6" />
-              <Skeleton className="h-8 w-3/4" />
-            </div>
-          ) : query.isError ? (
+      {query.isLoading ? (
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-5/6" />
+            <Skeleton className="h-8 w-3/4" />
+          </CardContent>
+        </Card>
+      ) : query.isError ? (
+        <Card>
+          <CardContent className="p-0">
             <ErrorState
               title="Could not load activity requests"
               message="Please try again."
               onRetry={() => void query.refetch()}
             />
-          ) : !requests.length ? (
-            <p className="p-6 text-sm text-muted-foreground">
+          </CardContent>
+        </Card>
+      ) : !requests.length ? (
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
               No pending activity requests.
             </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Employee</TableHead>
-                  <TableHead>Project</TableHead>
-                  <TableHead>Activity</TableHead>
-                  <TableHead>Sub Activity</TableHead>
-                  <TableHead>Task</TableHead>
-                  <TableHead className="text-right">Tags</TableHead>
-                  <TableHead className="text-right">Docs</TableHead>
-                  <TableHead className="text-right">BOM</TableHead>
-                  <TableHead className="text-right">Spares</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-32 text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {requests.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{r.employee_name}</TableCell>
-                    <TableCell className="text-sm">
-                      <span className="font-mono">{r.project_code}</span>
-                      {r.project_name && (
-                        <span className="ml-1 text-muted-foreground">
-                          {r.project_name}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {r.activity_name ?? (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm">{r.sub_activity_name}</TableCell>
-                    <TableCell className="text-sm">
-                      {r.task_title ?? (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular">{r.tags_count}</TableCell>
-                    <TableCell className="text-right tabular">{r.docs_count}</TableCell>
-                    <TableCell className="text-right tabular">{r.bom_count}</TableCell>
-                    <TableCell className="text-right tabular">{r.spares_count}</TableCell>
-                    <TableCell>
-                      <Badge variant="warning">
-                        {ACTIVITY_REQUEST_STATUS_LABEL[r.status]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          loading={acting === r.id && approve.isPending}
-                          disabled={acting === r.id}
-                          onClick={() => void decide(r, "approve")}
-                        >
-                          <Check className="h-4 w-4" />
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          loading={acting === r.id && reject.isPending}
-                          disabled={acting === r.id}
-                          onClick={() => void decide(r, "reject")}
-                        >
-                          <X className="h-4 w-4 text-destructive" />
-                          Reject
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {requests.map((r) => (
+            <Card key={r.id}>
+              <CardContent className="flex flex-col gap-4 pt-6 lg:flex-row lg:items-center">
+                <div className="lg:w-44 lg:shrink-0">
+                  <p className="text-xs text-muted-foreground">Employee</p>
+                  <p className="font-medium">{r.employee_name}</p>
+                  <Badge variant="warning" className="mt-1">
+                    {ACTIVITY_REQUEST_STATUS_LABEL[r.status]}
+                  </Badge>
+                </div>
+
+                <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-stretch">
+                  <ActivityBlock
+                    label="Current Approved Activity"
+                    projectCode={r.current_project_code}
+                    activity={r.current_activity_name}
+                    subActivity={r.current_sub_activity_name}
+                    muted
+                  />
+                  <div className="flex items-center justify-center">
+                    <ArrowRight className="hidden h-4 w-4 text-muted-foreground sm:block" />
+                    <ArrowDown className="h-4 w-4 text-muted-foreground sm:hidden" />
+                  </div>
+                  <ActivityBlock
+                    label="Requested Activity"
+                    projectCode={r.project_code}
+                    activity={r.activity_name}
+                    subActivity={r.sub_activity_name}
+                  />
+                </div>
+
+                <div className="flex gap-2 lg:shrink-0">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    loading={acting === r.id && approve.isPending}
+                    disabled={acting === r.id}
+                    onClick={() => void decide(r, "approve")}
+                  >
+                    <Check className="h-4 w-4" />
+                    Approve
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    loading={acting === r.id && reject.isPending}
+                    disabled={acting === r.id}
+                    onClick={() => void decide(r, "reject")}
+                  >
+                    <X className="h-4 w-4 text-destructive" />
+                    Reject
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </>
+  );
+}
+
+/** One activity summary (project code / activity / sub-activity) inside a row. */
+function ActivityBlock({
+  label,
+  projectCode,
+  activity,
+  subActivity,
+  muted,
+}: {
+  label: string;
+  projectCode?: string | null;
+  activity?: string | null;
+  subActivity?: string | null;
+  muted?: boolean;
+}) {
+  return (
+    <div
+      className={
+        muted
+          ? "flex-1 rounded-md border border-border bg-muted/40 p-3"
+          : "flex-1 rounded-md border border-primary/30 bg-primary/5 p-3"
+      }
+    >
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </p>
+      <dl className="space-y-1.5 text-sm">
+        <div className="flex gap-2">
+          <dt className="w-24 shrink-0 text-xs text-muted-foreground">Project Code</dt>
+          <dd className="font-mono font-medium">{projectCode || "—"}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-24 shrink-0 text-xs text-muted-foreground">Activity</dt>
+          <dd className="font-medium">{activity || "—"}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-24 shrink-0 text-xs text-muted-foreground">Sub Activity</dt>
+          <dd className="font-medium">{subActivity || "—"}</dd>
+        </div>
+      </dl>
+    </div>
   );
 }
