@@ -113,7 +113,7 @@ function MaintenancePlantField({
         render={({ field: f }) => (
           <FormItem className="min-w-0">
             <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
-              Maintenance Plant <span className="text-destructive">*</span>
+              Maintenance Plant
             </FormLabel>
             <FormControl>
               <Combobox

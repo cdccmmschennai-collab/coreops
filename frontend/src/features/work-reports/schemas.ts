@@ -185,9 +185,9 @@ const taskSchema = z
     due_date: z.string().optional(),
     completed_date: z.string().optional(),
     // Maintenance Plant the employee worked at — independent of the
-    // project's own assigned plant. Required: pick it directly; Planning Plant
+    // project's own assigned plant. Optional: pick it directly; Planning Plant
     // code/description auto-derive (display-only, never sent to the backend).
-    maintenance_plant_id: z.string().min(1, "Maintenance Plant is required"),
+    maintenance_plant_id: z.string().optional().default(""),
     maintenance_plant_code: z.string().optional(),
     maintenance_plant_description: z.string().optional(),
     planning_plant_code: z.string().optional(),
