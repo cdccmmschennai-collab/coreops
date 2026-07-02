@@ -835,12 +835,15 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         variant="ghost"
                         size="icon"
                         onClick={() => {
-                          // Removing the second-activity draft cancels the
-                          // pending-request affordance too.
-                          if (secondDraft && index === fields.length - 1) {
+                          remove(index);
+                          // "Add Activity" only shows when there's no pending
+                          // second-activity draft. Once a delete leaves a single
+                          // row (whichever row was removed), that row is just the
+                          // first activity again — clear the draft flag so the
+                          // button comes back without needing a page refresh.
+                          if (fields.length - 1 <= 1) {
                             setSecondDraft(false);
                           }
-                          remove(index);
                         }}
                         disabled={fields.length === 1}
                         aria-label="Remove activity"
@@ -1018,6 +1021,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         // field the sub-activity names — there is no separate
                         // "Actual Count" entry, so the same number is never typed twice.
                         const targetField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
+                        // A half day halves every benchmark target (100 -> 50),
+                        // matching the deficit/productivity the backend freezes
+                        // at submit time.
+                        const isHalfDay = dayStatus === "half_day";
+                        const targetValue =
+                          sub?.benchmark_value != null
+                            ? isHalfDay
+                              ? sub.benchmark_value / 2
+                              : sub.benchmark_value
+                            : null;
 
                         return (
                           [
@@ -1047,7 +1060,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                       <>
                                         <span className="text-destructive"> *</span>
                                         <span className="font-normal text-muted-foreground">
-                                          {" "}(Target: {formatInt(sub!.benchmark_value)}/{sub!.benchmark_period_days ?? 1}d)
+                                          {" "}(Target: {formatInt(targetValue)}/{sub!.benchmark_period_days ?? 1}d)
                                         </span>
                                       </>
                                     )}
