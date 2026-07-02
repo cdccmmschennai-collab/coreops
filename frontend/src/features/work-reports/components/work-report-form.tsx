@@ -374,7 +374,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       toast.error("Select a project, activity and sub-activity for the second activity.");
       return;
     }
-    if (!validateBenchmarks(realRows)) return;
+    // Validate benchmark counts on every row INCLUDING the draft being requested,
+    // so a request can't be sent with the requested activity's required fields
+    // (e.g. benchmark count) left blank.
+    if (!validateBenchmarks(values.tasks)) return;
 
     try {
       // Persist the report (first activity only) so the request can link to it.

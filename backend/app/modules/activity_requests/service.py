@@ -332,7 +332,7 @@ def _decide(
             f"on {req.project_code} was {decided}."  # type: ignore[attr-defined]
         ),
         request_id=req.id,
-        target_url=None,
+        target_url=f"/work-reports/{req.report_id}" if req.report_id else None,
     )
     return req
 
@@ -443,7 +443,7 @@ def approve_request(
             f"on {req.project_code} was approved."  # type: ignore[attr-defined]
         ),
         request_id=req.id,
-        target_url=None,
+        target_url=f"/work-reports/{req.report_id}" if req.report_id else None,
     )
     return req
 
