@@ -107,7 +107,12 @@ def get_daily_benchmark_ledger(
     task rows for the same sub-activity (e.g. split across projects), so
     those are summed/joined in Python rather than the benchmark math, which
     stays keyed on actual/target only."""
-    from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus, WorkReportTask
+    from app.modules.work_reports.models import (
+        DailyWorkReport,
+        DayStatus,
+        WorkReportStatus,
+        WorkReportTask,
+    )
 
     today = today or date.today()
     week_start, week_end = compute_week_bounds(today)
@@ -127,6 +132,7 @@ def get_daily_benchmark_ledger(
         select(
             DailyWorkReport.employee_id,
             DailyWorkReport.report_date,
+            DailyWorkReport.day_status,
             ActivityMaster.parent_id.label("activity_id"),
             ActivityMaster.id.label("sub_activity_id"),
             ActivityMaster.name.label("sub_activity_name"),
@@ -168,7 +174,16 @@ def get_daily_benchmark_ledger(
         }
         dkey = (r.employee_id, r.report_date, r.sub_activity_id)
         bucket = day_by_key.setdefault(
-            dkey, {"actual": Decimal("0"), "hours_minutes": 0, "projects": [], "project_codes": []}
+            dkey,
+            {
+                "actual": Decimal("0"),
+                "hours_minutes": 0,
+                "projects": [],
+                "project_codes": [],
+                # Same for every row of a given (employee, date) report; used to
+                # halve the day's target on a half day.
+                "day_status": r.day_status,
+            },
         )
         bucket["actual"] += Decimal(r.actual or 0)
         bucket["hours_minutes"] += int(r.hours_minutes or 0)
@@ -192,6 +207,9 @@ def get_daily_benchmark_ledger(
     for (employee_id, d, sub_activity_id), bucket in day_by_key.items():
         m = meta[(employee_id, sub_activity_id)]
         target = Decimal(str(m["benchmark_value"] or 0))
+        # Half day -> the day's target (and therefore its pending) is halved.
+        if bucket.get("day_status") == DayStatus.half_day:
+            target = target / 2
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
         project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None

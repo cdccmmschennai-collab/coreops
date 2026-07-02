@@ -462,13 +462,15 @@ DAY_STATUS_LABELS: dict[str, str] = {
     DayStatus.work_from_home.value: "Work From Home",
     DayStatus.week_off.value: "Week Off",
     DayStatus.work_at_office.value: "Work at Office",
+    DayStatus.half_day.value: "Half Day",
     DayStatus.comp_off.value: "Comp-off",
     DayStatus.overtime_compensation.value: "Overtime Hours-Compensation",
     DayStatus.overtime_salary.value: "Overtime Hours-Salary",
-    DayStatus.permission_first_half_1hr.value: "Permission-First Half 1HR",
-    DayStatus.permission_second_half_1hr.value: "Permission-Second Half 1HR",
-    DayStatus.permission_first_half_2hr.value: "Permission-First Half 2HR",
-    DayStatus.permission_second_half_2hr.value: "Permission-Second Half 2HR",
+    # "P / …" marks a Present day on which the employee took some permission.
+    DayStatus.permission_first_half_1hr.value: "P / Permission-First Half 1HR",
+    DayStatus.permission_second_half_1hr.value: "P / Permission-Second Half 1HR",
+    DayStatus.permission_first_half_2hr.value: "P / Permission-First Half 2HR",
+    DayStatus.permission_second_half_2hr.value: "P / Permission-Second Half 2HR",
 }
 
 
@@ -936,6 +938,9 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
     / get_overdue_activities (see the dashboard + login-alert endpoints).
     Persisting a notification at submit time would create a second, staler
     source of truth alongside those live queries."""
+    # On a half day the employee worked half the time, so every NUMERIC target
+    # is halved (benchmark 100 -> 50) before the deficit/productivity math.
+    half_day = report.day_status == DayStatus.half_day
     rows = db.execute(
         select(WorkReportTask).where(WorkReportTask.report_id == report.id)
     ).scalars().all()
@@ -945,8 +950,11 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         sub = db.get(ActivityMaster, row.sub_activity_id)
         if sub is None:
             continue
+        benchmark_value = sub.benchmark_value
+        if half_day and benchmark_value is not None:
+            benchmark_value = benchmark_value / 2
         row.benchmark_type_snapshot = sub.benchmark_type
-        row.benchmark_value_snapshot = sub.benchmark_value
+        row.benchmark_value_snapshot = benchmark_value
         row.benchmark_period_days_snapshot = sub.benchmark_period_days
         row.relevant_count_field_snapshot = sub.relevant_count_field
         actual_value = None
@@ -954,7 +962,7 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
             column = _COUNT_FIELD_COLUMNS.get(sub.relevant_count_field)
             actual_value = getattr(row, column) if column else None
         deficit, productivity_pct = compute_benchmark(
-            sub.benchmark_type, sub.benchmark_value, actual_value
+            sub.benchmark_type, benchmark_value, actual_value
         )
         row.deficit = deficit
         row.productivity_pct = productivity_pct
