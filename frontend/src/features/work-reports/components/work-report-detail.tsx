@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useMyActivityRequests } from "@/features/activity-requests/hooks";
+import type { ActivityRequest } from "@/features/activity-requests/types";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
@@ -64,6 +66,44 @@ function benchmarkActualCount(t: WorkReportTask): number | "—" {
   }
 }
 
+/** A second activity the author has requested but the PM hasn't decided yet.
+ *  Rendered alongside the logged activities on the report info page so a
+ *  requested activity is preserved and visibly marked as Pending / Rejected —
+ *  on approval it becomes a normal activity row; on rejection it is not added. */
+function RequestedActivityCard({ request }: { request: ActivityRequest }) {
+  const isRejected = request.status === "rejected";
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-muted/30 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-medium leading-snug">
+            {request.project_name || request.project_code || "-"}
+          </p>
+          {request.project_code && (
+            <p className="mt-1 font-mono text-xs text-muted-foreground">
+              {request.project_code}
+            </p>
+          )}
+        </div>
+        <Badge variant={isRejected ? "danger" : "warning"}>
+          {isRejected ? "Rejected" : "Pending PM Approval"}
+        </Badge>
+      </div>
+      <div className="mt-4 space-y-0.5">
+        <p className="text-xs text-muted-foreground">Activity / Sub-Activity</p>
+        <p className="text-sm font-medium">
+          {`${request.activity_name ?? "-"} / ${request.sub_activity_name || "-"}`}
+        </p>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        {isRejected
+          ? "Your Project Manager declined this activity, so it was not added to the report. You can still submit the report."
+          : "Waiting for your Project Manager to approve. Once approved it is added as an activity above."}
+      </p>
+    </div>
+  );
+}
+
 /** Compact label-over-value cell used inside the activity cards. */
 function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -86,6 +126,12 @@ export function WorkReportDetail({ id }: { id: string }) {
   const submit = useSubmitWorkReport(id);
   const grantEdit = useGrantEditWorkReport(id);
   const toggleCompletion = useToggleTaskCompletion(id);
+  // Second activities the author has requested but the PM hasn't decided yet.
+  // list_my_requests only returns pending/rejected (approved ones are already
+  // real activity rows), and is author-scoped — enable only for the author.
+  const viewerIsAuthor = !!employeeId && report?.employee_id === employeeId;
+  const myRequests = useMyActivityRequests(id, viewerIsAuthor);
+  const activityRequests = myRequests.data ?? [];
   const [rejectOpen, setRejectOpen] = React.useState(false);
   const [requestEditOpen, setRequestEditOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<WorkReport | null>(null);
@@ -295,7 +341,7 @@ export function WorkReportDetail({ id }: { id: string }) {
               <CardTitle>Project activities</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {report.tasks.length === 0 && (
+              {report.tasks.length === 0 && activityRequests.length === 0 && (
                 <p className="text-sm text-muted-foreground">No activities recorded.</p>
               )}
               {report.tasks.map((t) => {
@@ -423,6 +469,13 @@ export function WorkReportDetail({ id }: { id: string }) {
                   </div>
                 );
               })}
+
+              {/* Requested second activities awaiting the PM. Shown to the author
+                  so the requested activity is preserved and clearly marked until
+                  it's approved (becomes a normal activity above) or rejected. */}
+              {activityRequests.map((r) => (
+                <RequestedActivityCard key={r.id} request={r} />
+              ))}
             </CardContent>
           </Card>
 

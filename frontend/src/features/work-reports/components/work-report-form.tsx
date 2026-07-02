@@ -4,9 +4,10 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, type Control } from "react-hook-form";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -30,6 +31,12 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
+import {
+  useCreateActivityRequest,
+  useDeleteActivityRequest,
+  useMyActivityRequests,
+} from "@/features/activity-requests/hooks";
+import type { ActivityRequest } from "@/features/activity-requests/types";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { useTasks } from "@/features/tasks/hooks";
@@ -64,6 +71,17 @@ const COUNT_FIELD_KEY = {
   bom: "bom_count",
   spares: "spares_count",
 } as const;
+
+// Second activities under these parent Activities are routine (meetings /
+// training) rather than extra project work, so they don't need PM approval —
+// they save straight onto the report like the first activity. Every other
+// parent Activity still routes a second activity through the PM request flow.
+// Matched on the parent Activity name (upper-cased, trimmed).
+const NO_APPROVAL_ACTIVITIES = new Set([
+  "PROJECT MEETING",
+  "TRAINING",
+  "TRAINER",
+]);
 
 /** "2026-06-16" + 2 -> "2026-06-18". Client-side preview only, for a
  * TASK_BASED row that hasn't been saved yet — the server is authoritative
@@ -156,6 +174,76 @@ function MaintenancePlantField({
   );
 }
 
+/**
+ * Read-only card standing in for a second activity that is waiting on the PM.
+ * `Pending PM Approval` while the request is pending; `Rejected` (with a Dismiss
+ * button) once the PM declines, after which the employee can request again.
+ */
+function RequestStatusCard({
+  request,
+  activityNo,
+  onDismiss,
+  dismissing,
+}: {
+  request: ActivityRequest;
+  activityNo: number;
+  onDismiss?: () => void;
+  dismissing?: boolean;
+}) {
+  const isRejected = request.status === "rejected";
+  return (
+    <div className="space-y-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-medium">Activity {activityNo}</h4>
+        <Badge variant={isRejected ? "danger" : "warning"}>
+          {isRejected ? "Rejected" : "Pending PM Approval"}
+        </Badge>
+      </div>
+      <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-xs text-muted-foreground">Project</dt>
+          <dd className="font-medium">
+            {request.project_name || request.project_code || "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Activity</dt>
+          <dd className="font-medium">{request.activity_name ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Sub Activity</dt>
+          <dd className="font-medium">{request.sub_activity_name || "—"}</dd>
+        </div>
+      </dl>
+      {isRejected ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">
+            Your Project Manager declined this activity. Dismiss it to request a
+            different one.
+          </p>
+          {onDismiss && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              loading={dismissing}
+              onClick={onDismiss}
+            >
+              <Trash2 className="h-4 w-4" />
+              Dismiss
+            </Button>
+          )}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Waiting for your Project Manager to approve this activity. No further
+          activities can be added until it&apos;s decided.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
@@ -226,6 +314,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     () => (activities ?? []).map((a) => ({ value: a.id, label: a.name })),
     [activities],
   );
+  const activityById = React.useMemo(
+    () => new Map((activities ?? []).map((a) => [a.id, a])),
+    [activities],
+  );
   const subActivityOptionsByActivity = React.useMemo(() => {
     const map = new Map<string, { value: string; label: string }[]>();
     for (const s of subActivities) {
@@ -244,6 +336,157 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     control: form.control,
     name: "tasks",
   });
+
+  // ── Second-activity approval flow ──────────────────────────────────────────
+  // The report normally holds one activity. To add a second, the employee fills
+  // an extra activity section (revealed by "Add Activity", exactly as today) and
+  // sends it to the project's PM as a request; it only becomes a real row once
+  // the PM approves. `secondDraft` marks that the last field-array row is that
+  // pending-to-be-requested draft, not a row that gets saved with the report.
+  const [secondDraft, setSecondDraft] = React.useState(false);
+
+  const createActivityRequest = useCreateActivityRequest();
+  const deleteActivityRequest = useDeleteActivityRequest();
+  // The employee's own pending / rejected requests for this report (edit mode).
+  const myRequests = useMyActivityRequests(reportId, mode === "edit");
+  const pendingRequest = myRequests.data?.find((r) => r.status === "pending");
+  const rejectedRequest = pendingRequest
+    ? undefined
+    : myRequests.data?.find((r) => r.status === "rejected");
+
+  function isNoApprovalName(name?: string | null): boolean {
+    const n = name?.trim().toUpperCase();
+    return !!n && NO_APPROVAL_ACTIVITIES.has(n);
+  }
+
+  // Whether an activity row belongs to a routine parent Activity that doesn't
+  // need PM approval (see NO_APPROVAL_ACTIVITIES). Keyed off the parent Activity
+  // selection (activity_id) so it applies the moment the Activity is chosen -
+  // before a sub-activity is picked, and to any new sub-activities added later -
+  // with a fallback to the sub-activity's own parent (edit-mode rows).
+  function rowIsNoApproval(row?: {
+    activity_id?: string | null;
+    sub_activity_id?: string | null;
+  }): boolean {
+    if (!row) return false;
+    if (row.activity_id && isNoApprovalName(activityById.get(row.activity_id)?.name)) {
+      return true;
+    }
+    if (
+      row.sub_activity_id &&
+      isNoApprovalName(subActivityById.get(row.sub_activity_id)?.activity_name)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  // A second activity needs PM approval only when BOTH it and the day's first
+  // activity are outside NO_APPROVAL_ACTIVITIES. If either the first activity
+  // OR the second one is a routine activity (meeting / training / trainer), the
+  // second saves straight onto the report with no approval.
+  function secondActivityNeedsApproval(
+    first?: { activity_id?: string | null; sub_activity_id?: string | null },
+    second?: { activity_id?: string | null; sub_activity_id?: string | null },
+  ): boolean {
+    return !rowIsNoApproval(first) && !rowIsNoApproval(second);
+  }
+
+  // A NUMERIC sub-activity must have its benchmarked count filled in — the same
+  // guard used on submit, factored out so the "Request PM" path enforces it too.
+  function validateBenchmarks(rows: WorkReportFormValues["tasks"]): boolean {
+    let ok = true;
+    rows.forEach((t, i) => {
+      const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
+      const countField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
+      const key = countField ? COUNT_FIELD_KEY[countField] : null;
+      if (key && Number(t[key] || 0) <= 0) {
+        form.setError(`tasks.${i}.${key}`, {
+          message: `Required — ${sub!.name} has a benchmark target`,
+        });
+        ok = false;
+      }
+    });
+    if (!ok) setFormError("Fill in the required benchmark count(s) highlighted below.");
+    return ok;
+  }
+
+  // "Request PM to Add This Activity" — the second-activity draft (the last row)
+  // is NOT saved to the report. The report is first persisted with its first
+  // activity, then the draft is sent to the PM as an activity request. On
+  // approval the PM's action turns it into a real row (see activity_requests).
+  async function requestSecondActivity() {
+    setFormError(null);
+    const valid = await form.trigger();
+    if (!valid) return;
+
+    const values = form.getValues();
+    const draft = values.tasks[values.tasks.length - 1];
+    const realRows = values.tasks.slice(0, -1);
+    if (!draft?.project_id || !draft?.sub_activity_id) {
+      toast.error("Select a project, activity and sub-activity for the second activity.");
+      return;
+    }
+    // Validate benchmark counts on every row INCLUDING the draft being requested,
+    // so a request can't be sent with the requested activity's required fields
+    // (e.g. benchmark count) left blank.
+    if (!validateBenchmarks(values.tasks)) return;
+
+    try {
+      // Persist the report (first activity only) so the request can link to it.
+      const persistValues = { ...values, tasks: realRows };
+      const reportRow =
+        mode === "create"
+          ? await createMutation.mutateAsync(toCreateBody(persistValues))
+          : await updateMutation.mutateAsync(toUpdateBody(persistValues));
+      const savedReportId = mode === "create" ? reportRow.id : (reportId as string);
+
+      await createActivityRequest.mutateAsync({
+        report_id: savedReportId,
+        project_id: draft.project_id,
+        activity_id: draft.activity_id || null,
+        sub_activity_id: draft.sub_activity_id,
+        task_id: draft.task_id || null,
+        tags_count: Number(draft.tags_count) || 0,
+        docs_count: Number(draft.docs_count) || 0,
+        bom_count: Number(draft.bom_count) || 0,
+        spares_count: Number(draft.spares_count) || 0,
+      });
+      toast.success(
+        "Your request has been sent to your Project Manager for approval.",
+      );
+
+      if (mode === "create") {
+        // Re-open the now-saved report so the Pending card renders in edit mode.
+        router.push(`/work-reports/${savedReportId}/edit`);
+      } else {
+        setSecondDraft(false);
+        remove(values.tasks.length - 1);
+      }
+    } catch (err) {
+      setFormError(
+        err instanceof AppError ? err.message : "Could not send your request.",
+      );
+    }
+  }
+
+  async function dismissRejectedRequest() {
+    if (!rejectedRequest) return;
+    try {
+      await deleteActivityRequest.mutateAsync(rejectedRequest.id);
+    } catch (err) {
+      toast.error(
+        err instanceof AppError ? err.message : "Could not dismiss the request.",
+      );
+    }
+  }
+
+  // Reveal an empty second-activity section (same UI as today's append), marked
+  // as the draft that must go through PM approval rather than a normal save.
+  function addSecondActivityDraft() {
+    append({ ...EMPTY_TASK_ROW });
+    setSecondDraft(true);
+  }
 
   // Leave-type day statuses (week off / leave / company holiday / comp-off):
   // the employee did no project work, so the activity editor is frozen out —
@@ -340,32 +583,36 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   async function onSubmit(values: WorkReportFormValues) {
     setFormError(null);
 
+    // Decide what to do with a second-activity draft (the last row) on save:
+    //  - empty (no sub-activity picked)  -> drop it, save the rest;
+    //  - no-approval activity (meeting / training) -> keep it as a normal row;
+    //  - any other activity -> it needs PM approval, so route through the
+    //    request flow (which preserves it as Pending) instead of discarding it.
+    let persist = values;
+    if (secondDraft) {
+      const draft = values.tasks[values.tasks.length - 1];
+      if (!draft?.sub_activity_id) {
+        persist = { ...values, tasks: values.tasks.slice(0, -1) };
+      } else if (
+        secondActivityNeedsApproval(values.tasks[0], draft)
+      ) {
+        await requestSecondActivity();
+        return;
+      }
+      // no-approval draft with a selection: fall through and save it as a row.
+    }
+
     // A NUMERIC sub-activity's relevant_count_field is the benchmark's
     // actual-value source — it must be filled in (not left at the default
     // 0) whenever that benchmark applies, so the deficit/productivity calc
     // at submit time reflects real production, not an unfilled field.
-    let hasBenchmarkError = false;
-    values.tasks.forEach((t, i) => {
-      const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
-      const countField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
-      const key = countField ? COUNT_FIELD_KEY[countField] : null;
-      if (key && Number(t[key] || 0) <= 0) {
-        form.setError(`tasks.${i}.${key}`, {
-          message: `Required — ${sub!.name} has a benchmark target`,
-        });
-        hasBenchmarkError = true;
-      }
-    });
-    if (hasBenchmarkError) {
-      setFormError("Fill in the required benchmark count(s) highlighted below.");
-      return;
-    }
+    if (!validateBenchmarks(persist.tasks)) return;
 
     try {
       const result =
         mode === "create"
-          ? await createMutation.mutateAsync(toCreateBody(values))
-          : await updateMutation.mutateAsync(toUpdateBody(values));
+          ? await createMutation.mutateAsync(toCreateBody(persist))
+          : await updateMutation.mutateAsync(toUpdateBody(persist));
       toast.success(mode === "create" ? "Draft saved" : "Changes saved");
       router.push(`/work-reports/${result.id}`);
     } catch (error) {
@@ -587,7 +834,14 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         type="button"
                         variant="ghost"
                         size="icon"
-                        onClick={() => remove(index)}
+                        onClick={() => {
+                          // Removing the second-activity draft cancels the
+                          // pending-request affordance too.
+                          if (secondDraft && index === fields.length - 1) {
+                            setSecondDraft(false);
+                          }
+                          remove(index);
+                        }}
                         disabled={fields.length === 1}
                         aria-label="Remove activity"
                       >
@@ -889,41 +1143,61 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 <p className="text-xs font-medium text-destructive">{tasksError}</p>
               )}
 
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => append({ ...EMPTY_TASK_ROW })}
-              >
-                <Plus className="h-4 w-4" />
-                Add activity
-              </Button>
+              {/* Second-activity flow. The first activity is added freely with
+                  "Add Activity" (unchanged). A second activity is filled the
+                  same way; routine ones (meeting / training - see
+                  NO_APPROVAL_ACTIVITIES) save straight onto the report, while
+                  any other activity must be approved by the PM: the draft is
+                  sent as a request and shown as Pending until decided. */}
+              {pendingRequest ? (
+                <RequestStatusCard
+                  request={pendingRequest}
+                  activityNo={fields.length + 1}
+                />
+              ) : rejectedRequest ? (
+                <RequestStatusCard
+                  request={rejectedRequest}
+                  activityNo={fields.length + 1}
+                  onDismiss={() => void dismissRejectedRequest()}
+                  dismissing={deleteActivityRequest.isPending}
+                />
+              ) : secondDraft ? (
+                secondActivityNeedsApproval(
+                  watchedTasks?.[0],
+                  watchedTasks?.[fields.length - 1],
+                ) ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    loading={
+                      createActivityRequest.isPending ||
+                      createMutation.isPending ||
+                      updateMutation.isPending
+                    }
+                    onClick={() => void requestSecondActivity()}
+                  >
+                    <Send className="h-4 w-4" />
+                    Request Approval
+                  </Button>
+                ) : (
+                  // No approval needed — either this activity or the day's first
+                  // activity is a routine one; it saves with the report.
+                  <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                    This activity does not need PM approval - it will be saved with
+                    the report when you save.
+                  </p>
+                )
+              ) : fields.length >= 1 ? (
+                <Button type="button" variant="secondary" onClick={addSecondActivityDraft}>
+                  <Plus className="h-4 w-4" />
+                  Add Activity
+                </Button>
+              ) : null}
                 </>
               )}
             </div>
 
             <Separator />
-
-            {/* ── Remarks (general — primary note for leave-type days) ── */}
-            <FormField
-              control={form.control}
-              name="remarks"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    Remarks{" "}
-                    <span className="font-normal text-muted-foreground">(optional)</span>
-                  </FormLabel>
-                  <FormControl>
-                    <Textarea
-                      rows={3}
-                      placeholder="Anything to note about this day?"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
 
             {/* ── Query / Issues (end) ── */}
             <FormField

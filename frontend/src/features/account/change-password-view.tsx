@@ -1,10 +1,12 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
+import { Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -43,6 +45,8 @@ type FormValues = z.infer<typeof schema>;
 
 export function ChangePasswordView() {
   const router = useRouter();
+  const [showCurrent, setShowCurrent] = React.useState(false);
+  const [showNew, setShowNew] = React.useState(false);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -110,12 +114,27 @@ export function ChangePasswordView() {
                     <FormItem>
                       <FormLabel>Current Password</FormLabel>
                       <FormControl>
-                        <Input
-                          type="password"
-                          autoComplete="current-password"
-                          placeholder="Your current password"
-                          {...field}
-                        />
+                        <div className="relative">
+                          <Input
+                            type={showCurrent ? "text" : "password"}
+                            autoComplete="current-password"
+                            placeholder="Your current password"
+                            className="pr-10"
+                            {...field}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowCurrent((s) => !s)}
+                            className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                            aria-label={showCurrent ? "Hide password" : "Show password"}
+                          >
+                            {showCurrent ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -129,12 +148,27 @@ export function ChangePasswordView() {
                     <FormItem>
                       <FormLabel>New Password</FormLabel>
                       <FormControl>
-                        <Input
-                          type="password"
-                          autoComplete="new-password"
-                          placeholder="Min. 8 characters"
-                          {...field}
-                        />
+                        <div className="relative">
+                          <Input
+                            type={showNew ? "text" : "password"}
+                            autoComplete="new-password"
+                            placeholder="Min. 8 characters"
+                            className="pr-10"
+                            {...field}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowNew((s) => !s)}
+                            className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                            aria-label={showNew ? "Hide password" : "Show password"}
+                          >
+                            {showNew ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
