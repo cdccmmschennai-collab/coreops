@@ -96,6 +96,13 @@ def create_app() -> FastAPI:
     app.include_router(tasks_router, prefix=settings.API_V1_PREFIX)
     app.include_router(plants_router, prefix=settings.API_V1_PREFIX)
 
+    # Temporary notification debug endpoints — mounted only when explicitly
+    # enabled (and each route still requires the project_manager role).
+    if settings.ENABLE_DEBUG_ENDPOINTS:
+        from app.modules.debug.router import router as debug_router
+
+        app.include_router(debug_router, prefix=settings.API_V1_PREFIX)
+
     return app
 
 
