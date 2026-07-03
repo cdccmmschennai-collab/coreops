@@ -57,6 +57,7 @@ class DayStatus(str, enum.Enum):
     work_from_home = "work_from_home"
     week_off = "week_off"
     work_at_office = "work_at_office"
+    half_day = "half_day"
     comp_off = "comp_off"
     overtime_compensation = "overtime_compensation"
     overtime_salary = "overtime_salary"

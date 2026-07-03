@@ -33,6 +33,7 @@ export const DAY_STATUSES = [
   "work_from_home",
   "week_off",
   "work_at_office",
+  "half_day",
   "comp_off",
   "overtime_compensation",
   "overtime_salary",
@@ -50,13 +51,15 @@ export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
   work_from_home: "Work From Home",
   week_off: "Week Off",
   work_at_office: "Work at Office",
+  half_day: "Half Day",
   comp_off: "Comp-off",
   overtime_compensation: "Overtime Hours-Compensation",
   overtime_salary: "Overtime Hours-Salary",
-  permission_first_half_1hr: "Permission-First Half 1HR",
-  permission_second_half_1hr: "Permission-Second Half 1HR",
-  permission_first_half_2hr: "Permission-First Half 2HR",
-  permission_second_half_2hr: "Permission-Second Half 2HR",
+  // "P / …" marks a Present day on which the employee took some permission.
+  permission_first_half_1hr: "P / Permission-First Half 1HR",
+  permission_second_half_1hr: "P / Permission-Second Half 1HR",
+  permission_first_half_2hr: "P / Permission-First Half 2HR",
+  permission_second_half_2hr: "P / Permission-Second Half 2HR",
 };
 
 // Day statuses where the employee did no project work: the report needs no
