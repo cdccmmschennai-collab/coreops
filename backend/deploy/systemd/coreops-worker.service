@@ -2,8 +2,8 @@
 Description=CoreOps Celery Worker (notifications)
 After=network.target redis.service
 Wants=redis.service
-# Independent of the backend: the API keeps serving if this is stopped, and vice
-# versa. Do NOT bind this to coreops-backend.
+# Independent of the API: the API keeps serving if this is stopped, and vice
+# versa. Do NOT bind this to coreops-api.
 
 [Service]
 Type=simple
