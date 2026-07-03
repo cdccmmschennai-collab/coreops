@@ -5,7 +5,7 @@ systemd. Three independent services:
 
 | Service           | Role                                             |
 |-------------------|--------------------------------------------------|
-| `coreops-backend` | FastAPI API (also applies DB migrations on start)|
+| `coreops-api` | FastAPI API (also applies DB migrations on start)|
 | `coreops-worker`  | Celery worker - executes the reminder task       |
 | `coreops-beat`    | Celery beat - schedules the reminder task        |
 
@@ -44,10 +44,19 @@ REMINDER_EVERY_MINUTE=false
 REMINDER_HOUR=9
 REMINDER_MINUTE=30
 
-# Broker / DB point at the VPS services.
+# Runtime + datastores for the VPS. Redis runs natively on 6379 here (NOT the
+# docker-dev 6381). Setting these in .env is what makes editing config.py
+# unnecessary - see section 8.
+ENV=production
+SECRET_KEY=<64+ random chars, e.g. `openssl rand -base64 48`>
+DATABASE_URL=postgresql+psycopg://<user>:<pass>@localhost:5432/<db>
+REDIS_URL=redis://localhost:6379/0
 CELERY_BROKER_URL=redis://localhost:6379/1
-DATABASE_URL=postgresql+psycopg://...
+BACKEND_PORT=8100
+CORS_ORIGINS=https://coreops.cdccmms.com
 ```
+
+`.env.example` lists every supported variable with a `# PROD:` hint for each.
 
 Confirm `.env` is not world-readable (it holds the SMTP key):
 
@@ -75,7 +84,7 @@ before `daemon-reload`.
 Start the backend first (it runs migrations), then worker, then beat:
 
 ```bash
-sudo systemctl start coreops-backend
+sudo systemctl start coreops-api
 sudo systemctl start coreops-worker
 sudo systemctl start coreops-beat
 ```
@@ -86,7 +95,7 @@ sudo systemctl start coreops-beat
 sudo systemctl enable coreops-worker
 sudo systemctl enable coreops-beat
 # (enable the backend too if systemd manages it)
-sudo systemctl enable coreops-backend
+sudo systemctl enable coreops-api
 
 # Or start + enable in one step:
 sudo systemctl enable --now coreops-worker coreops-beat
@@ -109,7 +118,7 @@ Expect `Active: active (running)`. Healthy markers:
 A one-line health snapshot of all three:
 
 ```bash
-systemctl is-active coreops-backend coreops-worker coreops-beat
+systemctl is-active coreops-api coreops-worker coreops-beat
 ```
 
 ---
@@ -201,3 +210,73 @@ sudo systemctl disable coreops-worker coreops-beat     # stop starting at boot
 To pause reminders without touching systemd, set `REMINDER_SCHEDULE_ENABLED=false`
 (beat registers no schedule) or `EMAIL_ENABLED=false` (pipeline runs but sends
 nothing), then `sudo systemctl restart coreops-beat` / `coreops-worker`.
+
+---
+
+## 8. One-time server cleanup (remove the config.py local edit)
+
+The server currently has a manual edit to `app/core/config.py` (pointing Redis at
+6379). That is a production-only source change and it blocks `git pull`. It is not
+needed: `config.py` reads every value from the environment / `.env`. Move the
+values into `.env` once, then discard the source edit so the tree is clean.
+
+```bash
+cd /opt/coreops/backend
+
+# 1. Put the real values in .env (idempotent - append if missing, else edit):
+#    ENV=production
+#    SECRET_KEY=<64+ chars>
+#    DATABASE_URL=postgresql+psycopg://<user>:<pass>@localhost:5432/<db>
+#    REDIS_URL=redis://localhost:6379/0
+#    CELERY_BROKER_URL=redis://localhost:6379/1
+#    (plus the SMTP_* / EMAIL_ENABLED / REMINDER_* values)
+nano .env
+
+# 2. Discard the local source modification so `git pull` is clean:
+git checkout -- app/core/config.py
+git status            # -> "nothing to commit, working tree clean"
+
+# 3. Confirm the app now reads Redis from .env (should print 6379):
+.venv/bin/python -c "from app.core.config import settings as s; print(s.REDIS_URL, s.CELERY_BROKER_URL)"
+```
+
+After this, `config.py` never needs editing again - all environments differ only
+by their `.env`.
+
+### Values that belong ONLY in the production `.env` (gitignored, never committed)
+
+| Variable | Production value |
+|----------|------------------|
+| `ENV` | `production` |
+| `SECRET_KEY` | a real 64+ char secret (app refuses to start otherwise) |
+| `DATABASE_URL` | the VPS Postgres DSN |
+| `REDIS_URL` | `redis://localhost:6379/0` |
+| `CELERY_BROKER_URL` | `redis://localhost:6379/1` |
+| `CORS_ORIGINS` | the real frontend origin(s) |
+| `BACKEND_PORT` | the port uvicorn should bind |
+| `EMAIL_ENABLED` | `true` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | the Brevo relay + key |
+| `REMINDER_*` | schedule (defaults already = 09:30 Asia/Kolkata) |
+
+`SMTP_PASSWORD` and `SECRET_KEY` are secrets - keep `.env` at `chmod 600` and out
+of git (it already matches `.gitignore`).
+
+---
+
+## 9. Routine deployment (every release)
+
+Once section 8 is done once, every future deploy is exactly:
+
+```bash
+cd /opt/coreops/backend
+git pull
+.venv/bin/pip install -r requirements.txt   # only when requirements.txt changed
+.venv/bin/alembic upgrade head
+sudo systemctl restart coreops-api
+sudo systemctl restart coreops-worker
+sudo systemctl restart coreops-beat
+```
+
+No source edits, no config.py changes - configuration is entirely in `.env`.
+Verify with `systemctl is-active coreops-api coreops-worker coreops-beat` and the
+log checks in sections 3-4.

@@ -25,7 +25,7 @@ or templating.
 
 | Service           | Command                                                             |
 |-------------------|--------------------------------------------------------------------|
-| `coreops-backend` | `uvicorn app.main:app` (also applies migrations on start)          |
+| `coreops-api`     | `uvicorn app.main:app` (also applies migrations on start)          |
 | `coreops-worker`  | `celery -A app.core.celery_app.celery_app worker`                  |
 | `coreops-beat`    | `celery -A app.core.celery_app.celery_app beat`                    |
 
@@ -37,7 +37,7 @@ imported by the API.
 ```bash
 sudo cp deploy/systemd/coreops-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now coreops-backend coreops-worker coreops-beat
+sudo systemctl enable --now coreops-api coreops-worker coreops-beat
 sudo systemctl status coreops-worker coreops-beat
 journalctl -u coreops-worker -f      # watch worker logs
 ```

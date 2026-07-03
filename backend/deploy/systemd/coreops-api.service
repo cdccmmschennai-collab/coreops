@@ -1,0 +1,22 @@
+[Unit]
+Description=CoreOps API (FastAPI / Uvicorn)
+After=network.target postgresql.service redis.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=coreops
+Group=coreops
+WorkingDirectory=/opt/coreops/backend
+# ALL configuration (DB, Redis, Celery broker, SMTP, schedule) comes from this
+# file. Never edit app/core/config.py on the server — override via .env here.
+EnvironmentFile=/opt/coreops/backend/.env
+# Apply migrations on start, then run the API. The worker/beat units do NOT run
+# migrations, so they run exactly once here. Port comes from .env (BACKEND_PORT).
+ExecStartPre=/opt/coreops/backend/.venv/bin/alembic upgrade head
+ExecStart=/opt/coreops/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
