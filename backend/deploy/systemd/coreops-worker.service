@@ -1,0 +1,19 @@
+[Unit]
+Description=CoreOps Celery Worker (notifications)
+After=network.target redis.service
+Wants=redis.service
+# Independent of the backend: the API keeps serving if this is stopped, and vice
+# versa. Do NOT bind this to coreops-backend.
+
+[Service]
+Type=simple
+User=coreops
+Group=coreops
+WorkingDirectory=/opt/coreops/backend
+EnvironmentFile=/opt/coreops/backend/.env
+ExecStart=/opt/coreops/backend/.venv/bin/celery -A app.core.celery_app.celery_app worker --loglevel=info
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

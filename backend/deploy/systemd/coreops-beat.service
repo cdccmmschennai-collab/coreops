@@ -1,0 +1,22 @@
+[Unit]
+Description=CoreOps Celery Beat (scheduler)
+After=network.target redis.service
+Wants=redis.service
+# Run a SINGLE beat instance across the fleet — multiple beats would double-fire
+# the schedule. The worker (coreops-worker) executes what beat enqueues.
+
+[Service]
+Type=simple
+User=coreops
+Group=coreops
+WorkingDirectory=/opt/coreops/backend
+EnvironmentFile=/opt/coreops/backend/.env
+# systemd creates/owns /var/lib/coreops-beat for the persistent schedule file.
+StateDirectory=coreops-beat
+# --schedule writes the beat state file to the managed, writable StateDirectory.
+ExecStart=/opt/coreops/backend/.venv/bin/celery -A app.core.celery_app.celery_app beat --loglevel=info --schedule /var/lib/coreops-beat/celerybeat-schedule
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

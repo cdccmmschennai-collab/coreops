@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     BACKEND_PORT: int = 8100
     CORS_ORIGINS: str = "http://localhost:3100"
 
+    # Temporary notification debug endpoints (/debug/*). Off by default; enable
+    # only for verifying the email/reminder pipeline. Guarded by PM role too.
+    ENABLE_DEBUG_ENDPOINTS: bool = False
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
