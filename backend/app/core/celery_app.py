@@ -8,8 +8,8 @@ Run:
   celery -A app.core.celery_app.celery_app worker --loglevel=info
   celery -A app.core.celery_app.celery_app beat   --loglevel=info
 
-The schedule is configurable via environment so it can fire every minute during
-testing, then be set to 09:30 Asia/Kolkata for production (see ScheduleSettings).
+The reminder fires once daily at 09:30 Asia/Kolkata (see ScheduleSettings); the
+hour/minute are overridable via environment.
 """
 from __future__ import annotations
 
@@ -26,8 +26,10 @@ DAILY_REPORT_REMINDER_TASK = "coreops.reminders.send_daily_report_reminders"
 class ScheduleSettings(BaseSettings):
     """Beat scheduling knobs, from environment.
 
-    During development set REMINDER_EVERY_MINUTE=true to fire every minute; for
-    production leave it false and use REMINDER_HOUR / REMINDER_MINUTE (09:30 IST).
+    The reminder runs once per day at REMINDER_HOUR:REMINDER_MINUTE in the app's
+    business timezone (Asia/Kolkata). Defaults are 09:30 IST; override the hour /
+    minute via environment if needed. Set REMINDER_SCHEDULE_ENABLED=false to
+    register no schedule at all.
     """
 
     model_config = SettingsConfigDict(
@@ -35,7 +37,6 @@ class ScheduleSettings(BaseSettings):
     )
 
     REMINDER_SCHEDULE_ENABLED: bool = True
-    REMINDER_EVERY_MINUTE: bool = False
     REMINDER_HOUR: int = 9
     REMINDER_MINUTE: int = 30
 
@@ -46,13 +47,13 @@ schedule_settings = ScheduleSettings()
 def _build_schedule() -> dict:
     if not schedule_settings.REMINDER_SCHEDULE_ENABLED:
         return {}
-    if schedule_settings.REMINDER_EVERY_MINUTE:
-        cron = crontab()  # every minute — testing only
-    else:
-        cron = crontab(
-            hour=schedule_settings.REMINDER_HOUR,
-            minute=schedule_settings.REMINDER_MINUTE,
-        )
+    # Once daily at REMINDER_HOUR:REMINDER_MINUTE. Beat interprets this crontab in
+    # celery_app.conf.timezone (= BUSINESS_TIMEZONE, Asia/Kolkata), so the default
+    # 9/30 means 09:30 IST regardless of the server's local timezone.
+    cron = crontab(
+        hour=schedule_settings.REMINDER_HOUR,
+        minute=schedule_settings.REMINDER_MINUTE,
+    )
     return {
         "daily-report-reminder": {
             "task": DAILY_REPORT_REMINDER_TASK,
