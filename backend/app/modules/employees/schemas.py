@@ -25,6 +25,7 @@ class EmployeeOut(BaseModel):
     department: str | None = None
     designation: str | None = None
     manager_id: uuid.UUID | None = None
+    reporting_pm_id: uuid.UUID | None = None
     office_id: uuid.UUID | None = None
     date_of_joining: date | None = None
     status: EmployeeStatus
@@ -42,6 +43,7 @@ class EmployeeCreate(BaseModel):
     department: str | None = None
     designation: str | None = None
     manager_id: uuid.UUID | None = None
+    reporting_pm_id: uuid.UUID | None = None
     office_id: uuid.UUID | None = None
     date_of_joining: date | None = None
     status: EmployeeStatus = EmployeeStatus.active
@@ -56,6 +58,7 @@ class EmployeeUpdate(BaseModel):
     department: str | None = None
     designation: str | None = None
     manager_id: uuid.UUID | None = None
+    reporting_pm_id: uuid.UUID | None = None
     office_id: uuid.UUID | None = None
     date_of_joining: date | None = None
     status: EmployeeStatus | None = None
