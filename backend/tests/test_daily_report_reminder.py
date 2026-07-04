@@ -21,22 +21,26 @@ from app.reminders.daily_report.template import render_daily_report_reminder
 
 def test_working_day_window_skips_weekends():
     svc = DailyReportReminderService()
-    # Monday 2026-07-06 -> previous 7 working days must exclude Sat/Sun.
+    # Monday 2026-07-06 -> previous 3 working days must exclude Sat/Sun.
     window = svc.working_day_window(date(2026, 7, 6))
     assert len(window) == DEFAULT_LOOKBACK_WORKING_DAYS
     assert window == [
         date(2026, 7, 3),   # Fri
         date(2026, 7, 2),   # Thu
         date(2026, 7, 1),   # Wed
-        date(2026, 6, 30),  # Tue
-        date(2026, 6, 29),  # Mon
-        date(2026, 6, 26),  # Fri (skips Sun 28 / Sat 27)
-        date(2026, 6, 25),  # Thu
     ]
     # Most-recent first, strictly before the reference day, no weekends.
     assert window == sorted(window, reverse=True)
     assert all(d.weekday() < 5 for d in window)
     assert max(window) < date(2026, 7, 6)
+
+
+def test_working_day_window_skips_weekend_when_reference_is_after_weekend():
+    svc = DailyReportReminderService()
+    # Monday reference: the 3 prior working days skip Sat/Sun entirely.
+    window = svc.working_day_window(date(2026, 7, 6))
+    assert date(2026, 7, 4) not in window  # Sat
+    assert date(2026, 7, 5) not in window  # Sun
 
 
 def _reminder() -> PMReminder:
@@ -69,11 +73,30 @@ def test_template_subject_and_text_layout():
     text = rendered.text_body
     assert text.startswith("Good Morning Alex,")
     assert "The following daily reports are still pending." in text
-    # Dates appear most-recent first.
-    assert text.index("03 Jul") < text.index("02 Jul")
-    assert "• John" in text and "• David" in text
+    # Summary section reflects the reminder totals.
+    assert "Employees checked:       3" in text
+    assert "Employees with missing:  2" in text
+    assert "Total missing entries:   3" in text
+    # Grouped per employee (sorted by name); each employee lists its dates ascending.
+    assert "David\n  Missing: 02 Jul, 03 Jul" in text
+    assert "John\n  Missing: 03 Jul" in text
+    assert text.index("David") < text.index("John")
     assert "Please follow up with the respective employees." in text
     assert text.rstrip().endswith("CoreOps")
+
+
+def test_template_html_summary_and_grouping():
+    html = render_daily_report_reminder(
+        _reminder(), now=datetime(2026, 7, 6, 9, 30)
+    ).html_body
+    # Summary numbers and table header present.
+    assert "Employee Name" in html and "Missing Dates" in html
+    assert ">3<" in html and ">2<" in html  # checked / with-missing / entries stats
+    # Most-overdue date (02 Jul) highlighted red; a later date amber.
+    assert "#b91c1c" in html  # red highlight for the oldest date
+    assert "#b45309" in html  # amber for the rest
+    # Employee-grouped, names escaped/rendered.
+    assert "David" in html and "John" in html
 
 
 def test_template_html_escapes_and_greets_by_time():

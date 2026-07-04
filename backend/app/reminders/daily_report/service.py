@@ -10,7 +10,7 @@ Business rules:
     does *not* depend on attendance being recorded.
   * A report "satisfies" a day only once it is **submitted** (drafts do not).
   * The lookback is the previous N working days (Mon-Fri), strictly before today,
-    default 7.
+    default 3.
 
 Only employees currently assigned to a PM (``employees.reporting_pm_id``) are
 considered, and only active PMs / active employees.
@@ -28,7 +28,7 @@ from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus
 
-DEFAULT_LOOKBACK_WORKING_DAYS = 7
+DEFAULT_LOOKBACK_WORKING_DAYS = 3
 
 
 @dataclass(frozen=True)
