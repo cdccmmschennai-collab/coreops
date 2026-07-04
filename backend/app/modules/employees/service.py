@@ -161,6 +161,28 @@ def _validate_office(db: Session, office_id: uuid.UUID | None) -> None:
         raise AppError("validation_error", "Office not found.", 422)
 
 
+def _validate_reporting_pm(db: Session, reporting_pm_id: uuid.UUID | None) -> None:
+    """The reporting PM must be an active project-manager user account.
+
+    NULL is allowed at this layer (the column is nullable and legacy/imported
+    rows may not have one yet); the mandatory-when-active rule is enforced later.
+    """
+    if reporting_pm_id is None:
+        return
+    user = db.get(User, reporting_pm_id)
+    if (
+        user is None
+        or user.deleted_at is not None
+        or not user.is_active
+        or user.role != UserRole.project_manager
+    ):
+        raise AppError(
+            "validation_error",
+            "Reporting PM must be an active project manager.",
+            422,
+        )
+
+
 def create_employee(db: Session, actor: User, data: EmployeeCreate) -> Employee:
     if db.execute(
         select(Employee).where(
@@ -189,6 +211,7 @@ def create_employee(db: Session, actor: User, data: EmployeeCreate) -> Employee:
 
     _validate_manager(db, data.manager_id)
     _validate_office(db, data.office_id)
+    _validate_reporting_pm(db, data.reporting_pm_id)
 
     emp = Employee(**data.model_dump(), created_by=actor.id, updated_by=actor.id)
     db.add(emp)
@@ -220,6 +243,8 @@ def update_employee(
         _validate_manager(db, fields["manager_id"], self_id=emp.id)
     if "office_id" in fields:
         _validate_office(db, fields["office_id"])
+    if "reporting_pm_id" in fields:
+        _validate_reporting_pm(db, fields["reporting_pm_id"])
 
     if fields.get("work_email"):
         clash = db.execute(

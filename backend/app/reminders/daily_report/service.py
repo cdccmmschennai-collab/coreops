@@ -3,17 +3,14 @@
 Responsibility (only): decide *who owes which reports* and return structured
 data. It performs no SMTP, no HTML rendering, and no email decisions.
 
-Business rules (reused from the existing report-compliance module so this stays
-consistent with what employees already see):
+Business rules:
 
-  * A day "requires a report" for an employee only if they have a *worked*
-    attendance record that day (present / half_day). This automatically excludes
-    approved leave, holidays, week-offs, comp-off and absences, because those are
-    not "worked" attendance statuses.
+  * A day "requires a report" for an employee if it is a working day (Mon-Fri)
+    in the lookback window, on or after the employee's ``date_of_joining``. This
+    does *not* depend on attendance being recorded.
   * A report "satisfies" a day only once it is **submitted** (drafts do not).
   * The lookback is the previous N working days (Mon-Fri), strictly before today,
-    default 7. Holidays that happen to fall on a weekday are still excluded via
-    the attendance rule above.
+    default 7.
 
 Only employees currently assigned to a PM (``employees.reporting_pm_id``) are
 considered, and only active PMs / active employees.
@@ -27,9 +24,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.attendance.models import AttendanceRecord
 from app.modules.employees.models import Employee, EmployeeStatus
-from app.modules.report_compliance.service import WORKED_STATUSES
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus
 
@@ -76,8 +71,8 @@ class DailyReportReminderService:
     def working_day_window(self, today: date) -> list[date]:
         """The previous ``lookback`` working days (Mon-Fri), strictly before today.
 
-        Returned most-recent first. This is only an *upper bound* on how far back
-        we nag; the attendance rule decides which of these actually owed a report.
+        Returned most-recent first. This is the set of days a report is owed for;
+        the per-employee joining-date clamp narrows it further.
         """
         days: list[date] = []
         cursor = today - timedelta(days=1)
@@ -105,7 +100,6 @@ class DailyReportReminderService:
         if not all_employee_ids:
             return []
 
-        worked = self._worked_dates(db, all_employee_ids, window_start, window_end)
         submitted = self._submitted_dates(db, all_employee_ids, window_start, window_end)
         pm_names = self._pm_display_names(db, pms)
 
@@ -113,7 +107,7 @@ class DailyReportReminderService:
         for pm in pms:
             pm_employees = employees_by_pm.get(pm.id, [])
             days = self._missing_days_for_pm(
-                pm_employees, worked, submitted, window_set
+                pm_employees, submitted, window_set
             )
             if not days:
                 continue
@@ -155,26 +149,6 @@ class DailyReportReminderService:
         for emp in rows:
             grouped.setdefault(emp.reporting_pm_id, []).append(emp)
         return grouped
-
-    def _worked_dates(
-        self,
-        db: Session,
-        employee_ids: list[uuid.UUID],
-        date_from: date,
-        date_to: date,
-    ) -> dict[uuid.UUID, set[date]]:
-        rows = db.execute(
-            select(AttendanceRecord.employee_id, AttendanceRecord.attendance_date).where(
-                AttendanceRecord.employee_id.in_(employee_ids),
-                AttendanceRecord.status.in_(WORKED_STATUSES),
-                AttendanceRecord.attendance_date >= date_from,
-                AttendanceRecord.attendance_date <= date_to,
-            )
-        ).all()
-        result: dict[uuid.UUID, set[date]] = {}
-        for emp_id, d in rows:
-            result.setdefault(emp_id, set()).add(d)
-        return result
 
     def _submitted_dates(
         self,
@@ -218,16 +192,28 @@ class DailyReportReminderService:
 
     # -- grouping ------------------------------------------------------------
 
+    @staticmethod
+    def _owed_days(emp: Employee, window: set[date]) -> set[date]:
+        """Working days in the window the employee owes a report for.
+
+        Every working day counts (attendance is no longer required); days strictly
+        before the employee's joining date are excluded. A missing joining date is
+        treated as "no clamp" (the whole window is owed).
+        """
+        joining = emp.date_of_joining
+        if joining is None:
+            return set(window)
+        return {d for d in window if d >= joining}
+
     def _missing_days_for_pm(
         self,
         employees: list[Employee],
-        worked: dict[uuid.UUID, set[date]],
         submitted: dict[uuid.UUID, set[date]],
         window: set[date],
     ) -> list[MissingReportDay]:
         by_date: dict[date, list[MissingEmployee]] = {}
         for emp in employees:
-            missing = (worked.get(emp.id, set()) & window) - submitted.get(emp.id, set())
+            missing = self._owed_days(emp, window) - submitted.get(emp.id, set())
             for d in missing:
                 by_date.setdefault(d, []).append(
                     MissingEmployee(employee_id=emp.id, name=emp.full_name)
