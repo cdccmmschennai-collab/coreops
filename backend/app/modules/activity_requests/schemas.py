@@ -17,7 +17,6 @@ class ActivityRequestCreate(BaseModel):
     project_id: uuid.UUID
     activity_id: uuid.UUID | None = None
     sub_activity_id: uuid.UUID
-    task_id: uuid.UUID | None = None
     tags_count: int = Field(default=0, ge=0)
     docs_count: int = Field(default=0, ge=0)
     bom_count: int = Field(default=0, ge=0)
@@ -33,7 +32,6 @@ class ActivityRequestOut(BaseModel):
     project_id: uuid.UUID
     activity_id: uuid.UUID | None
     sub_activity_id: uuid.UUID
-    task_id: uuid.UUID | None
     tags_count: int
     docs_count: int
     bom_count: int

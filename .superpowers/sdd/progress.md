@@ -8,8 +8,8 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 ## Tasks
 - [x] Task 1: Remove assigned-task picker from report form (FE) — COMMITTED as 03e6c7a
 - [x] Task 2: Re-source team-lead detection via GET /projects/led (BE+FE) — COMMITTED as 6f2b2ae
-- [x] Task 3: Remove Task UI surface (FE) — implemented + verified; awaiting user commit
-- [ ] Task 4: Sever backend seams (columns remain)
+- [x] Task 3: Remove Task UI surface (FE) — COMMITTED as a478faa
+- [x] Task 4: Sever backend seams (columns remain) — implemented + verified; awaiting user commit
 - [ ] Task 5: Remove backend Task module
 - [ ] Task 6: Regenerate OpenAPI types
 - [ ] Task 7: Drop Task DB objects (final, isolated migration)
@@ -24,3 +24,13 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
   - Verification: Step-1 grep clean (no external features/tasks importers; only survivors are openapi.ts /tasks paths→Task 6, and KEEP look-alikes: work-reports/tasks completion + employee-performance TasksTab). FE build PASS (route list now has zero /tasks routes). FE typecheck PASS.
   - Deviation: typecheck initially failed on STALE .next/types/app/(app)/tasks/page.ts (Next.js generated route types for the deleted page). Ran build first to regenerate .next/types, then typecheck passed. Artifact staleness only — no source issue. (Plan lists typecheck before build; ran build first to clear stale generated types.)
   - Manual check remaining (user): sidebar has no Tasks item, PM dashboard has no "Assign task", /tasks 404s, Reports/Projects unaffected.
+- Task 4: DONE (awaiting user commit). Stopped reading/writing Task links; DB columns untouched (dropped later in Task 7).
+  - BE work_reports/service.py: removed `from app.modules.tasks.models import Task`; removed linked-Task title-resolution block; removed `"task_title"` from snapshot dict; removed `task_id=`/`task_title=` from BOTH WorkReportTask constructions (create + update paths — 2nd had 20-space indent, needed a separate edit).
+  - BE work_reports/schemas.py: removed task_id from WorkReportTaskIn; removed task_id + task_title from WorkReportTaskOut.
+  - BE activity_requests/service.py: removed Task import; removed task_ids set + tasks bulk-fetch + task lookup in _attach_names (task_title now hard-set None for API back-compat); removed task_id= in create_request; removed task_id from SimpleNamespace + task_id=/task_title= from WorkReportTask in _create_task_from_request.
+  - BE activity_requests/schemas.py: removed task_id from ActivityRequestCreate + ActivityRequestOut. KEPT task_title output field (defaults None) — plan scoped schema change to task_id only; back-compat.
+  - Verification: `python -c import app.main` OK. activity_requests suite FULLY PASSES. 12 full-suite failures are ALL PRE-EXISTING (proven: `git stash` → same 11 fail at HEAD a478faa; 12th = test_report_approved_notifies_author posts to removed /approve endpoint). None caused by Task 4. Working tree restored after stash.
+  - Pre-existing failures are the removed-approval-flow family (svc.approve_work_report / POST .../approve / list-scope) + 1 date-flaky benchmark overdue test (today=Mon 2026-07-06 makes due_date-2=Sat fall before week_start).
+  - Deviation: activity_requests task_title set to explicit None (not removed) — model has no task_title column, schema keeps field for back-compat, plan says "set to None/omit".
+  - Out-of-scope note: work_reports/service.py `_team_ids` (line 231) is pre-existing dead code (unused); left untouched per Task-4 scope.
+  - NOT run: FE typecheck/build (Task 4 is backend-only; frontend stopped sending task_id in Task 1).

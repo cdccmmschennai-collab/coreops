@@ -25,8 +25,6 @@ _MAX_DAY_MINUTES = 1440
 
 class WorkReportTaskIn(BaseModel):
     project_id: uuid.UUID
-    # Optional link to an assigned task (must be assigned to the author).
-    task_id: uuid.UUID | None = None
     # Day remarks — optional free text (the daily report has no mandatory note)
     description: str = Field(default="", max_length=_DESCRIPTION_MAX)
     # minutes_spent = project-activity hours; task_minutes_spent = task hours.
@@ -56,8 +54,6 @@ class WorkReportTaskOut(BaseModel):
 
     id: uuid.UUID
     project_id: uuid.UUID
-    task_id: uuid.UUID | None = None
-    task_title: str | None = None
     # Snapshot fields (populated at save time; null for records predating migration 0017).
     project_name: str | None = None
     project_code: str | None = None

@@ -35,7 +35,6 @@ from app.modules.projects.models import (
     ProjectMemberRole,
     ProjectStatus,
 )
-from app.modules.tasks.models import Task
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
     NO_ACTIVITY_DAY_STATUSES,
@@ -268,15 +267,6 @@ def _validate_tasks(
         if project.job_code_id:
             jc = db.get(JobCode, project.job_code_id)
             job_code_code = jc.code if jc else None
-        # Optional assigned-task link: must be a task assigned to the author.
-        task_title: str | None = None
-        if getattr(task, "task_id", None) is not None:
-            linked = db.get(Task, task.task_id)
-            if linked is None or linked.assigned_to_employee_id != author_id:
-                raise AppError(
-                    "validation_error", "Selected task is not assigned to you.", 422
-                )
-            task_title = linked.title
         # Optional Activity Master selection: replaces free-text activity_type.
         sub_activity_name: str | None = None
         activity_name: str | None = None
@@ -323,7 +313,6 @@ def _validate_tasks(
             "project_name": project.name,
             "project_code": project.code,
             "project_job_code_code": job_code_code,
-            "task_title": task_title,
             "sub_activity_name": sub_activity_name,
             "activity_name": activity_name,
             "activity_type": activity_type,
@@ -738,7 +727,6 @@ def create_work_report(
             WorkReportTask(
                 report_id=report.id,
                 project_id=task.project_id,
-                task_id=task.task_id,
                 description=task.description,
                 minutes_spent=task.minutes_spent,
                 task_minutes_spent=task.task_minutes_spent,
@@ -762,7 +750,6 @@ def create_work_report(
                 project_name=snap["project_name"],
                 project_code=snap["project_code"],
                 project_job_code_code=snap["project_job_code_code"],
-                task_title=snap["task_title"],
             )
         )
     try:
@@ -830,7 +817,6 @@ def update_work_report(
                 WorkReportTask(
                     report_id=report.id,
                     project_id=task.project_id,
-                    task_id=task.task_id,
                     description=task.description,
                     minutes_spent=task.minutes_spent,
                     task_minutes_spent=task.task_minutes_spent,
@@ -854,7 +840,6 @@ def update_work_report(
                     project_name=snap["project_name"],
                     project_code=snap["project_code"],
                     project_job_code_code=snap["project_job_code_code"],
-                    task_title=snap["task_title"],
                 )
             )
         report.total_minutes = total

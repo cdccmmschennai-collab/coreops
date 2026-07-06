@@ -17,7 +17,6 @@ from app.modules.activity_requests.schemas import ActivityRequestCreate
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.projects.models import Project, ProjectManager
-from app.modules.tasks.models import Task
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
 from app.shared.errors import AppError
@@ -64,7 +63,6 @@ def _attach_names(db: Session, requests: list[ActivityRequest]) -> None:
     project_ids = {r.project_id for r in requests}
     am_ids = {r.sub_activity_id for r in requests}
     am_ids |= {r.activity_id for r in requests if r.activity_id}
-    task_ids = {r.task_id for r in requests if r.task_id}
 
     employees = {
         e.id: e
@@ -81,11 +79,6 @@ def _attach_names(db: Session, requests: list[ActivityRequest]) -> None:
         for a in db.execute(select(ActivityMaster).where(ActivityMaster.id.in_(am_ids)))
         .scalars().all()
     } if am_ids else {}
-    tasks = {
-        t.id: t
-        for t in db.execute(select(Task).where(Task.id.in_(task_ids)))
-        .scalars().all()
-    } if task_ids else {}
 
     # The employee's current (first) activity in each request's report, so the
     # PM can compare "already logged" vs "requested". Take the earliest task row.
@@ -109,13 +102,12 @@ def _attach_names(db: Session, requests: list[ActivityRequest]) -> None:
         proj = projects.get(r.project_id)
         sub = activities.get(r.sub_activity_id)
         act = activities.get(r.activity_id) if r.activity_id else None
-        task = tasks.get(r.task_id) if r.task_id else None
         r.employee_name = emp.full_name if emp else ""  # type: ignore[attr-defined]
         r.project_name = proj.name if proj else ""  # type: ignore[attr-defined]
         r.project_code = proj.code if proj else ""  # type: ignore[attr-defined]
         r.activity_name = act.name if act else None  # type: ignore[attr-defined]
         r.sub_activity_name = sub.name if sub else ""  # type: ignore[attr-defined]
-        r.task_title = task.title if task else None  # type: ignore[attr-defined]
+        r.task_title = None  # type: ignore[attr-defined]  # Task module removed; kept null for API back-compat
 
         current = first_task_by_report.get(r.report_id) if r.report_id else None
         r.current_project_name = current.project_name if current else None  # type: ignore[attr-defined]
@@ -198,7 +190,6 @@ def create_request(
         project_id=data.project_id,
         activity_id=data.activity_id,
         sub_activity_id=data.sub_activity_id,
-        task_id=data.task_id,
         tags_count=data.tags_count,
         docs_count=data.docs_count,
         bom_count=data.bom_count,
@@ -350,7 +341,6 @@ def _create_task_from_request(
 
     row = SimpleNamespace(
         project_id=req.project_id,
-        task_id=req.task_id,
         description="",
         minutes_spent=None,
         task_minutes_spent=None,
@@ -372,7 +362,6 @@ def _create_task_from_request(
         WorkReportTask(
             report_id=report.id,
             project_id=row.project_id,
-            task_id=row.task_id,
             description=row.description,
             minutes_spent=None,
             task_minutes_spent=None,
@@ -396,7 +385,6 @@ def _create_task_from_request(
             project_name=snap["project_name"],
             project_code=snap["project_code"],
             project_job_code_code=snap["project_job_code_code"],
-            task_title=snap["task_title"],
         )
     )
 
