@@ -813,6 +813,35 @@ def list_led_projects(db: Session, actor: User) -> list[LedProject]:
     return result
 
 
+def list_assignable_employees(
+    db: Session, actor: User, project_id: uuid.UUID
+) -> list[Employee]:
+    """Every active employee that may be staffed onto one of this project's
+    activities — the candidate list for the shared assignment form. Restricted
+    to staffing managers (PM or the project Head), the same authority that the
+    assign/remove endpoints require, so a Head (whose global role is `employee`)
+    can list all candidates instead of just their own record."""
+    project = _fetch(db, project_id)
+    if not authz.can_manage_activity_staffing(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only the PM or the project Head can view assignable employees.",
+            403,
+        )
+    return list(
+        db.execute(
+            select(Employee)
+            .where(
+                Employee.deleted_at.is_(None),
+                Employee.status == EmployeeStatus.active,
+            )
+            .order_by(Employee.first_name, Employee.last_name)
+        )
+        .scalars()
+        .all()
+    )
+
+
 # ---------- activity staffing (Phase 3) ------------------------------------
 def list_activity_staffing(
     db: Session, actor: User, project_id: uuid.UUID

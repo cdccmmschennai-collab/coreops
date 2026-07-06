@@ -38,7 +38,6 @@ import { Tabs } from "@/components/ui/tabs";
 import { ActivitiesTab } from "@/features/project-activities/components/activities-tab";
 import { SubmissionsTab } from "@/features/project-submissions/components/submissions-tab";
 import { ArchiveDialog } from "./archive-dialog";
-import { ProjectHeadActivities } from "./project-head";
 import { ProjectMembers } from "./project-members";
 import { ProjectTimeline } from "./project-timeline";
 import { StatusBadge } from "./status-badge";
@@ -335,10 +334,6 @@ export function ProjectDetail({ id }: { id: string }) {
           </Card>
 
           <ProjectMembers project={project} />
-
-          {/* Head-only activity staffing (assign Lead / Contributor / QC per
-              activity); renders nothing unless the viewer is this project's Head. */}
-          <ProjectHeadActivities project={project} />
 
           <div className="md:col-span-2">
             <ProjectTimeline projectId={project.id} />

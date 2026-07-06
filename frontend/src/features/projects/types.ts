@@ -20,6 +20,8 @@ export type ActivityMember = components["schemas"]["ActivityMemberOut"];
 export type ActivityMemberRole = components["schemas"]["ActivityMemberRole"];
 export type ActivityMemberCreateBody = components["schemas"]["ActivityMemberCreate"];
 export type ActivityMemberUpdateBody = components["schemas"]["ActivityMemberUpdate"];
+// Candidate employees for the shared activity-assignment form (all active).
+export type AssignableEmployee = components["schemas"]["EmployeeOut"];
 
 // Display labels for project member roles. Stored/API values are kept as-is
 // (team_lead, contributor, qc) — only the rendered text differs.

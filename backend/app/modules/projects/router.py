@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
+from app.modules.employees.schemas import EmployeeOut
 from app.modules.projects import service
 from app.modules.projects.models import ProjectStatus
 from app.modules.projects.schemas import (
@@ -220,6 +221,16 @@ def unassign_member(
 # centrally in the service via authz — hence get_current_user, not require_role.
 # Path is /activity-staffing (not /activities) to avoid colliding with the
 # project_activities planning module, which owns /projects/{id}/activities.
+@router.get("/{project_id}/assignable-employees", response_model=list[EmployeeOut])
+def list_assignable_employees(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[EmployeeOut]:
+    rows = service.list_assignable_employees(db, current, project_id)
+    return [EmployeeOut.model_validate(e) for e in rows]
+
+
 @router.get("/{project_id}/activity-staffing", response_model=list[ActivityStaffingOut])
 def list_activity_staffing(
     project_id: uuid.UUID,

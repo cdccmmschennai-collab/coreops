@@ -5,6 +5,7 @@ import type {
   ActivityMemberCreateBody,
   ActivityMemberUpdateBody,
   ActivityStaffing,
+  AssignableEmployee,
   PlannedDateChange,
   PlannedDateUpdateBody,
   Project,
@@ -56,6 +57,8 @@ export const projectsApi = {
     api.del<void>(`/projects/${id}/members/${employeeId}`),
 
   // Phase 3 — per-activity staffing (grouped read + assign/update/unassign).
+  listAssignableEmployees: (id: string) =>
+    api.get<AssignableEmployee[]>(`/projects/${id}/assignable-employees`),
   listActivityStaffing: (id: string) =>
     api.get<ActivityStaffing[]>(`/projects/${id}/activity-staffing`),
   assignActivityMember: (

@@ -151,6 +151,17 @@ export function useActivityStaffing(id: string | undefined) {
   });
 }
 
+/** Active employees that may be staffed onto an activity (the shared assignment
+ * form's Employee options). Restricted to staffing managers server-side, so it
+ * only fetches for authorized viewers. */
+export function useAssignableEmployees(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: projectsKeys.assignableEmployees(id),
+    queryFn: () => projectsApi.listAssignableEmployees(id),
+    enabled: !!id && enabled,
+  });
+}
+
 /** Staffing changes also touch the visibility backbone (project_members) and the
  * member_count on the project, so invalidate those alongside the staffing list. */
 function useActivityStaffingInvalidation(projectId: string) {
