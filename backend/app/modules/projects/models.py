@@ -83,6 +83,12 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     maintenance_plant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("maintenance_plants.id", ondelete="SET NULL"), nullable=True
     )
+    # Phase 2 - Head ownership. One employee owns the project: report reviewer
+    # (with the PM) and primary notification-routing target. Nullable; projects
+    # start with no Head. Assigned via PUT /projects/{id}/head.
+    head_employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -101,6 +107,7 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         Index("projects_job_code_idx", "job_code_id", postgresql_where=text("deleted_at IS NULL")),
         Index("projects_planning_plant_idx", "planning_plant_id"),
         Index("projects_maintenance_plant_idx", "maintenance_plant_id"),
+        Index("projects_head_employee_idx", "head_employee_id"),
     )
 
 

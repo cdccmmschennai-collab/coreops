@@ -22,6 +22,8 @@ class ProjectOut(BaseModel):
     maintenance_plant_description: str | None = None   # populated by service join
     planning_plant_code: str | None = None              # populated by service join
     planning_plant_description: str | None = None       # populated by service join
+    head_employee_id: uuid.UUID | None = None
+    head_employee_name: str | None = None               # populated by service join
     client: str | None = None
     description: str | None = None
     status: ProjectStatus

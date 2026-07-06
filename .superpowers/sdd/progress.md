@@ -16,7 +16,27 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 
 ## Phase transition (2026-07-06)
 - Phase 1: Tasks 1-6 DONE (1-4 committed: 03e6c7a/6f2b2ae/a478faa/759a54d; 5+6 implemented, awaiting user commit). Task 7 deferred.
-- Phase 2 (Head ownership) plan written: docs/superpowers/plans/2026-07-06-phase2-head-ownership.md. 6 tasks. Current migration head 0052 → Phase 2 uses 0053_project_head. AWAITING USER APPROVAL of plan before implementing.
+- Phase 2 (Head ownership) plan written: docs/superpowers/plans/2026-07-06-phase2-head-ownership.md. 6 tasks. Current migration head 0052 → Phase 2 uses 0053_project_head. APPROVED 2026-07-06 with decisions: (a) Head picker = ANY employee, service auto-maintains project_members; (b) routing Head → reporting_pm_id → project_managers until Phase 6.
+
+## Spec revision (2026-07-06) — AWAITING APPROVAL
+- Business-workflow correction to the architecture spec (docs/superpowers/specs/2026-07-05-coreops-hierarchy-redesign-design.md), sections revised: header changelog, §3 decisions, §4.1 data model, §4.6 diagram, §5 permissions, §6 APIs, §8 frontend, §11 phased plan.
+- Key deltas: PM assigns ONLY the Head + manages projects (NO activity staffing); Head manages ALL activity assignments; EXACTLY ONE Lead per activity (partial-unique index); QC is an additive `is_qc` boolean (not a role value; role ∈ {lead, contributor}); Leads manage Contributors + QC in own activity only; frontend becomes an ACTIVITY-GROUPED member view (wireframe in §8).
+- Phase 2 (Head) UNAFFECTED — proceeds as written. Revision reshapes Phase 3.
+- Revised Phase 3 plan written: docs/superpowers/plans/2026-07-06-phase3-activity-assignments.md (4 tasks; migration 0054_project_activity_members).
+- APPROVED 2026-07-06 with final decisions: QC 0..N per activity (is_qc flag); PM fully read-only for activity staffing after assigning Head. UI direction folded into spec §8 + Phase 3 plan Task 4: three role views (PM read-only / Head single-assignment-form / Lead fixed-activity), Head section + grouped Activities→Lead/Contributors/QC list, targeted per-activity re-render on assign.
+- NEXT: waiting for user to commit Phase 2 Task 1 (0053 head column), then proceed to Phase 2 Task 2 (app/core/authz.py). No code written during this design revision.
+
+## Phase 2 — Head Ownership
+- [x] P2-T1: Add head_employee_id (DB + model + read exposure) — implemented + verified; awaiting user commit
+- [ ] P2-T2: Central app/core/authz.py helper (+ unit tests)
+- [ ] P2-T3: PUT /projects/{id}/head (assign/replace + timeline + auto project_members)
+- [ ] P2-T4: Honor Head in review + visibility + notification routing
+- [ ] P2-T5: Relax timeline view to all project members
+- [ ] P2-T6: Frontend assign/show Head
+
+### Log
+- P2-T1: DONE (awaiting user commit). Files: alembic/versions/0053_project_head.py (add nullable projects.head_employee_id FK→employees SET NULL + index projects_head_employee_idx; real downgrade); projects/models.py (head_employee_id column + index in __table_args__); projects/schemas.py (ProjectOut.head_employee_id + head_employee_name); projects/service.py (_attach_heads bulk-name helper, called in list_projects + all 3 single-project ProjectOut paths get/create/update).
+  - Verification: `alembic upgrade head` 0052→0053 OK (dev DB now at 0053); `import app.main` OK; ProjectOut exposes both head fields (defaults None); test_projects.py + test_led_projects.py 25/25 PASS; full suite = SAME 12 pre-existing failures, ZERO new. No behavior change yet (nothing assigns/reads head for logic).
 
 ## Log
 - Task 1: DONE + COMMITTED as 03e6c7a (verified: no task_id/useTasks in features/work-reports; HEAD = BASE fd94517 + this commit). Ledger "awaiting commit" was stale from the other machine.

@@ -120,6 +120,7 @@ def list_projects(
     _attach_member_counts(db, projects)
     _attach_job_codes(db, projects)
     _attach_maintenance_plants(db, projects)
+    _attach_heads(db, projects)
     for p in projects:
         p.days_running = _compute_days_running(p)  # type: ignore[attr-defined]
     return projects, total
@@ -183,6 +184,22 @@ def _attach_maintenance_plants(db: Session, projects: list[Project]) -> None:
         p.planning_plant_description = pp.description if pp else None   # type: ignore[attr-defined]
 
 
+def _attach_heads(db: Session, projects: list[Project]) -> None:
+    """Bulk-fetch each project's Head employee name (Phase 2), same pattern as
+    _attach_job_codes. head_employee_name is null when no Head is assigned."""
+    head_ids = {p.head_employee_id for p in projects if p.head_employee_id}
+    by_id: dict = {}
+    if head_ids:
+        by_id = {
+            e.id: e for e in db.execute(
+                select(Employee).where(Employee.id.in_(head_ids))
+            ).scalars().all()
+        }
+    for p in projects:
+        emp = by_id.get(p.head_employee_id) if p.head_employee_id else None
+        p.head_employee_name = emp.full_name if emp else None  # type: ignore[attr-defined]
+
+
 def _attach_member_counts(db: Session, projects: list[Project]) -> None:
     ids = [p.id for p in projects]
     counts: dict[uuid.UUID, int] = {}
@@ -230,6 +247,7 @@ def get_project(db: Session, actor: User, project_id: uuid.UUID) -> Project:
     ).scalar_one()
     _attach_job_codes(db, [project])
     _attach_maintenance_plants(db, [project])
+    _attach_heads(db, [project])
     project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     return project
 
@@ -342,6 +360,7 @@ def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
     project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     _attach_job_codes(db, [project])
     _attach_maintenance_plants(db, [project])
+    _attach_heads(db, [project])
     return project
 
 
@@ -417,6 +436,7 @@ def update_project(
     ).scalar_one()
     _attach_job_codes(db, [project])
     _attach_maintenance_plants(db, [project])
+    _attach_heads(db, [project])
     project.days_running = _compute_days_running(project)  # type: ignore[attr-defined]
     return project
 
