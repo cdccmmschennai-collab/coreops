@@ -12,7 +12,11 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 - [x] Task 4: Sever backend seams (columns remain) — implemented + verified; awaiting user commit
 - [x] Task 5: Remove backend Task module — implemented + verified; awaiting user commit
 - [x] Task 6: Regenerate OpenAPI types — implemented + verified; awaiting user commit
-- [ ] Task 7: Drop Task DB objects (final, isolated migration) — IRREVERSIBLE, needs DB backup; STOPPED for user confirm
+- [~] Task 7: Drop Task DB objects (final, isolated migration) — DEFERRED by user (irreversible; do before production). Migration renumbers to chain AFTER Phase 2's 0053+.
+
+## Phase transition (2026-07-06)
+- Phase 1: Tasks 1-6 DONE (1-4 committed: 03e6c7a/6f2b2ae/a478faa/759a54d; 5+6 implemented, awaiting user commit). Task 7 deferred.
+- Phase 2 (Head ownership) plan written: docs/superpowers/plans/2026-07-06-phase2-head-ownership.md. 6 tasks. Current migration head 0052 → Phase 2 uses 0053_project_head. AWAITING USER APPROVAL of plan before implementing.
 
 ## Log
 - Task 1: DONE + COMMITTED as 03e6c7a (verified: no task_id/useTasks in features/work-reports; HEAD = BASE fd94517 + this commit). Ledger "awaiting commit" was stale from the other machine.
