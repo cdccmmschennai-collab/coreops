@@ -363,14 +363,6 @@ export function WorkReportDetail({ id }: { id: string }) {
                       </p>
                     </div>
 
-                    {/* Linked task (if any) */}
-                    {t.task_title && (
-                      <div className="mt-4 min-w-0">
-                        <p className="text-xs text-muted-foreground">Task</p>
-                        <p className="text-sm font-medium">{t.task_title}</p>
-                      </div>
-                    )}
-
                     {/* Activity / Sub-Activity — new rows use the Activity Master;
                         legacy rows (filed before it existed) fall back to the old
                         free-text activity_type. */}

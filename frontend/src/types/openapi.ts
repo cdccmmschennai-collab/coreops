@@ -334,6 +334,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/led": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Led Projects */
+        get: operations["led_projects_api_v1_projects_led_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}": {
         parameters: {
             query?: never;
@@ -1144,6 +1161,109 @@ export interface paths {
         patch: operations["update_sub_activity_api_v1_activity_master_sub_activities__activity_master_id__patch"];
         trace?: never;
     };
+    "/api/v1/activity-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activity Requests */
+        get: operations["list_activity_requests_api_v1_activity_requests_get"];
+        put?: never;
+        /** Create Activity Request */
+        post: operations["create_activity_request_api_v1_activity_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-requests/mine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List My Activity Requests */
+        get: operations["list_my_activity_requests_api_v1_activity_requests_mine_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-requests/pending-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pending Count */
+        get: operations["pending_count_api_v1_activity_requests_pending_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Activity Request */
+        post: operations["approve_activity_request_api_v1_activity_requests__request_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Activity Request */
+        post: operations["reject_activity_request_api_v1_activity_requests__request_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Activity Request */
+        delete: operations["delete_activity_request_api_v1_activity_requests__request_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/benchmarks/my-alerts": {
         parameters: {
             query?: never;
@@ -1489,79 +1609,6 @@ export interface paths {
         patch: operations["update_submission_status_api_v1_projects__project_id__submissions__submission_id__status_patch"];
         trace?: never;
     };
-    "/api/v1/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Tasks */
-        get: operations["list_tasks_api_v1_tasks_get"];
-        put?: never;
-        /** Create Task */
-        post: operations["create_task_api_v1_tasks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/tasks/assignable-projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Assignable Projects
-         * @description Projects the current user leads + the members they may assign to.
-         */
-        get: operations["assignable_projects_api_v1_tasks_assignable_projects_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Task */
-        get: operations["get_task_api_v1_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Task */
-        patch: operations["update_task_api_v1_tasks__task_id__patch"];
-        trace?: never;
-    };
-    "/api/v1/tasks/{task_id}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Task Status */
-        patch: operations["update_task_status_api_v1_tasks__task_id__status_patch"];
-        trace?: never;
-    };
     "/api/v1/plants/planning-plants": {
         parameters: {
             query?: never;
@@ -1748,6 +1795,134 @@ export interface components {
             /** Rows */
             rows: components["schemas"]["ActivityRow"][];
         };
+        /**
+         * ActivityRequestCreate
+         * @description Body sent when an employee clicks 'Request PM to Add Another Activity'.
+         *
+         *     Carries the currently-selected activity row's details verbatim. No approval
+         *     fields, no reason/remarks.
+         */
+        ActivityRequestCreate: {
+            /**
+             * Report Id
+             * Format: uuid
+             */
+            report_id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Activity Id */
+            activity_id?: string | null;
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /**
+             * Tags Count
+             * @default 0
+             */
+            tags_count: number;
+            /**
+             * Docs Count
+             * @default 0
+             */
+            docs_count: number;
+            /**
+             * Bom Count
+             * @default 0
+             */
+            bom_count: number;
+            /**
+             * Spares Count
+             * @default 0
+             */
+            spares_count: number;
+        };
+        /** ActivityRequestOut */
+        ActivityRequestOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Report Id */
+            report_id: string | null;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Activity Id */
+            activity_id: string | null;
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /** Tags Count */
+            tags_count: number;
+            /** Docs Count */
+            docs_count: number;
+            /** Bom Count */
+            bom_count: number;
+            /** Spares Count */
+            spares_count: number;
+            status: components["schemas"]["ActivityRequestStatus"];
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Approved By */
+            approved_by: string | null;
+            /** Approved At */
+            approved_at: string | null;
+            /**
+             * Employee Name
+             * @default
+             */
+            employee_name: string;
+            /**
+             * Project Name
+             * @default
+             */
+            project_name: string;
+            /**
+             * Project Code
+             * @default
+             */
+            project_code: string;
+            /** Activity Name */
+            activity_name?: string | null;
+            /**
+             * Sub Activity Name
+             * @default
+             */
+            sub_activity_name: string;
+            /** Task Title */
+            task_title?: string | null;
+            /** Current Project Name */
+            current_project_name?: string | null;
+            /** Current Project Code */
+            current_project_code?: string | null;
+            /** Current Activity Name */
+            current_activity_name?: string | null;
+            /** Current Sub Activity Name */
+            current_sub_activity_name?: string | null;
+        };
+        /**
+         * ActivityRequestStatus
+         * @enum {string}
+         */
+        ActivityRequestStatus: "pending" | "approved" | "rejected";
         /** ActivityRow */
         ActivityRow: {
             /** Employee Label */
@@ -1831,36 +2006,6 @@ export interface components {
             requires_project?: boolean | null;
             /** Is Active */
             is_active?: boolean | null;
-        };
-        /**
-         * AssignableMember
-         * @description A project member a team lead may assign a task to.
-         */
-        AssignableMember: {
-            /**
-             * Employee Id
-             * Format: uuid
-             */
-            employee_id: string;
-            /** Name */
-            name: string;
-        };
-        /**
-         * AssignableProject
-         * @description A project the current user leads, with its assignable members.
-         */
-        AssignableProject: {
-            /**
-             * Project Id
-             * Format: uuid
-             */
-            project_id: string;
-            /** Name */
-            name: string;
-            /** Code */
-            code: string;
-            /** Members */
-            members: components["schemas"]["AssignableMember"][];
         };
         /** AttendanceBulkRecord */
         AttendanceBulkRecord: {
@@ -2386,6 +2531,8 @@ export interface components {
             designation?: string | null;
             /** Manager Id */
             manager_id?: string | null;
+            /** Reporting Pm Id */
+            reporting_pm_id?: string | null;
             /** Office Id */
             office_id?: string | null;
             /** Date Of Joining */
@@ -2422,6 +2569,8 @@ export interface components {
             designation?: string | null;
             /** Manager Id */
             manager_id?: string | null;
+            /** Reporting Pm Id */
+            reporting_pm_id?: string | null;
             /** Office Id */
             office_id?: string | null;
             /** Date Of Joining */
@@ -2563,6 +2712,8 @@ export interface components {
             designation?: string | null;
             /** Manager Id */
             manager_id?: string | null;
+            /** Reporting Pm Id */
+            reporting_pm_id?: string | null;
             /** Office Id */
             office_id?: string | null;
             /** Date Of Joining */
@@ -2819,6 +2970,30 @@ export interface components {
          * @enum {string}
          */
         LeaveType: "casual" | "sick" | "annual" | "comp_off" | "unpaid" | "other";
+        /** LedProject */
+        LedProject: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Name */
+            name: string;
+            /** Code */
+            code: string;
+            /** Members */
+            members: components["schemas"]["LedProjectMember"][];
+        };
+        /** LedProjectMember */
+        LedProjectMember: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Name */
+            name: string;
+        };
         /**
          * LinkedEmployee
          * @description Compact employee summary attached to a user row in the admin list.
@@ -3611,95 +3786,6 @@ export interface components {
             /** Is Completed */
             is_completed: boolean;
         };
-        /** TaskCreate */
-        TaskCreate: {
-            /** Title */
-            title: string;
-            /** Description */
-            description?: string | null;
-            /**
-             * Assigned To Employee Id
-             * Format: uuid
-             */
-            assigned_to_employee_id: string;
-            /** Project Id */
-            project_id?: string | null;
-            /** @default medium */
-            priority: components["schemas"]["TaskPriority"];
-            /** Due Date */
-            due_date?: string | null;
-        };
-        /** TaskOut */
-        TaskOut: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            /** Title */
-            title: string;
-            /** Description */
-            description?: string | null;
-            /**
-             * Assigned To Employee Id
-             * Format: uuid
-             */
-            assigned_to_employee_id: string;
-            /**
-             * Assigned By Employee Id
-             * Format: uuid
-             */
-            assigned_by_employee_id: string;
-            /**
-             * Assigned To Name
-             * @default
-             */
-            assigned_to_name: string;
-            /**
-             * Assigned By Name
-             * @default
-             */
-            assigned_by_name: string;
-            /** Project Id */
-            project_id?: string | null;
-            /** Project Name */
-            project_name?: string | null;
-            status: components["schemas"]["TaskStatus"];
-            priority: components["schemas"]["TaskPriority"];
-            /** Due Date */
-            due_date?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** TaskPage */
-        TaskPage: {
-            /** Items */
-            items: components["schemas"]["TaskOut"][];
-            /** Total */
-            total: number;
-            /** Limit */
-            limit: number;
-            /** Offset */
-            offset: number;
-        };
-        /**
-         * TaskPriority
-         * @enum {string}
-         */
-        TaskPriority: "low" | "medium" | "high";
-        /**
-         * TaskStatus
-         * @enum {string}
-         */
-        TaskStatus: "open" | "in_progress" | "completed" | "cancelled";
         /**
          * TaskStatusOut
          * @description One row of 'My Alerts' / 'Overdue Tasks' panel — a TASK_BASED
@@ -3739,23 +3825,6 @@ export interface components {
             status: string;
             /** Days Overdue */
             days_overdue: number;
-        };
-        /** TaskStatusUpdate */
-        TaskStatusUpdate: {
-            status: components["schemas"]["TaskStatus"];
-        };
-        /** TaskUpdate */
-        TaskUpdate: {
-            /** Title */
-            title?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Assigned To Employee Id */
-            assigned_to_employee_id?: string | null;
-            priority?: components["schemas"]["TaskPriority"] | null;
-            /** Due Date */
-            due_date?: string | null;
-            status?: components["schemas"]["TaskStatus"] | null;
         };
         /** TeamAlertsOut */
         TeamAlertsOut: {
@@ -4114,8 +4183,6 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
-            /** Task Id */
-            task_id?: string | null;
             /**
              * Description
              * @default
@@ -4169,10 +4236,6 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
-            /** Task Id */
-            task_id?: string | null;
-            /** Task Title */
-            task_title?: string | null;
             /** Project Name */
             project_name?: string | null;
             /** Project Code */
@@ -5094,6 +5157,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    led_projects_api_v1_projects_led_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LedProject"][];
                 };
             };
         };
@@ -7361,6 +7444,214 @@ export interface operations {
             };
         };
     };
+    list_activity_requests_api_v1_activity_requests_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["ActivityRequestStatus"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityRequestOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_activity_request_api_v1_activity_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_my_activity_requests_api_v1_activity_requests_mine_get: {
+        parameters: {
+            query: {
+                report_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityRequestOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pending_count_api_v1_activity_requests_pending_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+        };
+    };
+    approve_activity_request_api_v1_activity_requests__request_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_activity_request_api_v1_activity_requests__request_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_activity_request_api_v1_activity_requests__request_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_alerts_api_v1_benchmarks_my_alerts_get: {
         parameters: {
             query?: never;
@@ -8264,198 +8555,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_tasks_api_v1_tasks_get: {
-        parameters: {
-            query?: {
-                mine?: boolean | null;
-                q?: string | null;
-                status?: components["schemas"]["TaskStatus"] | null;
-                priority?: components["schemas"]["TaskPriority"] | null;
-                due_from?: string | null;
-                due_to?: string | null;
-                limit?: number;
-                offset?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskPage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_task_api_v1_tasks_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assignable_projects_api_v1_tasks_assignable_projects_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AssignableProject"][];
-                };
-            };
-        };
-    };
-    get_task_api_v1_tasks__task_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_task_api_v1_tasks__task_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_task_status_api_v1_tasks__task_id__status_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TaskStatusUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskOut"];
                 };
             };
             /** @description Validation Error */

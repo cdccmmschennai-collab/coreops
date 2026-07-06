@@ -54,8 +54,11 @@ class ActivityRequest(UUIDMixin, Base):
     sub_activity_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="RESTRICT"), nullable=False
     )
+    # Legacy Task-link column — Task module removed (Phase 1); FK dropped from the
+    # model so the mapper does not require the gone tasks table. Column dropped in
+    # migration 0053 (Task 7).
     task_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), nullable=True
     )
     tags_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))

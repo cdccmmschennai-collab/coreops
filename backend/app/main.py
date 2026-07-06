@@ -34,7 +34,6 @@ from app.modules.project_deliverables.router import router as deliverables_route
 from app.modules.project_submissions.router import router as submissions_router
 from app.modules.report_compliance.router import router as report_compliance_router
 from app.modules.reports_export.router import router as reports_export_router
-from app.modules.tasks.router import router as tasks_router
 from app.modules.work_reports.router import router as work_reports_router
 from app.shared.errors import register_error_handlers
 
@@ -93,7 +92,6 @@ def create_app() -> FastAPI:
     app.include_router(project_activities_router, prefix=settings.API_V1_PREFIX)
     app.include_router(deliverables_router, prefix=settings.API_V1_PREFIX)
     app.include_router(submissions_router, prefix=settings.API_V1_PREFIX)
-    app.include_router(tasks_router, prefix=settings.API_V1_PREFIX)
     app.include_router(plants_router, prefix=settings.API_V1_PREFIX)
 
     # Temporary notification debug endpoints — mounted only when explicitly

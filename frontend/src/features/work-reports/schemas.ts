@@ -414,7 +414,6 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
       report.tasks.length > 0
         ? report.tasks.map((t) => ({
             project_id:     t.project_id,
-            task_title:     t.task_title ?? undefined,
             task_hours:     t.task_minutes_spent != null ? minutesToHours(t.task_minutes_spent) : "",
             project_name:   t.project_name ?? undefined,
             project_code:   t.project_code ?? undefined,

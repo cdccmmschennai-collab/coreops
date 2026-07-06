@@ -10,9 +10,9 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 - [x] Task 2: Re-source team-lead detection via GET /projects/led (BE+FE) — COMMITTED as 6f2b2ae
 - [x] Task 3: Remove Task UI surface (FE) — COMMITTED as a478faa
 - [x] Task 4: Sever backend seams (columns remain) — implemented + verified; awaiting user commit
-- [ ] Task 5: Remove backend Task module
-- [ ] Task 6: Regenerate OpenAPI types
-- [ ] Task 7: Drop Task DB objects (final, isolated migration)
+- [x] Task 5: Remove backend Task module — implemented + verified; awaiting user commit
+- [x] Task 6: Regenerate OpenAPI types — implemented + verified; awaiting user commit
+- [ ] Task 7: Drop Task DB objects (final, isolated migration) — IRREVERSIBLE, needs DB backup; STOPPED for user confirm
 
 ## Log
 - Task 1: DONE + COMMITTED as 03e6c7a (verified: no task_id/useTasks in features/work-reports; HEAD = BASE fd94517 + this commit). Ledger "awaiting commit" was stale from the other machine.
@@ -34,3 +34,13 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
   - Deviation: activity_requests task_title set to explicit None (not removed) — model has no task_title column, schema keeps field for back-compat, plan says "set to None/omit".
   - Out-of-scope note: work_reports/service.py `_team_ids` (line 231) is pre-existing dead code (unused); left untouched per Task-4 scope.
   - NOT run: FE typecheck/build (Task 4 is backend-only; frontend stopped sending task_id in Task 1).
+- Task 5: DONE (awaiting user commit). Deleted backend/app/modules/tasks/ (5 files) + backend/tests/test_tasks.py. Removed tasks_router import + include_router from main.py. Audit constants kept.
+  - TWO UNPLANNED-BUT-REQUIRED FIXES (plan's Task 5 file list was incomplete; adapted to repo, back-compat preserved):
+    (1) alembic/env.py: removed `import app.modules.tasks.models` (model registration) — otherwise ModuleNotFoundError broke ALL migrations/tests.
+    (2) work_reports/models.py + activity_requests/models.py: removed `ForeignKey("tasks.id", ondelete="SET NULL")` from the surviving task_id columns (kept the columns as plain nullable UUID). After deleting the Task model, the tasks Table left SQLAlchemy metadata, so these FKs raised NoReferencedTableError on every insert. DB columns + DB FK constraints untouched (dropped in Task 7); only the ORM FK *declaration* removed.
+  - Verification: `import app.main` OK. Full suite: SAME 12 pre-existing failures, ZERO new failures, ZERO collection errors after deleting test_tasks.py. Guardrail benchmark_alerts fully green; benchmark_engine green except the 1 date-flaky overdue test; activity_requests fully green.
+- Task 6: DONE (awaiting user commit). Regenerated frontend/openapi.json (from backend app.openapi(), UTF-8 no BOM; no /api/v1/tasks paths; work-report completion endpoint retained) + src/types/openapi.ts via `npm run gen:api`.
+  - Export mechanism deviation: plan's in-container write path /app/../frontend won't work (backend container mounts only backend/ at /app). Instead dumped app.openapi() to stdout and wrote host frontend/openapi.json via PowerShell [System.IO.File]::WriteAllText UTF-8-no-BOM.
+  - UNPLANNED-BUT-REQUIRED FE fixes (regenerated types dropped work_report_tasks.task_title, exposing read-side consumers the plan didn't enumerate; typecheck failed until fixed): removed task_title read in work-reports/schemas.ts edit-mapper (line ~417); removed the "Linked task" display block in work-report-detail.tsx; removed t.task_title fallback in employee-performance tasks-tab.tsx title expr. All minimal.
+  - KEPT (correct, back-compat): ActivityRequestOut.task_title in openapi.ts + activity-requests/types.ts (backend still returns it, now always null); work-reports form's own optional task_title zod field + default (harmless leftover, not payload-mapped).
+  - Verification: gen:api OK; FE typecheck PASS; FE build PASS (no /tasks routes).

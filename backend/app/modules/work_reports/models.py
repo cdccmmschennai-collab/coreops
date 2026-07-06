@@ -222,9 +222,12 @@ class WorkReportTask(UUIDMixin, Base):
     maintenance_plant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     planning_plant_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     planning_plant_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Optional link to an assigned Task (the activity logs work on that task).
+    # Legacy Task-link columns — the Task module was removed (Phase 1). No longer
+    # read/written; the FK to tasks was dropped from the model so the mapper does
+    # not require the (now-gone) tasks table. Columns themselves are dropped in
+    # migration 0053 (Task 7).
     task_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), nullable=True
     )
     task_title: Mapped[str | None] = mapped_column(Text, nullable=True)  # snapshot
     # Snapshot fields (migration 0017) — frozen at save time for historical accuracy.

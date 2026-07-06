@@ -83,7 +83,7 @@ export function TasksTab({ employeeId }: { employeeId: string }) {
         out.push({
           id: t.id,
           activity: t.activity_name ?? null,
-          title: t.sub_activity_name || t.task_title || t.description || "Activity",
+          title: t.sub_activity_name || t.description || "Activity",
           projectCode: t.project_code ?? null,
           date: report.report_date,
           count: relevantCount(t),
