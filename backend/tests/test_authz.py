@@ -88,3 +88,19 @@ def test_head_honored_by_review_among_multiple_projects(db, make_user, make_empl
 
     assert authz.can_review_report(db, head_u, {unrelated.id, headed.id})
     assert not authz.can_review_report(db, head_u, {unrelated.id})
+
+
+def test_reviewable_project_ids_unions_head_and_team_lead(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    u, e = _emp(make_user, make_employee, "rv@x.com", "RV-1")
+    headed = make_project(code="RV-H")
+    _set_head(db, headed, e.id)
+    led = make_project(code="RV-L")
+    make_project_member(project_id=led.id, employee_id=e.id, role=ProjectMemberRole.team_lead)
+    contrib = make_project(code="RV-C")
+    make_project_member(project_id=contrib.id, employee_id=e.id, role=ProjectMemberRole.contributor)
+
+    ids = authz.reviewable_project_ids(db, u)
+    assert headed.id in ids and led.id in ids
+    assert contrib.id not in ids  # a plain contributor cannot review

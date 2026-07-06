@@ -78,6 +78,31 @@ def can_view_project(db: Session, actor: User, project: Project) -> bool:
     return _is_project_member(db, emp_id, project.id)
 
 
+def reviewable_project_ids(db: Session, actor: User) -> set[uuid.UUID]:
+    """Projects whose reports the caller may review as a non-PM: those they Head,
+    plus (legacy, until Phase 6) those they team_lead. Resolved in two queries so
+    batch callers (report lists) check membership in-memory instead of per-report.
+
+    PM reviews every report and is handled by the caller, not enumerated here.
+    """
+    emp_id = _actor_employee_id(db, actor)
+    if emp_id is None:
+        return set()
+    head_ids = db.execute(
+        select(Project.id).where(
+            Project.head_employee_id == emp_id,
+            Project.deleted_at.is_(None),
+        )
+    ).scalars().all()
+    lead_ids = db.execute(
+        select(ProjectMember.project_id).where(
+            ProjectMember.employee_id == emp_id,
+            ProjectMember.role == ProjectMemberRole.team_lead,
+        )
+    ).scalars().all()
+    return set(head_ids) | set(lead_ids)
+
+
 def can_review_report(db: Session, actor: User, project_ids: set[uuid.UUID]) -> bool:
     """Whether the caller may review (reject / request-edit / grant-edit) a report
     whose lines touch ``project_ids``.
@@ -90,23 +115,4 @@ def can_review_report(db: Session, actor: User, project_ids: set[uuid.UUID]) -> 
         return True
     if not project_ids:
         return False
-    emp_id = _actor_employee_id(db, actor)
-    if emp_id is None:
-        return False
-    # Head of any of the report's projects.
-    is_head = db.execute(
-        select(Project.id).where(
-            Project.id.in_(project_ids),
-            Project.head_employee_id == emp_id,
-        ).limit(1)
-    ).scalar_one_or_none() is not None
-    if is_head:
-        return True
-    # Legacy team_lead reviewer path (retired in Phase 6).
-    return db.execute(
-        select(ProjectMember.id).where(
-            ProjectMember.project_id.in_(project_ids),
-            ProjectMember.employee_id == emp_id,
-            ProjectMember.role == ProjectMemberRole.team_lead,
-        ).limit(1)
-    ).scalar_one_or_none() is not None
+    return bool(set(project_ids) & reviewable_project_ids(db, actor))

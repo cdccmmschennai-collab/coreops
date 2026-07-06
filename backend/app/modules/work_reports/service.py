@@ -23,6 +23,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.activity_master.models import ActivityMaster, LEVEL_SUB_ACTIVITY
 from app.modules.activity_master.service import compute_benchmark, compute_overdue
 from app.modules.employees.models import Employee
@@ -89,8 +90,9 @@ def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
 
 def _notify_reviewers(db: Session, report: DailyWorkReport, author: Employee,
                       type_: str, title: str, message: str) -> None:
-    """Notify the report's reviewers: team leads on its projects + the author's
-    manager. (Requires report.tasks to be attached.)"""
+    """Notify the report's reviewers: the Head of each of its projects + team
+    leads on those projects (legacy) + the author's manager. (Requires
+    report.tasks to be attached.)"""
     url = f"/work-reports/{report.id}"
     project_ids = {t.project_id for t in getattr(report, "tasks", [])}
     if project_ids:
@@ -100,12 +102,19 @@ def _notify_reviewers(db: Session, report: DailyWorkReport, author: Employee,
                 ProjectMember.role == ProjectMemberRole.team_lead,
             )
         ).scalars().all()
-        for emp_id in set(lead_emp_ids):
+        head_emp_ids = db.execute(
+            select(Project.head_employee_id).where(
+                Project.id.in_(project_ids),
+                Project.head_employee_id.is_not(None),
+            )
+        ).scalars().all()
+        # Dedup so a Head who is also a team lead is notified once.
+        for emp_id in set(lead_emp_ids) | set(head_emp_ids):
             if emp_id == author.id:
                 continue
-            lead = db.get(Employee, emp_id)
-            if lead and lead.user_id:
-                _push(db, lead.user_id, type_, title, message, report.id, url)
+            reviewer = db.get(Employee, emp_id)
+            if reviewer and reviewer.user_id:
+                _push(db, reviewer.user_id, type_, title, message, report.id, url)
     _notify_manager(db, author, type_, title, message, report.id, url)
 
 
@@ -114,17 +123,6 @@ _EDITABLE = {
     WorkReportStatus.rejected,
     WorkReportStatus.granted,
 }
-
-
-def _led_project_ids(db: Session, employee_id: uuid.UUID) -> set[uuid.UUID]:
-    """Project ids where this employee is a team lead (drives scoped review)."""
-    rows = db.execute(
-        select(ProjectMember.project_id).where(
-            ProjectMember.employee_id == employee_id,
-            ProjectMember.role == ProjectMemberRole.team_lead,
-        )
-    ).scalars().all()
-    return set(rows)
 
 
 def _report_in_projects(
@@ -145,8 +143,9 @@ def _decorate(
 ) -> list[DailyWorkReport]:
     """Attach tasks and the per-actor `can_review` flag to each report.
 
-    can_review = PM (any report) OR team lead on one of the report's projects
-    (but never one's own report — authors request edits, they don't grant them).
+    can_review = PM (any report) OR the Head / (legacy) team lead on one of the
+    report's projects (but never one's own report — authors request edits, they
+    don't grant them).
     """
     _attach_tasks(db, reports)
     # Resolve author display names server-side so scoped viewers (team leads)
@@ -165,12 +164,12 @@ def _decorate(
             r.can_review = True
         return reports
     me = _current_employee(db, actor)
-    led_ids = _led_project_ids(db, me.id) if me is not None else set()
+    reviewable = authz.reviewable_project_ids(db, actor)
     for r in reports:
         r.can_review = (
             me is not None
             and r.employee_id != me.id
-            and any(t.project_id in led_ids for t in r.tasks)
+            and any(t.project_id in reviewable for t in r.tasks)
         )
     return reports
 
@@ -379,16 +378,17 @@ def _apply_scope(db: Session, actor: User, stmt):
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
-    led_ids = _led_project_ids(db, me.id)
-    if led_ids:
-        led_reports = select(WorkReportTask.report_id).where(
-            WorkReportTask.project_id.in_(led_ids)
+    # Head + (legacy) team leads see reviewable reports from their projects.
+    scoped_ids = authz.reviewable_project_ids(db, actor)
+    if scoped_ids:
+        scoped_reports = select(WorkReportTask.report_id).where(
+            WorkReportTask.project_id.in_(scoped_ids)
         )
         return stmt.where(
             or_(
                 DailyWorkReport.employee_id == me.id,
                 and_(
-                    DailyWorkReport.id.in_(led_reports),
+                    DailyWorkReport.id.in_(scoped_reports),
                     DailyWorkReport.status.in_(_REVIEWABLE),
                 ),
             )
@@ -647,7 +647,7 @@ def _assert_can_read(db: Session, actor: User, report: DailyWorkReport) -> None:
         raise AppError("forbidden", "Not permitted.", 403)
     if report.employee_id == me.id:
         return
-    if _report_in_projects(db, report.id, _led_project_ids(db, me.id)):
+    if _report_in_projects(db, report.id, authz.reviewable_project_ids(db, actor)):
         return
     raise AppError(
         "forbidden",
@@ -989,14 +989,14 @@ def submit_work_report(
 
 # ---------- edit-access workflow -------------------------------------------
 def _assert_can_review(db: Session, actor: User, report: DailyWorkReport) -> None:
-    """Reviewers = PM (any report) or a team lead on one of the report's
-    projects. A user can never review their own report."""
+    """Reviewers = PM (any report), the Head, or (legacy) a team lead on one of
+    the report's projects. A user can never review their own report."""
     if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)
     if me is None or report.employee_id == me.id:
         raise AppError("forbidden", "You are not permitted to review this report.", 403)
-    if _report_in_projects(db, report.id, _led_project_ids(db, me.id)):
+    if _report_in_projects(db, report.id, authz.reviewable_project_ids(db, actor)):
         return
     raise AppError("forbidden", "You are not permitted to review this report.", 403)
 

@@ -29,8 +29,8 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 ## Phase 2 — Head Ownership
 - [x] P2-T1: Add head_employee_id (DB + model + read exposure) — COMMITTED as 517acde
 - [x] P2-T2: Central app/core/authz.py helper (+ unit tests) — COMMITTED as be1ee97
-- [x] P2-T3: PUT /projects/{id}/head (assign/replace + timeline + auto project_members) — implemented + verified; awaiting user commit
-- [ ] P2-T4: Honor Head in review + visibility + notification routing
+- [x] P2-T3: PUT /projects/{id}/head (assign/replace + timeline + auto project_members) — COMMITTED as 2370c52
+- [x] P2-T4: Honor Head in review + visibility + notification routing — implemented + verified; awaiting user commit
 - [ ] P2-T5: Relax timeline view to all project members
 - [ ] P2-T6: Frontend assign/show Head
 
@@ -45,6 +45,14 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
   - Auto-maintains project_members: new Head gets a contributor visibility row (idempotent); prior Head's row retained (reference-counted cleanup = Phase 3). Timeline head_assigned (first) / head_changed (replace or clear). Null clears Head. Idempotent no-op when unchanged. Notification routing UNTOUCHED (Phase 4).
   - Deviations (both lean/justified): (1) router uses get_current_user + service-level authz.can_assign_head instead of require_role at the router — single central authorization point (spec's authz philosophy), avoids redundant double-guard. (2) Extracted _decorate_project and pointed get_project at it (removed duplicated decoration) — consolidation, no behavior change.
   - Verification: import OK; tests/test_project_head.py 5/5 PASS; projects+led+authz+head suites all PASS (get_project refactor safe); full suite = SAME 12 pre-existing failures, ZERO new.
+- P2-T4: DONE (awaiting user commit). Honor Head in review + visibility + routing. NO frontend, NO activity logic, NO migration (additive code only).
+  - authz.py: added reviewable_project_ids(db, actor) = Head-projects ∪ (legacy) team_lead-projects (2 queries, batch-friendly); refactored can_review_report to use it (DRY; Task 2 tests still green).
+  - work_reports/service.py: _decorate can_review + _assert_can_review + list-scope (_scoped_report_query) + report _assert_can_read now use authz.reviewable_project_ids → Head sees/reviews their project's reports. REMOVED dead _led_project_ids (replaced all 4 usages). _notify_reviewers now also notifies the project Head (deduped with team leads).
+  - projects/service.py: _assert_can_read → authz.can_view_project (Head honored even w/o member row); list_projects employee scope adds `or_ head_employee_id==me.id`; _assert_can_view_timeline adds Head branch (Task 5 will relax to all members).
+  - activity_requests/service.py: _pm_user_ids routing reordered to Head → reporting_pm_id → project_managers (spec R4).
+  - REGRESSION caught+fixed mid-task: removing _led_project_ids left 2 refs (list-scope 381, report-read 649) → NameError broke 5 tests; fixed by routing both through reviewable_project_ids (also correctly extends report visibility to Head).
+  - Pre-existing-bug note: ProjectManager ORM model has updated_at (TimestampMixin) but the project_managers table lacks it; test inserts via raw SQL (prod only SELECTs). Not fixed (deprecated, Phase 6).
+  - Tests: tests/test_authz.py +reviewable_project_ids (8 total); tests/test_head_permissions.py (5: Head reviews report, Head views project+timeline, routing prefers Head / falls back reporting_pm / falls back project_managers). Verification: 13/13 new PASS; full suite = SAME 12 pre-existing failures, ZERO new.
 
 ## Log
 - Task 1: DONE + COMMITTED as 03e6c7a (verified: no task_id/useTasks in features/work-reports; HEAD = BASE fd94517 + this commit). Ledger "awaiting commit" was stale from the other machine.

@@ -79,9 +79,13 @@ def list_projects(
         me = _current_employee(db, actor)
         if me is None:
             return [], 0
+        # Visible to an employee when they are the Head or a member of the project.
         stmt = stmt.where(
-            Project.id.in_(
-                select(ProjectMember.project_id).where(ProjectMember.employee_id == me.id)
+            or_(
+                Project.head_employee_id == me.id,
+                Project.id.in_(
+                    select(ProjectMember.project_id).where(ProjectMember.employee_id == me.id)
+                ),
             )
         )
     # project_manager: full access, no scope filter
@@ -216,19 +220,10 @@ def _attach_member_counts(db: Session, projects: list[Project]) -> None:
 
 
 def _assert_can_read(db: Session, actor: User, project: Project) -> None:
-    if actor.role == UserRole.project_manager:
-        return
-    if actor.role == UserRole.employee:
-        me = _current_employee(db, actor)
-        if me is not None and db.execute(
-            select(ProjectMember.id).where(
-                ProjectMember.project_id == project.id,
-                ProjectMember.employee_id == me.id,
-            )
-        ).first():
-            return
+    # PM, the Head, or any project member (visibility backbone). Head is honored
+    # even without a membership row (authz checks head_employee_id directly).
+    if not authz.can_view_project(db, actor, project):
         raise AppError("forbidden", "You can only view projects you're assigned to.", 403)
-    raise AppError("forbidden", "Not permitted.", 403)
 
 
 def _fetch(db: Session, project_id: uuid.UUID) -> Project:
@@ -357,20 +352,24 @@ def _record_timeline(
 
 
 def _assert_can_view_timeline(db: Session, actor: User, project: Project) -> None:
-    """Only PM and team leads on the project can view the timeline."""
+    """PM, the project Head, or a team lead on the project can view the timeline.
+    (Phase 2 Task 4; Phase 2 Task 5 relaxes this to all project members.)"""
     if actor.role == UserRole.project_manager:
         return
     if actor.role == UserRole.employee:
         me = _current_employee(db, actor)
-        if me is not None and db.execute(
-            select(ProjectMember).where(
-                ProjectMember.project_id == project.id,
-                ProjectMember.employee_id == me.id,
-                ProjectMember.role == ProjectMemberRole.team_lead,
-            )
-        ).first():
-            return
-    raise AppError("forbidden", "Only project managers and team leads can view the timeline.", 403)
+        if me is not None:
+            if project.head_employee_id is not None and me.id == project.head_employee_id:
+                return
+            if db.execute(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == project.id,
+                    ProjectMember.employee_id == me.id,
+                    ProjectMember.role == ProjectMemberRole.team_lead,
+                )
+            ).first():
+                return
+    raise AppError("forbidden", "Only project managers, the Head, and team leads can view the timeline.", 403)
 
 
 def _resolve_job_code(

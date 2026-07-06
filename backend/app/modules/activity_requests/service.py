@@ -41,17 +41,27 @@ def _fetch_request(db: Session, request_id: uuid.UUID) -> ActivityRequest:
 def _pm_user_ids(
     db: Session, project_id: uuid.UUID, employee: Employee
 ) -> list[uuid.UUID]:
-    """User ids of the project's assigned PMs. Falls back to the employee's
-    reporting PM when the project has no explicit PM assignment."""
-    ids = set(
-        db.execute(
-            select(ProjectManager.user_id).where(
-                ProjectManager.project_id == project_id
-            )
-        ).scalars().all()
-    )
-    if not ids and employee.reporting_pm_id is not None:
-        ids.add(employee.reporting_pm_id)
+    """Notification target user ids for a project, in fallback order (spec R4):
+    the project **Head**, else the employee's **reporting PM**, else the
+    project's assigned PMs (``project_managers``, deprecated in place until
+    Phase 6). Each step is used only when the previous one is absent."""
+    # 1. Head of the project.
+    head_emp_id = db.execute(
+        select(Project.head_employee_id).where(Project.id == project_id)
+    ).scalar_one_or_none()
+    if head_emp_id is not None:
+        head = db.get(Employee, head_emp_id)
+        if head is not None and head.user_id is not None:
+            return [head.user_id]
+    # 2. The employee's reporting PM (a user id).
+    if employee.reporting_pm_id is not None:
+        return [employee.reporting_pm_id]
+    # 3. The project's assigned PMs.
+    ids = db.execute(
+        select(ProjectManager.user_id).where(
+            ProjectManager.project_id == project_id
+        )
+    ).scalars().all()
     return [i for i in ids if i is not None]
 
 
