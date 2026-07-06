@@ -27,8 +27,8 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 - NEXT: waiting for user to commit Phase 2 Task 1 (0053 head column), then proceed to Phase 2 Task 2 (app/core/authz.py). No code written during this design revision.
 
 ## Phase 2 — Head Ownership
-- [x] P2-T1: Add head_employee_id (DB + model + read exposure) — implemented + verified; awaiting user commit
-- [ ] P2-T2: Central app/core/authz.py helper (+ unit tests)
+- [x] P2-T1: Add head_employee_id (DB + model + read exposure) — COMMITTED as 517acde
+- [x] P2-T2: Central app/core/authz.py helper (+ unit tests) — implemented + verified; awaiting user commit
 - [ ] P2-T3: PUT /projects/{id}/head (assign/replace + timeline + auto project_members)
 - [ ] P2-T4: Honor Head in review + visibility + notification routing
 - [ ] P2-T5: Relax timeline view to all project members
@@ -37,6 +37,10 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 ### Log
 - P2-T1: DONE (awaiting user commit). Files: alembic/versions/0053_project_head.py (add nullable projects.head_employee_id FK→employees SET NULL + index projects_head_employee_idx; real downgrade); projects/models.py (head_employee_id column + index in __table_args__); projects/schemas.py (ProjectOut.head_employee_id + head_employee_name); projects/service.py (_attach_heads bulk-name helper, called in list_projects + all 3 single-project ProjectOut paths get/create/update).
   - Verification: `alembic upgrade head` 0052→0053 OK (dev DB now at 0053); `import app.main` OK; ProjectOut exposes both head fields (defaults None); test_projects.py + test_led_projects.py 25/25 PASS; full suite = SAME 12 pre-existing failures, ZERO new. No behavior change yet (nothing assigns/reads head for logic).
+- P2-T2: DONE (awaiting user commit). Files: app/core/authz.py (new central helper) + tests/test_authz.py (7 tests).
+  - authz surface (Phase 2): _actor_employee_id, project_head_employee_id, is_project_head, can_manage_project (PM), can_assign_head (PM), can_view_project (PM/Head/member), can_review_report (PM / Head of any report project / legacy team_lead — "not own report" left to caller). Pure reads, no writes.
+  - Additive + UNWIRED (not imported by app.main/routers yet; wired in P2-T4/P3). Cannot affect other tests.
+  - Verification: pytest tests/test_authz.py 7/7 PASS (also proves module imports cleanly: authz→models). Activity-level helpers (can_manage_activity, can_assign_contributor) deferred to Phase 3 per revised spec.
 
 ## Log
 - Task 1: DONE + COMMITTED as 03e6c7a (verified: no task_id/useTasks in features/work-reports; HEAD = BASE fd94517 + this commit). Ledger "awaiting commit" was stale from the other machine.
