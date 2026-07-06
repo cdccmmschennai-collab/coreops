@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { X } from "lucide-react";
+import { ChevronRight, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -106,6 +106,83 @@ function AssignmentRow({
   );
 }
 
+/** One collapsed-by-default activity: a minimal header (name · count · chevron)
+ * that smoothly expands/collapses the assignment rows. The open state lives in
+ * component state, so it is remembered while the user stays on the page. */
+function ActivityAccordionItem({
+  activity,
+  canModifyStaffing,
+  onRemove,
+}: {
+  activity: ActivityStaffing;
+  canModifyStaffing: boolean;
+  onRemove: (activityId: string, employeeId: string) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const count =
+    (activity.lead ? 1 : 0) + (activity.contributors?.length ?? 0);
+
+  return (
+    <div className="rounded-lg border border-border bg-card">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+      >
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="truncate text-sm font-semibold uppercase tracking-wide text-blue-700">
+            {activity.activity_code ?? activity.activity_name}
+          </span>
+          <span className="shrink-0 text-xs font-normal normal-case tracking-normal text-muted-foreground">
+            ({count} {count === 1 ? "Member" : "Members"})
+          </span>
+        </span>
+        <ChevronRight
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
+            open ? "rotate-90" : ""
+          }`}
+          aria-hidden
+        />
+      </button>
+
+      {/* grid-rows 0fr → 1fr gives a smooth height transition without JS. */}
+      <div
+        className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        }`}
+      >
+        <div className="overflow-hidden">
+          <ul className="divide-y divide-border border-t border-border px-3">
+            {activity.lead && (
+              <AssignmentRow
+                member={activity.lead}
+                isLead
+                onRemove={
+                  canModifyStaffing
+                    ? () => onRemove(activity.activity_id, activity.lead!.employee_id)
+                    : undefined
+                }
+              />
+            )}
+            {(activity.contributors ?? []).map((c) => (
+              <AssignmentRow
+                key={c.id}
+                member={c}
+                onRemove={
+                  canModifyStaffing
+                    ? () => onRemove(activity.activity_id, c.employee_id)
+                    : undefined
+                }
+              />
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** One shared form for the whole project: pick an employee, an activity, a role
  * and optional QC, then assign via the existing activity-staffing API. Replaces
  * the per-activity Add-member forms. Rendered only for staffing managers. */
@@ -160,56 +237,69 @@ function AssignActivityForm({
   return (
     <>
       <Separator className="my-4" />
-      <p className="mb-2 text-sm font-medium">Assign Employee</p>
-      <div className="space-y-2">
-        <Select value={employee} onValueChange={setEmployee}>
-          <SelectTrigger>
-            <SelectValue placeholder="Select employee…" />
-          </SelectTrigger>
-          <SelectContent>
-            {employees.length === 0 ? (
-              <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                No employees available
-              </div>
-            ) : (
-              employees.map((e) => (
-                <SelectItem key={e.id} value={e.id}>
-                  {e.full_name} · {e.employee_code}
-                </SelectItem>
-              ))
-            )}
-          </SelectContent>
-        </Select>
+      <p className="mb-3 text-sm font-medium">Assign Employee</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <div className="min-w-[9rem] flex-1 space-y-1">
+          <label className="block text-xs font-medium text-muted-foreground">
+            Employee
+          </label>
+          <Select value={employee} onValueChange={setEmployee}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select employee…" />
+            </SelectTrigger>
+            <SelectContent>
+              {employees.length === 0 ? (
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                  No employees available
+                </div>
+              ) : (
+                employees.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.full_name} · {e.employee_code}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        </div>
 
-        <Select
-          value={activity}
-          onValueChange={(v) => {
-            setActivity(v);
-            // Can't add a second Lead — fall back to Contributor.
-            if (role === "lead" && leadActivityIds.has(v)) setRole("contributor");
-          }}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Select activity…" />
-          </SelectTrigger>
-          <SelectContent>
-            {activities.length === 0 ? (
-              <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                No activities available
-              </div>
-            ) : (
-              activities.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.code ?? a.name}
-                </SelectItem>
-              ))
-            )}
-          </SelectContent>
-        </Select>
+        <div className="min-w-[9rem] flex-1 space-y-1">
+          <label className="block text-xs font-medium text-muted-foreground">
+            Activity
+          </label>
+          <Select
+            value={activity}
+            onValueChange={(v) => {
+              setActivity(v);
+              // Can't add a second Lead — fall back to Contributor.
+              if (role === "lead" && leadActivityIds.has(v)) setRole("contributor");
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select activity…" />
+            </SelectTrigger>
+            <SelectContent>
+              {activities.length === 0 ? (
+                <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                  No activities available
+                </div>
+              ) : (
+                activities.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.code ?? a.name}
+                  </SelectItem>
+                ))
+              )}
+            </SelectContent>
+          </Select>
+        </div>
 
-        <div className="flex items-center gap-2">
+        <div className="min-w-[8rem] flex-1 space-y-1">
+          <label className="block text-xs font-medium text-muted-foreground">
+            Role
+          </label>
           <Select value={role} onValueChange={(v) => setRole(v as ActivityMemberRole)}>
-            <SelectTrigger className="flex-1">
+            <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -219,18 +309,20 @@ function AssignActivityForm({
               <SelectItem value="contributor">Contributor</SelectItem>
             </SelectContent>
           </Select>
-          <label className="flex items-center gap-1.5 whitespace-nowrap text-sm text-muted-foreground">
-            <Checkbox checked={isQc} onChange={(e) => setIsQc(e.target.checked)} />
-            QC
-          </label>
-          <Button
-            onClick={() => void add()}
-            disabled={!employee || !activity}
-            loading={assign.isPending}
-          >
-            Add Assignment
-          </Button>
         </div>
+
+        <label className="flex items-center gap-1.5 whitespace-nowrap text-sm text-muted-foreground sm:h-10">
+          <Checkbox checked={isQc} onChange={(e) => setIsQc(e.target.checked)} />
+          QC
+        </label>
+
+        <Button
+          onClick={() => void add()}
+          disabled={!employee || !activity}
+          loading={assign.isPending}
+        >
+          Add Assignment
+        </Button>
       </div>
     </>
   );
@@ -279,9 +371,9 @@ export function ProjectMembers({ project }: { project: Project }) {
     }
   }
 
-  async function unassign(activityId: string, employeeId: string) {
+  async function unassign(activityId: string, employeeIdToRemove: string) {
     try {
-      await removeMember.mutateAsync({ activityId, employeeId });
+      await removeMember.mutateAsync({ activityId, employeeId: employeeIdToRemove });
       toast.success("Member removed");
     } catch (err) {
       toast.error(err instanceof AppError ? err.message : "Could not remove member.");
@@ -305,10 +397,11 @@ export function ProjectMembers({ project }: { project: Project }) {
         ) : isEmpty ? (
           <p className="text-sm text-muted-foreground">No members assigned.</p>
         ) : (
-          <div className="space-y-2">
-            {/* Project Head — single amber row, pinned to the top. */}
+          <div className="space-y-3">
+            {/* Project Head — plain member-style row (Name · badge), pinned to
+                the top. Same visual weight as an activity member row. */}
             {hasHead && (
-              <div className="flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+              <div className="flex items-center justify-between gap-2 py-1 text-sm">
                 <span className="min-w-0 truncate font-semibold">
                   {project.head_employee_name}
                 </span>
@@ -319,47 +412,15 @@ export function ProjectMembers({ project }: { project: Project }) {
               </div>
             )}
 
-            {/* One full-width bordered box per assigned activity (Lead first,
-                then Contributors), already ordered by the activity master
-                sort_order server-side. */}
+            {/* One collapsible accordion item per assigned activity, already
+                ordered by the activity master sort_order server-side. */}
             {staffing.map((activity) => (
-              <div
+              <ActivityAccordionItem
                 key={activity.activity_id}
-                className="rounded-md border border-border px-3 py-2.5"
-              >
-                <p className="mb-1 text-sm font-semibold uppercase tracking-wide text-blue-700">
-                  {activity.activity_code ?? activity.activity_name}
-                </p>
-                <ul className="divide-y divide-border">
-                  {activity.lead && (
-                    <AssignmentRow
-                      key={activity.lead.id}
-                      member={activity.lead}
-                      isLead
-                      onRemove={
-                        canModifyStaffing
-                          ? () =>
-                              void unassign(
-                                activity.activity_id,
-                                activity.lead!.employee_id,
-                              )
-                          : undefined
-                      }
-                    />
-                  )}
-                  {(activity.contributors ?? []).map((c) => (
-                    <AssignmentRow
-                      key={c.id}
-                      member={c}
-                      onRemove={
-                        canModifyStaffing
-                          ? () => void unassign(activity.activity_id, c.employee_id)
-                          : undefined
-                      }
-                    />
-                  ))}
-                </ul>
-              </div>
+                activity={activity}
+                canModifyStaffing={canModifyStaffing}
+                onRemove={unassign}
+              />
             ))}
           </div>
         )}
