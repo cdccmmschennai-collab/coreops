@@ -142,8 +142,6 @@ const countSchema = z
 const taskSchema = z
   .object({
     project_id: z.string().min(1, "Project is required"),
-    // Optional link to an assigned task; selecting one fills in the project.
-    task_id: z.string().optional().default(""),
     task_title: z.string().optional(),
     // Task-based hours (separate from the project-activity duration below).
     task_hours: durationHoursSchema,
@@ -280,7 +278,6 @@ export type WorkReportFormValues = z.infer<typeof workReportFormSchema>;
 
 export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   project_id:     "",
-  task_id:        "",
   task_title:     undefined,
   task_hours:     "",
   project_name:   undefined,
@@ -353,7 +350,6 @@ const toCount = (v: string | undefined): number =>
 function toTasks(v: WorkReportFormValues) {
   return v.tasks.map((t) => ({
     project_id:    t.project_id,
-    task_id:       orNull(t.task_id),
     description:   t.description.trim(),
     minutes_spent: hoursToMinutes(t.duration_hours),
     task_minutes_spent: hoursToMinutes(t.task_hours),
@@ -418,7 +414,6 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
       report.tasks.length > 0
         ? report.tasks.map((t) => ({
             project_id:     t.project_id,
-            task_id:        t.task_id ?? "",
             task_title:     t.task_title ?? undefined,
             task_hours:     t.task_minutes_spent != null ? minutesToHours(t.task_minutes_spent) : "",
             project_name:   t.project_name ?? undefined,

@@ -39,7 +39,6 @@ import {
 import type { ActivityRequest } from "@/features/activity-requests/types";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
-import { useTasks } from "@/features/tasks/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 import { formatInt } from "@/lib/format";
@@ -286,29 +285,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return [...base, ...ghosts];
   }, [projects, mode, defaultValues.tasks]);
 
-  // The author's own assigned tasks (open / in-progress) for the task picker.
-  const { data: myTasksData } = useTasks({
-    mine: true, q: "", status: "", priority: "", limit: 100, offset: 0,
-  });
-  const myTaskById = React.useMemo(
-    () => new Map((myTasksData?.items ?? []).map((t) => [t.id, t])),
-    [myTasksData],
-  );
-  const taskOptions = React.useMemo(
-    () =>
-      (myTasksData?.items ?? [])
-        // Show assignable tasks incl. completed (you still log hours for them);
-        // only cancelled tasks are hidden.
-        .filter((t) => t.status !== "cancelled")
-        .map((t) => ({
-          value: t.id,
-          label: t.title,
-          sublabel: t.project_name ?? undefined,
-          keywords: [t.title, t.project_name ?? ""],
-        })),
-    [myTasksData],
-  );
-
   // Activity Master combobox options (Activity → Sub-Activity cascade).
   const activityOptions = React.useMemo(
     () => (activities ?? []).map((a) => ({ value: a.id, label: a.name })),
@@ -446,7 +422,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         project_id: draft.project_id,
         activity_id: draft.activity_id || null,
         sub_activity_id: draft.sub_activity_id,
-        task_id: draft.task_id || null,
         tags_count: Number(draft.tags_count) || 0,
         docs_count: Number(draft.docs_count) || 0,
         bom_count: Number(draft.bom_count) || 0,
@@ -790,46 +765,8 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     key={field.id}
                     className="space-y-5 rounded-lg border border-border p-4"
                   >
-                    {/* Task picker (optional — picking it fills in the project)
-                        with the row's remove control on the same line. */}
-                    <div className="flex items-end gap-2">
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.task_id`}
-                        render={({ field: f }) => (
-                          <FormItem className="min-w-0 flex-1">
-                            <FormLabel className="block text-xs leading-none text-muted-foreground">
-                              Task <span className="font-normal">(optional)</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Combobox
-                                value={f.value || ""}
-                                onValueChange={(v) => {
-                                  f.onChange(v);
-                                  const t = v ? myTaskById.get(v) : undefined;
-                                  if (t?.project_id) {
-                                    const current = form.getValues(`tasks.${index}.project_id`);
-                                    form.setValue(
-                                      `tasks.${index}.project_id`,
-                                      t.project_id,
-                                      { shouldValidate: true },
-                                    );
-                                    // Picking a task can switch the project (and thus
-                                    // its Planning Plant) — clear the stale plant.
-                                    if (current !== t.project_id) clearRowPlant(index);
-                                  }
-                                }}
-                                options={taskOptions}
-                                placeholder="Select an assigned task…"
-                                searchPlaceholder="Search your tasks…"
-                                emptyMessage="No tasks assigned to you."
-                                allowClear
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
+                    {/* Row remove control. */}
+                    <div className="flex items-end justify-end gap-2">
                       <Button
                         type="button"
                         variant="ghost"
