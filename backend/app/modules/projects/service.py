@@ -26,7 +26,13 @@ from app.modules.projects.models import (
     ProjectTimelineEvent,
     TimelineEventType,
 )
-from app.modules.projects.schemas import PlannedDateUpdate, ProjectCreate, ProjectUpdate
+from app.modules.projects.schemas import (
+    LedProject,
+    LedProjectMember,
+    PlannedDateUpdate,
+    ProjectCreate,
+    ProjectUpdate,
+)
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
@@ -669,3 +675,48 @@ def list_timeline(
         .scalars()
         .all()
     )
+
+
+def list_led_projects(db: Session, actor: User) -> list[LedProject]:
+    """Projects the current user leads (team_lead), each with its active members.
+
+    Returns [] for users who don't lead any live, non-archived project — the
+    signal the Work Reports view uses to decide whether to show the team-lead
+    employee filter. Unlike the retired /tasks/assignable-projects endpoint,
+    this is a reports-scope filter: it includes every active member of the led
+    project (the lead themselves included).
+    """
+    me = _current_employee(db, actor)
+    if me is None:
+        return []
+    led_ids = db.execute(
+        select(ProjectMember.project_id).where(
+            ProjectMember.employee_id == me.id,
+            ProjectMember.role == ProjectMemberRole.team_lead,
+        )
+    ).scalars().all()
+    if not led_ids:
+        return []
+    projects = db.execute(
+        select(Project).where(
+            Project.id.in_(led_ids),
+            Project.deleted_at.is_(None),
+            Project.status != ProjectStatus.archived,
+        ).order_by(Project.name)
+    ).scalars().all()
+    result: list[LedProject] = []
+    for project in projects:
+        rows = db.execute(
+            select(Employee)
+            .join(ProjectMember, ProjectMember.employee_id == Employee.id)
+            .where(
+                ProjectMember.project_id == project.id,
+                Employee.status == EmployeeStatus.active,
+                Employee.deleted_at.is_(None),
+            ).order_by(Employee.first_name, Employee.last_name)
+        ).scalars().all()
+        result.append(LedProject(
+            project_id=project.id, name=project.name, code=project.code,
+            members=[LedProjectMember(employee_id=e.id, name=e.full_name) for e in rows],
+        ))
+    return result

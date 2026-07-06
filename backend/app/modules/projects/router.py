@@ -20,6 +20,7 @@ from app.core.deps import get_current_user, require_role
 from app.modules.projects import service
 from app.modules.projects.models import ProjectStatus
 from app.modules.projects.schemas import (
+    LedProject,
     PlannedDateChangeOut,
     PlannedDateUpdate,
     ProjectCreate,
@@ -64,6 +65,14 @@ def create_project(
     db: Session = Depends(get_db),
 ) -> ProjectOut:
     return ProjectOut.model_validate(service.create_project(db, admin, body))
+
+
+@router.get("/led", response_model=list[LedProject])
+def led_projects(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[LedProject]:
+    return service.list_led_projects(db, current)
 
 
 @router.get("/{project_id}", response_model=ProjectOut)

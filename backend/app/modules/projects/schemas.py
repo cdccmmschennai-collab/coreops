@@ -90,6 +90,18 @@ class ProjectMemberRoleUpdate(BaseModel):
     role: ProjectMemberRole
 
 
+class LedProjectMember(BaseModel):
+    employee_id: uuid.UUID
+    name: str
+
+
+class LedProject(BaseModel):
+    project_id: uuid.UUID
+    name: str
+    code: str
+    members: list[LedProjectMember]
+
+
 class TimelineEventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

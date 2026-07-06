@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
-import { useAssignableProjects } from "@/features/tasks/hooks";
+import { useLedProjects } from "@/features/projects/hooks/use-led-projects";
 import { can, isManagerial } from "@/lib/rbac";
 
 import {
@@ -39,7 +39,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   // Team leads (who are `employee` role) get the same filter once they lead
   // a project — degraded back to a plain contributor, assignableProjects is
   // empty and they fall back to seeing only their own reports.
-  const { data: assignableProjects } = useAssignableProjects({ enabled: !isManager });
+  const { data: assignableProjects } = useLedProjects({ enabled: !isManager });
   const isTeamLead = !isManager && (assignableProjects?.length ?? 0) > 0;
   const showEmployeeFilter = isManager || isTeamLead;
   const canCreate = can(role, "report.submit");
