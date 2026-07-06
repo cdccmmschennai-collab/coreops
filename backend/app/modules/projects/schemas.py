@@ -92,6 +92,11 @@ class ProjectMemberRoleUpdate(BaseModel):
     role: ProjectMemberRole
 
 
+class ProjectHeadUpdate(BaseModel):
+    # null clears the Head; otherwise the employee assigned as project Head.
+    head_employee_id: uuid.UUID | None = None
+
+
 class LedProjectMember(BaseModel):
     employee_id: uuid.UUID
     name: str

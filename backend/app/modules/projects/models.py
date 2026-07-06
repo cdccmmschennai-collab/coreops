@@ -189,6 +189,8 @@ class TimelineEventType:
     PLANNED_DATE_CHANGED = "planned_date_changed"
     MEMBER_ADDED = "member_added"
     MEMBER_REMOVED = "member_removed"
+    HEAD_ASSIGNED = "head_assigned"   # Phase 2 — first Head set on the project
+    HEAD_CHANGED = "head_changed"     # Phase 2 — Head replaced or cleared
     SUBMISSION_CREATED = "submission_created"   # emitted by Phase C
     SUBMISSION_UPDATED = "submission_updated"   # emitted by Phase C
 

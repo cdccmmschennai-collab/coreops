@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.audit import service as audit
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee, EmployeeStatus
@@ -240,6 +241,80 @@ def _fetch(db: Session, project_id: uuid.UUID) -> Project:
 def get_project(db: Session, actor: User, project_id: uuid.UUID) -> Project:
     project = _fetch(db, project_id)
     _assert_can_read(db, actor, project)
+    return _decorate_project(db, project)
+
+
+def _ensure_project_member(
+    db: Session, project_id: uuid.UUID, employee_id: uuid.UUID, actor: User
+) -> None:
+    """Idempotently give the employee a project_members visibility row.
+
+    The visibility backbone (spec 4.3) keeps every project-scoped read query
+    working: any assignment (Head here, activity members in Phase 3) implies a
+    member row. Role is `contributor` — the Head's authority comes from
+    `projects.head_employee_id`, not from this row.
+    """
+    exists = db.execute(
+        select(ProjectMember.id).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.employee_id == employee_id,
+        ).limit(1)
+    ).scalar_one_or_none()
+    if exists is None:
+        db.add(ProjectMember(
+            project_id=project_id,
+            employee_id=employee_id,
+            role=ProjectMemberRole.contributor,
+            created_by=actor.id,
+        ))
+
+
+def set_project_head(
+    db: Session, actor: User, project_id: uuid.UUID, head_employee_id: uuid.UUID | None
+) -> Project:
+    """PM assigns, replaces, or clears (null) the project Head.
+
+    Auto-maintains the visibility backbone (adds the new Head as a project
+    member); the prior Head's member row is left in place — reference-counted
+    cleanup arrives with the assignment layer (Phase 3). Emits a timeline event.
+    Does NOT touch notification routing (Phase 4).
+    """
+    project = _fetch(db, project_id)
+    if not authz.can_assign_head(db, actor, project):
+        raise AppError("forbidden", "Only project managers can assign the project Head.", 403)
+
+    if head_employee_id is not None:
+        employee = db.get(Employee, head_employee_id)
+        if employee is None or employee.deleted_at is not None:
+            raise AppError("validation_error", "Employee not found.", 422)
+        if employee.status != EmployeeStatus.active:
+            raise AppError("validation_error", "The Head must be an active employee.", 422)
+
+    previous = project.head_employee_id
+    if previous == head_employee_id:
+        return _decorate_project(db, project)   # idempotent — no event, no change
+
+    project.head_employee_id = head_employee_id
+    db.add(project)
+    if head_employee_id is not None:
+        _ensure_project_member(db, project_id, head_employee_id, actor)
+    _record_timeline(
+        db,
+        project_id,
+        TimelineEventType.HEAD_ASSIGNED if previous is None else TimelineEventType.HEAD_CHANGED,
+        actor,
+        {
+            "head_employee_id": str(head_employee_id) if head_employee_id else None,
+            "previous_head_employee_id": str(previous) if previous else None,
+        },
+    )
+    db.commit()
+    db.refresh(project)
+    return _decorate_project(db, project)
+
+
+def _decorate_project(db: Session, project: Project) -> Project:
+    """Attach the read-only display fields the ProjectOut schema expects."""
     project.member_count = db.execute(  # type: ignore[attr-defined]
         select(func.count()).select_from(ProjectMember).where(
             ProjectMember.project_id == project.id

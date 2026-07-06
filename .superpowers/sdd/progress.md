@@ -28,8 +28,8 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
 
 ## Phase 2 — Head Ownership
 - [x] P2-T1: Add head_employee_id (DB + model + read exposure) — COMMITTED as 517acde
-- [x] P2-T2: Central app/core/authz.py helper (+ unit tests) — implemented + verified; awaiting user commit
-- [ ] P2-T3: PUT /projects/{id}/head (assign/replace + timeline + auto project_members)
+- [x] P2-T2: Central app/core/authz.py helper (+ unit tests) — COMMITTED as be1ee97
+- [x] P2-T3: PUT /projects/{id}/head (assign/replace + timeline + auto project_members) — implemented + verified; awaiting user commit
 - [ ] P2-T4: Honor Head in review + visibility + notification routing
 - [ ] P2-T5: Relax timeline view to all project members
 - [ ] P2-T6: Frontend assign/show Head
@@ -41,6 +41,10 @@ Execution: subagent-driven; git hands-off (user commits at each checkpoint).
   - authz surface (Phase 2): _actor_employee_id, project_head_employee_id, is_project_head, can_manage_project (PM), can_assign_head (PM), can_view_project (PM/Head/member), can_review_report (PM / Head of any report project / legacy team_lead — "not own report" left to caller). Pure reads, no writes.
   - Additive + UNWIRED (not imported by app.main/routers yet; wired in P2-T4/P3). Cannot affect other tests.
   - Verification: pytest tests/test_authz.py 7/7 PASS (also proves module imports cleanly: authz→models). Activity-level helpers (can_manage_activity, can_assign_contributor) deferred to Phase 3 per revised spec.
+- P2-T3: DONE (awaiting user commit). PUT /projects/{id}/head. Files: projects/models.py (TimelineEventType.HEAD_ASSIGNED/HEAD_CHANGED — string consts, NO migration); projects/schemas.py (ProjectHeadUpdate); projects/service.py (set_project_head via authz.can_assign_head; _ensure_project_member visibility helper; extracted _decorate_project reused by get_project); projects/router.py (PUT /{project_id}/head, get_current_user + service authz); tests/test_project_head.py (5 tests).
+  - Auto-maintains project_members: new Head gets a contributor visibility row (idempotent); prior Head's row retained (reference-counted cleanup = Phase 3). Timeline head_assigned (first) / head_changed (replace or clear). Null clears Head. Idempotent no-op when unchanged. Notification routing UNTOUCHED (Phase 4).
+  - Deviations (both lean/justified): (1) router uses get_current_user + service-level authz.can_assign_head instead of require_role at the router — single central authorization point (spec's authz philosophy), avoids redundant double-guard. (2) Extracted _decorate_project and pointed get_project at it (removed duplicated decoration) — consolidation, no behavior change.
+  - Verification: import OK; tests/test_project_head.py 5/5 PASS; projects+led+authz+head suites all PASS (get_project refactor safe); full suite = SAME 12 pre-existing failures, ZERO new.
 
 ## Log
 - Task 1: DONE + COMMITTED as 03e6c7a (verified: no task_id/useTasks in features/work-reports; HEAD = BASE fd94517 + this commit). Ledger "awaiting commit" was stale from the other machine.

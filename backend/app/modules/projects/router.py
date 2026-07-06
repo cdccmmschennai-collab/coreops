@@ -24,6 +24,7 @@ from app.modules.projects.schemas import (
     PlannedDateChangeOut,
     PlannedDateUpdate,
     ProjectCreate,
+    ProjectHeadUpdate,
     ProjectMemberCreate,
     ProjectMemberOut,
     ProjectMemberRoleUpdate,
@@ -92,6 +93,19 @@ def update_project(
     db: Session = Depends(get_db),
 ) -> ProjectOut:
     return ProjectOut.model_validate(service.update_project(db, admin, project_id, body))
+
+
+@router.put("/{project_id}/head", response_model=ProjectOut)
+def set_project_head(
+    project_id: uuid.UUID,
+    body: ProjectHeadUpdate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectOut:
+    # Authorization (PM only) is enforced centrally in the service via authz.
+    return ProjectOut.model_validate(
+        service.set_project_head(db, current, project_id, body.head_employee_id)
+    )
 
 
 @router.delete("/{project_id}", status_code=204)
