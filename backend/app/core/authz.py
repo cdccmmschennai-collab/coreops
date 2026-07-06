@@ -66,6 +66,16 @@ def can_assign_head(db: Session, actor: User, project: Project) -> bool:
     return actor.role == UserRole.project_manager
 
 
+def can_manage_activity_staffing(db: Session, actor: User, project: Project) -> bool:
+    """Manage per-activity staffing (Phase 3): assign/update/remove activity
+    members. PM (any project) or the project's Head. Finer-grained Lead
+    self-service (a Lead staffing their own activity) is a later Phase-3
+    permission refinement; kept out of this baseline deliberately."""
+    if actor.role == UserRole.project_manager:
+        return True
+    return is_project_head(db, actor, project)
+
+
 def can_view_project(db: Session, actor: User, project: Project) -> bool:
     """View the project — PM (any), the Head, or any project member."""
     if actor.role == UserRole.project_manager:

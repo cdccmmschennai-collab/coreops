@@ -370,6 +370,23 @@ export interface paths {
         patch: operations["update_project_api_v1_projects__project_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/head": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Project Head */
+        put: operations["set_project_head_api_v1_projects__project_id__head_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/planned-completion-date": {
         parameters: {
             query?: never;
@@ -455,6 +472,58 @@ export interface paths {
         head?: never;
         /** Update Member Role */
         patch: operations["update_member_role_api_v1_projects__project_id__members__employee_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/activity-staffing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activity Staffing */
+        get: operations["list_activity_staffing_api_v1_projects__project_id__activity_staffing_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/activity-staffing/{activity_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assign Activity Member */
+        post: operations["assign_activity_member_api_v1_projects__project_id__activity_staffing__activity_id__members_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/activity-staffing/{activity_id}/members/{employee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unassign Activity Member */
+        delete: operations["unassign_activity_member_api_v1_projects__project_id__activity_staffing__activity_id__members__employee_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Activity Member */
+        patch: operations["update_activity_member_api_v1_projects__project_id__activity_staffing__activity_id__members__employee_id__patch"];
         trace?: never;
     };
     "/api/v1/attendance": {
@@ -1788,6 +1857,72 @@ export interface components {
             /** Is Active */
             is_active?: boolean | null;
         };
+        /** ActivityMemberCreate */
+        ActivityMemberCreate: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            role: components["schemas"]["ActivityMemberRole"];
+            /**
+             * Is Qc
+             * @default false
+             */
+            is_qc: boolean;
+        };
+        /**
+         * ActivityMemberOut
+         * @description One person's staffing on one project activity.
+         */
+        ActivityMemberOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Employee Name
+             * @default
+             */
+            employee_name: string;
+            role: components["schemas"]["ActivityMemberRole"];
+            /** Is Qc */
+            is_qc: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * ActivityMemberRole
+         * @description Base staffing role on a project activity. QC is NOT a role value here -
+         *     it is an additive `is_qc` flag on the assignment (spec SS4.1).
+         * @enum {string}
+         */
+        ActivityMemberRole: "lead" | "contributor";
+        /** ActivityMemberUpdate */
+        ActivityMemberUpdate: {
+            role?: components["schemas"]["ActivityMemberRole"] | null;
+            /** Is Qc */
+            is_qc?: boolean | null;
+        };
         /** ActivityReportOut */
         ActivityReportOut: {
             /** Max Activities */
@@ -1938,6 +2073,36 @@ export interface components {
             remarks: string | null;
             /** Activities */
             activities: components["schemas"]["ActivityCell"][];
+        };
+        /**
+         * ActivityStaffingOut
+         * @description One project activity with its resolved staffing (Lead, the Contributor
+         *     list, and which members hold QC). Named distinctly from the unrelated
+         *     project_activities.ProjectActivityOut (the planning work-item feature).
+         */
+        ActivityStaffingOut: {
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /** Activity Code */
+            activity_code?: string | null;
+            /**
+             * Activity Name
+             * @default
+             */
+            activity_name: string;
+            lead?: components["schemas"]["ActivityMemberOut"] | null;
+            /** Contributors */
+            contributors?: components["schemas"]["ActivityMemberOut"][];
+            /** Qc */
+            qc?: components["schemas"]["ActivityMemberOut"][];
+            /**
+             * Member Count
+             * @default 0
+             */
+            member_count: number;
         };
         /** ActivityTypeCreate */
         ActivityTypeCreate: {
@@ -3431,6 +3596,11 @@ export interface components {
             /** Actual Completion Date */
             actual_completion_date?: string | null;
         };
+        /** ProjectHeadUpdate */
+        ProjectHeadUpdate: {
+            /** Head Employee Id */
+            head_employee_id?: string | null;
+        };
         /** ProjectMemberCreate */
         ProjectMemberCreate: {
             /**
@@ -3505,6 +3675,10 @@ export interface components {
             planning_plant_code?: string | null;
             /** Planning Plant Description */
             planning_plant_description?: string | null;
+            /** Head Employee Id */
+            head_employee_id?: string | null;
+            /** Head Employee Name */
+            head_employee_name?: string | null;
             /** Client */
             client?: string | null;
             /** Description */
@@ -5276,6 +5450,41 @@ export interface operations {
             };
         };
     };
+    set_project_head_api_v1_projects__project_id__head_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectHeadUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_planned_completion_date_api_v1_projects__project_id__planned_completion_date_patch: {
         parameters: {
             query?: never;
@@ -5492,6 +5701,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectMemberOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_activity_staffing_api_v1_projects__project_id__activity_staffing_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityStaffingOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assign_activity_member_api_v1_projects__project_id__activity_staffing__activity_id__members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityMemberCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMemberOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unassign_activity_member_api_v1_projects__project_id__activity_staffing__activity_id__members__employee_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                activity_id: string;
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_activity_member_api_v1_projects__project_id__activity_staffing__activity_id__members__employee_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                activity_id: string;
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivityMemberUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityMemberOut"];
                 };
             };
             /** @description Validation Error */

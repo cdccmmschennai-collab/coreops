@@ -4,7 +4,11 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.projects.models import ProjectMemberRole, ProjectStatus
+from app.modules.projects.models import (
+    ActivityMemberRole,
+    ProjectMemberRole,
+    ProjectStatus,
+)
 
 
 class ProjectOut(BaseModel):
@@ -90,6 +94,46 @@ class ProjectMemberCreate(BaseModel):
 
 class ProjectMemberRoleUpdate(BaseModel):
     role: ProjectMemberRole
+
+
+class ActivityMemberOut(BaseModel):
+    """One person's staffing on one project activity."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    activity_id: uuid.UUID
+    employee_id: uuid.UUID
+    employee_name: str = ""   # populated by service join
+    role: ActivityMemberRole
+    is_qc: bool
+    created_at: datetime
+
+
+class ActivityMemberCreate(BaseModel):
+    employee_id: uuid.UUID
+    role: ActivityMemberRole
+    is_qc: bool = False
+
+
+class ActivityMemberUpdate(BaseModel):
+    # Both optional: change the base role and/or toggle QC. Omitted fields are
+    # left unchanged (promotion to lead is Head-only, enforced in the service).
+    role: ActivityMemberRole | None = None
+    is_qc: bool | None = None
+
+
+class ActivityStaffingOut(BaseModel):
+    """One project activity with its resolved staffing (Lead, the Contributor
+    list, and which members hold QC). Named distinctly from the unrelated
+    project_activities.ProjectActivityOut (the planning work-item feature)."""
+    activity_id: uuid.UUID
+    activity_code: str | None = None   # populated by service join (activity_master.code)
+    activity_name: str = ""   # populated by service join (activity_master.name)
+    lead: ActivityMemberOut | None = None
+    contributors: list[ActivityMemberOut] = Field(default_factory=list)
+    qc: list[ActivityMemberOut] = Field(default_factory=list)
+    member_count: int = 0
 
 
 class ProjectHeadUpdate(BaseModel):

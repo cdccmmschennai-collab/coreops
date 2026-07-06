@@ -60,6 +60,31 @@ def test_head_can_view_project_and_timeline(
     assert client.get(f"{BASE}/{project.id}/timeline", headers=head_hdr).status_code == 200
 
 
+# ---- Task 5: timeline visible to any project member (not just team leads) ---
+def test_plain_member_can_view_timeline(
+    client, make_project, make_employee, make_user, make_project_member, login
+):
+    project = make_project(code="TV-2")
+    member_u = make_user("member@x.com", role=UserRole.employee)
+    member_e = make_employee(employee_code="TVM-1", user_id=member_u.id)
+    # a plain contributor membership row (NOT team_lead)
+    make_project_member(project_id=project.id, employee_id=member_e.id)
+
+    member_hdr = login("member@x.com")
+    assert client.get(f"{BASE}/{project.id}/timeline", headers=member_hdr).status_code == 200
+
+
+def test_non_member_cannot_view_timeline(
+    client, make_project, make_employee, make_user, login
+):
+    project = make_project(code="TV-3")
+    outsider_u = make_user("outsider@x.com", role=UserRole.employee)
+    make_employee(employee_code="TVO-1", user_id=outsider_u.id)
+
+    outsider_hdr = login("outsider@x.com")
+    assert client.get(f"{BASE}/{project.id}/timeline", headers=outsider_hdr).status_code == 403
+
+
 # ---- notification routing (Head -> reporting_pm_id -> project_managers) ----
 def test_routing_prefers_head(db, make_user, make_employee, make_project):
     head_u = make_user("h@x.com", role=UserRole.employee)

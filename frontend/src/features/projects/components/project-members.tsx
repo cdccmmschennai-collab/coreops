@@ -1,10 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { UserMinus } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -21,35 +19,44 @@ import { useEmployees } from "@/features/employees/hooks";
 import { AppError } from "@/lib/api-client";
 import { can } from "@/lib/rbac";
 
-import {
-  useAddMember,
-  useProjectMembers,
-  useRemoveMember,
-  useUpdateMemberRole,
-} from "../hooks";
-import {
-  projectMemberRoleLabel,
-  type Project,
-  type ProjectMemberRole,
-} from "../types";
+import { useActivityStaffing, useSetProjectHead } from "../hooks";
+import { type ActivityMember, type Project } from "../types";
+import { ProjectRoleBadges, type ProjectRoleKey } from "./project-role-badges";
 
-const ROLES: ProjectMemberRole[] = ["team_lead", "contributor", "qc"];
+/** The effective role badges for one activity assignment: the base role plus,
+ * additively, the QC badge when the person also holds QC. */
+function assignmentRoles(member: ActivityMember): { role: ProjectRoleKey }[] {
+  const roles: { role: ProjectRoleKey }[] = [{ role: member.role }];
+  if (member.is_qc) roles.push({ role: "qc" });
+  return roles;
+}
+
+function AssignmentRow({ member }: { member: ActivityMember }) {
+  return (
+    <li className="flex items-center justify-between gap-2 py-2 text-sm">
+      <span className="min-w-0 truncate font-medium">{member.employee_name}</span>
+      <ProjectRoleBadges
+        roles={assignmentRoles(member)}
+        className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1.5"
+      />
+    </li>
+  );
+}
 
 export function ProjectMembers({ project }: { project: Project }) {
   const { role } = useAuth();
   const canManage = can(role, "project.manage");
   const archived = project.status === "archived";
+  const headEmployeeId = project.head_employee_id;
 
-  const query = useProjectMembers(project.id);
-  const members = query.data ?? [];
+  const staffingQuery = useActivityStaffing(project.id);
+  // Only activities with assignments come back — render each as its own section.
+  const activities = staffingQuery.data ?? [];
 
-  const addMember = useAddMember(project.id);
-  const removeMember = useRemoveMember(project.id);
-  const updateRole = useUpdateMemberRole(project.id);
+  const setHead = useSetProjectHead(project.id);
+  const [selectedHead, setSelectedHead] = React.useState("");
 
-  const [selectedEmployee, setSelectedEmployee] = React.useState("");
-  const [selectedRole, setSelectedRole] = React.useState<ProjectMemberRole>("contributor");
-
+  // Head picker = any active employee (the backend auto-adds them as a member).
   const employeesQuery = useEmployees({
     q: "",
     status: "active",
@@ -58,37 +65,23 @@ export function ProjectMembers({ project }: { project: Project }) {
     limit: 100,
     offset: 0,
   });
-  const assignedIds = new Set(members.map((m) => m.employee_id));
-  const available = (employeesQuery.data?.items ?? []).filter((e) => !assignedIds.has(e.id));
+  const headCandidates = (employeesQuery.data?.items ?? []).filter(
+    (e) => e.id !== headEmployeeId,
+  );
 
-  async function assign() {
-    if (!selectedEmployee) return;
+  async function assignHead() {
+    if (!selectedHead) return;
     try {
-      await addMember.mutateAsync({ employee_id: selectedEmployee, role: selectedRole });
-      toast.success("Member assigned");
-      setSelectedEmployee("");
-      setSelectedRole("contributor");
+      await setHead.mutateAsync({ head_employee_id: selectedHead });
+      toast.success("Project Head assigned");
+      setSelectedHead("");
     } catch (error) {
-      toast.error(error instanceof AppError ? error.message : "Could not assign member.");
+      toast.error(error instanceof AppError ? error.message : "Could not assign Head.");
     }
   }
 
-  async function changeRole(employeeId: string, next: ProjectMemberRole) {
-    try {
-      await updateRole.mutateAsync({ employeeId, role: next });
-    } catch (error) {
-      toast.error(error instanceof AppError ? error.message : "Could not update role.");
-    }
-  }
-
-  async function remove(employeeId: string, name: string) {
-    try {
-      await removeMember.mutateAsync(employeeId);
-      toast.success(`${name} removed`);
-    } catch (error) {
-      toast.error(error instanceof AppError ? error.message : "Could not remove member.");
-    }
-  }
+  const hasHead = !!headEmployeeId && !!project.head_employee_name;
+  const isEmpty = !hasHead && activities.length === 0;
 
   return (
     <Card>
@@ -96,71 +89,71 @@ export function ProjectMembers({ project }: { project: Project }) {
         <CardTitle>Members ({project.member_count})</CardTitle>
       </CardHeader>
       <CardContent>
-        {query.isLoading ? (
+        {staffingQuery.isLoading ? (
           <div className="space-y-2">
             <Skeleton className="h-6 w-full" />
             <Skeleton className="h-6 w-2/3" />
           </div>
-        ) : members.length === 0 ? (
+        ) : isEmpty ? (
           <p className="text-sm text-muted-foreground">No members assigned.</p>
         ) : (
-          <ul className="divide-y divide-border">
-            {members.map((m) => (
-              <li key={m.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                <span className="min-w-0 truncate font-medium">{m.employee_name}</span>
-                {canManage ? (
-                  <div className="flex items-center gap-2">
-                    <Select
-                      value={m.role}
-                      onValueChange={(v) =>
-                        void changeRole(m.employee_id, v as ProjectMemberRole)
-                      }
-                    >
-                      <SelectTrigger className="h-8 w-auto whitespace-nowrap">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ROLES.map((r) => (
-                          <SelectItem key={r} value={r}>
-                            {projectMemberRoleLabel(r)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`Remove ${m.employee_name}`}
-                      onClick={() => void remove(m.employee_id, m.employee_name)}
-                    >
-                      <UserMinus className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ) : (
-                  <Badge variant={m.role === "team_lead" ? "info" : "neutral"}>
-                    {projectMemberRoleLabel(m.role)}
-                  </Badge>
-                )}
-              </li>
+          <div className="space-y-4">
+            {/* Project Head — always pinned to the top of the card. */}
+            {hasHead && (
+              <div>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Project Head
+                </p>
+                <div className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="min-w-0 truncate font-medium">
+                    {project.head_employee_name}
+                  </span>
+                  <ProjectRoleBadges
+                    roles={[{ role: "head" }]}
+                    className="flex flex-shrink-0 items-center gap-1.5"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* One section per assigned activity (Lead first, then Contributors). */}
+            {activities.map((activity, idx) => (
+              <div key={activity.activity_id}>
+                {(hasHead || idx > 0) && <Separator className="mb-4" />}
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {activity.activity_code ?? activity.activity_name}
+                </p>
+                <ul className="divide-y divide-border">
+                  {activity.lead && (
+                    <AssignmentRow key={activity.lead.id} member={activity.lead} />
+                  )}
+                  {(activity.contributors ?? []).map((c) => (
+                    <AssignmentRow key={c.id} member={c} />
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
 
+        {/* PM only assigns / changes the Project Head. Lead / Contributor / QC
+            are activity-level and assigned by the Head in the Activities card. */}
         {canManage && !archived && (
           <>
             <Separator className="my-4" />
+            <p className="mb-2 text-sm font-medium">Assign / Change Head</p>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Select value={selectedEmployee} onValueChange={setSelectedEmployee}>
+              <Select value={selectedHead} onValueChange={setSelectedHead}>
                 <SelectTrigger className="sm:flex-1">
-                  <SelectValue placeholder="Add an employee…" />
+                  <SelectValue placeholder="Select an employee…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {available.length === 0 ? (
+                  {headCandidates.length === 0 ? (
                     <div className="px-2 py-1.5 text-sm text-muted-foreground">
                       No employees available
                     </div>
                   ) : (
-                    available.map((e) => (
+                    headCandidates.map((e) => (
                       <SelectItem key={e.id} value={e.id}>
                         {e.full_name} · {e.employee_code}
                       </SelectItem>
@@ -168,27 +161,12 @@ export function ProjectMembers({ project }: { project: Project }) {
                   )}
                 </SelectContent>
               </Select>
-              <Select
-                value={selectedRole}
-                onValueChange={(v) => setSelectedRole(v as ProjectMemberRole)}
-              >
-                <SelectTrigger className="sm:w-32 whitespace-nowrap">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ROLES.map((r) => (
-                    <SelectItem key={r} value={r}>
-                      {projectMemberRoleLabel(r)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
               <Button
-                onClick={() => void assign()}
-                disabled={!selectedEmployee}
-                loading={addMember.isPending}
+                onClick={() => void assignHead()}
+                disabled={!selectedHead}
+                loading={setHead.isPending}
               >
-                Add
+                {headEmployeeId ? "Change Head" : "Assign Head"}
               </Button>
             </div>
           </>

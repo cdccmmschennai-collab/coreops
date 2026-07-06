@@ -9,6 +9,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -135,6 +136,61 @@ class ProjectMember(UUIDMixin, TimestampMixin, Base):
         UniqueConstraint("project_id", "employee_id", name="project_members_uq"),
         Index("project_members_project_idx", "project_id"),
         Index("project_members_employee_idx", "employee_id"),
+    )
+
+
+class ActivityMemberRole(str, enum.Enum):
+    """Base staffing role on a project activity. QC is NOT a role value here -
+    it is an additive `is_qc` flag on the assignment (spec SS4.1)."""
+    lead = "lead"
+    contributor = "contributor"
+
+
+class ProjectActivityMember(UUIDMixin, TimestampMixin, Base):
+    """Per-activity staffing (Phase 3). Assigns an employee to one activity of a
+    project with a base role (lead|contributor) plus an additive QC flag. Exactly
+    one Lead per activity is enforced by the partial-unique index below (and by
+    the service layer, which also validates activity_id -> level='activity')."""
+    __tablename__ = "project_activity_members"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # Activity node in activity_master; service enforces it is a level='activity' row.
+    activity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="RESTRICT"), nullable=False
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    role: Mapped[ActivityMemberRole] = mapped_column(
+        SAEnum(
+            ActivityMemberRole,
+            name="project_activity_member_role",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+    )
+    # Additive QC responsibility; may be true on a lead or a contributor.
+    is_qc: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "activity_id", "employee_id", name="project_activity_members_uq"
+        ),
+        # At most one Lead per (project, activity).
+        Index(
+            "project_activity_members_one_lead_uq",
+            "project_id",
+            "activity_id",
+            unique=True,
+            postgresql_where=text("role = 'lead'"),
+        ),
+        Index("project_activity_members_project_idx", "project_id"),
+        Index("project_activity_members_activity_idx", "activity_id"),
+        Index("project_activity_members_employee_idx", "employee_id"),
+        Index("project_activity_members_project_activity_idx", "project_id", "activity_id"),
     )
 
 

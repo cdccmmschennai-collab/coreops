@@ -19,7 +19,9 @@ from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
 from app.modules.plants.models import MaintenancePlant, PlanningPlant
 from app.modules.projects.models import (
+    ActivityMemberRole,
     Project,
+    ProjectActivityMember,
     ProjectMember,
     ProjectMemberRole,
     ProjectPlannedDateChange,
@@ -28,6 +30,10 @@ from app.modules.projects.models import (
     TimelineEventType,
 )
 from app.modules.projects.schemas import (
+    ActivityMemberCreate,
+    ActivityMemberOut,
+    ActivityMemberUpdate,
+    ActivityStaffingOut,
     LedProject,
     LedProjectMember,
     PlannedDateUpdate,
@@ -352,24 +358,15 @@ def _record_timeline(
 
 
 def _assert_can_view_timeline(db: Session, actor: User, project: Project) -> None:
-    """PM, the project Head, or a team lead on the project can view the timeline.
-    (Phase 2 Task 4; Phase 2 Task 5 relaxes this to all project members.)"""
-    if actor.role == UserRole.project_manager:
-        return
-    if actor.role == UserRole.employee:
-        me = _current_employee(db, actor)
-        if me is not None:
-            if project.head_employee_id is not None and me.id == project.head_employee_id:
-                return
-            if db.execute(
-                select(ProjectMember).where(
-                    ProjectMember.project_id == project.id,
-                    ProjectMember.employee_id == me.id,
-                    ProjectMember.role == ProjectMemberRole.team_lead,
-                )
-            ).first():
-                return
-    raise AppError("forbidden", "Only project managers, the Head, and team leads can view the timeline.", 403)
+    """PM, the project Head, or any project member can view the timeline.
+    (Phase 2 Task 5 relaxes the earlier team-lead-only member rule to all
+    members; PM + Head visibility is unchanged. Same rule as project read.)"""
+    if not authz.can_view_project(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only project managers, the Head, and project members can view the timeline.",
+            403,
+        )
 
 
 def _resolve_job_code(
@@ -814,3 +811,218 @@ def list_led_projects(db: Session, actor: User) -> list[LedProject]:
             members=[LedProjectMember(employee_id=e.id, name=e.full_name) for e in rows],
         ))
     return result
+
+
+# ---------- activity staffing (Phase 3) ------------------------------------
+def list_activity_staffing(
+    db: Session, actor: User, project_id: uuid.UUID
+) -> list[ActivityStaffingOut]:
+    """Every activity that currently has staffing on this project, each grouped
+    into its Lead, its Contributor list, and the members holding QC. QC is
+    additive, so a QC member also appears under lead/contributors. Activities
+    with no assignments are omitted. PM / Head / any project member may read
+    (same scope as project read)."""
+    from app.modules.activity_master.models import ActivityMaster
+
+    project = _fetch(db, project_id)
+    _assert_can_read(db, actor, project)
+
+    rows = db.execute(
+        select(ProjectActivityMember, Employee, ActivityMaster)
+        .join(Employee, Employee.id == ProjectActivityMember.employee_id)
+        .join(ActivityMaster, ActivityMaster.id == ProjectActivityMember.activity_id)
+        .where(ProjectActivityMember.project_id == project_id)
+        .order_by(
+            ActivityMaster.sort_order,
+            ActivityMaster.name,
+            Employee.first_name,
+            Employee.last_name,
+        )
+    ).all()
+
+    groups: dict[uuid.UUID, ActivityStaffingOut] = {}
+    order: list[uuid.UUID] = []
+    for member, employee, activity in rows:
+        member.employee_name = employee.full_name  # type: ignore[attr-defined]
+        out = ActivityMemberOut.model_validate(member)
+        group = groups.get(activity.id)
+        if group is None:
+            group = ActivityStaffingOut(
+                activity_id=activity.id,
+                activity_code=activity.code,
+                activity_name=activity.name,
+            )
+            groups[activity.id] = group
+            order.append(activity.id)
+        if member.role == ActivityMemberRole.lead:
+            group.lead = out
+        else:
+            group.contributors.append(out)
+        if member.is_qc:
+            group.qc.append(out)
+        group.member_count += 1
+    return [groups[aid] for aid in order]
+
+
+def _assert_no_activity_lead(
+    db: Session,
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    except_id: uuid.UUID | None = None,
+) -> None:
+    """Guard the one-Lead-per-activity rule (also enforced by a partial-unique
+    index). ``except_id`` excludes the row being updated in place."""
+    stmt = select(ProjectActivityMember.id).where(
+        ProjectActivityMember.project_id == project_id,
+        ProjectActivityMember.activity_id == activity_id,
+        ProjectActivityMember.role == ActivityMemberRole.lead,
+    )
+    if except_id is not None:
+        stmt = stmt.where(ProjectActivityMember.id != except_id)
+    if db.execute(stmt.limit(1)).scalar_one_or_none() is not None:
+        raise AppError(
+            "conflict",
+            "This activity already has a Lead. Change the current Lead first.",
+            409,
+        )
+
+
+def assign_activity_member(
+    db: Session,
+    actor: User,
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    data: ActivityMemberCreate,
+) -> ActivityMemberOut:
+    """Assign an employee to one activity of the project (base role + QC flag).
+    PM or the project Head only. Auto-maintains the visibility backbone (adds a
+    project_members row) so activity staff can see the project."""
+    from app.modules.activity_master.service import _assert_is_activity
+
+    project = _fetch(db, project_id)
+    if not authz.can_manage_activity_staffing(db, actor, project):
+        raise AppError(
+            "forbidden", "Only the PM or the project Head can assign activity members.", 403
+        )
+    if project.status == ProjectStatus.archived:
+        raise AppError("validation_error", "Cannot assign to an archived project.", 422)
+
+    # 404 if the activity is missing, 422 if it is a sub-activity node.
+    _assert_is_activity(db, activity_id)
+
+    employee = db.get(Employee, data.employee_id)
+    if employee is None or employee.deleted_at is not None:
+        raise AppError("validation_error", "Employee not found.", 422)
+    if employee.status != EmployeeStatus.active:
+        raise AppError("validation_error", "Employee is not active.", 422)
+
+    if db.execute(
+        select(ProjectActivityMember.id).where(
+            ProjectActivityMember.project_id == project_id,
+            ProjectActivityMember.activity_id == activity_id,
+            ProjectActivityMember.employee_id == data.employee_id,
+        )
+    ).scalar_one_or_none():
+        raise AppError("conflict", "Employee is already assigned to this activity.", 409)
+
+    if data.role == ActivityMemberRole.lead:
+        _assert_no_activity_lead(db, project_id, activity_id)
+
+    member = ProjectActivityMember(
+        project_id=project_id,
+        activity_id=activity_id,
+        employee_id=data.employee_id,
+        role=data.role,
+        is_qc=data.is_qc,
+        created_by=actor.id,
+    )
+    db.add(member)
+    _ensure_project_member(db, project_id, data.employee_id, actor)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "This activity already has a Lead.", 409)
+    db.refresh(member)
+    member.employee_name = employee.full_name  # type: ignore[attr-defined]
+    return ActivityMemberOut.model_validate(member)
+
+
+def update_activity_member(
+    db: Session,
+    actor: User,
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    data: ActivityMemberUpdate,
+) -> ActivityMemberOut:
+    """Change an assignment's base role and/or toggle its QC flag. PM or the
+    project Head only. Omitted fields are left unchanged."""
+    project = _fetch(db, project_id)
+    if not authz.can_manage_activity_staffing(db, actor, project):
+        raise AppError(
+            "forbidden", "Only the PM or the project Head can update activity members.", 403
+        )
+
+    member = db.execute(
+        select(ProjectActivityMember).where(
+            ProjectActivityMember.project_id == project_id,
+            ProjectActivityMember.activity_id == activity_id,
+            ProjectActivityMember.employee_id == employee_id,
+        )
+    ).scalar_one_or_none()
+    if member is None:
+        raise AppError("not_found", "Activity assignment not found.", 404)
+
+    if (
+        data.role is not None
+        and data.role == ActivityMemberRole.lead
+        and member.role != ActivityMemberRole.lead
+    ):
+        _assert_no_activity_lead(db, project_id, activity_id, except_id=member.id)
+    if data.role is not None:
+        member.role = data.role
+    if data.is_qc is not None:
+        member.is_qc = data.is_qc
+    db.add(member)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "This activity already has a Lead.", 409)
+    db.refresh(member)
+    employee = db.get(Employee, employee_id)
+    member.employee_name = employee.full_name if employee else ""  # type: ignore[attr-defined]
+    return ActivityMemberOut.model_validate(member)
+
+
+def remove_activity_member(
+    db: Session,
+    actor: User,
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    employee_id: uuid.UUID,
+) -> None:
+    """Unassign an employee from one activity. PM or the project Head only.
+
+    The employee's project_members visibility row is intentionally left in
+    place — reference-counted cleanup (drop it once they hold no Head/activity
+    assignment) is a later Phase-3 refinement, so we don't silently strip
+    project visibility here."""
+    project = _fetch(db, project_id)
+    if not authz.can_manage_activity_staffing(db, actor, project):
+        raise AppError(
+            "forbidden", "Only the PM or the project Head can remove activity members.", 403
+        )
+
+    member = db.execute(
+        select(ProjectActivityMember).where(
+            ProjectActivityMember.project_id == project_id,
+            ProjectActivityMember.activity_id == activity_id,
+            ProjectActivityMember.employee_id == employee_id,
+        )
+    ).scalar_one_or_none()
+    if member is None:
+        raise AppError("not_found", "Activity assignment not found.", 404)
+    db.delete(member)
+    db.commit()

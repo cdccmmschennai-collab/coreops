@@ -9,6 +9,13 @@
   POST   /projects/{id}/members                      assign employee (admin)
   PATCH  /projects/{id}/members/{employee_id}        change member role (admin)
   DELETE /projects/{id}/members/{employee_id}        unassign (admin)
+  GET    /projects/{id}/activity-staffing                    grouped staffing (RBAC-scoped)
+  POST   /projects/{id}/activity-staffing/{aid}/members       assign activity member (PM/Head)
+  PATCH  /projects/{id}/activity-staffing/{aid}/members/{eid} update role / QC (PM/Head)
+  DELETE /projects/{id}/activity-staffing/{aid}/members/{eid} unassign activity member (PM/Head)
+
+Note: the plain /activities path is owned by the project_activities module
+(planning work-items) — this staffing feature lives under /activity-staffing.
 """
 import uuid
 
@@ -20,6 +27,10 @@ from app.core.deps import get_current_user, require_role
 from app.modules.projects import service
 from app.modules.projects.models import ProjectStatus
 from app.modules.projects.schemas import (
+    ActivityMemberCreate,
+    ActivityMemberOut,
+    ActivityMemberUpdate,
+    ActivityStaffingOut,
     LedProject,
     PlannedDateChangeOut,
     PlannedDateUpdate,
@@ -201,4 +212,64 @@ def unassign_member(
     db: Session = Depends(get_db),
 ) -> Response:
     service.remove_member(db, admin, project_id, employee_id)
+    return Response(status_code=204)
+
+
+# ---------- activity staffing (Phase 3) ------------------------------------
+# Reads are RBAC-scoped (PM / Head / member); writes are PM-or-Head, enforced
+# centrally in the service via authz — hence get_current_user, not require_role.
+# Path is /activity-staffing (not /activities) to avoid colliding with the
+# project_activities planning module, which owns /projects/{id}/activities.
+@router.get("/{project_id}/activity-staffing", response_model=list[ActivityStaffingOut])
+def list_activity_staffing(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ActivityStaffingOut]:
+    return service.list_activity_staffing(db, current, project_id)
+
+
+@router.post(
+    "/{project_id}/activity-staffing/{activity_id}/members",
+    response_model=ActivityMemberOut,
+    status_code=201,
+)
+def assign_activity_member(
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    body: ActivityMemberCreate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActivityMemberOut:
+    return service.assign_activity_member(db, current, project_id, activity_id, body)
+
+
+@router.patch(
+    "/{project_id}/activity-staffing/{activity_id}/members/{employee_id}",
+    response_model=ActivityMemberOut,
+)
+def update_activity_member(
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    body: ActivityMemberUpdate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ActivityMemberOut:
+    return service.update_activity_member(
+        db, current, project_id, activity_id, employee_id, body
+    )
+
+
+@router.delete(
+    "/{project_id}/activity-staffing/{activity_id}/members/{employee_id}", status_code=204
+)
+def unassign_activity_member(
+    project_id: uuid.UUID,
+    activity_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    service.remove_activity_member(db, current, project_id, activity_id, employee_id)
     return Response(status_code=204)

@@ -10,8 +10,16 @@ export type ProjectMember = components["schemas"]["ProjectMemberOut"];
 export type ProjectMemberRole = components["schemas"]["ProjectMemberRole"];
 export type ProjectMemberCreateBody = components["schemas"]["ProjectMemberCreate"];
 export type PlannedDateUpdateBody = components["schemas"]["PlannedDateUpdate"];
+export type ProjectHeadUpdateBody = components["schemas"]["ProjectHeadUpdate"];
 export type PlannedDateChange = components["schemas"]["PlannedDateChangeOut"];
 export type ProjectTimelineEvent = components["schemas"]["TimelineEventOut"];
+
+// Phase 3 — per-activity staffing.
+export type ActivityStaffing = components["schemas"]["ActivityStaffingOut"];
+export type ActivityMember = components["schemas"]["ActivityMemberOut"];
+export type ActivityMemberRole = components["schemas"]["ActivityMemberRole"];
+export type ActivityMemberCreateBody = components["schemas"]["ActivityMemberCreate"];
+export type ActivityMemberUpdateBody = components["schemas"]["ActivityMemberUpdate"];
 
 // Display labels for project member roles. Stored/API values are kept as-is
 // (team_lead, contributor, qc) — only the rendered text differs.

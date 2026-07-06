@@ -3,8 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { projectsApi } from "./api";
 import { projectsKeys } from "./keys";
 import type {
+  ActivityMemberCreateBody,
+  ActivityMemberUpdateBody,
   PlannedDateUpdateBody,
   ProjectCreateBody,
+  ProjectHeadUpdateBody,
   ProjectListParams,
   ProjectMemberCreateBody,
   ProjectMemberRole,
@@ -51,6 +54,20 @@ export function useArchiveProject() {
   return useMutation({
     mutationFn: (id: string) => projectsApi.archive(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: projectsKeys.all }),
+  });
+}
+
+export function useSetProjectHead(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProjectHeadUpdateBody) => projectsApi.setHead(id, body),
+    onSuccess: () => {
+      // Head assignment emits a timeline event and auto-adds a member row.
+      qc.invalidateQueries({ queryKey: projectsKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.timeline(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.members(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.all });
+    },
   });
 }
 
@@ -121,6 +138,63 @@ export function useRemoveMember(projectId: string) {
   const invalidate = useMemberInvalidation(projectId);
   return useMutation({
     mutationFn: (employeeId: string) => projectsApi.removeMember(projectId, employeeId),
+    onSuccess: invalidate,
+  });
+}
+
+// ---------- activity staffing (Phase 3) ----------
+export function useActivityStaffing(id: string | undefined) {
+  return useQuery({
+    queryKey: projectsKeys.activityStaffing(id ?? ""),
+    queryFn: () => projectsApi.listActivityStaffing(id as string),
+    enabled: !!id,
+  });
+}
+
+/** Staffing changes also touch the visibility backbone (project_members) and the
+ * member_count on the project, so invalidate those alongside the staffing list. */
+function useActivityStaffingInvalidation(projectId: string) {
+  const qc = useQueryClient();
+  return () => {
+    qc.invalidateQueries({ queryKey: projectsKeys.activityStaffing(projectId) });
+    qc.invalidateQueries({ queryKey: projectsKeys.members(projectId) });
+    qc.invalidateQueries({ queryKey: projectsKeys.detail(projectId) });
+    qc.invalidateQueries({ queryKey: projectsKeys.all });
+  };
+}
+
+export function useAssignActivityMember(projectId: string) {
+  const invalidate = useActivityStaffingInvalidation(projectId);
+  return useMutation({
+    mutationFn: (vars: { activityId: string; body: ActivityMemberCreateBody }) =>
+      projectsApi.assignActivityMember(projectId, vars.activityId, vars.body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateActivityMember(projectId: string) {
+  const invalidate = useActivityStaffingInvalidation(projectId);
+  return useMutation({
+    mutationFn: (vars: {
+      activityId: string;
+      employeeId: string;
+      body: ActivityMemberUpdateBody;
+    }) =>
+      projectsApi.updateActivityMember(
+        projectId,
+        vars.activityId,
+        vars.employeeId,
+        vars.body,
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useRemoveActivityMember(projectId: string) {
+  const invalidate = useActivityStaffingInvalidation(projectId);
+  return useMutation({
+    mutationFn: (vars: { activityId: string; employeeId: string }) =>
+      projectsApi.removeActivityMember(projectId, vars.activityId, vars.employeeId),
     onSuccess: invalidate,
   });
 }
