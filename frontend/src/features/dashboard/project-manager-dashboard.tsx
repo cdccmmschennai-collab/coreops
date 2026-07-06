@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, ClipboardList, ListChecks, ListPlus } from "lucide-react";
+import { ArrowRight, CalendarOff, ClipboardList, ListPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -170,11 +170,6 @@ export function ProjectManagerDashboard() {
               <Button asChild className="justify-start" variant="secondary">
                 <Link href="/attendance/new">
                   <ClipboardList className="h-4 w-4" /> Record attendance
-                </Link>
-              </Button>
-              <Button asChild className="justify-start" variant="secondary">
-                <Link href="/tasks/new">
-                  <ListChecks className="h-4 w-4" /> Assign task
                 </Link>
               </Button>
             </div>
