@@ -8,6 +8,7 @@ import pytest
 
 from app.modules.activity_master import service as am_svc
 from app.modules.activity_master.schemas import ActivityCreate
+from app.modules.notifications.models import Notification
 from app.modules.projects import service as proj_svc
 from app.modules.projects.models import ProjectMember, ProjectStatus
 from app.modules.projects.schemas import (
@@ -135,3 +136,192 @@ def test_only_activities_with_staffing_returned(db, make_user, make_employee, ma
     )
     groups = proj_svc.list_activity_staffing(db, pm, project.id)
     assert [g.activity_code for g in groups] == ["USED"]
+
+
+# ---------- Lead self-service (Part 2) -------------------------------------
+def _lead_of_activity(db, make_user, make_employee, proj_svc_, project, activity, head_u):
+    """Make an employee (with a login) the Lead of one activity; return (user, emp)."""
+    lead_u = make_user(f"lead-{activity.code}@x.com", role=UserRole.employee)
+    lead_e = make_employee(employee_code=f"LEAD-{activity.code}", user_id=lead_u.id)
+    proj_svc_.assign_activity_member(
+        db, head_u, project.id, activity.id,
+        ActivityMemberCreate(employee_id=lead_e.id, role="lead"),
+    )
+    return lead_u, lead_e
+
+
+def test_lead_can_add_and_remove_contributor_on_own_activity(
+    db, make_user, make_employee, make_project
+):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    act = _activity(db, "FMTL")
+    lead_u, _ = _lead_of_activity(db, make_user, make_employee, proj_svc, project, act, head_u)
+    con = make_employee(employee_code="C-1")
+
+    # Add a Contributor (with QC) to their own activity.
+    proj_svc.assign_activity_member(
+        db, lead_u, project.id, act.id,
+        ActivityMemberCreate(employee_id=con.id, role="contributor", is_qc=True),
+    )
+    # Remove it again.
+    proj_svc.remove_activity_member(db, lead_u, project.id, act.id, con.id)
+    g = proj_svc.list_activity_staffing(db, pm, project.id)[0]
+    assert g.contributors == []
+
+
+def test_lead_cannot_add_second_lead(db, make_user, make_employee, make_project):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    act = _activity(db, "MTL")
+    lead_u, _ = _lead_of_activity(db, make_user, make_employee, proj_svc, project, act, head_u)
+    other = make_employee(employee_code="O-1")
+
+    with pytest.raises(AppError) as ei:
+        proj_svc.assign_activity_member(
+            db, lead_u, project.id, act.id,
+            ActivityMemberCreate(employee_id=other.id, role="lead"),
+        )
+    assert ei.value.status_code == 403
+
+
+def test_lead_cannot_remove_the_lead(db, make_user, make_employee, make_project):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    act = _activity(db, "DOC")
+    lead_u, lead_e = _lead_of_activity(db, make_user, make_employee, proj_svc, project, act, head_u)
+
+    with pytest.raises(AppError) as ei:
+        proj_svc.remove_activity_member(db, lead_u, project.id, act.id, lead_e.id)
+    assert ei.value.status_code == 403
+
+
+def test_lead_cannot_manage_other_activity(db, make_user, make_employee, make_project):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    mine = _activity(db, "MINE")
+    other = _activity(db, "OTHER")
+    lead_u, _ = _lead_of_activity(db, make_user, make_employee, proj_svc, project, mine, head_u)
+    emp = make_employee(employee_code="X-1")
+
+    with pytest.raises(AppError) as ei:
+        proj_svc.assign_activity_member(
+            db, lead_u, project.id, other.id,
+            ActivityMemberCreate(employee_id=emp.id, role="contributor"),
+        )
+    assert ei.value.status_code == 403
+
+
+def test_lead_cannot_promote_contributor_to_lead(db, make_user, make_employee, make_project):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    act = _activity(db, "BOM")
+    lead_u, _ = _lead_of_activity(db, make_user, make_employee, proj_svc, project, act, head_u)
+    con = make_employee(employee_code="C-2")
+    proj_svc.assign_activity_member(
+        db, lead_u, project.id, act.id,
+        ActivityMemberCreate(employee_id=con.id, role="contributor"),
+    )
+
+    # Changing the Lead assignment is barred; only QC toggling is allowed.
+    with pytest.raises(AppError) as ei:
+        proj_svc.update_activity_member(
+            db, lead_u, project.id, act.id, con.id,
+            ActivityMemberUpdate(role="lead"),
+        )
+    assert ei.value.status_code == 403
+    # QC toggling on a contributor is fine.
+    out = proj_svc.update_activity_member(
+        db, lead_u, project.id, act.id, con.id, ActivityMemberUpdate(is_qc=True)
+    )
+    assert out.is_qc is True
+
+
+def test_contributor_cannot_manage_staffing(db, make_user, make_employee, make_project):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    act = _activity(db, "PM")
+    con_u = make_user("con@x.com", role=UserRole.employee)
+    con_e = make_employee(employee_code="CON-1", user_id=con_u.id)
+    proj_svc.assign_activity_member(
+        db, head_u, project.id, act.id,
+        ActivityMemberCreate(employee_id=con_e.id, role="contributor"),
+    )
+    target = make_employee(employee_code="T-2")
+
+    with pytest.raises(AppError) as ei:
+        proj_svc.assign_activity_member(
+            db, con_u, project.id, act.id,
+            ActivityMemberCreate(employee_id=target.id, role="contributor"),
+        )
+    assert ei.value.status_code == 403
+
+
+# ---------- assignment notifications (Part 1) ------------------------------
+def _notifs_for(db, user_id):
+    return db.query(Notification).filter_by(user_id=user_id, type="project_assigned").all()
+
+
+def test_head_assignment_notifies_head(db, make_user, make_employee, make_project):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project = make_project(code="NP-1", name="Nova", status=ProjectStatus.active)
+    head_u = make_user("head@x.com", role=UserRole.employee)
+    head_e = make_employee(employee_code="HD-1", user_id=head_u.id)
+
+    proj_svc.set_project_head(db, pm, project.id, head_e.id)
+
+    notes = _notifs_for(db, head_u.id)
+    assert len(notes) == 1
+    n = notes[0]
+    assert n.title == "You have been assigned to a project"
+    assert "Nova" in n.message and "NP-1" in n.message
+    assert "Role:\nHead" in n.message
+    assert "Activity:" not in n.message  # Head has no activity
+    assert n.target_url == f"/projects/{project.id}"
+
+
+def test_activity_assignment_notifies_member_with_content(
+    db, make_user, make_employee, make_project
+):
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project = make_project(code="AP-1", name="Atlas", status=ProjectStatus.active)
+    head_u = make_user("head@x.com", role=UserRole.employee)
+    head_e = make_employee(employee_code="HD-2", user_id=head_u.id,
+                           first_name="Hedy", last_name="Boss")
+    proj_svc.set_project_head(db, pm, project.id, head_e.id)
+    act = _activity(db, "FMTL")
+
+    con_u = make_user("con@x.com", role=UserRole.employee)
+    con_e = make_employee(employee_code="CN-9", user_id=con_u.id)
+    proj_svc.assign_activity_member(
+        db, head_u, project.id, act.id,
+        ActivityMemberCreate(employee_id=con_e.id, role="contributor", is_qc=True),
+    )
+
+    notes = _notifs_for(db, con_u.id)
+    assert len(notes) == 1
+    msg = notes[0].message
+    assert "Project:\nAtlas" in msg
+    assert "Code:\nAP-1" in msg
+    assert "Role:\nQC" in msg          # is_qc → QC label
+    assert "Activity:\nFMTL" in msg
+    assert "Assigned by:\nHedy Boss" in msg
+
+
+def test_assigner_is_not_notified(db, make_user, make_employee, make_project):
+    """A Lead who assigns a Contributor does not notify themselves."""
+    pm = make_user("pm@x.com", role=UserRole.project_manager)
+    project, head_u, _ = _head(db, make_user, make_employee, make_project, pm)
+    act = _activity(db, "MTL")
+    lead_u, _ = _lead_of_activity(db, make_user, make_employee, proj_svc, project, act, head_u)
+    con_u = make_user("con@x.com", role=UserRole.employee)
+    con_e = make_employee(employee_code="CN-8", user_id=con_u.id)
+
+    # The Lead already has one notification (from being assigned Lead by the Head).
+    lead_before = len(_notifs_for(db, lead_u.id))
+    proj_svc.assign_activity_member(
+        db, lead_u, project.id, act.id,
+        ActivityMemberCreate(employee_id=con_e.id, role="contributor"),
+    )
+    assert len(_notifs_for(db, con_u.id)) == 1        # the contributor is notified
+    assert len(_notifs_for(db, lead_u.id)) == lead_before  # the assigner is not

@@ -1,6 +1,13 @@
 "use client";
 
-import { CalendarClock, GitMerge, UserMinus, UserPlus } from "lucide-react";
+import {
+  CalendarClock,
+  Crown,
+  GitMerge,
+  ShieldCheck,
+  UserMinus,
+  UserPlus,
+} from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -46,6 +53,60 @@ function formatEvent(e: ProjectTimelineEvent): EventMeta {
       return {
         icon: <UserMinus className="h-3.5 w-3.5" />,
         description: `${d.employee_name ?? "Unknown"} removed`,
+      };
+
+    case "head_assigned":
+      return {
+        icon: <Crown className="h-3.5 w-3.5" />,
+        description: `${d.head_employee_name ?? "Someone"} was assigned as Project Head.`,
+      };
+
+    case "head_changed":
+      return {
+        icon: <Crown className="h-3.5 w-3.5" />,
+        description: d.head_employee_name
+          ? `${d.head_employee_name} was assigned as Project Head.`
+          : "Project Head removed.",
+      };
+
+    case "activity_lead_assigned":
+      return {
+        icon: <UserPlus className="h-3.5 w-3.5" />,
+        description: `${d.employee_name ?? "Someone"} was assigned as Lead for ${
+          d.activity_code ?? d.activity_name ?? "an activity"
+        }.`,
+      };
+
+    case "activity_contributor_added":
+      return {
+        icon: <UserPlus className="h-3.5 w-3.5" />,
+        description: `${d.employee_name ?? "Someone"} was added as Contributor to ${
+          d.activity_code ?? d.activity_name ?? "an activity"
+        }.`,
+      };
+
+    case "activity_qc_assigned":
+      return {
+        icon: <ShieldCheck className="h-3.5 w-3.5" />,
+        description: `${d.employee_name ?? "Someone"} was assigned as QC for ${
+          d.activity_code ?? d.activity_name ?? "an activity"
+        }.`,
+      };
+
+    case "activity_qc_removed":
+      return {
+        icon: <ShieldCheck className="h-3.5 w-3.5" />,
+        description: `QC role removed from ${d.employee_name ?? "Someone"} for ${
+          d.activity_code ?? d.activity_name ?? "an activity"
+        }.`,
+      };
+
+    case "activity_member_removed":
+      return {
+        icon: <UserMinus className="h-3.5 w-3.5" />,
+        description: `${d.employee_name ?? "Someone"} was removed from ${
+          d.activity_code ?? d.activity_name ?? "an activity"
+        }.`,
       };
 
     case "submission_created":

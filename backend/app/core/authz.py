@@ -19,7 +19,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee
-from app.modules.projects.models import Project, ProjectMember
+from app.modules.projects.models import (
+    ActivityMemberRole,
+    Project,
+    ProjectActivityMember,
+    ProjectMember,
+)
 from app.modules.users.models import User, UserRole
 
 
@@ -66,14 +71,66 @@ def can_assign_head(db: Session, actor: User, project: Project) -> bool:
     return actor.role == UserRole.project_manager
 
 
+def is_activity_lead(
+    db: Session, actor: User, project_id: uuid.UUID, activity_id: uuid.UUID
+) -> bool:
+    """True when the caller is the assigned Lead of this specific activity."""
+    emp_id = _actor_employee_id(db, actor)
+    if emp_id is None:
+        return False
+    return db.execute(
+        select(ProjectActivityMember.id).where(
+            ProjectActivityMember.project_id == project_id,
+            ProjectActivityMember.activity_id == activity_id,
+            ProjectActivityMember.employee_id == emp_id,
+            ProjectActivityMember.role == ActivityMemberRole.lead,
+        ).limit(1)
+    ).scalar_one_or_none() is not None
+
+
+def leads_any_activity(db: Session, actor: User, project_id: uuid.UUID) -> bool:
+    """True when the caller is the Lead of at least one activity in the project
+    (used to gate the staffing UI / assignable-employee list for Leads)."""
+    emp_id = _actor_employee_id(db, actor)
+    if emp_id is None:
+        return False
+    return db.execute(
+        select(ProjectActivityMember.id).where(
+            ProjectActivityMember.project_id == project_id,
+            ProjectActivityMember.employee_id == emp_id,
+            ProjectActivityMember.role == ActivityMemberRole.lead,
+        ).limit(1)
+    ).scalar_one_or_none() is not None
+
+
 def can_manage_activity_staffing(db: Session, actor: User, project: Project) -> bool:
-    """Manage per-activity staffing (Phase 3): assign/update/remove activity
-    members. PM (any project) or the project's Head. Finer-grained Lead
-    self-service (a Lead staffing their own activity) is a later Phase-3
-    permission refinement; kept out of this baseline deliberately."""
+    """Project-wide activity-staffing authority: PM (any project) or the project's
+    Head. This is *full* control over every activity. A Lead's narrower per-activity
+    authority is resolved by ``activity_staffing_authority`` — do not use this
+    helper to gate a Lead's own-activity actions."""
     if actor.role == UserRole.project_manager:
         return True
     return is_project_head(db, actor, project)
+
+
+def activity_staffing_authority(
+    db: Session, actor: User, project: Project, activity_id: uuid.UUID
+) -> str | None:
+    """Resolve the caller's authority over ONE activity's staffing:
+
+      "full"  -> PM or the project Head — may add/remove anyone in any role.
+      "lead"  -> the assigned Lead of *this* activity — may add/remove
+                 Contributors and QC on this activity only; may NOT touch the
+                 Lead assignment or any other activity.
+      None    -> not authorized to manage this activity's staffing.
+    """
+    if actor.role == UserRole.project_manager:
+        return "full"
+    if is_project_head(db, actor, project):
+        return "full"
+    if is_activity_lead(db, actor, project.id, activity_id):
+        return "lead"
+    return None
 
 
 def can_view_project(db: Session, actor: User, project: Project) -> bool:

@@ -106,16 +106,22 @@ function AssignmentRow({
   );
 }
 
+/** Per-activity staffing authority for the current viewer:
+ *   "full" — PM or project Head: may remove anyone (Lead included).
+ *   "lead" — the Lead of THIS activity: may remove Contributors/QC only.
+ *   "none" — read-only. */
+type ActivityAuthority = "full" | "lead" | "none";
+
 /** One collapsed-by-default activity: a minimal header (name · count · chevron)
  * that smoothly expands/collapses the assignment rows. The open state lives in
  * component state, so it is remembered while the user stays on the page. */
 function ActivityAccordionItem({
   activity,
-  canModifyStaffing,
+  authority,
   onRemove,
 }: {
   activity: ActivityStaffing;
-  canModifyStaffing: boolean;
+  authority: ActivityAuthority;
   onRemove: (activityId: string, employeeId: string) => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -159,7 +165,8 @@ function ActivityAccordionItem({
                 member={activity.lead}
                 isLead
                 onRemove={
-                  canModifyStaffing
+                  // Only PM/Head may remove the Lead; a Lead cannot remove itself.
+                  authority === "full"
                     ? () => onRemove(activity.activity_id, activity.lead!.employee_id)
                     : undefined
                 }
@@ -170,7 +177,8 @@ function ActivityAccordionItem({
                 key={c.id}
                 member={c}
                 onRemove={
-                  canModifyStaffing
+                  // PM/Head or the activity's Lead may remove Contributors/QC.
+                  authority !== "none"
                     ? () => onRemove(activity.activity_id, c.employee_id)
                     : undefined
                 }
@@ -189,18 +197,29 @@ function ActivityAccordionItem({
 function AssignActivityForm({
   projectId,
   staffing,
+  authority,
+  ledActivityIds,
 }: {
   projectId: string;
   staffing: ActivityStaffing[];
+  /** "full" — PM/Head: any activity, any role. "lead" — the activity Lead:
+   *  only their own activities, Contributor/QC only. */
+  authority: "full" | "lead";
+  ledActivityIds: Set<string>;
 }) {
   const assign = useAssignActivityMember(projectId);
   const employeesQuery = useAssignableEmployees(projectId, true);
   const activitiesQuery = useActivities(true);
+  const canAssignLead = authority === "full";
 
   const employees = employeesQuery.data ?? [];
   const activities = React.useMemo(
-    () => (activitiesQuery.data ?? []).filter(isProjectExecutionActivity),
-    [activitiesQuery.data],
+    () =>
+      (activitiesQuery.data ?? [])
+        .filter(isProjectExecutionActivity)
+        // A Lead may only staff activities they lead.
+        .filter((a) => authority === "full" || ledActivityIds.has(a.id)),
+    [activitiesQuery.data, authority, ledActivityIds],
   );
 
   // Activities that already have a Lead — the one-Lead-per-activity rule is
@@ -210,25 +229,43 @@ function AssignActivityForm({
     [staffing],
   );
 
+  // A Lead only ever adds Contributors (optionally as QC) to their own activity.
+  const isLeadForm = authority === "lead";
+  // QC is an optional responsibility - off by default, enabled intentionally.
+  const defaultQc = false;
+
   const [employee, setEmployee] = React.useState("");
   const [activity, setActivity] = React.useState("");
   const [role, setRole] = React.useState<ActivityMemberRole>("contributor");
-  const [isQc, setIsQc] = React.useState(false);
+  const [isQc, setIsQc] = React.useState(defaultQc);
+
+  // When a Lead heads exactly one activity, pre-select it (still shown in the
+  // Activity dropdown) so they don't have to pick from a single option.
+  React.useEffect(() => {
+    if (isLeadForm && !activity && activities.length === 1) {
+      setActivity(activities[0].id);
+    }
+  }, [isLeadForm, activity, activities]);
 
   const selectedHasLead = !!activity && leadActivityIds.has(activity);
 
   async function add() {
     if (!employee || !activity) return;
     try {
+      // A Lead can only add Contributors — the base role is fixed.
       await assign.mutateAsync({
         activityId: activity,
-        body: { employee_id: employee, role, is_qc: isQc },
+        body: {
+          employee_id: employee,
+          role: isLeadForm ? "contributor" : role,
+          is_qc: isQc,
+        },
       });
       toast.success("Assignment added");
       setEmployee("");
       setActivity("");
       setRole("contributor");
-      setIsQc(false);
+      setIsQc(defaultQc);
     } catch (err) {
       toast.error(err instanceof AppError ? err.message : "Could not add assignment.");
     }
@@ -237,92 +274,108 @@ function AssignActivityForm({
   return (
     <>
       <Separator className="my-4" />
-      <p className="mb-3 text-sm font-medium">Assign Employee</p>
-      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-        <div className="min-w-[9rem] flex-1 space-y-1">
-          <label className="block text-xs font-medium text-muted-foreground">
-            Employee
-          </label>
-          <Select value={employee} onValueChange={setEmployee}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select employee…" />
-            </SelectTrigger>
-            <SelectContent>
-              {employees.length === 0 ? (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                  No employees available
-                </div>
-              ) : (
-                employees.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.full_name} · {e.employee_code}
+      <p className="mb-3 text-sm font-medium">
+        {isLeadForm ? "Add Contributor" : "Assign Employee"}
+      </p>
+      <div className="flex flex-col gap-3">
+        {/* Row 1 — Employee + Activity, side by side on sm+. */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="min-w-[9rem] flex-1 space-y-1">
+            <label className="block text-xs font-medium text-muted-foreground">
+              Employee
+            </label>
+            <Select value={employee} onValueChange={setEmployee}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select employee…" />
+              </SelectTrigger>
+              <SelectContent>
+                {employees.length === 0 ? (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    No employees available
+                  </div>
+                ) : (
+                  employees.map((e) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.full_name} · {e.employee_code}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="min-w-[9rem] flex-1 space-y-1">
+            <label className="block text-xs font-medium text-muted-foreground">
+              Activity
+            </label>
+            <Select
+              value={activity}
+              onValueChange={(v) => {
+                setActivity(v);
+                // Can't add a second Lead — fall back to Contributor.
+                if (role === "lead" && leadActivityIds.has(v)) setRole("contributor");
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select activity…" />
+              </SelectTrigger>
+              <SelectContent>
+                {activities.length === 0 ? (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    No activities available
+                  </div>
+                ) : (
+                  activities.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.code ?? a.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Row 2 — Role (PM/Head only) on the left; QC + Add on the right. */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          {/* Role picker is only for PM/Head — a Lead adds Contributors only, so
+              the whole control is dropped from the simplified Lead form. */}
+          {!isLeadForm && (
+            <div className="min-w-[9rem] flex-1 space-y-1">
+              <label className="block text-xs font-medium text-muted-foreground">
+                Role
+              </label>
+              <Select value={role} onValueChange={(v) => setRole(v as ActivityMemberRole)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {/* Only PM/Head assign a Lead; a Lead adds Contributors/QC only. */}
+                  <SelectItem value="lead" disabled={!canAssignLead || selectedHasLead}>
+                    Lead
                   </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
+                  <SelectItem value="contributor">Contributor</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 sm:h-10 sm:flex-1">
+            <label className="flex items-center gap-1.5 whitespace-nowrap text-sm text-muted-foreground">
+              <Checkbox checked={isQc} onChange={(e) => setIsQc(e.target.checked)} />
+              QC
+            </label>
+
+            <Button
+              onClick={() => void add()}
+              disabled={!employee || !activity}
+              loading={assign.isPending}
+              className="ml-auto"
+            >
+              Add
+            </Button>
+          </div>
         </div>
-
-        <div className="min-w-[9rem] flex-1 space-y-1">
-          <label className="block text-xs font-medium text-muted-foreground">
-            Activity
-          </label>
-          <Select
-            value={activity}
-            onValueChange={(v) => {
-              setActivity(v);
-              // Can't add a second Lead — fall back to Contributor.
-              if (role === "lead" && leadActivityIds.has(v)) setRole("contributor");
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select activity…" />
-            </SelectTrigger>
-            <SelectContent>
-              {activities.length === 0 ? (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                  No activities available
-                </div>
-              ) : (
-                activities.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.code ?? a.name}
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="min-w-[8rem] flex-1 space-y-1">
-          <label className="block text-xs font-medium text-muted-foreground">
-            Role
-          </label>
-          <Select value={role} onValueChange={(v) => setRole(v as ActivityMemberRole)}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="lead" disabled={selectedHasLead}>
-                Lead
-              </SelectItem>
-              <SelectItem value="contributor">Contributor</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <label className="flex items-center gap-1.5 whitespace-nowrap text-sm text-muted-foreground sm:h-10">
-          <Checkbox checked={isQc} onChange={(e) => setIsQc(e.target.checked)} />
-          QC
-        </label>
-
-        <Button
-          onClick={() => void add()}
-          disabled={!employee || !activity}
-          loading={assign.isPending}
-        >
-          Add Assignment
-        </Button>
       </div>
     </>
   );
@@ -334,14 +387,35 @@ export function ProjectMembers({ project }: { project: Project }) {
   const archived = project.status === "archived";
   const headEmployeeId = project.head_employee_id;
 
-  // PM (any project) or the project's Head may modify activity staffing — the
-  // same authority the backend enforces on assign/remove.
+  // PM (any project) or the project's Head has full staffing authority over
+  // every activity — the same authority the backend enforces on assign/remove.
   const isHead = !!employeeId && employeeId === headEmployeeId;
-  const canModifyStaffing = (canManage || isHead) && !archived;
+  const canManageAll = (canManage || isHead) && !archived;
 
   const staffingQuery = useActivityStaffing(project.id);
   // Only activities with assignments come back — render each as its own section.
   const staffing = staffingQuery.data ?? [];
+
+  // Activities where the current user is the assigned Lead. A Lead may manage
+  // (add/remove Contributors + QC) only these, and never the Lead row itself —
+  // mirrored server-side by authz.activity_staffing_authority.
+  const ledActivityIds = React.useMemo(
+    () =>
+      new Set(
+        staffing
+          .filter((s) => !!employeeId && s.lead?.employee_id === employeeId)
+          .map((s) => s.activity_id),
+      ),
+    [staffing, employeeId],
+  );
+  const isLeadOfAny = ledActivityIds.size > 0 && !archived;
+  const canModifyStaffing = canManageAll || isLeadOfAny;
+
+  function activityAuthority(activityId: string): ActivityAuthority {
+    if (canManageAll) return "full";
+    if (isLeadOfAny && ledActivityIds.has(activityId)) return "lead";
+    return "none";
+  }
 
   const setHead = useSetProjectHead(project.id);
   const removeMember = useRemoveActivityMember(project.id);
@@ -418,7 +492,7 @@ export function ProjectMembers({ project }: { project: Project }) {
               <ActivityAccordionItem
                 key={activity.activity_id}
                 activity={activity}
-                canModifyStaffing={canModifyStaffing}
+                authority={activityAuthority(activity.activity_id)}
                 onRemove={unassign}
               />
             ))}
@@ -461,9 +535,15 @@ export function ProjectMembers({ project }: { project: Project }) {
           </>
         )}
 
-        {/* Shared activity-staffing form — PM or Head, active projects only. */}
+        {/* Shared activity-staffing form. PM/Head may staff any activity in any
+            role; a Lead may staff only their own activities as Contributor/QC. */}
         {canModifyStaffing && (
-          <AssignActivityForm projectId={project.id} staffing={staffing} />
+          <AssignActivityForm
+            projectId={project.id}
+            staffing={staffing}
+            authority={canManageAll ? "full" : "lead"}
+            ledActivityIds={ledActivityIds}
+          />
         )}
 
         {archived && (

@@ -56,6 +56,67 @@ def _push_notification(db: Session, user_id: uuid.UUID, type_: str, title: str,
         db.rollback()
 
 
+def _actor_display_name(db: Session, actor: User) -> str:
+    """Human name of the assigner for the notification body — their employee
+    full name if they have a profile, else their login email."""
+    emp = db.execute(
+        select(Employee).where(
+            Employee.user_id == actor.id, Employee.deleted_at.is_(None)
+        )
+    ).scalars().first()
+    return emp.full_name if emp is not None else actor.email
+
+
+def _assignment_role_label(role: ActivityMemberRole, is_qc: bool) -> str:
+    """The single role word shown in the assignment notification. QC is an
+    additive flag, but for the notification we surface it as the role when the
+    member holds no higher (Lead) role — matching the trigger list which treats
+    'assign QC' as its own event."""
+    if role == ActivityMemberRole.lead:
+        return "Lead"
+    if is_qc:
+        return "QC"
+    return "Contributor"
+
+
+def _notify_assignment(
+    db: Session,
+    *,
+    assignee: Employee,
+    actor: User,
+    project: Project,
+    role_label: str,
+    activity_name: str | None,
+) -> None:
+    """Create the in-app 'You have been assigned to a project' notification for
+    the assigned employee only. Never notifies the assigner. Best-effort: a
+    notification failure must not roll back the assignment (already committed),
+    so it manages its own commit/rollback like ``_push_notification``.
+
+    ``activity_name`` is omitted for a Head (the Head belongs to the project, not
+    a specific activity)."""
+    # No login row -> nowhere to deliver; and never notify the assigner.
+    if assignee.user_id is None or assignee.user_id == actor.id:
+        return
+    lines = [
+        "Project:", project.name, "",
+        "Code:", project.code, "",
+        "Role:", role_label, "",
+    ]
+    if activity_name is not None:
+        lines += ["Activity:", activity_name, ""]
+    lines += ["Assigned by:", _actor_display_name(db, actor)]
+    _push_notification(
+        db,
+        assignee.user_id,
+        "project_assigned",
+        "You have been assigned to a project",
+        "\n".join(lines),
+        project.id,
+        f"/projects/{project.id}",
+    )
+
+
 _ALLOWED_TRANSITIONS: dict[ProjectStatus, set[ProjectStatus]] = {
     ProjectStatus.planning: {ProjectStatus.active, ProjectStatus.on_hold, ProjectStatus.completed},
     ProjectStatus.active: {ProjectStatus.on_hold, ProjectStatus.completed},
@@ -295,6 +356,11 @@ def set_project_head(
     if previous == head_employee_id:
         return _decorate_project(db, project)   # idempotent — no event, no change
 
+    previous_name = None
+    if previous is not None:
+        prev_emp = db.get(Employee, previous)
+        previous_name = prev_emp.full_name if prev_emp else None
+
     project.head_employee_id = head_employee_id
     db.add(project)
     if head_employee_id is not None:
@@ -306,11 +372,24 @@ def set_project_head(
         actor,
         {
             "head_employee_id": str(head_employee_id) if head_employee_id else None,
+            "head_employee_name": employee.full_name if head_employee_id is not None else None,
             "previous_head_employee_id": str(previous) if previous else None,
+            "previous_head_employee_name": previous_name,
         },
     )
     db.commit()
     db.refresh(project)
+    # Notify the newly assigned Head (not on a clear). Head belongs to the whole
+    # project, so no Activity line.
+    if head_employee_id is not None:
+        _notify_assignment(
+            db,
+            assignee=employee,
+            actor=actor,
+            project=project,
+            role_label="Head",
+            activity_name=None,
+        )
     return _decorate_project(db, project)
 
 
@@ -355,6 +434,24 @@ def _record_timeline(
         details=details or {},
     )
     db.add(event)
+
+
+def _record_activity_staffing_event(
+    db: Session,
+    project_id: uuid.UUID,
+    event_type: str,
+    actor: User,
+    employee: Employee,
+    activity,
+) -> None:
+    """Stage a per-activity staffing timeline event (Lead/Contributor/QC add or
+    remove). Stores the employee name and the activity code/name so the timeline
+    can render a readable line without a follow-up lookup. Caller must commit."""
+    _record_timeline(db, project_id, event_type, actor, {
+        "employee_name": employee.full_name,
+        "activity_code": activity.code if activity else None,
+        "activity_name": activity.name if activity else None,
+    })
 
 
 def _assert_can_view_timeline(db: Session, actor: User, project: Project) -> None:
@@ -813,14 +910,18 @@ def list_assignable_employees(
 ) -> list[Employee]:
     """Every active employee that may be staffed onto one of this project's
     activities — the candidate list for the shared assignment form. Restricted
-    to staffing managers (PM or the project Head), the same authority that the
-    assign/remove endpoints require, so a Head (whose global role is `employee`)
-    can list all candidates instead of just their own record."""
+    to staffing managers: the PM, the project Head, or a Lead of any activity in
+    the project (Leads staff their own activity's Contributors/QC), so a Head or
+    Lead (whose global role is `employee`) can list all candidates instead of
+    just their own record."""
     project = _fetch(db, project_id)
-    if not authz.can_manage_activity_staffing(db, actor, project):
+    if not (
+        authz.can_manage_activity_staffing(db, actor, project)
+        or authz.leads_any_activity(db, actor, project_id)
+    ):
         raise AppError(
             "forbidden",
-            "Only the PM or the project Head can view assignable employees.",
+            "Only the PM, the project Head, or an activity Lead can view assignable employees.",
             403,
         )
     return list(
@@ -919,14 +1020,25 @@ def assign_activity_member(
     data: ActivityMemberCreate,
 ) -> ActivityMemberOut:
     """Assign an employee to one activity of the project (base role + QC flag).
-    PM or the project Head only. Auto-maintains the visibility backbone (adds a
-    project_members row) so activity staff can see the project."""
+    PM or the project Head (any activity), or the activity's own Lead (Contributor
+    / QC only). Auto-maintains the visibility backbone (adds a project_members
+    row) so activity staff can see the project."""
+    from app.modules.activity_master.models import ActivityMaster
     from app.modules.activity_master.service import _assert_is_activity
 
     project = _fetch(db, project_id)
-    if not authz.can_manage_activity_staffing(db, actor, project):
+    authority = authz.activity_staffing_authority(db, actor, project, activity_id)
+    if authority is None:
         raise AppError(
-            "forbidden", "Only the PM or the project Head can assign activity members.", 403
+            "forbidden",
+            "Only the PM, the project Head, or this activity's Lead can assign its members.",
+            403,
+        )
+    if authority == "lead" and data.role == ActivityMemberRole.lead:
+        raise AppError(
+            "forbidden",
+            "A Lead can only add Contributors or QC, not another Lead.",
+            403,
         )
     if project.status == ProjectStatus.archived:
         raise AppError("validation_error", "Cannot assign to an archived project.", 422)
@@ -962,6 +1074,16 @@ def assign_activity_member(
     )
     db.add(member)
     _ensure_project_member(db, project_id, data.employee_id, actor)
+    activity = db.get(ActivityMaster, activity_id)
+    # Timeline: a Lead assignment, a QC assignment, or a plain Contributor add.
+    # is_qc on a Lead is subsumed by the Lead event (Lead is the primary role).
+    if data.role == ActivityMemberRole.lead:
+        _staffing_event = TimelineEventType.ACTIVITY_LEAD_ASSIGNED
+    elif data.is_qc:
+        _staffing_event = TimelineEventType.ACTIVITY_QC_ASSIGNED
+    else:
+        _staffing_event = TimelineEventType.ACTIVITY_CONTRIBUTOR_ADDED
+    _record_activity_staffing_event(db, project_id, _staffing_event, actor, employee, activity)
     try:
         db.commit()
     except IntegrityError:
@@ -969,6 +1091,14 @@ def assign_activity_member(
         raise AppError("conflict", "This activity already has a Lead.", 409)
     db.refresh(member)
     member.employee_name = employee.full_name  # type: ignore[attr-defined]
+    _notify_assignment(
+        db,
+        assignee=employee,
+        actor=actor,
+        project=project,
+        role_label=_assignment_role_label(member.role, member.is_qc),
+        activity_name=activity.name if activity else None,
+    )
     return ActivityMemberOut.model_validate(member)
 
 
@@ -981,11 +1111,18 @@ def update_activity_member(
     data: ActivityMemberUpdate,
 ) -> ActivityMemberOut:
     """Change an assignment's base role and/or toggle its QC flag. PM or the
-    project Head only. Omitted fields are left unchanged."""
+    project Head (any activity), or the activity's own Lead (QC on a Contributor
+    only — a Lead may not change roles or touch the Lead assignment). Omitted
+    fields are left unchanged."""
+    from app.modules.activity_master.models import ActivityMaster
+
     project = _fetch(db, project_id)
-    if not authz.can_manage_activity_staffing(db, actor, project):
+    authority = authz.activity_staffing_authority(db, actor, project, activity_id)
+    if authority is None:
         raise AppError(
-            "forbidden", "Only the PM or the project Head can update activity members.", 403
+            "forbidden",
+            "Only the PM, the project Head, or this activity's Lead can update its members.",
+            403,
         )
 
     member = db.execute(
@@ -998,6 +1135,16 @@ def update_activity_member(
     if member is None:
         raise AppError("not_found", "Activity assignment not found.", 404)
 
+    if authority == "lead":
+        # A Lead manages Contributors/QC only: never the Lead row, never a role change.
+        if member.role == ActivityMemberRole.lead:
+            raise AppError("forbidden", "A Lead cannot modify the activity Lead.", 403)
+        if data.role is not None and data.role != member.role:
+            raise AppError(
+                "forbidden", "A Lead can only add or remove QC on Contributors.", 403
+            )
+
+    prev_role, prev_qc = member.role, member.is_qc
     if (
         data.role is not None
         and data.role == ActivityMemberRole.lead
@@ -1009,14 +1156,43 @@ def update_activity_member(
     if data.is_qc is not None:
         member.is_qc = data.is_qc
     db.add(member)
+
+    # Timeline: only for a meaningful change (a QC gain/loss or a promotion to
+    # Lead). A no-op update, or a QC toggle that doesn't alter the row, records
+    # nothing. Lead is primary, so a QC toggle on a Lead is not surfaced.
+    employee = db.get(Employee, employee_id)
+    activity = db.get(ActivityMaster, activity_id)
+    if employee is not None:
+        if prev_role != ActivityMemberRole.lead and member.role == ActivityMemberRole.lead:
+            _record_activity_staffing_event(
+                db, project_id, TimelineEventType.ACTIVITY_LEAD_ASSIGNED,
+                actor, employee, activity,
+            )
+        elif member.role != ActivityMemberRole.lead and member.is_qc != prev_qc:
+            _record_activity_staffing_event(
+                db, project_id,
+                TimelineEventType.ACTIVITY_QC_ASSIGNED if member.is_qc
+                else TimelineEventType.ACTIVITY_QC_REMOVED,
+                actor, employee, activity,
+            )
+
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
         raise AppError("conflict", "This activity already has a Lead.", 409)
     db.refresh(member)
-    employee = db.get(Employee, employee_id)
     member.employee_name = employee.full_name if employee else ""  # type: ignore[attr-defined]
+    # Notify the assignee when the assignment actually changed (role or QC).
+    if employee is not None and (member.role != prev_role or member.is_qc != prev_qc):
+        _notify_assignment(
+            db,
+            assignee=employee,
+            actor=actor,
+            project=project,
+            role_label=_assignment_role_label(member.role, member.is_qc),
+            activity_name=activity.name if activity else None,
+        )
     return ActivityMemberOut.model_validate(member)
 
 
@@ -1027,16 +1203,21 @@ def remove_activity_member(
     activity_id: uuid.UUID,
     employee_id: uuid.UUID,
 ) -> None:
-    """Unassign an employee from one activity. PM or the project Head only.
+    """Unassign an employee from one activity. PM or the project Head (any
+    activity), or the activity's own Lead (Contributors/QC only — a Lead may not
+    remove the Lead assignment).
 
     The employee's project_members visibility row is intentionally left in
     place — reference-counted cleanup (drop it once they hold no Head/activity
     assignment) is a later Phase-3 refinement, so we don't silently strip
     project visibility here."""
     project = _fetch(db, project_id)
-    if not authz.can_manage_activity_staffing(db, actor, project):
+    authority = authz.activity_staffing_authority(db, actor, project, activity_id)
+    if authority is None:
         raise AppError(
-            "forbidden", "Only the PM or the project Head can remove activity members.", 403
+            "forbidden",
+            "Only the PM, the project Head, or this activity's Lead can remove its members.",
+            403,
         )
 
     member = db.execute(
@@ -1048,5 +1229,17 @@ def remove_activity_member(
     ).scalar_one_or_none()
     if member is None:
         raise AppError("not_found", "Activity assignment not found.", 404)
+    if authority == "lead" and member.role == ActivityMemberRole.lead:
+        raise AppError("forbidden", "A Lead cannot remove the activity Lead.", 403)
+
+    from app.modules.activity_master.models import ActivityMaster
+
+    employee = db.get(Employee, employee_id)
+    activity = db.get(ActivityMaster, activity_id)
     db.delete(member)
+    if employee is not None:
+        _record_activity_staffing_event(
+            db, project_id, TimelineEventType.ACTIVITY_MEMBER_REMOVED,
+            actor, employee, activity,
+        )
     db.commit()

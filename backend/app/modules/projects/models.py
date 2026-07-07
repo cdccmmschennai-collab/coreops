@@ -247,6 +247,12 @@ class TimelineEventType:
     MEMBER_REMOVED = "member_removed"
     HEAD_ASSIGNED = "head_assigned"   # Phase 2 — first Head set on the project
     HEAD_CHANGED = "head_changed"     # Phase 2 — Head replaced or cleared
+    # Phase 3 — per-activity staffing changes (only meaningful ones).
+    ACTIVITY_LEAD_ASSIGNED = "activity_lead_assigned"
+    ACTIVITY_CONTRIBUTOR_ADDED = "activity_contributor_added"
+    ACTIVITY_MEMBER_REMOVED = "activity_member_removed"
+    ACTIVITY_QC_ASSIGNED = "activity_qc_assigned"
+    ACTIVITY_QC_REMOVED = "activity_qc_removed"
     SUBMISSION_CREATED = "submission_created"   # emitted by Phase C
     SUBMISSION_UPDATED = "submission_updated"   # emitted by Phase C
 
