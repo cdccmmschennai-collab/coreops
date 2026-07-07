@@ -149,9 +149,11 @@ def test_pm_list_scope_includes_rejected_and_granted(db, author, make_user):
     assert total == 1
 
 
-def test_team_lead_list_scope_includes_rejected_and_granted(
+def test_team_lead_cannot_review_or_see_project_reports(
     db, author, make_user, make_employee, make_project_member
 ):
+    """A team lead no longer inherits project-wide report access: they cannot
+    review another member's report, and it stays out of their list scope."""
     from app.modules.projects.models import ProjectMemberRole
 
     lead_u, lead_e, p = author(email="lead@x.com", code="TL-1", proj_code="P-1", member=False)
@@ -161,13 +163,16 @@ def test_team_lead_list_scope_includes_rejected_and_granted(
 
     r = svc.create_work_report(db, emp_u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, emp_u, r.id)
-    svc.reject_work_report(db, lead_u, r.id, WorkReportReject(review_note="redo"))
+
+    with pytest.raises(AppError) as ei:
+        svc.reject_work_report(db, lead_u, r.id, WorkReportReject(review_note="redo"))
+    assert ei.value.status_code == 403
 
     _, total = svc.list_work_reports(
         db, lead_u, employee_id=None, project_id=None, status=None,
         date_from=None, date_to=None, limit=50, offset=0,
     )
-    assert total == 1
+    assert total == 0
 
 
 # ---------- validation rules (§6) ------------------------------------------

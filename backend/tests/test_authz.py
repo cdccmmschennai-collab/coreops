@@ -2,7 +2,8 @@
 
 PM manages + reviews everything; the Head views + reviews their own project but
 does not manage it or assign the Head; contributors are view-only; non-members
-see nothing; the legacy team_lead reviewer path still grants review.
+see nothing; a team lead can view the project (member) but no longer reviews
+its reports.
 """
 from app.core import authz
 from app.modules.projects.models import ProjectMemberRole
@@ -70,13 +71,15 @@ def test_non_member_cannot_view_or_review(db, make_user, make_employee, make_pro
     assert not authz.can_review_report(db, u, {project.id})
 
 
-def test_legacy_team_lead_can_still_review(db, make_user, make_employee, make_project, make_project_member):
+def test_team_lead_can_view_but_no_longer_reviews(db, make_user, make_employee, make_project, make_project_member):
     u, e = _emp(make_user, make_employee, "tl@x.com", "TL-1")
     project = make_project(code="A-5")
     make_project_member(project_id=project.id, employee_id=e.id, role=ProjectMemberRole.team_lead)
 
-    assert authz.can_review_report(db, u, {project.id})
+    # A team lead is a project member, so may still view the project itself,
+    # but no longer inherits project-wide report review access.
     assert authz.can_view_project(db, u, project)
+    assert not authz.can_review_report(db, u, {project.id})
 
 
 def test_head_honored_by_review_among_multiple_projects(db, make_user, make_employee, make_project):
@@ -90,7 +93,7 @@ def test_head_honored_by_review_among_multiple_projects(db, make_user, make_empl
     assert not authz.can_review_report(db, head_u, {unrelated.id})
 
 
-def test_reviewable_project_ids_unions_head_and_team_lead(
+def test_reviewable_project_ids_is_head_only(
     db, make_user, make_employee, make_project, make_project_member
 ):
     u, e = _emp(make_user, make_employee, "rv@x.com", "RV-1")
@@ -102,5 +105,6 @@ def test_reviewable_project_ids_unions_head_and_team_lead(
     make_project_member(project_id=contrib.id, employee_id=e.id, role=ProjectMemberRole.contributor)
 
     ids = authz.reviewable_project_ids(db, u)
-    assert headed.id in ids and led.id in ids
+    assert headed.id in ids  # only projects the caller heads are reviewable
+    assert led.id not in ids  # a team lead no longer reviews project reports
     assert contrib.id not in ids  # a plain contributor cannot review

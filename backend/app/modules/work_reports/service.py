@@ -33,7 +33,6 @@ from app.modules.plants.models import MaintenancePlant, PlanningPlant
 from app.modules.projects.models import (
     Project,
     ProjectMember,
-    ProjectMemberRole,
     ProjectStatus,
 )
 from app.modules.users.models import User, UserRole
@@ -90,26 +89,19 @@ def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
 
 def _notify_reviewers(db: Session, report: DailyWorkReport, author: Employee,
                       type_: str, title: str, message: str) -> None:
-    """Notify the report's reviewers: the Head of each of its projects + team
-    leads on those projects (legacy) + the author's manager. (Requires
-    report.tasks to be attached.)"""
+    """Notify the report's reviewers: the Head of each of its projects + the
+    author's manager. Team leads are no longer reviewers, so they are not
+    notified. (Requires report.tasks to be attached.)"""
     url = f"/work-reports/{report.id}"
     project_ids = {t.project_id for t in getattr(report, "tasks", [])}
     if project_ids:
-        lead_emp_ids = db.execute(
-            select(ProjectMember.employee_id).where(
-                ProjectMember.project_id.in_(project_ids),
-                ProjectMember.role == ProjectMemberRole.team_lead,
-            )
-        ).scalars().all()
         head_emp_ids = db.execute(
             select(Project.head_employee_id).where(
                 Project.id.in_(project_ids),
                 Project.head_employee_id.is_not(None),
             )
         ).scalars().all()
-        # Dedup so a Head who is also a team lead is notified once.
-        for emp_id in set(lead_emp_ids) | set(head_emp_ids):
+        for emp_id in set(head_emp_ids):
             if emp_id == author.id:
                 continue
             reviewer = db.get(Employee, emp_id)
@@ -143,12 +135,11 @@ def _decorate(
 ) -> list[DailyWorkReport]:
     """Attach tasks and the per-actor `can_review` flag to each report.
 
-    can_review = PM (any report) OR the Head / (legacy) team lead on one of the
-    report's projects (but never one's own report — authors request edits, they
-    don't grant them).
+    can_review = PM (any report) OR the Head of one of the report's projects
+    (but never one's own report — authors request edits, they don't grant them).
     """
     _attach_tasks(db, reports)
-    # Resolve author display names server-side so scoped viewers (team leads)
+    # Resolve author display names server-side so scoped viewers (project Heads)
     # don't depend on the RBAC-limited employee list to show who filed a report.
     if reports:
         emp_ids = {r.employee_id for r in reports}
@@ -368,17 +359,18 @@ def _apply_scope(db: Session, actor: User, stmt):
     are private to the author until filed. This keeps PM dashboards complete:
     a report reopened for edit ('granted') or sent back ('rejected') still
     represents real work and must remain visible.
-    TL sees own reports (all statuses) + submitted/rejected/granted reports
-    from their led projects, so they can still track a report they sent
+    A Head sees own reports (all statuses) + submitted/rejected/granted reports
+    from projects they head, so they can still track a report they sent
     back or granted edit access to, not just the moment it's re-submitted.
-    Everyone else sees only their own reports (all statuses).
+    Everyone else (team leads and contributors alike) sees only their own
+    reports (all statuses).
     """
     if actor.role == UserRole.project_manager:
         return stmt.where(DailyWorkReport.status != WorkReportStatus.draft), True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
-    # Head + (legacy) team leads see reviewable reports from their projects.
+    # Head sees reviewable reports from projects they head.
     scoped_ids = authz.reviewable_project_ids(db, actor)
     if scoped_ids:
         scoped_reports = select(WorkReportTask.report_id).where(
@@ -989,8 +981,8 @@ def submit_work_report(
 
 # ---------- edit-access workflow -------------------------------------------
 def _assert_can_review(db: Session, actor: User, report: DailyWorkReport) -> None:
-    """Reviewers = PM (any report), the Head, or (legacy) a team lead on one of
-    the report's projects. A user can never review their own report."""
+    """Reviewers = PM (any report) or the Head of one of the report's projects.
+    A user can never review their own report."""
     if actor.role == UserRole.project_manager:
         return
     me = _current_employee(db, actor)

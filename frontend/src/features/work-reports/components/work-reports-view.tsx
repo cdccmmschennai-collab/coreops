@@ -36,12 +36,13 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const searchParams = useSearchParams();
   const { role, employee, employeeId } = useAuth();
   const isManager = isManagerial(role);
-  // Team leads (who are `employee` role) get the same filter once they lead
-  // a project — degraded back to a plain contributor, assignableProjects is
-  // empty and they fall back to seeing only their own reports.
-  const { data: assignableProjects } = useLedProjects({ enabled: !isManager });
-  const isTeamLead = !isManager && (assignableProjects?.length ?? 0) > 0;
-  const showEmployeeFilter = isManager || isTeamLead;
+  // Project Heads (who are `employee` role) get the same filter once they Head
+  // a project. A user who Heads nothing gets an empty list and falls back to
+  // seeing only their own reports, like any contributor. Team leads no longer
+  // qualify — project-wide report access now belongs to the Head.
+  const { data: headedProjects } = useLedProjects({ enabled: !isManager });
+  const isProjectHead = !isManager && (headedProjects?.length ?? 0) > 0;
+  const showEmployeeFilter = isManager || isProjectHead;
   const canCreate = can(role, "report.submit");
 
   const { items: orgEmployees } = useEmployeeOptions();
@@ -49,18 +50,18 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
     if (isManager) {
       return orgEmployees.map((e) => ({ id: e.id, label: `${e.full_name} · ${e.employee_code}` }));
     }
-    if (!isTeamLead) return [];
-    // Scoped to the team lead's own led-project teammates (+ themselves) —
-    // not the org-wide list, which they're not RBAC-permitted to browse.
+    if (!isProjectHead) return [];
+    // Scoped to the Head's own headed-project members (+ themselves) — not the
+    // org-wide list, which they're not RBAC-permitted to browse.
     const seen = new Map<string, string>();
     if (employeeId && employee) seen.set(employeeId, employee.full_name);
-    for (const project of assignableProjects ?? []) {
+    for (const project of headedProjects ?? []) {
       for (const member of project.members) {
         if (!seen.has(member.employee_id)) seen.set(member.employee_id, member.name);
       }
     }
     return Array.from(seen, ([id, label]) => ({ id, label }));
-  }, [isManager, isTeamLead, orgEmployees, assignableProjects, employee, employeeId]);
+  }, [isManager, isProjectHead, orgEmployees, headedProjects, employee, employeeId]);
 
   const params: WorkReportListParams = {
     employee_id: showEmployeeFilter ? searchParams.get("employee_id") ?? "" : "",
@@ -97,7 +98,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   }
 
   const items = query.data?.items ?? [];
-  // Team leads see reports from their project members → show who authored each.
+  // A Head sees reports from their project members → show who authored each.
   const showEmployeeColumn =
     showEmployeeFilter || items.some((r) => r.employee_id !== employeeId);
 
@@ -105,7 +106,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const scopeLabel = isManager
     ? "All employees"
     : showEmployeeColumn
-      ? "Projects you lead"
+      ? "Projects you head"
       : undefined;
   const countLabel = count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined;
   const subtitle = [scopeLabel, countLabel].filter(Boolean).join(" · ") || undefined;

@@ -769,32 +769,27 @@ def list_timeline(
 
 
 def list_led_projects(db: Session, actor: User) -> list[LedProject]:
-    """Projects the current user leads (team_lead), each with its active members.
+    """Projects the current user is Head of, each with its active members.
 
-    Returns [] for users who don't lead any live, non-archived project — the
-    signal the Work Reports view uses to decide whether to show the team-lead
-    employee filter. Unlike the retired /tasks/assignable-projects endpoint,
-    this is a reports-scope filter: it includes every active member of the led
-    project (the lead themselves included).
+    Returns [] for users who don't Head any live, non-archived project — the
+    signal the Work Reports view uses to decide whether to show the Head's
+    employee filter. Mirrors the backend report scope, which is now Head-only:
+    team leads no longer inherit project-wide report access, so they no longer
+    surface here either. It includes every active member of the headed project
+    (the Head themselves included).
     """
     me = _current_employee(db, actor)
     if me is None:
         return []
-    led_ids = db.execute(
-        select(ProjectMember.project_id).where(
-            ProjectMember.employee_id == me.id,
-            ProjectMember.role == ProjectMemberRole.team_lead,
-        )
-    ).scalars().all()
-    if not led_ids:
-        return []
     projects = db.execute(
         select(Project).where(
-            Project.id.in_(led_ids),
+            Project.head_employee_id == me.id,
             Project.deleted_at.is_(None),
             Project.status != ProjectStatus.archived,
         ).order_by(Project.name)
     ).scalars().all()
+    if not projects:
+        return []
     result: list[LedProject] = []
     for project in projects:
         rows = db.execute(

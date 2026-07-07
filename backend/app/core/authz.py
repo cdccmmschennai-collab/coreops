@@ -6,8 +6,8 @@ DB per request here, so endpoints and services share one source of truth instead
 of duplicating ``_assert_can_*`` checks across modules.
 
 Phase 2 surface (this file): project-level view, project management, Head
-assignment, and report review (PM + Head, with the legacy ``team_lead`` reviewer
-path kept until Phase 6). Activity-level helpers (Head-manages / Lead-own-
+assignment, and report review (PM + Head). Team leads no longer inherit
+project-wide report access. Activity-level helpers (Head-manages / Lead-own-
 activity) arrive in Phase 3.
 
 Ownership chain: PM ⊃ Head for reads/review; PM performs project management and
@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee
-from app.modules.projects.models import Project, ProjectMember, ProjectMemberRole
+from app.modules.projects.models import Project, ProjectMember
 from app.modules.users.models import User, UserRole
 
 
@@ -89,9 +89,10 @@ def can_view_project(db: Session, actor: User, project: Project) -> bool:
 
 
 def reviewable_project_ids(db: Session, actor: User) -> set[uuid.UUID]:
-    """Projects whose reports the caller may review as a non-PM: those they Head,
-    plus (legacy, until Phase 6) those they team_lead. Resolved in two queries so
-    batch callers (report lists) check membership in-memory instead of per-report.
+    """Projects whose reports the caller may review/see as a non-PM: those they
+    Head, and only those. Team leads no longer inherit project-wide report
+    access — a lead only manages staffing for their own activities and sees
+    their own reports like any contributor.
 
     PM reviews every report and is handled by the caller, not enumerated here.
     """
@@ -104,21 +105,14 @@ def reviewable_project_ids(db: Session, actor: User) -> set[uuid.UUID]:
             Project.deleted_at.is_(None),
         )
     ).scalars().all()
-    lead_ids = db.execute(
-        select(ProjectMember.project_id).where(
-            ProjectMember.employee_id == emp_id,
-            ProjectMember.role == ProjectMemberRole.team_lead,
-        )
-    ).scalars().all()
-    return set(head_ids) | set(lead_ids)
+    return set(head_ids)
 
 
 def can_review_report(db: Session, actor: User, project_ids: set[uuid.UUID]) -> bool:
     """Whether the caller may review (reject / request-edit / grant-edit) a report
     whose lines touch ``project_ids``.
 
-    Reviewers = PM (any report), the **Head** of any of those projects, or
-    (legacy, until Phase 6) a ``team_lead`` on any of those projects. The
+    Reviewers = PM (any report) or the **Head** of any of those projects. The
     "you cannot review your own report" rule is enforced by the caller, not here.
     """
     if actor.role == UserRole.project_manager:
