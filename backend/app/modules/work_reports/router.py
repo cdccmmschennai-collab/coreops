@@ -5,9 +5,8 @@
   GET    /work-reports/{id}             read (RBAC-scoped)
   PATCH  /work-reports/{id}             edit draft/rejected (author)
   POST   /work-reports/{id}/submit      submit (author)
-  POST   /work-reports/{id}/request-edit  author asks to reopen a submitted report
-  POST   /work-reports/{id}/reject      reviewer sends report back + note
-  POST   /work-reports/{id}/grant-edit  reviewer reopens report for editing
+  POST   /work-reports/{id}/request-edit  author asks the Project Head to reopen
+  POST   /work-reports/{id}/grant-edit  Project Head reopens report for editing
   DELETE /work-reports/{id}             delete own draft (author)
   PATCH  /work-reports/tasks/{task_id}/completion
                                          toggle a TASK_BASED row's completion
@@ -15,14 +14,14 @@
                                          regardless of the parent report's
                                          status (see service docstring)
 
-There is no approval step: a submitted report is final unless a reviewer reopens
-it (reject / grant-edit), which returns it to the editable 'rejected' state.
+There is no approval step: a submitted report is final unless the Project Head
+grants an edit request, which returns it to the editable 'granted' state.
 
 Coarse role gate at the router; the service enforces the fine-grained rules:
   - author actions (create/edit/submit/request-edit/delete) → own reports
-  - reviewer actions (reject/grant-edit) → PM (any) or team lead (their projects)
-Both author and reviewer actions are reachable by project_manager + employee at
-the router, so team leads (who are employees) can reach the reviewer endpoints.
+  - grant-edit → the Project Head of the report's projects (never the PM)
+Both author and Head actions are reachable by project_manager + employee at the
+router, so a Head (who is an employee) can reach the grant-edit endpoint.
 """
 import uuid
 from datetime import date
@@ -41,7 +40,6 @@ from app.modules.work_reports.schemas import (
     WorkReportEditRequest,
     WorkReportOut,
     WorkReportPage,
-    WorkReportReject,
     WorkReportTaskOut,
     WorkReportUpdate,
 )
@@ -131,18 +129,6 @@ def request_edit_work_report(
 ) -> WorkReportOut:
     return WorkReportOut.model_validate(
         service.request_edit_work_report(db, current, report_id, body)
-    )
-
-
-@router.post("/{report_id}/reject", response_model=WorkReportOut)
-def reject_work_report(
-    report_id: uuid.UUID,
-    body: WorkReportReject,
-    current: User = Depends(require_submit),
-    db: Session = Depends(get_db),
-) -> WorkReportOut:
-    return WorkReportOut.model_validate(
-        service.reject_work_report(db, current, report_id, body)
     )
 
 

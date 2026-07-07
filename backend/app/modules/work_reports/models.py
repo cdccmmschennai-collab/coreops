@@ -43,8 +43,8 @@ class WorkReportStatus(str, enum.Enum):
     draft = "draft"
     submitted = "submitted"
     approved = "approved"      # legacy — no longer produced (approval removed)
-    rejected = "rejected"      # reviewer sent the report back for changes
-    granted = "granted"        # reviewer reopened the report on an edit request
+    rejected = "rejected"      # legacy — no longer produced ("Send back" removed)
+    granted = "granted"        # the Project Head reopened the report on an edit request
 
 
 class DayStatus(str, enum.Enum):
@@ -138,11 +138,11 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
     )
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Set when the author requests edit access on a submitted (locked) report;
-    # cleared when a reviewer reopens it (reject / grant edit) or on resubmit.
+    # cleared when the Project Head grants the edit request or on resubmit.
     edit_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # The author's reason for the edit request (shown to the reviewer).
+    # The author's reason for the edit request (shown to the Project Head).
     edit_request_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

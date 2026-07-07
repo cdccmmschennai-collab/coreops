@@ -15,7 +15,6 @@ from app.modules.work_reports.models import WorkReportStatus
 from app.modules.work_reports.schemas import (
     WorkReportCreate,
     WorkReportEditRequest,
-    WorkReportReject,
     WorkReportTaskIn,
     WorkReportUpdate,
 )
@@ -26,6 +25,16 @@ TODAY = date.today()
 
 def _task(project_id, minutes=60, desc="work"):
     return WorkReportTaskIn(project_id=project_id, description=desc, minutes_spent=minutes)
+
+
+def _make_head(db, make_user, make_employee, project, email, code):
+    """Assign an employee as the Project Head so they can grant edit access."""
+    head_u = make_user(email, role=UserRole.employee)
+    head_e = make_employee(employee_code=code, user_id=head_u.id)
+    project.head_employee_id = head_e.id
+    db.add(project)
+    db.commit()
+    return head_u, head_e
 
 
 @pytest.fixture()
@@ -76,24 +85,25 @@ def test_transition_submitted_to_approved(db, author, make_user):
     assert r.reviewed_at is not None
 
 
-def test_transition_submitted_to_rejected(db, author, make_user):
+def test_transition_submitted_to_granted(db, author, make_user, make_employee):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.project_manager)
+    head_u, head_e = _make_head(db, make_user, make_employee, p, "head@x.com", "HD-1")
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
+    svc.request_edit_work_report(db, u, r.id, WorkReportEditRequest(note="Add detail"))
 
-    r = svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="Add detail"))
-    assert r.status == WorkReportStatus.rejected
-    assert r.review_note == "Add detail"
-    assert r.reviewed_by == admin.id
+    r = svc.grant_edit_work_report(db, head_u, r.id)
+    assert r.status == WorkReportStatus.granted
+    assert r.reviewed_by == head_u.id
 
 
-def test_transition_rejected_to_submitted(db, author, make_user):
+def test_transition_granted_to_submitted(db, author, make_user, make_employee):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.project_manager)
+    head_u, head_e = _make_head(db, make_user, make_employee, p, "head@x.com", "HD-1")
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
-    svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="redo"))
+    svc.request_edit_work_report(db, u, r.id, WorkReportEditRequest(note="redo"))
+    svc.grant_edit_work_report(db, head_u, r.id)
 
     r = svc.submit_work_report(db, u, r.id)
     assert r.status == WorkReportStatus.submitted
@@ -109,12 +119,13 @@ def test_invalid_transition_approve_draft_is_422(db, author, make_user):
     assert ei.value.status_code == 422
 
 
-def test_edit_rejected_returns_to_draft(db, author, make_user):
+def test_edit_granted_returns_to_draft(db, author, make_user, make_employee):
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
-    admin = make_user("admin@x.com", role=UserRole.project_manager)
+    head_u, head_e = _make_head(db, make_user, make_employee, p, "head@x.com", "HD-1")
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
-    svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="redo"))
+    svc.request_edit_work_report(db, u, r.id, WorkReportEditRequest(note="redo"))
+    svc.grant_edit_work_report(db, head_u, r.id)
 
     r = svc.update_work_report(db, u, r.id, WorkReportUpdate(tasks=[_task(p.id, 90)]))
     assert r.status == WorkReportStatus.draft
@@ -122,25 +133,16 @@ def test_edit_rejected_returns_to_draft(db, author, make_user):
     assert r.review_note is None
 
 
-def test_pm_list_scope_includes_rejected_and_granted(db, author, make_user):
-    """A rejected/granted report must stay visible to the reviewer who acted
-    on it — disappearing the moment it leaves 'submitted' would make it
-    impossible to track what's been sent back or reopened."""
+def test_pm_list_scope_includes_granted(db, author, make_user, make_employee):
+    """A granted (reopened) report must stay visible to the PM — it still
+    represents real work even after it leaves 'submitted'."""
     u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
     admin = make_user("admin@x.com", role=UserRole.project_manager)
+    head_u, head_e = _make_head(db, make_user, make_employee, p, "head@x.com", "HD-1")
     r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, u, r.id)
-    svc.reject_work_report(db, admin, r.id, WorkReportReject(review_note="redo"))
-
-    _, total = svc.list_work_reports(
-        db, admin, employee_id=None, project_id=None, status=None,
-        date_from=None, date_to=None, limit=50, offset=0,
-    )
-    assert total == 1
-
-    svc.submit_work_report(db, u, r.id)
     svc.request_edit_work_report(db, u, r.id, WorkReportEditRequest(note="need to fix a typo"))
-    svc.grant_edit_work_report(db, admin, r.id)
+    svc.grant_edit_work_report(db, head_u, r.id)
 
     _, total = svc.list_work_reports(
         db, admin, employee_id=None, project_id=None, status=None,
@@ -149,11 +151,11 @@ def test_pm_list_scope_includes_rejected_and_granted(db, author, make_user):
     assert total == 1
 
 
-def test_team_lead_cannot_review_or_see_project_reports(
+def test_team_lead_cannot_grant_edit_or_see_project_reports(
     db, author, make_user, make_employee, make_project_member
 ):
     """A team lead no longer inherits project-wide report access: they cannot
-    review another member's report, and it stays out of their list scope."""
+    grant edit on another member's report, and it stays out of their list scope."""
     from app.modules.projects.models import ProjectMemberRole
 
     lead_u, lead_e, p = author(email="lead@x.com", code="TL-1", proj_code="P-1", member=False)
@@ -163,9 +165,10 @@ def test_team_lead_cannot_review_or_see_project_reports(
 
     r = svc.create_work_report(db, emp_u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
     svc.submit_work_report(db, emp_u, r.id)
+    svc.request_edit_work_report(db, emp_u, r.id, WorkReportEditRequest(note="fix"))
 
     with pytest.raises(AppError) as ei:
-        svc.reject_work_report(db, lead_u, r.id, WorkReportReject(review_note="redo"))
+        svc.grant_edit_work_report(db, lead_u, r.id)
     assert ei.value.status_code == 403
 
     _, total = svc.list_work_reports(

@@ -9,11 +9,14 @@ import type {
 
 // ── status ──────────────────────────────────────────────────────────────────
 
+// Statuses offered in the Status filter. "rejected" is a legacy state that can
+// no longer be produced ("Send back" removed), so it is not filterable — but it
+// stays in WORK_REPORT_STATUS_LABEL below so the badge still renders correctly
+// for any historical report.
 export const WORK_REPORT_STATUSES = [
   "draft",
   "submitted",
   "approved",
-  "rejected",
   "granted",
 ] as const;
 
@@ -304,21 +307,12 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   planning_plant_description:    undefined,
 };
 
-// ── review note (reject dialog) ─────────────────────────────────────────────
-
-export const reviewNoteSchema = z.object({
-  review_note: z
-    .string()
-    .min(1, "A reason is required")
-    .max(REVIEW_NOTE_MAX, `Keep under ${REVIEW_NOTE_MAX} characters`),
-});
-
-export type ReviewNoteValues = z.infer<typeof reviewNoteSchema>;
+// ── edit request (author → Project Head) ────────────────────────────────────
 
 export const editRequestSchema = z.object({
   note: z
     .string()
-    .min(1, "Tell your reviewer why you need to edit")
+    .min(1, "Tell the Project Head why you need to edit")
     .max(REVIEW_NOTE_MAX, `Keep under ${REVIEW_NOTE_MAX} characters`),
 });
 

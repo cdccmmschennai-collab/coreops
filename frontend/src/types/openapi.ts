@@ -474,6 +474,23 @@ export interface paths {
         patch: operations["update_member_role_api_v1_projects__project_id__members__employee_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/assignable-employees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Assignable Employees */
+        get: operations["list_assignable_employees_api_v1_projects__project_id__assignable_employees_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/activity-staffing": {
         parameters: {
             query?: never;
@@ -679,23 +696,6 @@ export interface paths {
         put?: never;
         /** Request Edit Work Report */
         post: operations["request_edit_work_report_api_v1_work_reports__report_id__request_edit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/work-reports/{report_id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reject Work Report */
-        post: operations["reject_work_report_api_v1_work_reports__report_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4340,11 +4340,6 @@ export interface components {
             /** Offset */
             offset: number;
         };
-        /** WorkReportReject */
-        WorkReportReject: {
-            /** Review Note */
-            review_note: string;
-        };
         /**
          * WorkReportStatus
          * @enum {string}
@@ -5714,6 +5709,37 @@ export interface operations {
             };
         };
     };
+    list_assignable_employees_api_v1_projects__project_id__assignable_employees_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_activity_staffing_api_v1_projects__project_id__activity_staffing_get: {
         parameters: {
             query?: never;
@@ -6322,41 +6348,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["WorkReportEditRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkReportOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reject_work_report_api_v1_work_reports__report_id__reject_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                report_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkReportReject"];
             };
         };
         responses: {

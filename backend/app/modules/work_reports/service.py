@@ -47,7 +47,6 @@ from app.modules.work_reports.schemas import (
     TaskCompletionUpdate,
     WorkReportCreate,
     WorkReportEditRequest,
-    WorkReportReject,
     WorkReportUpdate,
 )
 from app.shared.errors import AppError
@@ -67,17 +66,6 @@ def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
         db.rollback()
 
 
-def _notify_manager(db: Session, author: Employee, type_: str, title: str,
-                    message: str, entity_id: uuid.UUID | None = None,
-                    target_url: str | None = None) -> None:
-    if author.manager_id is None:
-        return
-    mgr = db.get(Employee, author.manager_id)
-    if mgr is None or mgr.user_id is None:
-        return
-    _push(db, mgr.user_id, type_, title, message, entity_id, target_url)
-
-
 def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
                    message: str) -> None:
     author = db.get(Employee, report.employee_id)
@@ -87,27 +75,28 @@ def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
           f"/work-reports/{report.id}")
 
 
-def _notify_reviewers(db: Session, report: DailyWorkReport, author: Employee,
-                      type_: str, title: str, message: str) -> None:
-    """Notify the report's reviewers: the Head of each of its projects + the
-    author's manager. Team leads are no longer reviewers, so they are not
-    notified. (Requires report.tasks to be attached.)"""
+def _notify_project_heads(db: Session, report: DailyWorkReport, author: Employee,
+                          type_: str, title: str, message: str) -> None:
+    """Notify the Project Head of each of the report's projects — and only them.
+    The Head owns report review, so an edit request goes solely to the Head;
+    the PM and the author's manager are never notified. (Requires report.tasks
+    to be attached.)"""
     url = f"/work-reports/{report.id}"
     project_ids = {t.project_id for t in getattr(report, "tasks", [])}
-    if project_ids:
-        head_emp_ids = db.execute(
-            select(Project.head_employee_id).where(
-                Project.id.in_(project_ids),
-                Project.head_employee_id.is_not(None),
-            )
-        ).scalars().all()
-        for emp_id in set(head_emp_ids):
-            if emp_id == author.id:
-                continue
-            reviewer = db.get(Employee, emp_id)
-            if reviewer and reviewer.user_id:
-                _push(db, reviewer.user_id, type_, title, message, report.id, url)
-    _notify_manager(db, author, type_, title, message, report.id, url)
+    if not project_ids:
+        return
+    head_emp_ids = db.execute(
+        select(Project.head_employee_id).where(
+            Project.id.in_(project_ids),
+            Project.head_employee_id.is_not(None),
+        )
+    ).scalars().all()
+    for emp_id in set(head_emp_ids):
+        if emp_id == author.id:
+            continue
+        head = db.get(Employee, emp_id)
+        if head and head.user_id:
+            _push(db, head.user_id, type_, title, message, report.id, url)
 
 
 _EDITABLE = {
@@ -135,8 +124,9 @@ def _decorate(
 ) -> list[DailyWorkReport]:
     """Attach tasks and the per-actor `can_review` flag to each report.
 
-    can_review = PM (any report) OR the Head of one of the report's projects
-    (but never one's own report — authors request edits, they don't grant them).
+    can_review = the Project Head of one of the report's projects may grant edit
+    access on it (but never on one's own report — authors request edits, they
+    don't grant them). The PM does not grant edit access, so this is Head-only.
     """
     _attach_tasks(db, reports)
     # Resolve author display names server-side so scoped viewers (project Heads)
@@ -150,10 +140,6 @@ def _decorate(
         names = {e.id: e.full_name for e in emps}
         for r in reports:
             r.employee_name = names.get(r.employee_id)
-    if actor.role == UserRole.project_manager:
-        for r in reports:
-            r.can_review = True
-        return reports
     me = _current_employee(db, actor)
     reviewable = authz.reviewable_project_ids(db, actor)
     for r in reports:
@@ -981,10 +967,9 @@ def submit_work_report(
 
 # ---------- edit-access workflow -------------------------------------------
 def _assert_can_review(db: Session, actor: User, report: DailyWorkReport) -> None:
-    """Reviewers = PM (any report) or the Head of one of the report's projects.
-    A user can never review their own report."""
-    if actor.role == UserRole.project_manager:
-        return
+    """Only the Project Head of one of the report's projects may grant edit
+    access. The PM has no grant-edit rights, and a user can never grant edit on
+    their own report."""
     me = _current_employee(db, actor)
     if me is None or report.employee_id == me.id:
         raise AppError("forbidden", "You are not permitted to review this report.", 403)
@@ -996,8 +981,8 @@ def _assert_can_review(db: Session, actor: User, report: DailyWorkReport) -> Non
 def request_edit_work_report(
     db: Session, actor: User, report_id: uuid.UUID, data: WorkReportEditRequest
 ) -> DailyWorkReport:
-    """Author asks a reviewer to reopen a submitted (locked) report for editing,
-    with a reason explaining why the edit is needed."""
+    """Author asks the Project Head to reopen a submitted (locked) report for
+    editing, with a reason explaining why the edit is needed."""
     report = _fetch(db, report_id)
     author = _assert_author(db, actor, report)
     if report.status != WorkReportStatus.submitted:
@@ -1012,7 +997,7 @@ def request_edit_work_report(
     db.commit()
     db.refresh(report)
     decorated = _decorate(db, actor, [report])[0]
-    _notify_reviewers(
+    _notify_project_heads(
         db, decorated, author, "report_edit_requested",
         f"{author.full_name} requested to edit a report",
         f"{author.full_name} asked to edit their work report for "
@@ -1021,39 +1006,11 @@ def request_edit_work_report(
     return decorated
 
 
-def reject_work_report(
-    db: Session, actor: User, report_id: uuid.UUID, data: WorkReportReject
-) -> DailyWorkReport:
-    """Reviewer sends a submitted report back to the author for changes."""
-    report = _fetch(db, report_id)
-    _assert_can_review(db, actor, report)
-    if report.status != WorkReportStatus.submitted:
-        raise AppError(
-            "validation_error", "Only submitted reports can be rejected.", 422
-        )
-    report.status = WorkReportStatus.rejected
-    report.reviewed_by = actor.id
-    report.reviewed_at = _now()
-    report.review_note = data.review_note
-    report.edit_requested_at = None
-    report.edit_request_note = None
-    db.add(report)
-    db.commit()
-    db.refresh(report)
-    _notify_author(
-        db, report, "report_rejected",
-        "Your work report was sent back",
-        f"Your work report for {report.report_date} was sent back for changes."
-        + (f" Note: {data.review_note}" if data.review_note else ""),
-    )
-    return _decorate(db, actor, [report])[0]
-
-
 def grant_edit_work_report(
     db: Session, actor: User, report_id: uuid.UUID
 ) -> DailyWorkReport:
-    """Reviewer grants an edit request — reopens the report so the author can
-    edit and resubmit. Uses the editable 'rejected' state."""
+    """The Project Head grants an edit request — reopens the report so the
+    author can edit and resubmit. Uses the editable 'granted' state."""
     report = _fetch(db, report_id)
     _assert_can_review(db, actor, report)
     if report.status != WorkReportStatus.submitted:

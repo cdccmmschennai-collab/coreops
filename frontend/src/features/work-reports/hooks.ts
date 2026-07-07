@@ -8,7 +8,6 @@ import type {
   WorkReportCreateBody,
   WorkReportEditRequestBody,
   WorkReportListParams,
-  WorkReportRejectBody,
   WorkReportUpdateBody,
 } from "./types";
 
@@ -79,14 +78,6 @@ export function useRequestEditWorkReport(id: string) {
   const invalidate = useReportActionInvalidation(id);
   return useMutation({
     mutationFn: (body: WorkReportEditRequestBody) => workReportsApi.requestEdit(id, body),
-    onSuccess: invalidate,
-  });
-}
-
-export function useRejectWorkReport(id: string) {
-  const invalidate = useReportActionInvalidation(id);
-  return useMutation({
-    mutationFn: (body: WorkReportRejectBody) => workReportsApi.reject(id, body),
     onSuccess: invalidate,
   });
 }

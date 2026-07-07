@@ -46,7 +46,7 @@ export function RequestEditDialog({
   async function onSubmit(values: EditRequestValues) {
     try {
       await mutation.mutateAsync(values);
-      toast.success("Edit request sent to your reviewer");
+      toast.success("Edit request sent to the Project Head");
       form.reset();
       onOpenChange(false);
     } catch (error) {
@@ -65,7 +65,7 @@ export function RequestEditDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Request edit access?</AlertDialogTitle>
           <AlertDialogDescription>
-            This report is submitted. Tell your reviewer why you need to edit it.
+            This report is submitted. Tell the Project Head why you need to edit it.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <Form {...form}>

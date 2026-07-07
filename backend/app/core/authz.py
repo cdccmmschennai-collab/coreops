@@ -109,8 +109,8 @@ def reviewable_project_ids(db: Session, actor: User) -> set[uuid.UUID]:
 
 
 def can_review_report(db: Session, actor: User, project_ids: set[uuid.UUID]) -> bool:
-    """Whether the caller may review (reject / request-edit / grant-edit) a report
-    whose lines touch ``project_ids``.
+    """Whether the caller may review (grant edit access on) a report whose lines
+    touch ``project_ids``.
 
     Reviewers = PM (any report) or the **Head** of any of those projects. The
     "you cannot review your own report" rule is enforced by the caller, not here.

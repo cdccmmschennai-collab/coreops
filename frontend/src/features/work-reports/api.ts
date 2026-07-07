@@ -7,7 +7,6 @@ import type {
   WorkReportEditRequestBody,
   WorkReportListParams,
   WorkReportPage,
-  WorkReportRejectBody,
   WorkReportTask,
   WorkReportUpdateBody,
 } from "./types";
@@ -34,8 +33,6 @@ export const workReportsApi = {
   submit: (id: string) => api.post<WorkReport>(`/work-reports/${id}/submit`),
   requestEdit: (id: string, body: WorkReportEditRequestBody) =>
     api.post<WorkReport>(`/work-reports/${id}/request-edit`, body),
-  reject: (id: string, body: WorkReportRejectBody) =>
-    api.post<WorkReport>(`/work-reports/${id}/reject`, body),
   grantEdit: (id: string) => api.post<WorkReport>(`/work-reports/${id}/grant-edit`),
   remove: (id: string) => api.del<void>(`/work-reports/${id}`),
   // Toggles a TASK_BASED row's completion checkbox — independent of the

@@ -1967,6 +1967,58 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/assignable-employees": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List Assignable Employees",
+        "operationId": "list_assignable_employees_api_v1_projects__project_id__assignable_employees_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmployeeOut"
+                  },
+                  "title": "Response List Assignable Employees Api V1 Projects  Project Id  Assignable Employees Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/activity-staffing": {
       "get": {
         "tags": [
@@ -3164,64 +3216,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/WorkReportEditRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkReportOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/work-reports/{report_id}/reject": {
-      "post": {
-        "tags": [
-          "work-reports"
-        ],
-        "summary": "Reject Work Report",
-        "operationId": "reject_work_report_api_v1_work_reports__report_id__reject_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "report_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Report Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorkReportReject"
               }
             }
           }
@@ -15458,21 +15452,6 @@
           "offset"
         ],
         "title": "WorkReportPage"
-      },
-      "WorkReportReject": {
-        "properties": {
-          "review_note": {
-            "type": "string",
-            "maxLength": 1000,
-            "minLength": 1,
-            "title": "Review Note"
-          }
-        },
-        "type": "object",
-        "required": [
-          "review_note"
-        ],
-        "title": "WorkReportReject"
       },
       "WorkReportStatus": {
         "type": "string",

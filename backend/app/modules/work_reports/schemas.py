@@ -137,10 +137,6 @@ class WorkReportUpdate(BaseModel):
     tasks: list[WorkReportTaskIn] | None = None
 
 
-class WorkReportReject(BaseModel):
-    review_note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
-
-
 class WorkReportEditRequest(BaseModel):
     # Author's reason for requesting edit access on a submitted report.
     note: str = Field(min_length=1, max_length=_REVIEW_NOTE_MAX)
@@ -184,8 +180,8 @@ class WorkReportOut(BaseModel):
     review_note: str | None = None
     edit_requested_at: datetime | None = None
     edit_request_note: str | None = None
-    # Per-actor: True when the current user may reject / grant edit on this report
-    # (PM for any report; team lead for reports on their projects). Set in service.
+    # Per-actor: True when the current user may grant edit access on this report
+    # — the Project Head of one of the report's projects. Set in service.
     can_review: bool = False
     created_at: datetime
 

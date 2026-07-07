@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { KeyRound, Pencil, Send, Trash2, Undo2, Unlock } from "lucide-react";
+import { KeyRound, Pencil, Send, Trash2, Unlock } from "lucide-react";
 import { toast } from "sonner";
 
 import { ErrorState } from "@/components/feedback/error-state";
@@ -21,7 +21,6 @@ import { formatDateTime, formatInt } from "@/lib/format";
 import { can } from "@/lib/rbac";
 
 import { DeleteDialog } from "./delete-dialog";
-import { RejectDialog } from "./reject-dialog";
 import { RequestEditDialog } from "./request-edit-dialog";
 import { StatusBadge } from "./status-badge";
 import {
@@ -132,7 +131,6 @@ export function WorkReportDetail({ id }: { id: string }) {
   const viewerIsAuthor = !!employeeId && report?.employee_id === employeeId;
   const myRequests = useMyActivityRequests(id, viewerIsAuthor);
   const activityRequests = myRequests.data ?? [];
-  const [rejectOpen, setRejectOpen] = React.useState(false);
   const [requestEditOpen, setRequestEditOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<WorkReport | null>(null);
 
@@ -170,7 +168,8 @@ export function WorkReportDetail({ id }: { id: string }) {
   const canAuthorAct = isAuthor && can(role, "report.submit");
   const isSubmitted = report.status === "submitted";
   const editRequested = !!report.edit_requested_at;
-  // can_review is computed per-actor by the API (PM = any; team lead = their projects).
+  // can_review is computed per-actor by the API — the Project Head of the
+  // report's projects may grant edit access (never the PM).
   const canReview = !isAuthor && report.can_review === true;
 
   const dayStatusLabel =
@@ -252,21 +251,13 @@ export function WorkReportDetail({ id }: { id: string }) {
           Edit requested
         </span>
       )}
-      {/* Reviewer (PM / team lead) actions on a submitted report.
-          Grant edit only when the author has actually requested it. */}
-      {canReview && isSubmitted && (
-        <>
-          {editRequested && (
-            <Button onClick={() => void onGrantEdit()} loading={grantEdit.isPending}>
-              <Unlock className="h-4 w-4" />
-              Grant edit
-            </Button>
-          )}
-          <Button variant="danger" onClick={() => setRejectOpen(true)}>
-            <Undo2 className="h-4 w-4" />
-            Send back
-          </Button>
-        </>
+      {/* Project Head action on a submitted report: grant edit access, only
+          when the author has actually requested it. */}
+      {canReview && isSubmitted && editRequested && (
+        <Button onClick={() => void onGrantEdit()} loading={grantEdit.isPending}>
+          <Unlock className="h-4 w-4" />
+          Grant edit
+        </Button>
       )}
     </>
   );
@@ -289,24 +280,14 @@ export function WorkReportDetail({ id }: { id: string }) {
         </div>
       )}
 
-      {/* Sent back for changes */}
-      {report.status === "rejected" && report.review_note && (
-        <div
-          role="alert"
-          className="mb-4 max-w-2xl rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          <span className="font-medium">Sent back:</span> {report.review_note}
-        </div>
-      )}
-
       {isSubmitted && editRequested && (
         <div className="mb-4 max-w-2xl rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground">
           <span className="font-medium">Edit access requested.</span>{" "}
           {report.edit_request_note && <span>{report.edit_request_note}</span>}
           <span className="mt-1 block text-muted-foreground">
             {canReview
-              ? "Grant edit to reopen the report, or send it back with a note."
-              : "Waiting for a reviewer (PM or team lead) to respond."}
+              ? "Grant edit to reopen the report for the author."
+              : "Waiting for the Project Head to review your edit request."}
           </span>
         </div>
       )}
@@ -526,11 +507,6 @@ export function WorkReportDetail({ id }: { id: string }) {
         </div>
       </div>
 
-      <RejectDialog
-        reportId={report.id}
-        open={rejectOpen}
-        onOpenChange={setRejectOpen}
-      />
       <RequestEditDialog
         reportId={report.id}
         open={requestEditOpen}

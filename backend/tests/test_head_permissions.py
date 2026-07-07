@@ -4,6 +4,7 @@ project_managers). No activity-assignment logic is involved yet.
 """
 from datetime import date
 
+import pytest
 from sqlalchemy import text
 
 from app.modules.activity_requests.service import _pm_user_ids
@@ -14,19 +15,23 @@ from app.modules.work_reports import service as wr_svc
 from app.modules.work_reports.models import WorkReportStatus
 from app.modules.work_reports.schemas import (
     WorkReportCreate,
-    WorkReportReject,
+    WorkReportEditRequest,
     WorkReportTaskIn,
 )
+from app.shared.errors import AppError
 
 TODAY = date.today()
 BASE = "/api/v1/projects"
 
 
-# ---- report review --------------------------------------------------------
-def test_head_can_review_report(db, make_user, make_employee, make_project, make_project_member):
-    author_u = make_user("author@x.com", role=UserRole.employee)
-    author_e = make_employee(employee_code="AU-1", user_id=author_u.id)
-    project = make_project(code="HR-1", status=ProjectStatus.active)
+def _submitted_report_with_head(db, make_user, make_employee, make_project, make_project_member,
+                                *, author_email, author_code, head_email, head_code, proj_code,
+                                request_edit=True):
+    """Create + submit a report, assign a Head, and (optionally) file an edit
+    request. Returns (author_u, head_u, report)."""
+    author_u = make_user(author_email, role=UserRole.employee)
+    author_e = make_employee(employee_code=author_code, user_id=author_u.id)
+    project = make_project(code=proj_code, status=ProjectStatus.active)
     make_project_member(project_id=project.id, employee_id=author_e.id)
 
     report = wr_svc.create_work_report(db, author_u, WorkReportCreate(
@@ -35,14 +40,77 @@ def test_head_can_review_report(db, make_user, make_employee, make_project, make
     ))
     wr_svc.submit_work_report(db, author_u, report.id)
 
-    head_u = make_user("head@x.com", role=UserRole.employee)
-    head_e = make_employee(employee_code="HD-1", user_id=head_u.id)
-    pm_u = make_user("pm@x.com", role=UserRole.project_manager)
+    head_u = make_user(head_email, role=UserRole.employee)
+    head_e = make_employee(employee_code=head_code, user_id=head_u.id)
+    pm_u = make_user(f"pm-{proj_code}@x.com", role=UserRole.project_manager)
     proj_svc.set_project_head(db, pm_u, project.id, head_e.id)
 
-    out = wr_svc.reject_work_report(db, head_u, report.id, WorkReportReject(review_note="fix"))
-    assert out.status == WorkReportStatus.rejected
+    if request_edit:
+        wr_svc.request_edit_work_report(db, author_u, report.id, WorkReportEditRequest(note="fix"))
+    return author_u, head_u, report
+
+
+# ---- report review (edit-request workflow) --------------------------------
+def test_head_can_grant_edit(db, make_user, make_employee, make_project, make_project_member):
+    _author_u, head_u, report = _submitted_report_with_head(
+        db, make_user, make_employee, make_project, make_project_member,
+        author_email="author@x.com", author_code="AU-1",
+        head_email="head@x.com", head_code="HD-1", proj_code="HR-1",
+    )
+
+    out = wr_svc.grant_edit_work_report(db, head_u, report.id)
+    assert out.status == WorkReportStatus.granted
     assert out.can_review is True
+
+
+def test_pm_cannot_grant_edit(db, make_user, make_employee, make_project, make_project_member):
+    _author_u, _head_u, report = _submitted_report_with_head(
+        db, make_user, make_employee, make_project, make_project_member,
+        author_email="author2@x.com", author_code="AU-2",
+        head_email="head2@x.com", head_code="HD-2", proj_code="HR-2",
+    )
+
+    pm_u = make_user("pm-grant@x.com", role=UserRole.project_manager)
+    with pytest.raises(AppError) as ei:
+        wr_svc.grant_edit_work_report(db, pm_u, report.id)
+    assert ei.value.status_code == 403
+
+
+def test_edit_request_notifies_head_not_manager(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    """The edit request notifies only the Project Head — never the PM/manager,
+    even when the author's manager is a project_manager."""
+    mgr_u = make_user("mgr@x.com", role=UserRole.project_manager)
+    mgr_e = make_employee(employee_code="MG-1", user_id=mgr_u.id)
+    author_u = make_user("author3@x.com", role=UserRole.employee)
+    author_e = make_employee(employee_code="AU-3", user_id=author_u.id, manager_id=mgr_e.id)
+    project = make_project(code="HR-3", status=ProjectStatus.active)
+    make_project_member(project_id=project.id, employee_id=author_e.id)
+
+    head_u = make_user("head3@x.com", role=UserRole.employee)
+    head_e = make_employee(employee_code="HD-3", user_id=head_u.id)
+    pm_u = make_user("pm-notify@x.com", role=UserRole.project_manager)
+    proj_svc.set_project_head(db, pm_u, project.id, head_e.id)
+
+    report = wr_svc.create_work_report(db, author_u, WorkReportCreate(
+        report_date=TODAY,
+        tasks=[WorkReportTaskIn(project_id=project.id, description="w", minutes_spent=60)],
+    ))
+    wr_svc.submit_work_report(db, author_u, report.id)
+    wr_svc.request_edit_work_report(db, author_u, report.id, WorkReportEditRequest(note="fix"))
+
+    def edit_req_count(user_id):
+        return db.execute(
+            text(
+                "SELECT count(*) FROM notifications "
+                "WHERE user_id = :uid AND type = 'report_edit_requested'"
+            ),
+            {"uid": str(user_id)},
+        ).scalar_one()
+
+    assert edit_req_count(head_u.id) == 1
+    assert edit_req_count(mgr_u.id) == 0
 
 
 # ---- visibility -----------------------------------------------------------
