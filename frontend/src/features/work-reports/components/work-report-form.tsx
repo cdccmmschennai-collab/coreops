@@ -1020,23 +1020,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       })()}
                     </div>
 
-                    {/* Row B3: Remarks — per-activity free text (own full-width row). */}
-                    <FormField
-                      control={form.control}
-                      name={`tasks.${index}.description`}
-                      render={({ field: f }) => (
-                        <FormItem>
-                          <FormLabel className="block text-xs leading-none text-muted-foreground">
-                            Remarks (optional)
-                          </FormLabel>
-                          <FormControl>
-                            <Input placeholder="What did you work on?" {...f} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
                     {/* Row C: TASK_BASED sub-activities only — a single
                         completion checkbox. No status dropdown, no manual
                         date entry: started_date/due_date/completed_date are
@@ -1146,6 +1129,30 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 </>
               )}
             </div>
+
+            <Separator />
+
+            {/* ── Day Remarks — one remark for the whole day (not per activity) ── */}
+            <FormField
+              control={form.control}
+              name="remarks"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Day Remarks{" "}
+                    <span className="font-normal text-muted-foreground">(optional)</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={3}
+                      placeholder="One overall remark for the day"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <Separator />
 

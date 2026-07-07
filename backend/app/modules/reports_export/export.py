@@ -41,7 +41,7 @@ _BLOCK = [
 ]
 _FIXED_LEFT = [
     ("Employee ID & Name", 24.0, False),
-    ("Today date", 12.0, False),
+    ("Date", 12.0, False),
     ("Day Status", 11.0, False),
 ]
 _REMARKS = ("Day Remarks", 68.4, False)
@@ -95,7 +95,7 @@ def _finalize(wb) -> BytesIO:
 def build_workbook(rows: list[dict], max_activities: int) -> BytesIO:
     wb, ws = _new_sheet()
 
-    # Columns: Employee | Today date | Day Status | (block × max) | Day Remarks.
+    # Columns: Employee | Date | Day Status | (block × max) | Day Remarks.
     columns = list(_FIXED_LEFT)
     for i in range(1, max_activities + 1):
         suffix = "" if i == 1 else f" {i}"
