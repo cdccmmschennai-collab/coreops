@@ -1145,7 +1145,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                   <FormControl>
                     <Textarea
                       rows={3}
-                      placeholder="One overall remark for the day"
+                      placeholder="What did you work on today?"
                       {...field}
                     />
                   </FormControl>
