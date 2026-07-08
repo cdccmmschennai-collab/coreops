@@ -331,15 +331,51 @@ def _ensure_project_member(
         ))
 
 
+def _prune_project_member(db: Session, project: Project, employee_id: uuid.UUID) -> None:
+    """Reference-counted teardown of the visibility backbone — the mirror of
+    ``_ensure_project_member``.
+
+    Drops the employee's project_members row once they hold no remaining
+    assignment on the project (no activity staffing and not the Head). Auto-added
+    member rows only ever came from an assignment, so removing the last one must
+    remove the row; otherwise member_count would keep counting people who are no
+    longer assigned. Employees added directly via the /members endpoint are
+    removed by that endpoint, not here. Callers must have already deleted the
+    assignment being removed; we flush so that pending delete is excluded from
+    the "still staffed" check below (the session runs with autoflush off).
+    """
+    if project.head_employee_id == employee_id:
+        return
+    db.flush()
+    still_staffed = db.execute(
+        select(ProjectActivityMember.id)
+        .where(
+            ProjectActivityMember.project_id == project.id,
+            ProjectActivityMember.employee_id == employee_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if still_staffed is not None:
+        return
+    member = db.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project.id,
+            ProjectMember.employee_id == employee_id,
+        )
+    ).scalar_one_or_none()
+    if member is not None:
+        db.delete(member)
+
+
 def set_project_head(
     db: Session, actor: User, project_id: uuid.UUID, head_employee_id: uuid.UUID | None
 ) -> Project:
     """PM assigns, replaces, or clears (null) the project Head.
 
     Auto-maintains the visibility backbone (adds the new Head as a project
-    member); the prior Head's member row is left in place — reference-counted
-    cleanup arrives with the assignment layer (Phase 3). Emits a timeline event.
-    Does NOT touch notification routing (Phase 4).
+    member); the prior Head's member row is reference-counted away unless they
+    remain assigned via an activity. Emits a timeline event. Does NOT touch
+    notification routing (Phase 4).
     """
     project = _fetch(db, project_id)
     if not authz.can_assign_head(db, actor, project):
@@ -365,6 +401,10 @@ def set_project_head(
     db.add(project)
     if head_employee_id is not None:
         _ensure_project_member(db, project_id, head_employee_id, actor)
+    # Drop the prior Head's auto-added visibility row unless they remain assigned
+    # via an activity, so replacing/clearing the Head doesn't inflate the count.
+    if previous is not None:
+        _prune_project_member(db, project, previous)
     _record_timeline(
         db,
         project_id,
@@ -1207,10 +1247,9 @@ def remove_activity_member(
     activity), or the activity's own Lead (Contributors/QC only — a Lead may not
     remove the Lead assignment).
 
-    The employee's project_members visibility row is intentionally left in
-    place — reference-counted cleanup (drop it once they hold no Head/activity
-    assignment) is a later Phase-3 refinement, so we don't silently strip
-    project visibility here."""
+    The employee's project_members visibility row is reference-counted: it is
+    dropped once this was their last activity on the project and they aren't the
+    Head, so the member count reflects only currently-assigned people."""
     project = _fetch(db, project_id)
     authority = authz.activity_staffing_authority(db, actor, project, activity_id)
     if authority is None:
@@ -1237,6 +1276,10 @@ def remove_activity_member(
     employee = db.get(Employee, employee_id)
     activity = db.get(ActivityMaster, activity_id)
     db.delete(member)
+    # Reference-counted cleanup: once this was their last activity on the project
+    # (and they aren't the Head), drop the auto-added visibility row so the
+    # member count reflects only currently-assigned people.
+    _prune_project_member(db, project, employee_id)
     if employee is not None:
         _record_activity_staffing_event(
             db, project_id, TimelineEventType.ACTIVITY_MEMBER_REMOVED,
