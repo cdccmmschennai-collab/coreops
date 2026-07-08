@@ -40,6 +40,19 @@ function fmtDate(value: string | null | undefined): string {
   });
 }
 
+function fmtDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function leaveDays(start: string, end: string): number {
   const diff = Date.parse(end) - Date.parse(start);
   if (Number.isNaN(diff)) return 1;
@@ -164,6 +177,7 @@ export function LeaveDetail({ id }: { id: string }) {
             <CardContent className="divide-y divide-border">
               <InfoRow label="Employee" value={empName} />
               <InfoRow label="Leave Type" value={LEAVE_TYPE_LABEL[leave.leave_type]} />
+              <InfoRow label="Requested On" value={fmtDateTime(leave.created_at)} />
               <InfoRow label="From" value={fmtDate(leave.start_date)} />
               <InfoRow label="To" value={fmtDate(leave.end_date)} />
               <InfoRow label="Duration" value={`${days} day${days > 1 ? "s" : ""}`} />

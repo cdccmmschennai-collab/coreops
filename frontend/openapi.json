@@ -2860,7 +2860,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/WorkReportStatus"
+                  "$ref": "#/components/schemas/WorkReportStatusFilter"
                 },
                 {
                   "type": "null"
@@ -15405,6 +15405,11 @@
             "title": "Can Review",
             "default": false
           },
+          "can_self_edit": {
+            "type": "boolean",
+            "title": "Can Self Edit",
+            "default": false
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -15463,6 +15468,19 @@
           "granted"
         ],
         "title": "WorkReportStatus"
+      },
+      "WorkReportStatusFilter": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "submitted",
+          "approved",
+          "rejected",
+          "granted",
+          "requested"
+        ],
+        "title": "WorkReportStatusFilter",
+        "description": "Status values accepted by the report LIST filter.\n\nMirrors WorkReportStatus but adds the **virtual** ``requested`` value: a\n``submitted`` report that carries a pending edit request\n(``edit_requested_at IS NOT NULL``). No such status is persisted \u2014 the\nservice translates the filter into a compound WHERE clause so pagination and\ncounts stay correct. To keep the two mutually exclusive, the ``submitted``\nfilter here means submitted *without* a pending edit request."
       },
       "WorkReportTaskIn": {
         "properties": {

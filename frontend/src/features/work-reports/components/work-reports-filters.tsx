@@ -10,13 +10,13 @@ import {
 } from "@/components/ui/select";
 
 import { useProjectOptions } from "../project-options";
-import { WORK_REPORT_STATUSES, WORK_REPORT_STATUS_LABEL } from "../schemas";
-import type { WorkReportStatus } from "../types";
+import { WORK_REPORT_STATUSES, WORK_REPORT_STATUS_FILTER_LABEL } from "../schemas";
+import type { WorkReportStatusFilter } from "../types";
 
 export interface WorkReportFilterValues {
   employee_id: string;
   project_id: string;
-  status: WorkReportStatus | "";
+  status: WorkReportStatusFilter | "";
   from: string;
   to: string;
 }
@@ -81,7 +81,7 @@ export function WorkReportsFilters({
 
       <Select
         value={values.status === "" ? ALL : values.status}
-        onValueChange={(v) => onChange({ status: v === ALL ? "" : (v as WorkReportStatus) })}
+        onValueChange={(v) => onChange({ status: v === ALL ? "" : (v as WorkReportStatusFilter) })}
       >
         <SelectTrigger className="sm:w-40">
           <SelectValue placeholder="Status" />
@@ -90,7 +90,7 @@ export function WorkReportsFilters({
           <SelectItem value={ALL}>All statuses</SelectItem>
           {WORK_REPORT_STATUSES.map((s) => (
             <SelectItem key={s} value={s}>
-              {WORK_REPORT_STATUS_LABEL[s]}
+              {WORK_REPORT_STATUS_FILTER_LABEL[s]}
             </SelectItem>
           ))}
         </SelectContent>

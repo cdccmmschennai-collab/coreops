@@ -184,6 +184,30 @@ def test_list_filter_by_status_and_project(client, setup_author, make_project):
     assert none["total"] == 0
 
 
+def test_list_status_submitted_vs_requested_split(client, setup_author):
+    """The virtual `requested` filter (submitted + pending edit request) and the
+    `submitted` filter (submitted + NO pending request) partition submitted
+    reports, and counts stay exact for each."""
+    a = setup_author()
+    r1 = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, report_date=TODAY)).json()
+    r2 = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, report_date=YESTERDAY)).json()
+    client.post(f"{BASE}/{r1['id']}/submit", headers=a["header"])
+    client.post(f"{BASE}/{r2['id']}/submit", headers=a["header"])
+
+    # r1 gets a pending edit request; r2 stays plainly submitted.
+    req = client.post(f"{BASE}/{r1['id']}/request-edit", headers=a["header"], json={"note": "fix hours"})
+    assert req.status_code == 200, req.text
+
+    submitted = client.get(f"{BASE}?status=submitted", headers=a["header"]).json()
+    assert submitted["total"] == 1
+    assert submitted["items"][0]["id"] == r2["id"]
+
+    requested = client.get(f"{BASE}?status=requested", headers=a["header"]).json()
+    assert requested["total"] == 1
+    assert requested["items"][0]["id"] == r1["id"]
+    assert requested["items"][0]["edit_requested_at"] is not None
+
+
 # ---------- get scoping -----------------------------------------------------
 def test_get_cross_employee_403_and_missing_404(client, setup_author):
     a = setup_author(email="a@x.com", code="E-1", proj_code="P-1")
@@ -276,6 +300,81 @@ def test_delete_draft_204_submitted_403(client, setup_author):
     r2 = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, report_date=YESTERDAY)).json()
     client.post(f"{BASE}/{r2['id']}/submit", headers=a["header"])
     assert client.delete(f"{BASE}/{r2['id']}", headers=a["header"]).status_code == 403
+
+
+# ---------- Project Head self-edit (edit-access edge case) ------------------
+def test_project_head_edits_own_submitted_report_directly(client, setup_author, db):
+    """The current Project Head may edit their OWN submitted report directly —
+    no request-edit/grant-edit handshake. The edit reopens it to draft."""
+    a = setup_author()
+    # Make the author the current Head of the project they filed against.
+    a["project"].head_employee_id = a["emp"].id
+    db.add(a["project"])
+    db.commit()
+
+    r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
+    client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
+
+    fetched = client.get(f"{BASE}/{r['id']}", headers=a["header"]).json()
+    assert fetched["status"] == "submitted"
+    assert fetched["can_self_edit"] is True
+    assert fetched["can_review"] is False  # never review/grant on your own report
+
+    # Direct PATCH of the submitted report succeeds and reopens it to draft.
+    patch = client.patch(f"{BASE}/{r['id']}", headers=a["header"], json={"summary": "fixed"})
+    assert patch.status_code == 200, patch.text
+    body = patch.json()
+    assert body["summary"] == "fixed"
+    assert body["status"] == "draft"
+    assert body["can_self_edit"] is False  # draft is editable the normal way now
+
+
+def test_non_head_author_cannot_edit_submitted_report(client, setup_author):
+    """A plain contributor (not the Head) still can't touch a submitted report;
+    can_self_edit is False so the UI shows Request edit, not Edit."""
+    a = setup_author()
+    r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
+    client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
+
+    fetched = client.get(f"{BASE}/{r['id']}", headers=a["header"]).json()
+    assert fetched["can_self_edit"] is False
+
+    patch = client.patch(f"{BASE}/{r['id']}", headers=a["header"], json={"summary": "x"})
+    assert patch.status_code == 403
+
+
+def test_head_change_transfers_self_edit_and_review(
+    client, setup_author, make_user, make_employee, login, db
+):
+    """The bypass follows the *current* Head only. When the Head changes, the
+    former Head loses direct-edit rights and the new Head gains review authority
+    over future edit requests."""
+    a = setup_author()
+    a["project"].head_employee_id = a["emp"].id
+    db.add(a["project"])
+    db.commit()
+
+    r = client.post(BASE, headers=a["header"], json=_payload(a["project"].id)).json()
+    client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
+
+    # A new Head takes over the project.
+    nh_user = make_user("nh@x.com", role=UserRole.employee)
+    nh_emp = make_employee(employee_code="NH-1", user_id=nh_user.id)
+    a["project"].head_employee_id = nh_emp.id
+    db.add(a["project"])
+    db.commit()
+    nh_header = login("nh@x.com")
+
+    # Former Head (the author) can no longer self-edit their submitted report.
+    fetched = client.get(f"{BASE}/{r['id']}", headers=a["header"]).json()
+    assert fetched["can_self_edit"] is False
+    assert client.patch(
+        f"{BASE}/{r['id']}", headers=a["header"], json={"summary": "x"}
+    ).status_code == 403
+
+    # The new Head now holds review (grant-edit) authority over the report.
+    nh_view = client.get(f"{BASE}/{r['id']}", headers=nh_header).json()
+    assert nh_view["can_review"] is True
 
 
 # ---------- OpenAPI integration --------------------------------------------

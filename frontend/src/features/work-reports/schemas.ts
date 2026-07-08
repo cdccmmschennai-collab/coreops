@@ -4,21 +4,25 @@ import type {
   WorkReport,
   WorkReportCreateBody,
   WorkReportStatus,
+  WorkReportStatusFilter,
   WorkReportUpdateBody,
 } from "./types";
 
 // ── status ──────────────────────────────────────────────────────────────────
 
-// Statuses offered in the Status filter. "rejected" is a legacy state that can
-// no longer be produced ("Send back" removed), so it is not filterable — but it
-// stays in WORK_REPORT_STATUS_LABEL below so the badge still renders correctly
-// for any historical report.
+// Options offered in the Status filter. "approved" and "rejected" are legacy
+// states that can no longer be produced (the approval workflow was removed, and
+// "Send back" with it), so neither is filterable — but both stay in
+// WORK_REPORT_STATUS_LABEL below so the badge still renders correctly for any
+// historical report. "requested" is a VIRTUAL filter (submitted + pending edit
+// request) resolved server-side — not a persisted status; "submitted" here means
+// submitted WITHOUT a pending edit request, so the two are mutually exclusive.
 export const WORK_REPORT_STATUSES = [
   "draft",
   "submitted",
-  "approved",
+  "requested",
   "granted",
-] as const;
+] as const satisfies readonly WorkReportStatusFilter[];
 
 export const WORK_REPORT_STATUS_LABEL: Record<WorkReportStatus, string> = {
   draft: "Draft",
@@ -26,6 +30,13 @@ export const WORK_REPORT_STATUS_LABEL: Record<WorkReportStatus, string> = {
   approved: "Approved",
   rejected: "Rejected",
   granted: "Granted",
+};
+
+// Labels for the Status filter options — the real-status labels plus the
+// virtual "Requested" option.
+export const WORK_REPORT_STATUS_FILTER_LABEL: Record<WorkReportStatusFilter, string> = {
+  ...WORK_REPORT_STATUS_LABEL,
+  requested: "Requested",
 };
 
 // ── day status ────────────────────────────────────────────────────────────────

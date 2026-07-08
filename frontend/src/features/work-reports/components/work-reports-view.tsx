@@ -20,13 +20,13 @@ import {
 import { WorkReportsTable } from "./work-reports-table";
 import { useWorkReportList } from "../hooks";
 import { WORK_REPORT_STATUSES } from "../schemas";
-import type { WorkReportListParams, WorkReportStatus } from "../types";
+import type { WorkReportListParams, WorkReportStatusFilter } from "../types";
 
 const LIMIT = 20;
 
-function parseStatus(value: string | null): WorkReportStatus | "" {
+function parseStatus(value: string | null): WorkReportStatusFilter | "" {
   return value && (WORK_REPORT_STATUSES as readonly string[]).includes(value)
-    ? (value as WorkReportStatus)
+    ? (value as WorkReportStatusFilter)
     : "";
 }
 

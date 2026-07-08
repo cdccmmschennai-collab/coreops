@@ -4324,6 +4324,11 @@ export interface components {
              */
             can_review: boolean;
             /**
+             * Can Self Edit
+             * @default false
+             */
+            can_self_edit: boolean;
+            /**
              * Created At
              * Format: date-time
              */
@@ -4345,6 +4350,19 @@ export interface components {
          * @enum {string}
          */
         WorkReportStatus: "draft" | "submitted" | "approved" | "rejected" | "granted";
+        /**
+         * WorkReportStatusFilter
+         * @description Status values accepted by the report LIST filter.
+         *
+         *     Mirrors WorkReportStatus but adds the **virtual** ``requested`` value: a
+         *     ``submitted`` report that carries a pending edit request
+         *     (``edit_requested_at IS NOT NULL``). No such status is persisted — the
+         *     service translates the filter into a compound WHERE clause so pagination and
+         *     counts stay correct. To keep the two mutually exclusive, the ``submitted``
+         *     filter here means submitted *without* a pending edit request.
+         * @enum {string}
+         */
+        WorkReportStatusFilter: "draft" | "submitted" | "approved" | "rejected" | "granted" | "requested";
         /** WorkReportTaskIn */
         WorkReportTaskIn: {
             /**
@@ -6145,7 +6163,7 @@ export interface operations {
             query?: {
                 employee_id?: string | null;
                 project_id?: string | null;
-                status?: components["schemas"]["WorkReportStatus"] | null;
+                status?: components["schemas"]["WorkReportStatusFilter"] | null;
                 from?: string | null;
                 to?: string | null;
                 limit?: number;

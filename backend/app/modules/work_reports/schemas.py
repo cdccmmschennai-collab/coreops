@@ -7,6 +7,7 @@ Field-level validation lives here. Cross-field and business rules are enforced
 in the service layer. total_minutes is derived server-side and never accepted
 from the client.
 """
+import enum
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -14,6 +15,25 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.work_reports.models import DayStatus, WorkLocation, WorkReportStatus
+
+
+class WorkReportStatusFilter(str, enum.Enum):
+    """Status values accepted by the report LIST filter.
+
+    Mirrors WorkReportStatus but adds the **virtual** ``requested`` value: a
+    ``submitted`` report that carries a pending edit request
+    (``edit_requested_at IS NOT NULL``). No such status is persisted — the
+    service translates the filter into a compound WHERE clause so pagination and
+    counts stay correct. To keep the two mutually exclusive, the ``submitted``
+    filter here means submitted *without* a pending edit request.
+    """
+
+    draft = "draft"
+    submitted = "submitted"
+    approved = "approved"
+    rejected = "rejected"
+    granted = "granted"
+    requested = "requested"
 
 _SUMMARY_MAX = 2000
 _REMARKS_MAX = 2000
@@ -183,6 +203,10 @@ class WorkReportOut(BaseModel):
     # Per-actor: True when the current user may grant edit access on this report
     # — the Project Head of one of the report's projects. Set in service.
     can_review: bool = False
+    # Per-actor: True when the current user is the author AND the current Project
+    # Head of one of this (submitted) report's projects, so they may edit it
+    # directly instead of requesting edit access. Set in service.
+    can_self_edit: bool = False
     created_at: datetime
 
 

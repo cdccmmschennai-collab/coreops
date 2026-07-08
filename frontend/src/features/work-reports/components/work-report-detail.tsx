@@ -171,6 +171,10 @@ export function WorkReportDetail({ id }: { id: string }) {
   // can_review is computed per-actor by the API — the Project Head of the
   // report's projects may grant edit access (never the PM).
   const canReview = !isAuthor && report.can_review === true;
+  // can_self_edit is computed per-actor by the API — the author who is also the
+  // current Project Head of one of this submitted report's projects may edit it
+  // directly, skipping the request-edit/grant-edit handshake.
+  const canSelfEdit = isAuthor && isSubmitted && report.can_self_edit === true;
 
   const dayStatusLabel =
     report.day_status
@@ -239,8 +243,19 @@ export function WorkReportDetail({ id }: { id: string }) {
           Delete
         </Button>
       )}
-      {/* Author of a locked (submitted) report can request edit access */}
-      {canAuthorAct && isSubmitted && !editRequested && (
+      {/* Project Head editing their own submitted report: edit directly — no
+          request-edit/grant-edit handshake (they're the report's only reviewer). */}
+      {canAuthorAct && canSelfEdit && (
+        <Button variant="secondary" asChild>
+          <Link href={`/work-reports/${report.id}/edit`}>
+            <Pencil className="h-4 w-4" />
+            Edit
+          </Link>
+        </Button>
+      )}
+      {/* Author of a locked (submitted) report can request edit access — unless
+          they're the Project Head, who edits directly (above). */}
+      {canAuthorAct && isSubmitted && !editRequested && !canSelfEdit && (
         <Button variant="secondary" onClick={() => setRequestEditOpen(true)}>
           <KeyRound className="h-4 w-4" />
           Request edit
@@ -301,7 +316,7 @@ export function WorkReportDetail({ id }: { id: string }) {
           <CardContent className="divide-y divide-border">
             <Row label="Employee" value={employeeName} />
             <Row label="Date" value={report.report_date} />
-            <Row label="Status" value={<StatusBadge status={report.status} />} />
+            <Row label="Status" value={<StatusBadge status={report.status} editRequested={editRequested} />} />
             {dayStatusLabel && <Row label="Day Status" value={dayStatusLabel} />}
             {locationLabel && <Row label="Location" value={locationLabel} />}
             {report.well_head_no && <Row label="Well Head No." value={report.well_head_no} />}

@@ -77,7 +77,7 @@ export function WorkReportsTable({
                     {proj.label}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={r.status} />
+                    <StatusBadge status={r.status} editRequested={!!r.edit_requested_at} />
                   </TableCell>
                 </TableRow>
               );

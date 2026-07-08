@@ -33,13 +33,13 @@ from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
 from app.modules.users.models import User
 from app.modules.work_reports import service
-from app.modules.work_reports.models import WorkReportStatus
 from app.modules.work_reports.schemas import (
     TaskCompletionUpdate,
     WorkReportCreate,
     WorkReportEditRequest,
     WorkReportOut,
     WorkReportPage,
+    WorkReportStatusFilter,
     WorkReportTaskOut,
     WorkReportUpdate,
 )
@@ -54,7 +54,7 @@ require_submit = require_role("project_manager", "employee")
 def list_work_reports(
     employee_id: uuid.UUID | None = Query(default=None),
     project_id: uuid.UUID | None = Query(default=None),
-    status: WorkReportStatus | None = Query(default=None),
+    status: WorkReportStatusFilter | None = Query(default=None),
     date_from: date | None = Query(default=None, alias="from"),
     date_to: date | None = Query(default=None, alias="to"),
     limit: int = Query(default=20, ge=1, le=100),

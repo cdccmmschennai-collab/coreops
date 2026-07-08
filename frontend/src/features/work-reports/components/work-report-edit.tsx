@@ -51,10 +51,13 @@ export function WorkReportEdit({ id }: { id: string }) {
     );
   }
 
+  // can_self_edit covers a Project Head editing their own submitted report
+  // directly (backend allows the PATCH and reopens it to draft on save).
   const isEditable =
     report.status === "draft" ||
     report.status === "rejected" ||
-    report.status === "granted";
+    report.status === "granted" ||
+    report.can_self_edit === true;
   if (!isEditable) {
     return (
       <ErrorState
