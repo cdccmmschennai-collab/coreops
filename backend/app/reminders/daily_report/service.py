@@ -35,6 +35,8 @@ DEFAULT_LOOKBACK_WORKING_DAYS = 3
 class MissingEmployee:
     employee_id: uuid.UUID
     name: str
+    # Human-facing staff code (e.g. "EMP225"). Shown in the reminder email.
+    code: str = ""
 
 
 @dataclass(frozen=True)
@@ -216,7 +218,11 @@ class DailyReportReminderService:
             missing = self._owed_days(emp, window) - submitted.get(emp.id, set())
             for d in missing:
                 by_date.setdefault(d, []).append(
-                    MissingEmployee(employee_id=emp.id, name=emp.full_name)
+                    MissingEmployee(
+                        employee_id=emp.id,
+                        name=emp.full_name,
+                        code=emp.employee_code,
+                    )
                 )
         days: list[MissingReportDay] = []
         for d in sorted(by_date, reverse=True):  # most recent first

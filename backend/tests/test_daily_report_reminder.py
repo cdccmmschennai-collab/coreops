@@ -53,13 +53,13 @@ def _reminder() -> PMReminder:
             MissingReportDay(
                 report_date=date(2026, 7, 3),
                 employees=[
-                    MissingEmployee(uuid.uuid4(), "John"),
-                    MissingEmployee(uuid.uuid4(), "David"),
+                    MissingEmployee(uuid.uuid4(), "John", "EMP002"),
+                    MissingEmployee(uuid.uuid4(), "David", "EMP001"),
                 ],
             ),
             MissingReportDay(
                 report_date=date(2026, 7, 2),
-                employees=[MissingEmployee(uuid.uuid4(), "David")],
+                employees=[MissingEmployee(uuid.uuid4(), "David", "EMP001")],
             ),
         ],
     )
@@ -71,40 +71,55 @@ def test_template_subject_and_text_layout():
     )
     assert rendered.subject == "CoreOps • Outstanding Daily Reports"
     text = rendered.text_body
-    assert text.startswith("Good Morning Alex,")
-    assert "The following daily reports are still pending." in text
-    # Summary section reflects the reminder totals.
-    assert "Employees checked:       3" in text
-    assert "Employees with missing:  2" in text
-    assert "Total missing entries:   3" in text
-    # Grouped per employee (sorted by name); each employee lists its dates ascending.
-    assert "David\n  Missing: 02 Jul, 03 Jul" in text
-    assert "John\n  Missing: 03 Jul" in text
+    assert text.startswith("Hello Alex,")
+    assert "The following employees have pending daily work reports." in text
+    # ASCII grid table with the Employee ID + Name column header.
+    assert "Employee ID & Name" in text
+    assert "Missing Report Dates" in text
+    # First column shows "<code> <name>"; dates separated by the bullet.
+    assert "EMP001 David" in text
+    assert "EMP002 John" in text
+    assert "02 Jul • 03 Jul" in text  # David's two dates, bullet-separated
+    # Sorted by employee name.
     assert text.index("David") < text.index("John")
-    assert "Please follow up with the respective employees." in text
+    # Summary section (new business-notification wording).
+    assert "Employees with Missing Reports : 2" in text
+    assert "Total Missing Report Days : 3" in text
     assert text.rstrip().endswith("CoreOps")
 
 
-def test_template_html_summary_and_grouping():
+def test_template_html_table_and_summary():
     html = render_daily_report_reminder(
         _reminder(), now=datetime(2026, 7, 6, 9, 30)
     ).html_body
-    # Summary numbers and table header present.
-    assert "Employee Name" in html and "Missing Dates" in html
-    assert ">3<" in html and ">2<" in html  # checked / with-missing / entries stats
-    # Most-overdue date (02 Jul) highlighted red; a later date amber.
-    assert "#b91c1c" in html  # red highlight for the oldest date
-    assert "#b45309" in html  # amber for the rest
-    # Employee-grouped, names escaped/rendered.
-    assert "David" in html and "John" in html
+    # Bordered table header (escaped ampersand) and both columns.
+    assert "Employee ID &amp; Name" in html
+    assert "Missing Report Dates" in html
+    # Employee ID + Name in the first column.
+    assert "EMP001 David" in html and "EMP002 John" in html
+    # Dates bullet-separated, not stuck together.
+    assert "02 Jul • 03 Jul" in html
+    assert "02 Jul03 Jul" not in html
+    # Summary totals (new wording).
+    assert "Employees with Missing Reports : <strong>2</strong>" in html
+    assert "Total Missing Report Days : <strong>3</strong>" in html
 
 
-def test_template_html_escapes_and_greets_by_time():
+def test_template_html_is_flat_internal_notification():
+    """No dark hero, no marketing card, plain white background."""
+    html = render_daily_report_reminder(_reminder()).html_body
+    assert "background:#ffffff" in html
+    assert "#0f172a" not in html          # no dark hero/banner
+    assert "border-radius" not in html    # no rounded promotional cards
+    assert "Outstanding Daily Reports" in html
+
+
+def test_template_html_greets_pm_by_name():
     reminder = _reminder()
     html = render_daily_report_reminder(
         reminder, now=datetime(2026, 7, 6, 15, 0)
     ).html_body
-    assert "Good Afternoon Alex" in html
+    assert "Hello Alex" in html
     assert "Outstanding Daily Reports" in html
     assert "03 Jul" in html and "02 Jul" in html
     assert "John" in html
