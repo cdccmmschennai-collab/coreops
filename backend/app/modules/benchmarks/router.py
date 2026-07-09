@@ -10,11 +10,13 @@ tab. Everything is computed live from Phase 1's get_daily_benchmark_ledger
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
 from app.modules.benchmarks import service
+from app.modules.reports_export.export import build_pending_benchmark_workbook
 from app.modules.benchmarks.schemas import (
     EmployeeBenchmarksOut,
     EmployeeOverviewOut,
@@ -47,15 +49,44 @@ def employees_performance(
     search: str = "",
     sort: str = "productivity",
     order: str = Query("asc", pattern="^(asc|desc)$"),
+    cycle: str = Query("current", pattern="^(current|previous)$"),
     _user: User = PMUser,
     db: Session = Depends(get_db),
 ) -> EmployeesPerformancePageOut:
     """Layer 1 — comparison table. Comparison columns only (reuses the frozen
-    _employee_comparison rollup); no overview/analytics fields here."""
+    _employee_comparison rollup); no overview/analytics fields here. `cycle`
+    switches the Fri..Thu window (current for live view, previous to review
+    the finished cycle — matches the pending export's options)."""
     return EmployeesPerformancePageOut.model_validate(
         service.get_employees_performance(
-            db, page=page, page_size=page_size, search=search, sort=sort, order=order
+            db, page=page, page_size=page_size, search=search, sort=sort,
+            order=order, cycle=cycle,
         )
+    )
+
+
+@router.get("/pending-export.xlsx")
+def pending_export_xlsx(
+    cycle: str = Query("previous", pattern="^(previous|current)$"),
+    _user: User = PMUser,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """PM-only Pending Benchmark export — reconciled pending > 0 rows only,
+    grouped employee-wise with a TOTAL row each. Defaults to the previous
+    completed Fri..Thu cycle (PMs export Friday morning); ?cycle=current
+    exports the active one."""
+    data = service.get_pending_benchmark_export(db, cycle=cycle)
+    buf = build_pending_benchmark_workbook(
+        data["rows"], data["cycle_start"], data["cycle_end"]
+    )
+    filename = (
+        f"pending-benchmark-{data['cycle_start'].isoformat()}"
+        f"-to-{data['cycle_end'].isoformat()}.xlsx"
+    )
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

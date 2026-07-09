@@ -383,13 +383,14 @@ def test_daily_pending_is_flat_per_day_and_resets_next_week(client, db, setup_au
         client, activity_admin, benchmark_type="NUMERIC", benchmark_value=250,
         relevant_count_field="tags", name="FMTL-REWORK",
     )
-    # A fully past week (last calendar week) so every report_date <= today
+    # A fully past cycle (the previous Fri..Thu) so every report_date <= today
     # (the API rejects future report dates) while staying inside the
-    # current/previous-month edit window.
-    this_week_monday = TODAY_D - timedelta(days=TODAY_D.weekday())
-    monday = this_week_monday - timedelta(days=7)
-    for i in range(5):
-        report_date = monday + timedelta(days=i)
+    # current/previous-month edit window. Weekdays only: Fri, then Mon..Thu.
+    from app.modules.activity_master.service import compute_week_bounds
+
+    prev_friday = compute_week_bounds(TODAY_D)[0] - timedelta(days=7)
+    workdays = [prev_friday + timedelta(days=o) for o in (0, 3, 4, 5, 6)]
+    for i, report_date in enumerate(workdays):
         payload = {
             "report_date": report_date.isoformat(),
             "tasks": [{
@@ -408,36 +409,39 @@ def test_daily_pending_is_flat_per_day_and_resets_next_week(client, db, setup_au
         assert float(today_row["pending"]) == 50  # flat, not cumulative
         assert today_row["benchmark_unit"] == "tags"
 
-    friday = monday + timedelta(days=4)
-    full_week = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=friday)
+    cycle_thursday = prev_friday + timedelta(days=6)
+    full_week = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=cycle_thursday)
     assert len(full_week) == 5
     assert sum(float(r["pending"]) for r in full_week) == 250
     assert sum(float(r["actual"]) for r in full_week) == 1000
     assert sum(float(r["target"]) for r in full_week) == 1250
 
-    next_monday = monday + timedelta(days=7)
-    ledger_next_week = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=next_monday)
-    assert ledger_next_week == []  # no submissions yet this new week — clean reset
+    next_friday = prev_friday + timedelta(days=7)
+    ledger_next_week = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=next_friday)
+    assert ledger_next_week == []  # no submissions yet this new cycle — clean reset
 
 
 def test_daily_pending_does_not_let_a_surplus_day_offset_a_deficit_day(client, db, setup_author, activity_admin):
-    """120/day benchmark; Mon 100, Tue 110, Wed 90, Thu 130 (surplus), Fri 120.
-    Per-day pending: 20, 10, 30, 0, 0 -> weekly total 60. A cumulative model
-    would have netted Thursday's +10 against the week's total and landed on
-    50 instead — the daily ledger must NOT do that."""
-    from app.modules.activity_master.service import get_daily_benchmark_ledger
+    """120/day benchmark over the previous Fri..Thu cycle's five weekdays;
+    100, 110, 90, 130 (surplus), 120. Per-day pending: 20, 10, 30, 0, 0 ->
+    weekly total 60. A cumulative model would have netted the surplus day's
+    +10 against the cycle's total and landed on 50 instead — the daily
+    ledger must NOT do that."""
+    from app.modules.activity_master.service import (
+        compute_week_bounds,
+        get_daily_benchmark_ledger,
+    )
 
     a = setup_author()
     _, sub = _make_sub_activity(
         client, activity_admin, benchmark_type="NUMERIC", benchmark_value=120,
         relevant_count_field="tags", name="FMTL-REWORK",
     )
-    this_week_monday = TODAY_D - timedelta(days=TODAY_D.weekday())
-    monday = this_week_monday - timedelta(days=7)
+    prev_friday = compute_week_bounds(TODAY_D)[0] - timedelta(days=7)
+    workdays = [prev_friday + timedelta(days=o) for o in (0, 3, 4, 5, 6)]
     counts = [100, 110, 90, 130, 120]
     expected_daily_pending = [20, 10, 30, 0, 0]
-    for i, count in enumerate(counts):
-        report_date = monday + timedelta(days=i)
+    for report_date, count in zip(workdays, counts):
         payload = {
             "report_date": report_date.isoformat(),
             "tasks": [{
@@ -448,12 +452,12 @@ def test_daily_pending_does_not_let_a_surplus_day_offset_a_deficit_day(client, d
         created = client.post(BASE, headers=a["header"], json=payload).json()
         client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
 
-    friday = monday + timedelta(days=4)
-    ledger = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=friday)
+    cycle_thursday = prev_friday + timedelta(days=6)
+    ledger = get_daily_benchmark_ledger(db, employee_ids={a["emp"].id}, today=cycle_thursday)
     assert len(ledger) == 5
     by_date = {r["date"]: r for r in ledger}
-    for i, report_date in enumerate(monday + timedelta(days=i) for i in range(5)):
-        assert float(by_date[report_date]["pending"]) == expected_daily_pending[i]
+    for report_date, expected in zip(workdays, expected_daily_pending):
+        assert float(by_date[report_date]["pending"]) == expected
 
     weekly_pending_total = sum(float(r["pending"]) for r in ledger)
     assert weekly_pending_total == 60  # not 50 — no cross-day netting

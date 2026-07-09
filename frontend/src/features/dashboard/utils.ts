@@ -7,14 +7,18 @@ export function todayISO(): string {
   return istTodayISO();
 }
 
+/**
+ * Start of the current benchmark cycle (Friday) in IST. The cycle runs
+ * Fri..Thu, mirroring the backend's compute_week_bounds — keep the two in
+ * lockstep or the dashboard label/date filters drift from the ledger data.
+ */
 export function weekStartISO(): string {
   const now = nowInIST();
-  const dow = now.getDay();
-  const mon = new Date(now);
-  mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
-  const y = mon.getFullYear();
-  const m = String(mon.getMonth() + 1).padStart(2, "0");
-  const d = String(mon.getDate()).padStart(2, "0");
+  const fri = new Date(now);
+  fri.setDate(now.getDate() - ((now.getDay() + 2) % 7)); // days since Friday
+  const y = fri.getFullYear();
+  const m = String(fri.getMonth() + 1).padStart(2, "0");
+  const d = String(fri.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
 

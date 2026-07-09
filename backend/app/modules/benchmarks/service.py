@@ -5,7 +5,7 @@ an employee's own "My Alerts" and a PM's org-wide "Team" view.
 No notifications, no persistence, no scheduled jobs — every value here is
 recomputed from scratch on each call."""
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
@@ -206,13 +206,19 @@ def get_employees_performance(
     search: str = "",
     sort: str = "productivity",
     order: str = "asc",
+    cycle: str = "current",
     today: date | None = None,
 ) -> dict:
     """Layer 1 comparison list. Lists ALL active employees (a no-activity
     employee shows zeros / 'no_data', not absent — this is a management
     roster). Reuses the frozen _employee_comparison rollup for employees with
-    benchmark activity this week; everyone else is filled with zeros."""
-    daily = get_daily_benchmark_ledger(db, employee_ids=None, today=today)
+    benchmark activity this cycle; everyone else is filled with zeros.
+
+    `cycle` selects the Fri..Thu window ("current" default for viewing;
+    "previous" lets a PM review the finished cycle) — same live recompute as
+    the pending export, no persistence."""
+    _, cycle_end = _cycle_window(cycle, today or date.today())
+    daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
 
     emps = db.execute(
         select(Employee)
@@ -309,8 +315,8 @@ def get_employee_overview(
 def _days_worked_this_week(
     db: Session, employee_id: uuid.UUID, *, today: date | None = None
 ) -> int:
-    """Count distinct days this week (Mon..Fri) the employee actually worked,
-    i.e. has a present/half_day attendance record. Mirrors the Mon..Fri week
+    """Count distinct days this cycle (Fri..Thu) the employee actually worked,
+    i.e. has a present/half_day attendance record. Mirrors the Fri..Thu cycle
     used by the benchmark ledger so "this week" means the same thing across the
     overview."""
     week_start, week_end = compute_week_bounds(today or date.today())
@@ -339,6 +345,73 @@ def get_employee_benchmarks(
         "daily": [_daily_row(r) for r in daily],
         "overdue": overdue,
     }
+
+
+def _cycle_window(cycle: str, today: date) -> tuple[date, date]:
+    """Fri..Thu bounds of the requested cycle: "current" contains today,
+    "previous" is the last completed one."""
+    cycle_start, cycle_end = compute_week_bounds(today)
+    if cycle == "previous":
+        cycle_start -= timedelta(days=7)
+        cycle_end -= timedelta(days=7)
+    return cycle_start, cycle_end
+
+
+def get_pending_benchmark_export(
+    db: Session, *, cycle: str = "previous", today: date | None = None
+) -> dict:
+    """Rows for the PM's pending-benchmark XLSX export. Reuses the frozen
+    ledger and the same reconciliation the dashboard shows: only rows whose
+    *reconciled* pending is still > 0 are exported (a day recovered by a later
+    day's surplus is excluded), so the sheet never disagrees with the
+    team-alerts backlog. An employee with nothing left pending simply has no
+    rows and therefore doesn't appear at all.
+
+    `cycle` picks the Fri..Thu window: "current" is the cycle containing
+    today; "previous" (the default) is the last completed one — PMs export on
+    Friday morning after Thursday's reports are in. Nothing is persisted; the
+    previous cycle is recomputed live from the same work-report rows."""
+    cycle_start, cycle_end = _cycle_window(cycle, today or date.today())
+
+    # The ledger derives its own bounds from `today`, so any date inside the
+    # wanted cycle selects it; use its end day.
+    daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
+    effective = _reconcile_effective_pending(daily)
+
+    pending_rows = []
+    for r in daily:
+        remaining = effective.get(
+            (r["employee_id"], r["date"], r["sub_activity_id"]), r["pending"]
+        )
+        if remaining > 0:
+            pending_rows.append({**r, "pending": remaining})
+
+    labels: dict[uuid.UUID, str] = {}
+    employee_ids = {r["employee_id"] for r in pending_rows}
+    if employee_ids:
+        emps = db.execute(
+            select(Employee).where(Employee.id.in_(employee_ids))
+        ).scalars().all()
+        labels = {e.id: f"{e.employee_code} - {e.full_name}" for e in emps}
+
+    rows = [
+        {
+            "employee_label": labels.get(r["employee_id"], "-"),
+            "date": r["date"],
+            "project": r["project_name"] or r["project_code"] or "",
+            "activity": r["activity_name"] or "",
+            "sub_activity": r["sub_activity_name"],
+            "unit": r["benchmark_unit"],
+            "target": r["target"],
+            "actual": r["actual"],
+            "pending": r["pending"],
+        }
+        for r in pending_rows
+    ]
+    # Employee-wise sections, date-wise within each — the workbook builder
+    # groups on contiguous employee_label runs.
+    rows.sort(key=lambda r: (r["employee_label"], r["date"], r["sub_activity"]))
+    return {"rows": rows, "cycle_start": cycle_start, "cycle_end": cycle_end}
 
 
 def get_team_alerts(db: Session, actor: User, *, today: date | None = None) -> dict:

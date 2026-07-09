@@ -92,6 +92,108 @@ def _finalize(wb) -> BytesIO:
     return buf
 
 
+PENDING_SHEET_NAME = "Pending Benchmark"
+
+_PB_LEFT = [
+    ("Emp Code & Name", 26.0),
+    ("Date", 12.0),
+    ("Project", 24.0),
+    ("Activity", 22.0),
+    ("Sub Activity", 22.0),
+]
+_PB_GROUPS = ["Benchmark Target", "Actual Completed", "Pending Benchmark"]
+_PB_UNITS = ["tags", "docs", "bom", "spares"]  # ledger benchmark_unit values
+_PB_UNIT_LABELS = ["Tags", "Docs", "BOM", "Spares"]
+_PB_RIGHT = [("Cycle Start", 12.0), ("Cycle End", 12.0)]
+
+
+def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -> BytesIO:
+    """Pending Benchmark XLSX: employee-wise sections of date-wise pending
+    rows, then one bold TOTAL row per employee. Two header rows — flat columns
+    span both rows; Benchmark Target / Actual Completed / Pending Benchmark
+    each merge across their Tags/Docs/BOM/Spares sub-columns. Each data row's
+    numbers land only in the sub-column matching its benchmark unit; the other
+    three stay blank (a sub-activity has exactly one counted field). `rows`
+    must arrive sorted employee-first (the service guarantees it)."""
+    wb, ws = _new_sheet()
+    ws.title = PENDING_SHEET_NAME
+
+    n_left = len(_PB_LEFT)
+    first_right = n_left + 1 + len(_PB_GROUPS) * 4  # first Cycle column
+    total_cols = first_right + len(_PB_RIGHT) - 1
+    date_cols = {2, first_right, first_right + 1}
+
+    # Header rows 1-2: flat columns merged vertically, group labels merged
+    # across their four sub-columns.
+    for idx, (label, width) in enumerate(_PB_LEFT, start=1):
+        ws.merge_cells(start_row=1, start_column=idx, end_row=2, end_column=idx)
+        ws.cell(1, idx, label)
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    for gi, group in enumerate(_PB_GROUPS):
+        start = n_left + 1 + gi * 4
+        ws.merge_cells(start_row=1, start_column=start, end_row=1, end_column=start + 3)
+        ws.cell(1, start, group)
+        for ui, unit_label in enumerate(_PB_UNIT_LABELS):
+            ws.cell(2, start + ui, unit_label)
+            ws.column_dimensions[get_column_letter(start + ui)].width = 9.0
+    for ri, (label, width) in enumerate(_PB_RIGHT):
+        col = first_right + ri
+        ws.merge_cells(start_row=1, start_column=col, end_row=2, end_column=col)
+        ws.cell(1, col, label)
+        ws.column_dimensions[get_column_letter(col)].width = width
+    for row in (1, 2):
+        for col in range(1, total_cols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = _HEADER_FONT
+            cell.fill = _HEADER_FILL
+            cell.border = _BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.freeze_panes = "A3"
+
+    def style_row(r: int, bold: bool = False) -> None:
+        for col in range(1, total_cols + 1):
+            cell = ws.cell(row=r, column=col)
+            _style_data_cell(cell, n_left < col < first_right, False, col in date_cols)
+            if bold:
+                cell.font = _GROUP_FONT
+                cell.fill = _GROUP_FILL
+
+    unit_col = {u: i for i, u in enumerate(_PB_UNITS)}
+    r = 3
+    for _, emp_rows in groupby(rows, key=lambda x: x["employee_label"]):
+        totals = [[0.0] * 4 for _ in _PB_GROUPS]
+        used = [False] * 4
+        for row in emp_rows:
+            ws.cell(r, 1, row["employee_label"])
+            ws.cell(r, 2, row["date"])
+            ws.cell(r, 3, row["project"])
+            ws.cell(r, 4, row["activity"])
+            ws.cell(r, 5, row["sub_activity"])
+            ui = unit_col.get(row["unit"])
+            if ui is not None:
+                for gi, key in enumerate(("target", "actual", "pending")):
+                    value = float(row[key])
+                    ws.cell(r, n_left + 1 + gi * 4 + ui, value)
+                    totals[gi][ui] += value
+                used[ui] = True
+            ws.cell(r, first_right, cycle_start)
+            ws.cell(r, first_right + 1, cycle_end)
+            style_row(r)
+            r += 1
+
+        # TOTAL row: label sits in Sub Activity; sums only for units this
+        # employee actually reported (the rest stay blank, like data rows).
+        ws.cell(r, 5, "TOTAL")
+        for gi in range(len(_PB_GROUPS)):
+            for ui in range(4):
+                if used[ui]:
+                    ws.cell(r, n_left + 1 + gi * 4 + ui, totals[gi][ui])
+        style_row(r, bold=True)
+        r += 1
+
+    return _finalize(wb)
+
+
 def build_workbook(rows: list[dict], max_activities: int) -> BytesIO:
     wb, ws = _new_sheet()
 

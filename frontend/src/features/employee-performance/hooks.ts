@@ -36,10 +36,11 @@ export function useEmployeeBenchmarks(id: string | undefined) {
 }
 
 // ── This-week views for the detail tabs ────────────────────────────────────────
-// All employee-detail tabs are scoped to the current week (Mon → today), matching
-// the benchmark module's weekly window. These reuse existing list endpoints
-// filtered by employee + date range — no new APIs. todayISO/weekStartISO are
-// deterministic within a day, so the query keys stay stable across renders.
+// All employee-detail tabs are scoped to the current cycle (Fri → today),
+// matching the benchmark module's Fri..Thu window. These reuse existing list
+// endpoints filtered by employee + date range — no new APIs. todayISO/
+// weekStartISO are deterministic within a day, so the query keys stay stable
+// across renders.
 
 /** This week's work reports for one employee (drives Projects / Tasks / Reports). */
 export function useEmployeeWeekReports(employeeId: string) {

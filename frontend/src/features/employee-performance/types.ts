@@ -43,10 +43,15 @@ export interface EmployeeOverview {
 
 export type PerformanceSort = "name" | "productivity" | "pending" | "actual" | "target";
 
+/** Fri..Thu benchmark window — "current" contains today, "previous" is the
+ * last completed cycle. Drives both the comparison table and the export. */
+export type BenchmarkCycle = "current" | "previous";
+
 export interface PerformanceParams {
   page: number;
   page_size: number;
   search: string;
   sort: PerformanceSort;
   order: "asc" | "desc";
+  cycle: BenchmarkCycle;
 }

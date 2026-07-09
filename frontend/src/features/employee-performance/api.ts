@@ -1,6 +1,9 @@
 import { api } from "@/lib/api-client";
+import { getToken } from "@/lib/auth-storage";
+import { env } from "@/lib/env";
 
 import type {
+  BenchmarkCycle,
   EmployeeBenchmarks,
   EmployeeOverview,
   EmployeesPerformancePage,
@@ -14,6 +17,7 @@ function toQuery(p: PerformanceParams): string {
   if (p.search) sp.set("search", p.search);
   sp.set("sort", p.sort);
   sp.set("order", p.order);
+  sp.set("cycle", p.cycle);
   return sp.toString();
 }
 
@@ -30,3 +34,30 @@ export const performanceApi = {
   benchmarks: (id: string) =>
     api.get<EmployeeBenchmarks>(`/benchmarks/employees/${id}/benchmarks`),
 };
+
+/**
+ * Streams the Pending Benchmark .xlsx for the given cycle and triggers a
+ * browser download, named from the response's Content-Disposition (the
+ * backend embeds the cycle dates). Goes through fetch directly (not
+ * api-client) because the response is a binary blob, not JSON — but still
+ * attaches the bearer token.
+ */
+export async function downloadPendingBenchmarkXlsx(cycle: BenchmarkCycle): Promise<void> {
+  const res = await fetch(`${env.apiBaseUrl}/benchmarks/pending-export.xlsx?cycle=${cycle}`, {
+    headers: { Authorization: `Bearer ${getToken() ?? ""}` },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Export failed (${res.status})`);
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const filename =
+    /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? "pending-benchmark.xlsx";
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

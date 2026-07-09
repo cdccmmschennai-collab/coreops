@@ -102,7 +102,8 @@ function StatusPill({ status }: { status: Status }) {
  *                      in N Days" while on time, "Overdue" with "N Days Overdue"
  *                      once past due.
  *
- * Both sources are current-week-only and reset every Monday with the ledger.
+ * Both sources are current-cycle-only (Fri..Thu) and reset every Friday with
+ * the ledger.
  * Renders an empty-state message (table hidden) when nothing needs attention.
  */
 export function BenchmarkActivities() {

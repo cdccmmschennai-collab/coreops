@@ -1,10 +1,10 @@
 // Backlog reconciliation for the weekly Benchmark Performance rows.
 //
 // Pure, framework-free logic (extracted from the productivity widget so it can
-// be unit-checked in isolation). Operates only on the current week's `daily`
-// rows the benchmark ledger returns — which are already Mon..Fri scoped — so
-// reconciliation is inherently same-week-only and resets every Monday with the
-// ledger.
+// be unit-checked in isolation). Operates only on the current cycle's `daily`
+// rows the benchmark ledger returns — which are already Fri..Thu scoped — so
+// reconciliation is inherently same-cycle-only and resets every Friday with
+// the ledger.
 
 import type { DailyBenchmarkRow } from "./types";
 

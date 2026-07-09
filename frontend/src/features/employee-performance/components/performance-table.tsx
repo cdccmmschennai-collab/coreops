@@ -2,12 +2,20 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarDays, Check, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { toast } from "sonner";
 
 import { Pagination } from "@/components/data/pagination";
 import { SearchInput } from "@/components/data/search-input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -27,8 +35,9 @@ import {
 import { weekStartISO } from "@/features/dashboard/utils";
 import { formatInt } from "@/lib/format";
 
+import { downloadPendingBenchmarkXlsx } from "../api";
 import { useEmployeesPerformance } from "../hooks";
-import type { EmployeePerformanceRow, PerformanceSort } from "../types";
+import type { BenchmarkCycle, EmployeePerformanceRow, PerformanceSort } from "../types";
 
 const PAGE_SIZE = 7;
 const COLLAPSE_KEY = "employeePerformanceCollapsed";
@@ -67,18 +76,19 @@ function StatusBadge({ pending }: { pending: string }) {
 }
 
 /**
- * Compact label for the current working week — Monday → Friday only, anchored
- * to IST via `weekStartISO()`. Handles a week that spans two months
- * ("JUN 29 – JUL 3").
+ * Compact label for a benchmark cycle — Friday → Thursday, anchored to IST
+ * via `weekStartISO()`; "previous" is the completed cycle one week back.
+ * Handles a cycle that spans two months ("JUN 26 – JUL 2").
  */
-function weekRangeLabel(): string {
+function cycleRangeLabel(cycle: BenchmarkCycle): string {
   const [y, m, d] = weekStartISO().split("-").map(Number);
-  const mon = new Date(y, m - 1, d);
-  const fri = new Date(y, m - 1, d + 4);
-  if (mon.getMonth() === fri.getMonth()) {
-    return `${MONTHS_SHORT[mon.getMonth()]} ${mon.getDate()}–${fri.getDate()}`;
+  const offset = cycle === "previous" ? -7 : 0;
+  const fri = new Date(y, m - 1, d + offset);
+  const thu = new Date(y, m - 1, d + offset + 6);
+  if (fri.getMonth() === thu.getMonth()) {
+    return `${MONTHS_SHORT[fri.getMonth()]} ${fri.getDate()}–${thu.getDate()}`;
   }
-  return `${MONTHS_SHORT[mon.getMonth()]} ${mon.getDate()} – ${MONTHS_SHORT[fri.getMonth()]} ${fri.getDate()}`;
+  return `${MONTHS_SHORT[fri.getMonth()]} ${fri.getDate()} – ${MONTHS_SHORT[thu.getMonth()]} ${thu.getDate()}`;
 }
 
 /**
@@ -98,6 +108,10 @@ export function PerformanceTable() {
   const [sort, setSort] = React.useState<PerformanceSort>("pending");
   const [order, setOrder] = React.useState<"asc" | "desc">("desc");
   const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all");
+  // Fri..Thu benchmark window — defaults to the current (live) cycle for
+  // viewing; "previous" lets the PM review/export the finished cycle.
+  const [cycle, setCycle] = React.useState<BenchmarkCycle>("current");
+  const [exporting, setExporting] = React.useState(false);
 
   // Collapse state: default expanded on first visit, then persisted. Read in an
   // effect (not in the initializer) so server and first client render agree.
@@ -120,11 +134,28 @@ export function PerformanceTable() {
     search,
     sort,
     order,
+    cycle,
   });
 
   function onSearch(value: string) {
     setSearch(value);
     setPage(1);
+  }
+
+  function onCycleChange(next: BenchmarkCycle) {
+    setCycle(next);
+    setPage(1);
+  }
+
+  async function onExport() {
+    setExporting(true);
+    try {
+      await downloadPendingBenchmarkXlsx(cycle);
+    } catch {
+      toast.error("Export failed. Please try again.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   function toggleSort(key: PerformanceSort) {
@@ -199,11 +230,47 @@ export function PerformanceTable() {
       >
         <div ref={scrollRef}>
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
-            <div className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm shadow-sm">
-              <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="text-muted-foreground">This week</span>
-              <span className="font-semibold tabular text-foreground">{weekRangeLabel()}</span>
-              <span className="text-xs text-muted-foreground">Mon–Fri</span>
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label="Select benchmark cycle"
+                    className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm shadow-sm transition-colors hover:bg-secondary"
+                  >
+                    <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="text-muted-foreground">
+                      {cycle === "current" ? "This week" : "Previous week"}
+                    </span>
+                    <span className="font-semibold tabular text-foreground">
+                      {cycleRangeLabel(cycle)}
+                    </span>
+                    <span className="text-xs text-muted-foreground">Fri–Thu</span>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {(["current", "previous"] as const).map((option) => (
+                    <DropdownMenuItem key={option} onSelect={() => onCycleChange(option)}>
+                      <div className="flex-1">
+                        <div className="font-medium">
+                          {option === "current" ? "Current Week" : "Previous Week"}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {cycleRangeLabel(option)} · Fri–Thu
+                        </div>
+                      </div>
+                      {cycle === option && (
+                        <Check className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Button onClick={onExport} disabled={exporting}>
+                <Download className="h-4 w-4" />
+                {exporting ? "Exporting…" : "Export Pending Benchmark"}
+              </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <SearchInput

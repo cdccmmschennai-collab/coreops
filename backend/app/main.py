@@ -52,6 +52,9 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Let the browser read the XLSX download filename on cross-origin
+        # fetches (frontend :3100 -> API :8100).
+        expose_headers=["Content-Disposition"],
     )
 
     register_error_handlers(app)

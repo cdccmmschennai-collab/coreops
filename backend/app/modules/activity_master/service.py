@@ -72,10 +72,16 @@ def compute_overdue(
 
 
 def compute_week_bounds(reference_date: date) -> tuple[date, date]:
-    """Mon-Fri bounds of the week containing reference_date."""
-    monday = reference_date - timedelta(days=reference_date.weekday())
-    friday = monday + timedelta(days=4)
-    return monday, friday
+    """Fri-Thu bounds of the benchmark cycle containing reference_date.
+
+    The cycle starts on Friday and runs through the following Thursday, so
+    the weekly benchmark reset happens every Friday (PMs export the finished
+    cycle on Friday morning, after Thursday's reports are in). The bounds are
+    a plain date range - weekend days inside it only contribute if a report
+    was actually submitted, since the ledger never synthesizes rows."""
+    friday = reference_date - timedelta(days=(reference_date.weekday() - 4) % 7)
+    thursday = friday + timedelta(days=6)
+    return friday, thursday
 
 
 def get_daily_benchmark_ledger(
@@ -86,7 +92,7 @@ def get_daily_benchmark_ledger(
 ) -> list[dict]:
     """Live (never stored) daily benchmark ledger for NUMERIC sub-activities:
     one row per (date, employee, sub_activity) the employee *actually
-    submitted* this week (Mon..Fri). daily_target is a flat benchmark_value
+    submitted* this cycle (Fri..Thu). daily_target is a flat benchmark_value
     (not multiplied by elapsed days), daily_pending = max(0, target - actual)
     is clamped PER DAY — a surplus on one day is never carried forward to
     offset a deficit on another, by design (a good Thursday shouldn't erase a
@@ -245,9 +251,9 @@ def get_overdue_activities(
     and submitted reports alike — an abandoned draft with a passed due date
     is still overdue.
 
-    Scoped to the CURRENT week (Mon..Fri) like the benchmark ledger: only
-    tasks whose due_date falls in this week (week_start <= due_date < today)
-    count, so overdue resets every Monday alongside the numeric benchmark
+    Scoped to the CURRENT cycle (Fri..Thu) like the benchmark ledger: only
+    tasks whose due_date falls in this cycle (week_start <= due_date < today)
+    count, so overdue resets every Friday alongside the numeric benchmark
     backlog rather than carrying stale deadlines forward indefinitely."""
     from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
 
@@ -304,11 +310,11 @@ def get_task_status_activities(
 ) -> list[dict]:
     """Live (never stored) list of TASK_BASED rows for the Homepage Alerts
     'Pending Tasks (This Week)' panel: every task whose due_date falls inside
-    the current week (week_start <= due_date <= week_end, Mon..Fri), completed
-    or not. The employee dashboard is deliberately current-week-only — a task
-    from a previous week (whether still pending or long overdue) never appears
+    the current cycle (week_start <= due_date <= week_end, Fri..Thu), completed
+    or not. The employee dashboard is deliberately current-cycle-only — a task
+    from a previous cycle (whether still pending or long overdue) never appears
     here, even though its row stays in the database. The view resets every
-    Monday with the week bounds.
+    Friday with the week bounds.
 
     `status` is "completed" once the task is marked done (so a within-week task
     finished later in the week reads as Completed), otherwise "pending" — we no
