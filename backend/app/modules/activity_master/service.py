@@ -254,11 +254,25 @@ def get_overdue_activities(
     Scoped to the CURRENT cycle (Fri..Thu) like the benchmark ledger: only
     tasks whose due_date falls in this cycle (week_start <= due_date < today)
     count, so overdue resets every Friday alongside the numeric benchmark
-    backlog rather than carrying stale deadlines forward indefinitely."""
+    backlog rather than carrying stale deadlines forward indefinitely.
+
+    Besides the alert-view fields, each row carries the sub-activity's
+    benchmark metadata (benchmark_value / benchmark_period_days /
+    benchmark_unit) and the task's counted `actual` — additive extras for the
+    pending-benchmark export's lumpsum rows; the Pydantic alert schemas
+    ignore them."""
     from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
 
     today = today or date.today()
     week_start, _ = compute_week_bounds(today)
+
+    actual_expr = case(
+        (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
+        (ActivityMaster.relevant_count_field == "docs", WorkReportTask.docs_count),
+        (ActivityMaster.relevant_count_field == "bom", WorkReportTask.bom_count),
+        (ActivityMaster.relevant_count_field == "spares", WorkReportTask.spares_count),
+        else_=0,
+    )
 
     stmt = (
         select(
@@ -267,8 +281,13 @@ def get_overdue_activities(
             WorkReportTask.activity_name,
             WorkReportTask.sub_activity_name,
             WorkReportTask.project_code,
+            WorkReportTask.project_name,
             DailyWorkReport.report_date,
             WorkReportTask.due_date,
+            ActivityMaster.benchmark_value,
+            ActivityMaster.benchmark_period_days,
+            ActivityMaster.relevant_count_field,
+            actual_expr.label("actual"),
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
@@ -295,9 +314,14 @@ def get_overdue_activities(
             "activity_name": r.activity_name,
             "sub_activity_name": r.sub_activity_name,
             "project_code": r.project_code,
+            "project_name": r.project_name,
             "report_date": r.report_date,
             "due_date": r.due_date,
             "days_overdue": days_overdue,
+            "benchmark_value": r.benchmark_value,
+            "benchmark_period_days": r.benchmark_period_days,
+            "benchmark_unit": r.relevant_count_field,
+            "actual": r.actual,
         })
     return out
 

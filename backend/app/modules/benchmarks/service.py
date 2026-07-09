@@ -357,15 +357,70 @@ def _cycle_window(cycle: str, today: date) -> tuple[date, date]:
     return cycle_start, cycle_end
 
 
+def _project_label(code: str | None, name: str | None) -> str:
+    """PROJECT CODE & TITLE cell: "<code> - <title>", falling back to
+    whichever half exists."""
+    if code and name:
+        return f"{code} - {name}"
+    return code or name or ""
+
+
+def _fmt_qty(value: Decimal) -> str:
+    """Trim trailing zeros for display inside text cells (1000.00 -> 1000)."""
+    return f"{value.normalize():f}"
+
+
+def _task_export_cells(r: dict) -> dict:
+    """Cell values for one TASK_BASED (lumpsum) overdue row of the export.
+
+    CASE A — count-based lumpsum (benchmark_value + a counted unit): text
+    cells like "1000 TAGS PER DAY" / "500 TAGS" / "500 TAGS", with the bare
+    numbers contributed to the employee TOTAL row.
+
+    CASE B — plain finish-by-due-date task: "FINISH WITHIN A DAY" /
+    "NOT COMPLETED" / "N DAYS OVERDUE", contributing nothing to totals."""
+    period = r["benchmark_period_days"] or 1
+    unit = r["benchmark_unit"]
+    if r["benchmark_value"] is not None and unit:
+        target = Decimal(str(r["benchmark_value"]))
+        actual = Decimal(str(r["actual"] or 0))
+        pending = max(Decimal("0"), target - actual)
+        unit_label = unit.upper()
+        per = "PER DAY" if period == 1 else f"PER {period} DAYS"
+        return {
+            "unit": unit,
+            "target": f"{_fmt_qty(target)} {unit_label} {per}",
+            "actual": f"{_fmt_qty(actual)} {unit_label}",
+            "pending": f"{_fmt_qty(pending)} {unit_label}",
+            "target_total": target,
+            "actual_total": actual,
+            "pending_total": pending,
+        }
+    days = r["days_overdue"]
+    return {
+        # No counted unit to place this under — default to the TAGS column.
+        "unit": unit or "tags",
+        "target": "FINISH WITHIN A DAY" if period == 1 else f"FINISH WITHIN {period} DAYS",
+        "actual": "NOT COMPLETED",
+        "pending": f"{days} DAY{'S' if days != 1 else ''} OVERDUE",
+        "target_total": None,
+        "actual_total": None,
+        "pending_total": None,
+    }
+
+
 def get_pending_benchmark_export(
     db: Session, *, cycle: str = "previous", today: date | None = None
 ) -> dict:
     """Rows for the PM's pending-benchmark XLSX export. Reuses the frozen
-    ledger and the same reconciliation the dashboard shows: only rows whose
-    *reconciled* pending is still > 0 are exported (a day recovered by a later
-    day's surplus is excluded), so the sheet never disagrees with the
-    team-alerts backlog. An employee with nothing left pending simply has no
-    rows and therefore doesn't appear at all.
+    ledger and the same reconciliation the dashboard shows: only NUMERIC rows
+    whose *reconciled* pending is still > 0 are exported (a day recovered by a
+    later day's surplus is excluded), so the sheet never disagrees with the
+    team-alerts backlog. TASK_BASED (lumpsum) rows come from the same frozen
+    get_overdue_activities the alert views use — incomplete tasks past their
+    due date within the cycle (see _task_export_cells for their cell text);
+    the two sources are disjoint by benchmark_type, so nothing duplicates.
+    An employee with nothing pending in either source doesn't appear at all.
 
     `cycle` picks the Fri..Thu window: "current" is the cycle containing
     today; "previous" (the default) is the last completed one — PMs export on
@@ -377,6 +432,7 @@ def get_pending_benchmark_export(
     # wanted cycle selects it; use its end day.
     daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
     effective = _reconcile_effective_pending(daily)
+    overdue = get_overdue_activities(db, employee_ids=None, today=cycle_end)
 
     pending_rows = []
     for r in daily:
@@ -387,26 +443,46 @@ def get_pending_benchmark_export(
             pending_rows.append({**r, "pending": remaining})
 
     labels: dict[uuid.UUID, str] = {}
-    employee_ids = {r["employee_id"] for r in pending_rows}
+    employee_ids = (
+        {r["employee_id"] for r in pending_rows}
+        | {r["employee_id"] for r in overdue}
+    )
     if employee_ids:
         emps = db.execute(
             select(Employee).where(Employee.id.in_(employee_ids))
         ).scalars().all()
         labels = {e.id: f"{e.employee_code} - {e.full_name}" for e in emps}
 
+    # Each row's target/actual/pending are the CELL values (Decimal or text);
+    # the *_total twins are what the employee TOTAL row sums (None = excluded,
+    # e.g. CASE B text rows).
     rows = [
         {
             "employee_label": labels.get(r["employee_id"], "-"),
             "date": r["date"],
-            "project": r["project_name"] or r["project_code"] or "",
+            "project": _project_label(r["project_code"], r["project_name"]),
             "activity": r["activity_name"] or "",
             "sub_activity": r["sub_activity_name"],
             "unit": r["benchmark_unit"],
             "target": r["target"],
             "actual": r["actual"],
             "pending": r["pending"],
+            "target_total": r["target"],
+            "actual_total": r["actual"],
+            "pending_total": r["pending"],
         }
         for r in pending_rows
+    ]
+    rows += [
+        {
+            "employee_label": labels.get(r["employee_id"], "-"),
+            "date": r["report_date"],
+            "project": _project_label(r["project_code"], r["project_name"]),
+            "activity": r["activity_name"] or "",
+            "sub_activity": r["sub_activity_name"],
+            **_task_export_cells(r),
+        }
+        for r in overdue
     ]
     # Employee-wise sections, date-wise within each — the workbook builder
     # groups on contiguous employee_label runs.

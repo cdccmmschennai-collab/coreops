@@ -50,6 +50,24 @@ def _make_sub_activity(client, admin_header, *, benchmark_value, name="Sub"):
     return a, sub
 
 
+def _make_task_sub(client, admin_header, *, name):
+    """TASK_BASED (lumpsum) sub-activity with a 1-day completion period."""
+    a = client.post(
+        "/api/v1/activity-master/activities", json={"name": f"Activity for {name}"}, headers=admin_header
+    ).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{a['id']}/sub-activities",
+        json={"name": name, "benchmark_type": "TASK_BASED"},
+        headers=admin_header,
+    ).json()
+    client.patch(
+        f"/api/v1/activity-master/sub-activities/{sub['id']}",
+        json={"benchmark_period_days": 1},
+        headers=admin_header,
+    )
+    return a, sub
+
+
 def _submit(client, header, project_id, sub_id, report_date, tags):
     payload = {
         "report_date": report_date.isoformat(),
@@ -122,23 +140,29 @@ def test_default_export_is_previous_cycle_with_grouped_header_and_total(
     )
 
     ws = _load_sheet(res.content)
-    # Two-row header: flat columns + three merged groups with unit sub-columns.
-    assert [ws.cell(1, c).value for c in range(1, 6)] == [
-        "Emp Code & Name", "Date", "Project", "Activity", "Sub Activity",
+    # Grouped header: row 1 = merged group labels only; row 2 = the real
+    # (filterable) header row with an UPPERCASE label in every column.
+    assert [ws.cell(2, c).value for c in range(1, 6)] == [
+        "EMP CODE & NAME", "DATE", "PROJECT CODE & TITLE", "ACTIVITY", "SUB ACTIVITY",
     ]
-    assert ws.cell(1, 6).value == "Benchmark Target"
-    assert ws.cell(1, 10).value == "Actual Completed"
-    assert ws.cell(1, 14).value == "Pending Benchmark"
-    assert ws.cell(1, 18).value == "Cycle Start"
-    assert ws.cell(1, 19).value == "Cycle End"
+    assert ws.cell(1, 6).value == "BENCHMARK TARGET"
+    assert ws.cell(1, 10).value == "ACTUAL COMPLETED"
+    assert ws.cell(1, 14).value == "PENDING BENCHMARK"
+    assert ws.cell(2, 18).value == "CYCLE START"
+    assert ws.cell(2, 19).value == "CYCLE END"
     for start in (6, 10, 14):
-        assert [ws.cell(2, start + i).value for i in range(4)] == ["Tags", "Docs", "BOM", "Spares"]
+        assert [ws.cell(2, start + i).value for i in range(4)] == ["TAGS", "DOCS", "BOM", "SPARES"]
     merges = {str(r) for r in ws.merged_cells.ranges}
-    assert {"F1:I1", "J1:M1", "N1:Q1", "A1:A2", "S1:S2"} <= merges
+    assert {"F1:I1", "J1:M1", "N1:Q1"} <= merges
+    # No vertical merges: row 2 must stay a clean AutoFilter row (a merged
+    # A1:A2 leaves A2 an empty MergedCell and breaks per-column filtering).
+    assert "A1:A2" not in merges and "S1:S2" not in merges
+    assert ws.auto_filter.ref == "A2:S4"
 
     # One data row (previous cycle only) then the employee TOTAL row.
     assert ws.cell(3, 1).value == "E-1 - Test User"
     assert _cell_date(ws.cell(3, 2).value) == cycle_start
+    assert ws.cell(3, 3).value == "P-1 - Test Project"
     assert ws.cell(3, 5).value == "FMTL"
     assert ws.cell(3, 6).value == 250   # target -> Tags
     assert ws.cell(3, 7).value is None  # Docs stays blank
@@ -197,6 +221,77 @@ def test_employees_performance_cycle_param_switches_window(
     assert client.get(
         "/api/v1/benchmarks/employees-performance?cycle=nope", headers=activity_admin
     ).status_code == 422
+
+
+def test_task_based_lumpsum_rows_case_a_and_b(client, db, setup_author, activity_admin):
+    """Overdue TASK_BASED rows join the export. CASE A (count-based lumpsum,
+    benchmark_value + counted unit) renders "1000 TAGS PER DAY" / "500 TAGS" /
+    "500 TAGS" and contributes its bare numbers to the TOTAL row; CASE B
+    (plain finish-by-due task) renders "FINISH WITHIN A DAY" /
+    "NOT COMPLETED" / "N DAYS OVERDUE" and contributes nothing to totals.
+    The employee here has NO numeric pending — task rows alone must include
+    them in the export."""
+    import uuid as uuid_mod
+
+    from app.modules.activity_master.models import ActivityMaster
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, sub_a = _make_task_sub(client, activity_admin, name="LUMPSUM-A")
+    _, sub_b = _make_task_sub(client, activity_admin, name="LUMPSUM-B")
+    # CASE A: give LUMPSUM-A a count-based lumpsum benchmark (1000 tags).
+    master_a = db.get(ActivityMaster, uuid_mod.UUID(sub_a["id"]))
+    master_a.benchmark_value = 1000
+    master_a.relevant_count_field = "tags"
+    db.commit()
+
+    cycle_start, cycle_end = _prev_cycle()
+    payload = {
+        "report_date": cycle_start.isoformat(),
+        "tasks": [
+            {
+                "project_id": str(a["project"].id), "description": "lumpsum work",
+                "sub_activity_id": sub_a["id"], "tags_count": 500,
+            },
+            {
+                "project_id": str(a["project"].id), "description": "task work",
+                "sub_activity_id": sub_b["id"],
+            },
+        ],
+    }
+    created = client.post(BASE, headers=a["header"], json=payload)
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
+
+    # Anchor both due dates inside the previous cycle: overdue is evaluated as
+    # of the cycle's end. B lands 3 days before cycle end -> "3 DAYS OVERDUE".
+    due_by_sub = {sub_a["id"]: cycle_end - timedelta(days=5), sub_b["id"]: cycle_end - timedelta(days=3)}
+    for t in body["tasks"]:
+        row = db.get(WorkReportTask, uuid_mod.UUID(t["id"]))
+        row.due_date = due_by_sub[str(row.sub_activity_id)]
+    db.commit()
+
+    res = client.get(EXPORT_URL, headers=activity_admin)
+    assert res.status_code == 200
+    ws = _load_sheet(res.content)
+
+    # Rows sort by sub-activity name within the date: LUMPSUM-A then LUMPSUM-B.
+    assert ws.cell(3, 5).value == "LUMPSUM-A"
+    assert ws.cell(3, 6).value == "1000 TAGS PER DAY"   # target -> TAGS
+    assert ws.cell(3, 10).value == "500 TAGS"           # actual -> TAGS
+    assert ws.cell(3, 14).value == "500 TAGS"           # pending -> TAGS
+
+    assert ws.cell(4, 5).value == "LUMPSUM-B"
+    assert ws.cell(4, 6).value == "FINISH WITHIN A DAY"
+    assert ws.cell(4, 10).value == "NOT COMPLETED"
+    assert ws.cell(4, 14).value == "3 DAYS OVERDUE"
+
+    # TOTAL: only CASE A's bare numbers count — no text pollution.
+    assert ws.cell(5, 5).value == "TOTAL"
+    assert ws.cell(5, 6).value == 1000
+    assert ws.cell(5, 10).value == 500
+    assert ws.cell(5, 14).value == 500
 
 
 def test_recovered_deficit_is_reconciled_away_and_employee_excluded(

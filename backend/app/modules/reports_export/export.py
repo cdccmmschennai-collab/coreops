@@ -95,39 +95,46 @@ def _finalize(wb) -> BytesIO:
 PENDING_SHEET_NAME = "Pending Benchmark"
 
 _PB_LEFT = [
-    ("Emp Code & Name", 26.0),
-    ("Date", 12.0),
-    ("Project", 24.0),
-    ("Activity", 22.0),
-    ("Sub Activity", 22.0),
+    ("EMP CODE & NAME", 26.0),
+    ("DATE", 12.0),
+    ("PROJECT CODE & TITLE", 28.0),
+    ("ACTIVITY", 22.0),
+    ("SUB ACTIVITY", 22.0),
 ]
-_PB_GROUPS = ["Benchmark Target", "Actual Completed", "Pending Benchmark"]
+_PB_GROUPS = ["BENCHMARK TARGET", "ACTUAL COMPLETED", "PENDING BENCHMARK"]
 _PB_UNITS = ["tags", "docs", "bom", "spares"]  # ledger benchmark_unit values
-_PB_UNIT_LABELS = ["Tags", "Docs", "BOM", "Spares"]
-_PB_RIGHT = [("Cycle Start", 12.0), ("Cycle End", 12.0)]
+_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES"]
+_PB_RIGHT = [("CYCLE START", 13.0), ("CYCLE END", 13.0)]
 
 
 def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -> BytesIO:
     """Pending Benchmark XLSX: employee-wise sections of date-wise pending
-    rows, then one bold TOTAL row per employee. Two header rows — flat columns
-    span both rows; Benchmark Target / Actual Completed / Pending Benchmark
-    each merge across their Tags/Docs/BOM/Spares sub-columns. Each data row's
-    numbers land only in the sub-column matching its benchmark unit; the other
-    three stay blank (a sub-activity has exactly one counted field). `rows`
-    must arrive sorted employee-first (the service guarantees it)."""
+    rows, then one bold TOTAL row per employee.
+
+    Header is two rows, built so Excel's AutoFilter actually works with the
+    grouped layout: row 1 carries ONLY the merged group labels (BENCHMARK
+    TARGET / ACTUAL COMPLETED / PENDING BENCHMARK, each across its four unit
+    sub-columns); row 2 is the real header row with a label in every column
+    (flat labels + TAGS/DOCS/BOM/SPARES per group) and the AutoFilter is
+    anchored on row 2 — merging flat labels across both rows would leave the
+    filter row with empty MergedCells and break per-column filtering.
+
+    Each data row's values land only in the sub-column matching its benchmark
+    unit (a sub-activity has exactly one counted field). Cell values may be
+    numbers (NUMERIC ledger rows) or text (lumpsum/task rows, e.g. "1000 TAGS
+    PER DAY", "NOT COMPLETED"); the TOTAL row sums the *_total twins only, so
+    text rows never pollute the numeric totals. `rows` must arrive sorted
+    employee-first (the service guarantees it)."""
     wb, ws = _new_sheet()
     ws.title = PENDING_SHEET_NAME
 
     n_left = len(_PB_LEFT)
-    first_right = n_left + 1 + len(_PB_GROUPS) * 4  # first Cycle column
+    first_right = n_left + 1 + len(_PB_GROUPS) * 4  # first CYCLE column
     total_cols = first_right + len(_PB_RIGHT) - 1
     date_cols = {2, first_right, first_right + 1}
 
-    # Header rows 1-2: flat columns merged vertically, group labels merged
-    # across their four sub-columns.
     for idx, (label, width) in enumerate(_PB_LEFT, start=1):
-        ws.merge_cells(start_row=1, start_column=idx, end_row=2, end_column=idx)
-        ws.cell(1, idx, label)
+        ws.cell(2, idx, label)
         ws.column_dimensions[get_column_letter(idx)].width = width
     for gi, group in enumerate(_PB_GROUPS):
         start = n_left + 1 + gi * 4
@@ -135,11 +142,10 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
         ws.cell(1, start, group)
         for ui, unit_label in enumerate(_PB_UNIT_LABELS):
             ws.cell(2, start + ui, unit_label)
-            ws.column_dimensions[get_column_letter(start + ui)].width = 9.0
+            ws.column_dimensions[get_column_letter(start + ui)].width = 12.0
     for ri, (label, width) in enumerate(_PB_RIGHT):
         col = first_right + ri
-        ws.merge_cells(start_row=1, start_column=col, end_row=2, end_column=col)
-        ws.cell(1, col, label)
+        ws.cell(2, col, label)
         ws.column_dimensions[get_column_letter(col)].width = width
     for row in (1, 2):
         for col in range(1, total_cols + 1):
@@ -172,17 +178,23 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
             ui = unit_col.get(row["unit"])
             if ui is not None:
                 for gi, key in enumerate(("target", "actual", "pending")):
-                    value = float(row[key])
-                    ws.cell(r, n_left + 1 + gi * 4 + ui, value)
-                    totals[gi][ui] += value
-                used[ui] = True
+                    value = row[key]
+                    ws.cell(
+                        r,
+                        n_left + 1 + gi * 4 + ui,
+                        value if isinstance(value, str) else float(value),
+                    )
+                    total_value = row[f"{key}_total"]
+                    if total_value is not None:
+                        totals[gi][ui] += float(total_value)
+                        used[ui] = True
             ws.cell(r, first_right, cycle_start)
             ws.cell(r, first_right + 1, cycle_end)
             style_row(r)
             r += 1
 
-        # TOTAL row: label sits in Sub Activity; sums only for units this
-        # employee actually reported (the rest stay blank, like data rows).
+        # TOTAL row: label sits in SUB ACTIVITY; sums only for units this
+        # employee has numeric contributions in (the rest stay blank).
         ws.cell(r, 5, "TOTAL")
         for gi in range(len(_PB_GROUPS)):
             for ui in range(4):
@@ -190,6 +202,9 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
                     ws.cell(r, n_left + 1 + gi * 4 + ui, totals[gi][ui])
         style_row(r, bold=True)
         r += 1
+
+    # Filter on the flattened header row (2) across all data rows.
+    ws.auto_filter.ref = f"A2:{get_column_letter(total_cols)}{max(r - 1, 2)}"
 
     return _finalize(wb)
 
