@@ -6,13 +6,14 @@ No notifications, no persistence, no scheduled jobs — every value here is
 recomputed from scratch on each call."""
 import uuid
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.service import (
     compute_week_bounds,
+    get_cycle_task_activities,
     get_daily_benchmark_ledger,
     get_overdue_activities,
     get_task_status_activities,
@@ -370,17 +371,33 @@ def _fmt_qty(value: Decimal) -> str:
     return f"{value.normalize():f}"
 
 
+def _task_pending_text(r: dict) -> str:
+    """PENDING-cell text for a lumpsum row by its state: finished this cycle ->
+    "NO PENDING"; still open and past due -> "N DAYS OVERDUE"; open but not yet
+    due -> "PENDING"."""
+    if r.get("is_completed"):
+        return "NO PENDING"
+    days = r["days_overdue"]
+    if days > 0:
+        return f"{days} DAY{'S' if days != 1 else ''} OVERDUE"
+    return "PENDING"
+
+
 def _task_export_cells(r: dict) -> dict:
-    """Cell values for one TASK_BASED (lumpsum) overdue row of the export.
+    """Cell values for one TASK_BASED (lumpsum) row of the export. The row may
+    be completed, overdue, or still-open (see get_cycle_task_activities).
 
     CASE A — count-based lumpsum (benchmark_value + a counted unit): text
-    cells like "1000 TAGS PER DAY" / "500 TAGS" / "500 TAGS", with the bare
-    numbers contributed to the employee TOTAL row.
+    cells like "1000 TAGS PER DAY" / "500 TAGS" / "500 TAGS" (or "NO PENDING"
+    when finished), with the bare numbers contributed to the employee TOTAL row
+    and the achievement %.
 
     CASE B — plain finish-by-due-date task: "FINISH WITHIN A DAY" /
-    "NOT COMPLETED" / "N DAYS OVERDUE", contributing nothing to totals."""
+    "FINISHED"|"NOT COMPLETED" / "NO PENDING"|"N DAYS OVERDUE"|"PENDING",
+    contributing nothing to the numeric totals."""
     period = r["benchmark_period_days"] or 1
     unit = r["benchmark_unit"]
+    completed = bool(r.get("is_completed"))
     if r["benchmark_value"] is not None and unit:
         target = Decimal(str(r["benchmark_value"]))
         actual = Decimal(str(r["actual"] or 0))
@@ -391,18 +408,17 @@ def _task_export_cells(r: dict) -> dict:
             "unit": unit,
             "target": f"{_fmt_qty(target)} {unit_label} {per}",
             "actual": f"{_fmt_qty(actual)} {unit_label}",
-            "pending": f"{_fmt_qty(pending)} {unit_label}",
+            "pending": "NO PENDING" if completed else f"{_fmt_qty(pending)} {unit_label}",
             "target_total": target,
             "actual_total": actual,
             "pending_total": pending,
         }
-    days = r["days_overdue"]
     return {
         # No counted unit to place this under — default to the TAGS column.
         "unit": unit or "tags",
         "target": "FINISH WITHIN A DAY" if period == 1 else f"FINISH WITHIN {period} DAYS",
-        "actual": "NOT COMPLETED",
-        "pending": f"{days} DAY{'S' if days != 1 else ''} OVERDUE",
+        "actual": "FINISHED" if completed else "NOT COMPLETED",
+        "pending": _task_pending_text(r),
         "target_total": None,
         "actual_total": None,
         "pending_total": None,
@@ -412,15 +428,18 @@ def _task_export_cells(r: dict) -> dict:
 def get_pending_benchmark_export(
     db: Session, *, cycle: str = "previous", today: date | None = None
 ) -> dict:
-    """Rows for the PM's pending-benchmark XLSX export. Reuses the frozen
-    ledger and the same reconciliation the dashboard shows: only NUMERIC rows
-    whose *reconciled* pending is still > 0 are exported (a day recovered by a
-    later day's surplus is excluded), so the sheet never disagrees with the
-    team-alerts backlog. TASK_BASED (lumpsum) rows come from the same frozen
-    get_overdue_activities the alert views use — incomplete tasks past their
-    due date within the cycle (see _task_export_cells for their cell text);
-    the two sources are disjoint by benchmark_type, so nothing duplicates.
-    An employee with nothing pending in either source doesn't appear at all.
+    """Rows for the PM's pending-benchmark XLSX export.
+
+    An employee is INCLUDED when they have something outstanding this cycle:
+    NUMERIC *reconciled* pending > 0 (a day recovered by a later day's surplus
+    doesn't count, matching the team-alerts backlog), or a TASK_BASED lumpsum
+    that's overdue. Once included, though, we export the employee's WHOLE
+    Fri..Thu benchmark story, not just the shortfall rows: every NUMERIC day
+    (over-, exactly-, or under-target) and every TASK_BASED lumpsum (completed,
+    overdue, or still open). That's what makes the ACHIEVEMENT % legible - a
+    111% employee whose only pending row reads 250/200 now also shows the
+    earlier days where he ran ahead. The two row sources are disjoint by
+    benchmark_type, so nothing duplicates.
 
     `cycle` picks the Fri..Thu window: "current" is the cycle containing
     today; "previous" (the default) is the last completed one — PMs export on
@@ -432,30 +451,27 @@ def get_pending_benchmark_export(
     # wanted cycle selects it; use its end day.
     daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
     effective = _reconcile_effective_pending(daily)
-    overdue = get_overdue_activities(db, employee_ids=None, today=cycle_end)
+    cycle_tasks = get_cycle_task_activities(db, employee_ids=None, today=cycle_end)
 
-    pending_rows = []
-    for r in daily:
-        remaining = effective.get(
-            (r["employee_id"], r["date"], r["sub_activity_id"]), r["pending"]
-        )
-        if remaining > 0:
-            pending_rows.append({**r, "pending": remaining})
+    def _pending(r: dict) -> Decimal:
+        return effective.get((r["employee_id"], r["date"], r["sub_activity_id"]), r["pending"])
+
+    # Inclusion set: still-pending NUMERIC work, or an overdue lumpsum.
+    included = {
+        r["employee_id"] for r in daily if _pending(r) > 0
+    } | {
+        r["employee_id"] for r in cycle_tasks if not r["is_completed"] and r["days_overdue"] > 0
+    }
 
     labels: dict[uuid.UUID, str] = {}
-    employee_ids = (
-        {r["employee_id"] for r in pending_rows}
-        | {r["employee_id"] for r in overdue}
-    )
-    if employee_ids:
+    if included:
         emps = db.execute(
-            select(Employee).where(Employee.id.in_(employee_ids))
+            select(Employee).where(Employee.id.in_(included))
         ).scalars().all()
         labels = {e.id: f"{e.employee_code} - {e.full_name}" for e in emps}
 
-    # Each row's target/actual/pending are the CELL values (Decimal or text);
-    # the *_total twins are what the employee TOTAL row sums (None = excluded,
-    # e.g. CASE B text rows).
+    # Every NUMERIC day for an included employee (pending shown reconciled, so
+    # an over-/on-target day reads 0). The *_total twins feed the TOTAL row.
     rows = [
         {
             "employee_label": labels.get(r["employee_id"], "-"),
@@ -466,13 +482,15 @@ def get_pending_benchmark_export(
             "unit": r["benchmark_unit"],
             "target": r["target"],
             "actual": r["actual"],
-            "pending": r["pending"],
+            "pending": _pending(r),
             "target_total": r["target"],
             "actual_total": r["actual"],
-            "pending_total": r["pending"],
+            "pending_total": _pending(r),
         }
-        for r in pending_rows
+        for r in daily
+        if r["employee_id"] in included
     ]
+    # Every lumpsum (completed / overdue / open) for an included employee.
     rows += [
         {
             "employee_label": labels.get(r["employee_id"], "-"),
@@ -482,12 +500,44 @@ def get_pending_benchmark_export(
             "sub_activity": r["sub_activity_name"],
             **_task_export_cells(r),
         }
-        for r in overdue
+        for r in cycle_tasks
+        if r["employee_id"] in included
     ]
+
+    # ACHIEVEMENT %, one per employee TOTAL row, from the WHOLE cycle's numeric
+    # totals: every NUMERIC day plus count-based lumpsum (CASE A) twins. So a
+    # day recovered by overachievement still counts (Mon 60/120 + Tue 50/20 =
+    # 140/110 = 127%). Non-count lumpsum (CASE B, target_total None) and any
+    # text value never enter the numeric math.
+    full_target: dict[uuid.UUID, Decimal] = {}
+    full_actual: dict[uuid.UUID, Decimal] = {}
+    for r in daily:
+        full_target[r["employee_id"]] = full_target.get(r["employee_id"], Decimal("0")) + r["target"]
+        full_actual[r["employee_id"]] = full_actual.get(r["employee_id"], Decimal("0")) + r["actual"]
+    for r in cycle_tasks:
+        cells = _task_export_cells(r)
+        if cells["target_total"] is not None:
+            eid = r["employee_id"]
+            full_target[eid] = full_target.get(eid, Decimal("0")) + cells["target_total"]
+            full_actual[eid] = full_actual.get(eid, Decimal("0")) + cells["actual_total"]
+    achievements: dict[str, int] = {}
+    for eid in included:
+        target = full_target.get(eid, Decimal("0"))
+        if target > 0:
+            pct = (full_actual.get(eid, Decimal("0")) / target * 100).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            )
+            achievements[labels.get(eid, "-")] = int(pct)
+
     # Employee-wise sections, date-wise within each — the workbook builder
     # groups on contiguous employee_label runs.
     rows.sort(key=lambda r: (r["employee_label"], r["date"], r["sub_activity"]))
-    return {"rows": rows, "cycle_start": cycle_start, "cycle_end": cycle_end}
+    return {
+        "rows": rows,
+        "cycle_start": cycle_start,
+        "cycle_end": cycle_end,
+        "achievements": achievements,
+    }
 
 
 def get_team_alerts(db: Session, actor: User, *, today: date | None = None) -> dict:

@@ -77,7 +77,7 @@ def pending_export_xlsx(
     exports the active one."""
     data = service.get_pending_benchmark_export(db, cycle=cycle)
     buf = build_pending_benchmark_workbook(
-        data["rows"], data["cycle_start"], data["cycle_end"]
+        data["rows"], data["cycle_start"], data["cycle_end"], data["achievements"]
     )
     filename = (
         f"pending-benchmark-{data['cycle_start'].isoformat()}"

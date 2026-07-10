@@ -95,6 +95,45 @@ def _load_sheet(content: bytes):
     return openpyxl.load_workbook(BytesIO(content)).active
 
 
+def _fill(cell):
+    """The cell's solid fill RGB, or None when unfilled."""
+    return cell.fill.fgColor.rgb if cell.fill and cell.fill.fill_type else None
+
+
+def _total_rows_by_label(ws):
+    """Map each employee label -> its TOTAL row index. The label lives on the
+    data rows; the TOTAL row's own EMP cell is blank, so read the row above it
+    (always a data row of the same employee section)."""
+    return {
+        ws.cell(r - 1, 1).value: r
+        for r in range(3, ws.max_row + 1)
+        if ws.cell(r, 5).value == "TOTAL"
+    }
+
+
+def _find_row(ws, label, sub, on_date):
+    """Row index of a specific employee/sub-activity/date detail row."""
+    for r in range(3, ws.max_row + 1):
+        if (
+            ws.cell(r, 1).value == label
+            and ws.cell(r, 5).value == sub
+            and _cell_date(ws.cell(r, 2).value) == on_date
+        ):
+            return r
+    raise AssertionError(f"row not found: {label} / {sub} / {on_date}")
+
+
+# Soft grading tints applied to employee TOTAL rows (see export._grade_fill).
+GREEN = "FFC6EFCE"
+RED = "FFFFC7CE"
+
+# Column map after the per-group TOTAL sub-columns + ACHIEVEMENT % were added.
+TGT_TAGS, TGT_TOTAL = 6, 10
+ACT_TAGS, ACT_TOTAL = 11, 15
+PEN_TAGS, PEN_TOTAL = 16, 20
+ACH, CYC_START, CYC_END = 21, 22, 23
+
+
 # --- cycle bounds -----------------------------------------------------------
 
 def test_week_bounds_are_friday_to_thursday():
@@ -145,37 +184,53 @@ def test_default_export_is_previous_cycle_with_grouped_header_and_total(
     assert [ws.cell(2, c).value for c in range(1, 6)] == [
         "EMP CODE & NAME", "DATE", "PROJECT CODE & TITLE", "ACTIVITY", "SUB ACTIVITY",
     ]
-    assert ws.cell(1, 6).value == "BENCHMARK TARGET"
-    assert ws.cell(1, 10).value == "ACTUAL COMPLETED"
-    assert ws.cell(1, 14).value == "PENDING BENCHMARK"
-    assert ws.cell(2, 18).value == "CYCLE START"
-    assert ws.cell(2, 19).value == "CYCLE END"
-    for start in (6, 10, 14):
-        assert [ws.cell(2, start + i).value for i in range(4)] == ["TAGS", "DOCS", "BOM", "SPARES"]
+    assert ws.cell(1, TGT_TAGS).value == "BENCHMARK TARGET"
+    assert ws.cell(1, ACT_TAGS).value == "ACTUAL COMPLETED"
+    assert ws.cell(1, PEN_TAGS).value == "PENDING BENCHMARK"
+    assert ws.cell(2, ACH).value == "ACHIEVEMENT %"
+    assert ws.cell(2, CYC_START).value == "CYCLE START"
+    assert ws.cell(2, CYC_END).value == "CYCLE END"
+    # Each group: four unit columns then a per-group TOTAL column.
+    for start in (TGT_TAGS, ACT_TAGS, PEN_TAGS):
+        assert [ws.cell(2, start + i).value for i in range(5)] == [
+            "TAGS", "DOCS", "BOM", "SPARES", "TOTAL",
+        ]
     merges = {str(r) for r in ws.merged_cells.ranges}
-    assert {"F1:I1", "J1:M1", "N1:Q1"} <= merges
+    # Group label spans the four unit cols only; the TOTAL col sits outside it.
+    assert {"F1:I1", "K1:N1", "P1:S1"} <= merges
     # No vertical merges: row 2 must stay a clean AutoFilter row (a merged
     # A1:A2 leaves A2 an empty MergedCell and breaks per-column filtering).
-    assert "A1:A2" not in merges and "S1:S2" not in merges
-    assert ws.auto_filter.ref == "A2:S4"
+    assert "A1:A2" not in merges and "W1:W2" not in merges
+    assert ws.auto_filter.ref == "A2:W4"
 
     # One data row (previous cycle only) then the employee TOTAL row.
     assert ws.cell(3, 1).value == "E-1 - Test User"
     assert _cell_date(ws.cell(3, 2).value) == cycle_start
     assert ws.cell(3, 3).value == "P-1 - Test Project"
     assert ws.cell(3, 5).value == "FMTL"
-    assert ws.cell(3, 6).value == 250   # target -> Tags
-    assert ws.cell(3, 7).value is None  # Docs stays blank
-    assert ws.cell(3, 10).value == 200  # actual -> Tags
-    assert ws.cell(3, 14).value == 50   # pending -> Tags
-    assert _cell_date(ws.cell(3, 18).value) == cycle_start
-    assert _cell_date(ws.cell(3, 19).value) == cycle_end
+    assert ws.cell(3, TGT_TAGS).value == 250        # target -> Tags
+    assert ws.cell(3, TGT_TAGS + 1).value is None   # Docs stays blank
+    assert ws.cell(3, ACT_TAGS).value == 200        # actual -> Tags
+    assert ws.cell(3, PEN_TAGS).value == 50         # pending -> Tags
+    assert ws.cell(3, ACH).value is None            # % only on the TOTAL row
+    assert _cell_date(ws.cell(3, CYC_START).value) == cycle_start
+    assert _cell_date(ws.cell(3, CYC_END).value) == cycle_end
 
     assert ws.cell(4, 1).value is None
     assert ws.cell(4, 5).value == "TOTAL"
-    assert ws.cell(4, 6).value == 250
-    assert ws.cell(4, 10).value == 200
-    assert ws.cell(4, 14).value == 50
+    assert ws.cell(4, TGT_TAGS).value == 250
+    assert ws.cell(4, TGT_TOTAL).value == 250       # cross-unit group total
+    assert ws.cell(4, ACT_TAGS).value == 200
+    assert ws.cell(4, ACT_TOTAL).value == 200
+    assert ws.cell(4, PEN_TAGS).value == 50
+    assert ws.cell(4, PEN_TOTAL).value == 50
+    # Full cycle 200/250 = 80% -> below 95, whole TOTAL row filled light red.
+    assert ws.cell(4, ACH).value == 0.8
+    assert ws.cell(4, ACH).number_format == "0%"
+    assert _fill(ws.cell(4, 1)) == RED
+    assert _fill(ws.cell(4, ACH)) == RED
+    # Detail rows are never graded.
+    assert _fill(ws.cell(3, 1)) is None
     assert ws.max_row == 4  # nothing from the current cycle
 
 
@@ -189,8 +244,11 @@ def test_cycle_current_exports_the_active_cycle(client, setup_author, activity_a
     ws = _load_sheet(res.content)
     assert ws.cell(3, 1).value == "E-1 - Test User"
     assert _cell_date(ws.cell(3, 2).value) == TODAY_D
-    assert ws.cell(3, 14).value == 20
+    assert ws.cell(3, PEN_TAGS).value == 20
     assert ws.cell(4, 5).value == "TOTAL"
+    # Full cycle 100/120 = 83% (rounded) -> below 95, TOTAL row light red.
+    assert ws.cell(4, ACH).value == 0.83
+    assert _fill(ws.cell(4, 1)) == RED
 
 
 def test_employees_performance_cycle_param_switches_window(
@@ -278,20 +336,24 @@ def test_task_based_lumpsum_rows_case_a_and_b(client, db, setup_author, activity
 
     # Rows sort by sub-activity name within the date: LUMPSUM-A then LUMPSUM-B.
     assert ws.cell(3, 5).value == "LUMPSUM-A"
-    assert ws.cell(3, 6).value == "1000 TAGS PER DAY"   # target -> TAGS
-    assert ws.cell(3, 10).value == "500 TAGS"           # actual -> TAGS
-    assert ws.cell(3, 14).value == "500 TAGS"           # pending -> TAGS
+    assert ws.cell(3, TGT_TAGS).value == "1000 TAGS PER DAY"   # target -> TAGS
+    assert ws.cell(3, ACT_TAGS).value == "500 TAGS"           # actual -> TAGS
+    assert ws.cell(3, PEN_TAGS).value == "500 TAGS"           # pending -> TAGS
 
     assert ws.cell(4, 5).value == "LUMPSUM-B"
-    assert ws.cell(4, 6).value == "FINISH WITHIN A DAY"
-    assert ws.cell(4, 10).value == "NOT COMPLETED"
-    assert ws.cell(4, 14).value == "3 DAYS OVERDUE"
+    assert ws.cell(4, TGT_TAGS).value == "FINISH WITHIN A DAY"
+    assert ws.cell(4, ACT_TAGS).value == "NOT COMPLETED"
+    assert ws.cell(4, PEN_TAGS).value == "3 DAYS OVERDUE"
 
     # TOTAL: only CASE A's bare numbers count — no text pollution.
     assert ws.cell(5, 5).value == "TOTAL"
-    assert ws.cell(5, 6).value == 1000
-    assert ws.cell(5, 10).value == 500
-    assert ws.cell(5, 14).value == 500
+    assert ws.cell(5, TGT_TAGS).value == 1000
+    assert ws.cell(5, ACT_TAGS).value == 500
+    assert ws.cell(5, PEN_TAGS).value == 500
+    # ACHIEVEMENT %: count-based lumpsum participates (500/1000 = 50%), the
+    # non-count CASE B text row contributes nothing and doesn't break the math.
+    assert ws.cell(5, ACH).value == 0.5
+    assert _fill(ws.cell(5, 1)) == RED
 
 
 def test_recovered_deficit_is_reconciled_away_and_employee_excluded(
@@ -311,3 +373,143 @@ def test_recovered_deficit_is_reconciled_away_and_employee_excluded(
     assert res.status_code == 200
     ws = _load_sheet(res.content)
     assert ws.max_row == 2  # header only — no data rows, no TOTAL row
+
+
+def test_achievement_grades_full_cycle_not_visible_pending(
+    client, setup_author, activity_admin,
+):
+    """ACHIEVEMENT % and the TOTAL-row colour come from the employee's WHOLE
+    Fri..Thu cycle, not the pending rows shown in the sheet. An overachiever
+    with one lagging day still reads green; 95-99% is left unfilled; <95% is
+    red (covered by the default-export test)."""
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    day1, day2 = cycle_start, cycle_start + timedelta(days=1)
+
+    # GREEN: an early day's surplus is never carried forward, so day2's deficit
+    # keeps a visible pending row — yet the full cycle is 250/200 = 125%.
+    green = setup_author(email="g@x.com", code="G-1", proj_code="PG", last_name="Green")
+    _submit(client, green["header"], green["project"].id, sub["id"], day1, 160)
+    _submit(client, green["header"], green["project"].id, sub["id"], day2, 90)
+
+    # NO FILL: full cycle 194/200 = 97%, the acceptable band -> no grade fill.
+    acc = setup_author(email="a@x.com", code="A-1", proj_code="PA", last_name="Acceptable")
+    _submit(client, acc["header"], acc["project"].id, sub["id"], day1, 94)
+    _submit(client, acc["header"], acc["project"].id, sub["id"], day2, 100)
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    rows = _total_rows_by_label(ws)
+
+    g = rows["G-1 - Test Green"]
+    assert ws.cell(g, ACH).value == 1.25
+    assert _fill(ws.cell(g, 1)) == GREEN
+    assert _fill(ws.cell(g, ACH)) == GREEN
+    # The over-target day that explains the >100% score is now visible too,
+    # reading pending 0 (previously it was hidden).
+    over = _find_row(ws, "G-1 - Test Green", "FMTL", day1)
+    assert ws.cell(over, ACT_TAGS).value == 160
+    assert ws.cell(over, PEN_TAGS).value == 0
+
+    a = rows["A-1 - Test Acceptable"]
+    assert ws.cell(a, ACH).value == 0.97
+    assert _fill(ws.cell(a, 1)) is None
+    assert _fill(ws.cell(a, ACH)) is None
+
+
+def test_included_employee_shows_full_cycle_rows(client, db, setup_author, activity_admin):
+    """Once an employee is included (one lagging numeric day), the export shows
+    their WHOLE cycle so the % is legible: the over-target day (pending 0) and
+    a lumpsum they finished this cycle appear alongside the shortfall row. The
+    completed non-count task contributes nothing to the numeric %."""
+    import uuid as uuid_mod
+
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, num = _make_sub_activity(client, activity_admin, benchmark_value=100, name="NUM")
+    _, done = _make_task_sub(client, activity_admin, name="DONE")
+    cycle_start, _ = _prev_cycle()
+    day1, day2, day3 = cycle_start, cycle_start + timedelta(days=1), cycle_start + timedelta(days=2)
+
+    _submit(client, a["header"], a["project"].id, num["id"], day1, 200)  # over target
+    _submit(client, a["header"], a["project"].id, num["id"], day2, 80)   # short 20 -> included
+
+    payload = {
+        "report_date": day3.isoformat(),
+        "tasks": [{"project_id": str(a["project"].id), "description": "x", "sub_activity_id": done["id"]}],
+    }
+    body = client.post(BASE, headers=a["header"], json=payload).json()
+    assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
+    task = db.get(WorkReportTask, uuid_mod.UUID(body["tasks"][0]["id"]))
+    task.due_date, task.is_completed, task.completed_date = day3, True, day3
+    db.commit()
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+
+    # Over-target day is visible with pending 0 (would have been hidden before).
+    over = _find_row(ws, label, "NUM", day1)
+    assert ws.cell(over, TGT_TAGS).value == 100
+    assert ws.cell(over, ACT_TAGS).value == 200
+    assert ws.cell(over, PEN_TAGS).value == 0
+    # The lagging day.
+    assert ws.cell(_find_row(ws, label, "NUM", day2), PEN_TAGS).value == 20
+    # Completed non-count lumpsum: FINISH WITHIN A DAY / FINISHED / NO PENDING.
+    d = _find_row(ws, label, "DONE", day3)
+    assert ws.cell(d, TGT_TAGS).value == "FINISH WITHIN A DAY"
+    assert ws.cell(d, ACT_TAGS).value == "FINISHED"
+    assert ws.cell(d, PEN_TAGS).value == "NO PENDING"
+
+    # % is numeric-only: (200 + 80) / (100 + 100) = 140%; the FINISHED task
+    # doesn't move it. The visible rows now explain the >100% score.
+    total = _total_rows_by_label(ws)[label]
+    assert ws.cell(total, ACH).value == 1.4
+    assert _fill(ws.cell(total, 1)) == GREEN
+
+
+def test_completed_count_based_lumpsum_counts_toward_percentage(
+    client, db, setup_author, activity_admin,
+):
+    """A count-based lumpsum finished this cycle renders numbers + NO PENDING
+    and its numeric target/actual join the Achievement %."""
+    import uuid as uuid_mod
+
+    from app.modules.activity_master.models import ActivityMaster
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, num = _make_sub_activity(client, activity_admin, benchmark_value=100, name="NUM")
+    _, lump = _make_task_sub(client, activity_admin, name="LUMP")
+    master = db.get(ActivityMaster, uuid_mod.UUID(lump["id"]))
+    master.benchmark_value, master.relevant_count_field = 1000, "tags"
+    db.commit()
+
+    cycle_start, _ = _prev_cycle()
+    day1, day2 = cycle_start, cycle_start + timedelta(days=1)
+    _submit(client, a["header"], a["project"].id, num["id"], day1, 40)  # 40/100 -> included
+
+    payload = {
+        "report_date": day2.isoformat(),
+        "tasks": [{
+            "project_id": str(a["project"].id), "description": "x",
+            "sub_activity_id": lump["id"], "tags_count": 1000,
+        }],
+    }
+    body = client.post(BASE, headers=a["header"], json=payload).json()
+    assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
+    task = db.get(WorkReportTask, uuid_mod.UUID(body["tasks"][0]["id"]))
+    task.due_date, task.is_completed, task.completed_date = day2, True, day2
+    db.commit()
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+
+    rl = _find_row(ws, label, "LUMP", day2)
+    assert ws.cell(rl, TGT_TAGS).value == "1000 TAGS PER DAY"
+    assert ws.cell(rl, ACT_TAGS).value == "1000 TAGS"
+    assert ws.cell(rl, PEN_TAGS).value == "NO PENDING"
+
+    # (40 + 1000) / (100 + 1000) = 1040/1100 = 95% (acceptable band, no fill).
+    total = _total_rows_by_label(ws)[label]
+    assert ws.cell(total, ACH).value == 0.95
+    assert _fill(ws.cell(total, 1)) is None

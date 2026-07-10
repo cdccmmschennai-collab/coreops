@@ -326,6 +326,89 @@ def get_overdue_activities(
     return out
 
 
+def get_cycle_task_activities(
+    db: Session,
+    *,
+    employee_ids: set[uuid.UUID] | None = None,
+    today: date | None = None,
+) -> list[dict]:
+    """Every TASK_BASED (lumpsum) work-report-task whose due_date falls inside
+    the cycle (week_start <= due_date <= week_end, Fri..Thu) -- completed AND
+    still-open alike. This is the full-context source for the pending-benchmark
+    export: unlike get_overdue_activities (open + past-due only), a lumpsum a
+    person actually finished this cycle appears too, so the sheet shows why an
+    over-100% achiever looks the way they do rather than hiding their wins.
+
+    Each row carries the same benchmark metadata + counted `actual` as
+    get_overdue_activities, plus `is_completed` and `days_overdue` (0 when
+    completed or not yet past due), so the export can render a Completed /
+    Overdue / Pending cell trio without a second query."""
+    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+
+    today = today or date.today()
+    week_start, week_end = compute_week_bounds(today)
+
+    actual_expr = case(
+        (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
+        (ActivityMaster.relevant_count_field == "docs", WorkReportTask.docs_count),
+        (ActivityMaster.relevant_count_field == "bom", WorkReportTask.bom_count),
+        (ActivityMaster.relevant_count_field == "spares", WorkReportTask.spares_count),
+        else_=0,
+    )
+
+    stmt = (
+        select(
+            DailyWorkReport.employee_id,
+            WorkReportTask.id.label("work_report_task_id"),
+            WorkReportTask.activity_name,
+            WorkReportTask.sub_activity_name,
+            WorkReportTask.project_code,
+            WorkReportTask.project_name,
+            DailyWorkReport.report_date,
+            WorkReportTask.due_date,
+            WorkReportTask.is_completed,
+            ActivityMaster.benchmark_value,
+            ActivityMaster.benchmark_period_days,
+            ActivityMaster.relevant_count_field,
+            actual_expr.label("actual"),
+        )
+        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
+        .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        .where(
+            ActivityMaster.benchmark_type == "TASK_BASED",
+            WorkReportTask.due_date.is_not(None),
+            WorkReportTask.due_date >= week_start,
+            WorkReportTask.due_date <= week_end,
+        )
+    )
+    if employee_ids is not None:
+        if not employee_ids:
+            return []
+        stmt = stmt.where(DailyWorkReport.employee_id.in_(employee_ids))
+
+    rows = db.execute(stmt).all()
+    out = []
+    for r in rows:
+        _, days_overdue = compute_overdue(r.due_date, r.is_completed, today)
+        out.append({
+            "employee_id": r.employee_id,
+            "work_report_task_id": r.work_report_task_id,
+            "activity_name": r.activity_name,
+            "sub_activity_name": r.sub_activity_name,
+            "project_code": r.project_code,
+            "project_name": r.project_name,
+            "report_date": r.report_date,
+            "due_date": r.due_date,
+            "is_completed": r.is_completed,
+            "days_overdue": days_overdue,
+            "benchmark_value": r.benchmark_value,
+            "benchmark_period_days": r.benchmark_period_days,
+            "benchmark_unit": r.relevant_count_field,
+            "actual": r.actual,
+        })
+    return out
+
+
 def get_task_status_activities(
     db: Session,
     *,

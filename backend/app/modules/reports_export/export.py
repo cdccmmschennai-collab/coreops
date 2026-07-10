@@ -25,6 +25,9 @@ _HEADER_FILL = PatternFill(fill_type="solid", fgColor="FF76A5AF")
 _HEADER_FONT = Font(name="Arial", size=10, bold=True, color="FFFFFFFF")
 _GROUP_FILL = PatternFill(fill_type="solid", fgColor="FFD9E2E1")
 _GROUP_FONT = Font(name="Arial", size=10, bold=True)
+# Employee TOTAL-row achievement grading (soft Excel "good"/"bad" tints).
+_ACH_GREEN = PatternFill(fill_type="solid", fgColor="FFC6EFCE")  # >= 100%: on track
+_ACH_RED = PatternFill(fill_type="solid", fgColor="FFFFC7CE")    # < 95%: needs attention
 _DATA_FONT = Font(name="Arial", size=10)
 _THIN = Side(style="thin")
 _BORDER = Border(top=_THIN, bottom=_THIN, left=_THIN, right=_THIN)
@@ -103,11 +106,28 @@ _PB_LEFT = [
 ]
 _PB_GROUPS = ["BENCHMARK TARGET", "ACTUAL COMPLETED", "PENDING BENCHMARK"]
 _PB_UNITS = ["tags", "docs", "bom", "spares"]  # ledger benchmark_unit values
-_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES"]
+_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES", "TOTAL"]  # 4 units + row/group total
+_PB_GROUP_WIDTH = len(_PB_UNIT_LABELS)  # 5 columns per group
+_PB_ACH = ("ACHIEVEMENT %", 15.0)
 _PB_RIGHT = [("CYCLE START", 13.0), ("CYCLE END", 13.0)]
 
 
-def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -> BytesIO:
+def _grade_fill(pct):
+    """Employee TOTAL-row fill by achievement %: >=100 green (reward eligible),
+    95-99 no fill (acceptable), <95 red (needs attention). None (no numeric
+    target for the cycle) grades to no fill."""
+    if pct is None:
+        return None
+    if pct >= 100:
+        return _ACH_GREEN
+    if pct >= 95:
+        return None
+    return _ACH_RED
+
+
+def build_pending_benchmark_workbook(
+    rows: list[dict], cycle_start, cycle_end, achievements: dict[str, int] | None = None
+) -> BytesIO:
     """Pending Benchmark XLSX: employee-wise sections of date-wise pending
     rows, then one bold TOTAL row per employee.
 
@@ -119,30 +139,45 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
     anchored on row 2 — merging flat labels across both rows would leave the
     filter row with empty MergedCells and break per-column filtering.
 
+    Each group spans four unit sub-columns (TAGS/DOCS/BOM/SPARES) plus a
+    per-group TOTAL column that carries the employee's cross-unit sum on the
+    TOTAL row only. After the three groups comes ACHIEVEMENT % (populated on
+    the TOTAL row only), then CYCLE START/END.
+
     Each data row's values land only in the sub-column matching its benchmark
     unit (a sub-activity has exactly one counted field). Cell values may be
     numbers (NUMERIC ledger rows) or text (lumpsum/task rows, e.g. "1000 TAGS
     PER DAY", "NOT COMPLETED"); the TOTAL row sums the *_total twins only, so
-    text rows never pollute the numeric totals. `rows` must arrive sorted
-    employee-first (the service guarantees it)."""
+    text rows never pollute the numeric totals. ACHIEVEMENT % arrives from the
+    service (full-cycle actual/target) and colours the whole TOTAL row. `rows`
+    must arrive sorted employee-first (the service guarantees it)."""
+    achievements = achievements or {}
     wb, ws = _new_sheet()
     ws.title = PENDING_SHEET_NAME
 
     n_left = len(_PB_LEFT)
-    first_right = n_left + 1 + len(_PB_GROUPS) * 4  # first CYCLE column
+    n_units = len(_PB_UNITS)
+    ach_col = n_left + 1 + len(_PB_GROUPS) * _PB_GROUP_WIDTH  # ACHIEVEMENT % column
+    first_right = ach_col + 1  # first CYCLE column
     total_cols = first_right + len(_PB_RIGHT) - 1
     date_cols = {2, first_right, first_right + 1}
+
+    def group_start(gi: int) -> int:
+        return n_left + 1 + gi * _PB_GROUP_WIDTH
 
     for idx, (label, width) in enumerate(_PB_LEFT, start=1):
         ws.cell(2, idx, label)
         ws.column_dimensions[get_column_letter(idx)].width = width
     for gi, group in enumerate(_PB_GROUPS):
-        start = n_left + 1 + gi * 4
-        ws.merge_cells(start_row=1, start_column=start, end_row=1, end_column=start + 3)
+        start = group_start(gi)
+        # Group label spans the unit columns only; the TOTAL column sits outside.
+        ws.merge_cells(start_row=1, start_column=start, end_row=1, end_column=start + n_units - 1)
         ws.cell(1, start, group)
         for ui, unit_label in enumerate(_PB_UNIT_LABELS):
             ws.cell(2, start + ui, unit_label)
             ws.column_dimensions[get_column_letter(start + ui)].width = 12.0
+    ws.cell(2, ach_col, _PB_ACH[0])
+    ws.column_dimensions[get_column_letter(ach_col)].width = _PB_ACH[1]
     for ri, (label, width) in enumerate(_PB_RIGHT):
         col = first_right + ri
         ws.cell(2, col, label)
@@ -156,19 +191,20 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws.freeze_panes = "A3"
 
-    def style_row(r: int, bold: bool = False) -> None:
+    def style_row(r: int, bold: bool = False, fill=None) -> None:
         for col in range(1, total_cols + 1):
             cell = ws.cell(row=r, column=col)
             _style_data_cell(cell, n_left < col < first_right, False, col in date_cols)
             if bold:
                 cell.font = _GROUP_FONT
-                cell.fill = _GROUP_FILL
+            if fill is not None:
+                cell.fill = fill
 
     unit_col = {u: i for i, u in enumerate(_PB_UNITS)}
     r = 3
-    for _, emp_rows in groupby(rows, key=lambda x: x["employee_label"]):
-        totals = [[0.0] * 4 for _ in _PB_GROUPS]
-        used = [False] * 4
+    for label, emp_rows in groupby(rows, key=lambda x: x["employee_label"]):
+        totals = [[0.0] * n_units for _ in _PB_GROUPS]
+        used = [False] * n_units
         for row in emp_rows:
             ws.cell(r, 1, row["employee_label"])
             ws.cell(r, 2, row["date"])
@@ -181,7 +217,7 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
                     value = row[key]
                     ws.cell(
                         r,
-                        n_left + 1 + gi * 4 + ui,
+                        group_start(gi) + ui,
                         value if isinstance(value, str) else float(value),
                     )
                     total_value = row[f"{key}_total"]
@@ -193,14 +229,22 @@ def build_pending_benchmark_workbook(rows: list[dict], cycle_start, cycle_end) -
             style_row(r)
             r += 1
 
-        # TOTAL row: label sits in SUB ACTIVITY; sums only for units this
-        # employee has numeric contributions in (the rest stay blank).
+        # TOTAL row: label in SUB ACTIVITY; per-unit sums for units this
+        # employee has numeric contributions in, plus a cross-unit group TOTAL;
+        # ACHIEVEMENT % (full-cycle) and its colour grade span the whole row.
         ws.cell(r, 5, "TOTAL")
+        any_used = any(used)
         for gi in range(len(_PB_GROUPS)):
-            for ui in range(4):
+            for ui in range(n_units):
                 if used[ui]:
-                    ws.cell(r, n_left + 1 + gi * 4 + ui, totals[gi][ui])
-        style_row(r, bold=True)
+                    ws.cell(r, group_start(gi) + ui, totals[gi][ui])
+            if any_used:
+                ws.cell(r, group_start(gi) + n_units, sum(totals[gi]))
+        pct = achievements.get(label)
+        if pct is not None:
+            cell = ws.cell(r, ach_col, pct / 100)
+            cell.number_format = "0%"
+        style_row(r, bold=True, fill=_grade_fill(pct))
         r += 1
 
     # Filter on the flattened header row (2) across all data rows.
