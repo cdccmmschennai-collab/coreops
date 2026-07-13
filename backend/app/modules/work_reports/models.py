@@ -158,6 +158,77 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
     )
 
 
+class WorkItem(UUIDMixin, TimestampMixin, Base):
+    """Persistent lifecycle record for a TASK_BASED (lumpsum) activity that may
+    span several daily reports (migration 0056).
+
+    A TASK_BASED activity is started on one report, may be *continued* on any
+    number of later reports (dates need not be sequential), and completes once —
+    possibly after its deadline. Before this table each daily entry was an
+    independent work_report_tasks row with its own started/due date and its own
+    completion flag, so continuing an activity silently reset its deadline and
+    completion never spanned days. A WorkItem fixes that: it is the single,
+    authoritative source for started_on / target_days / due_date / completed_on.
+    The linked work_report_tasks rows mirror those fields for backward
+    compatibility, but this row is the truth.
+
+    due_date is FROZEN at creation (started_on + target_days - 1, calendar days)
+    and never recomputed — a later change to the sub-activity's benchmark master
+    must not move an in-flight deadline.
+
+    The lifecycle (IN_PROGRESS / DUE_TODAY / OVERDUE / COMPLETED_ON_TIME /
+    COMPLETED_LATE) is DERIVED from these dates on read (see
+    work_items.service.lifecycle_of); it is deliberately NOT a stored, mutable
+    status column. `completed_late` is likewise derived (completed_on > due_date),
+    never stored.
+
+    Scope: TASK_BASED only. NUMERIC daily-quantity benchmarks are inherently
+    per-day and never produce a WorkItem.
+    """
+    __tablename__ = "work_items"
+
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
+    )
+    sub_activity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="RESTRICT"), nullable=False
+    )
+    # started_on = the originating report's date. target_days snapshots the
+    # sub-activity's benchmark_period_days at creation (>= 1). due_date is frozen.
+    started_on: Mapped[date] = mapped_column(Date, nullable=False)
+    target_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    completed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Display snapshots frozen at creation (same convention as work_report_tasks),
+    # so the open-task list renders stable labels without extra joins.
+    activity_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sub_activity_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("target_days >= 1", name="work_items_target_days_positive"),
+        CheckConstraint("due_date >= started_on", name="work_items_due_after_start"),
+        CheckConstraint(
+            "completed_on IS NULL OR completed_on >= started_on",
+            name="work_items_completed_after_start",
+        ),
+        Index("work_items_employee_idx", "employee_id"),
+        Index("work_items_employee_sub_idx", "employee_id", "sub_activity_id"),
+        Index("work_items_due_date_idx", "due_date"),
+        # Open-task retrieval: unfinished items for one employee, by deadline.
+        Index(
+            "work_items_open_idx",
+            "employee_id",
+            "due_date",
+            postgresql_where=text("completed_on IS NULL"),
+        ),
+    )
+
+
 class WorkReportTask(UUIDMixin, Base):
     __tablename__ = "work_report_tasks"
 
@@ -211,6 +282,16 @@ class WorkReportTask(UUIDMixin, Base):
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_completed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     completed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Task-continuation link (migration 0056). When set, this row is one daily
+    # entry of a WorkItem that may span several reports; started_date/due_date/
+    # is_completed/completed_date above are mirrored from that authoritative
+    # WorkItem inside the same transaction. NULL = a legacy standalone row
+    # (pre-continuation behaviour, unchanged). RESTRICT: a WorkItem cannot be
+    # deleted while report rows still reference it, so history is never
+    # silently detached.
+    work_item_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("work_items.id", ondelete="RESTRICT"), nullable=True
+    )
     # Independent of the project's own assigned plant (projects.maintenance_plant_id)
     # — the employee picks which plant they actually worked at that day. Pick the
     # Maintenance Plant directly; Planning Plant code/description auto-derive and
@@ -247,4 +328,5 @@ class WorkReportTask(UUIDMixin, Base):
         Index("work_report_tasks_project_idx", "project_id"),
         Index("work_report_tasks_sub_activity_idx", "sub_activity_id"),
         Index("work_report_tasks_maintenance_plant_idx", "maintenance_plant_id"),
+        Index("work_report_tasks_work_item_idx", "work_item_id"),
     )

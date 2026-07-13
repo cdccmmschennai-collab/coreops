@@ -34,6 +34,7 @@ from app.core.deps import get_current_user, require_role
 from app.modules.users.models import User
 from app.modules.work_reports import service
 from app.modules.work_reports.schemas import (
+    OpenTasksOut,
     TaskCompletionUpdate,
     WorkReportCreate,
     WorkReportEditRequest,
@@ -88,6 +89,19 @@ def create_work_report(
     db: Session = Depends(get_db),
 ) -> WorkReportOut:
     return WorkReportOut.model_validate(service.create_work_report(db, current, body))
+
+
+@router.get("/open-tasks", response_model=OpenTasksOut)
+def open_tasks(
+    report_date: date = Query(..., description="Date of the report being written; "
+                              "lifecycle is evaluated relative to it."),
+    current: User = Depends(require_submit),
+    db: Session = Depends(get_db),
+) -> OpenTasksOut:
+    """Unfinished TASK_BASED work items the current employee can continue in a
+    report dated `report_date`, ordered OVERDUE, DUE_TODAY, then IN_PROGRESS by
+    nearest due date. Empty when the task-continuation feature is off."""
+    return OpenTasksOut(items=service.get_open_tasks(db, current, report_date))
 
 
 @router.get("/{report_id}", response_model=WorkReportOut)

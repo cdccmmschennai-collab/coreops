@@ -649,6 +649,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/work-reports/open-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Open Tasks
+         * @description Unfinished TASK_BASED work items the current employee can continue in a
+         *     report dated `report_date`, ordered OVERDUE, DUE_TODAY, then IN_PROGRESS by
+         *     nearest due date. Empty when the task-continuation feature is off.
+         */
+        get: operations["open_tasks_api_v1_work_reports_open_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/work-reports/{report_id}": {
         parameters: {
             query?: never;
@@ -1376,10 +1398,35 @@ export interface paths {
         };
         /**
          * Employees Performance
-         * @description Layer 1 — comparison table. Comparison columns only (reuses the frozen
-         *     _employee_comparison rollup); no overview/analytics fields here.
+         * @description Layer 1 â comparison table. Comparison columns only (reuses the frozen
+         *     _employee_comparison rollup); no overview/analytics fields here. `cycle`
+         *     switches the Fri..Thu window (current for live view, previous to review
+         *     the finished cycle â matches the pending export's options).
          */
         get: operations["employees_performance_api_v1_benchmarks_employees_performance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/benchmarks/pending-export.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pending Export Xlsx
+         * @description PM-only Pending Benchmark export â reconciled pending > 0 rows only,
+         *     grouped employee-wise with a TOTAL row each. Defaults to the previous
+         *     completed Fri..Thu cycle (PMs export Friday morning); ?cycle=current
+         *     exports the active one.
+         */
+        get: operations["pending_export_xlsx_api_v1_benchmarks_pending_export_xlsx_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1397,7 +1444,7 @@ export interface paths {
         };
         /**
          * Employee Overview
-         * @description Layer 2/3 — shared overview aggregation for the drawer and the route's
+         * @description Layer 2/3 â shared overview aggregation for the drawer and the route's
          *     Overview tab.
          */
         get: operations["employee_overview_api_v1_benchmarks_employees__employee_id__overview_get"];
@@ -1418,7 +1465,7 @@ export interface paths {
         };
         /**
          * Employee Benchmarks
-         * @description Layer 3 Benchmarks tab — full weekly ledger + overdue for one employee,
+         * @description Layer 3 Benchmarks tab â full weekly ledger + overdue for one employee,
          *     so the client reconciles backlog (same logic as the employee's own widget).
          */
         get: operations["employee_benchmarks_api_v1_benchmarks_employees__employee_id__benchmarks_get"];
@@ -1775,7 +1822,7 @@ export interface components {
         };
         /**
          * ActivityCreate
-         * @description Top-level Activity. parent_id is implicit (None) — never accepted here.
+         * @description Top-level Activity. parent_id is implicit (None) â never accepted here.
          */
         ActivityCreate: {
             /** Code */
@@ -2442,7 +2489,7 @@ export interface components {
         };
         /**
          * DailyBenchmarkRowOut
-         * @description One row of 'My Alerts' / 'Team Benchmark Backlog' — a single day's
+         * @description One row of 'My Alerts' / 'Team Benchmark Backlog' â a single day's
          *     actual/target/pending for one NUMERIC sub-activity, with pending > 0
          *     (a clean day doesn't show up in this list, though it still counts
          *     toward the weekly productivity %). `sub_activity_name` is the "Activity
@@ -2521,7 +2568,7 @@ export interface components {
         };
         /**
          * DeliverableConflictOut
-         * @description One Planned deliverable whose target date falls within ±2 days of a
+         * @description One Planned deliverable whose target date falls within Â±2 days of a
          *     leave request, on a project the requesting employee is assigned to.
          */
         DeliverableConflictOut: {
@@ -2649,7 +2696,7 @@ export interface components {
          * EmployeeBenchmarksOut
          * @description One employee's FULL weekly daily ledger (every NUMERIC sub-activity day,
          *     not just the pending ones) + overdue, so the client can run the same
-         *     backlog reconciliation the employee's own widget does — later-day surplus
+         *     backlog reconciliation the employee's own widget does â later-day surplus
          *     paying down earlier deficits. Raw per-day pending lives in `daily`;
          *     reconciliation is applied client-side (display only).
          */
@@ -2784,7 +2831,7 @@ export interface components {
         };
         /**
          * EmployeePerformanceRowOut
-         * @description One row of the PM comparison table (Layer 1). Comparison columns ONLY —
+         * @description One row of the PM comparison table (Layer 1). Comparison columns ONLY â
          *     inspection/overview fields deliberately live on EmployeeOverviewOut so the
          *     table can't grow into an analytics surface. `productivity` is None when the
          *     employee logged no NUMERIC benchmark work this week; `status` is derived
@@ -3183,7 +3230,7 @@ export interface components {
         };
         /**
          * MaintenancePlantOut
-         * @description Flattened with the parent Planning Plant's code/description — the
+         * @description Flattened with the parent Planning Plant's code/description â the
          *     shape both the Project form and the Work Report row need (pick the
          *     Maintenance Plant, auto-show the Planning Plant info).
          */
@@ -3387,8 +3434,68 @@ export interface components {
             is_active?: boolean | null;
         };
         /**
+         * OpenTaskOut
+         * @description One unfinished WorkItem the current employee can continue in a report,
+         *     evaluated relative to that report's date. Backs GET /work-reports/open-tasks.
+         *     Carries everything the form needs to prefill a continuation row.
+         */
+        OpenTaskOut: {
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Code */
+            project_code?: string | null;
+            /** Project Name */
+            project_name?: string | null;
+            /** Activity Id */
+            activity_id?: string | null;
+            /** Activity Name */
+            activity_name?: string | null;
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /** Sub Activity Name */
+            sub_activity_name?: string | null;
+            /**
+             * Started On
+             * Format: date
+             */
+            started_on: string;
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            /** Target Days */
+            target_days: number;
+            /** Lifecycle */
+            lifecycle: string;
+            /**
+             * Days Overdue
+             * @default 0
+             */
+            days_overdue: number;
+        };
+        /** OpenTasksOut */
+        OpenTasksOut: {
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["OpenTaskOut"][];
+        };
+        /**
          * OverdueActivityOut
-         * @description One row of 'My Alerts' / 'Team Overdue Activities' — a TASK_BASED
+         * @description One row of 'My Alerts' / 'Team Overdue Activities' â a TASK_BASED
          *     work-report-task row past its due_date and not completed.
          */
         OverdueActivityOut: {
@@ -3781,7 +3888,7 @@ export interface components {
         };
         /**
          * SubActivityFlatOut
-         * @description Leaf rows flattened with the parent Activity's name — for the work-report
+         * @description Leaf rows flattened with the parent Activity's name â for the work-report
          *     cascading-select / combobox use case.
          */
         SubActivityFlatOut: {
@@ -3951,7 +4058,7 @@ export interface components {
         };
         /**
          * TaskCompletionUpdate
-         * @description Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*
+         * @description Body for PATCH /work-reports/tasks/{task_id}/completion â the *only*
          *     way a TASK_BASED row's completion is changed once the parent report is
          *     submitted/locked, since these activities often complete days after the
          *     report they were logged on. Independent of report.status by design.
@@ -3962,7 +4069,7 @@ export interface components {
         };
         /**
          * TaskStatusOut
-         * @description One row of 'My Alerts' / 'Overdue Tasks' panel — a TASK_BASED
+         * @description One row of 'My Alerts' / 'Overdue Tasks' panel â a TASK_BASED
          *     work-report-task row, broader than OverdueActivityOut: also covers
          *     due-today and rows completed this week, with `status` driving the
          *     Pending/Due Today/Completed badge in the UI.
@@ -4039,7 +4146,7 @@ export interface components {
         };
         /**
          * TeamComparisonRowOut
-         * @description One row of the PM 'compare employee performance' table — an employee's
+         * @description One row of the PM 'compare employee performance' table â an employee's
          *     weekly benchmark rollup (summed target/actual/pending + productivity %).
          *     productivity_pct is None when the employee logged no NUMERIC benchmark
          *     work this week (no target to measure against).
@@ -4356,7 +4463,7 @@ export interface components {
          *
          *     Mirrors WorkReportStatus but adds the **virtual** ``requested`` value: a
          *     ``submitted`` report that carries a pending edit request
-         *     (``edit_requested_at IS NOT NULL``). No such status is persisted — the
+         *     (``edit_requested_at IS NOT NULL``). No such status is persisted â the
          *     service translates the filter into a compound WHERE clause so pagination and
          *     counts stay correct. To keep the two mutually exclusive, the ``submitted``
          *     filter here means submitted *without* a pending edit request.
@@ -4408,6 +4515,8 @@ export interface components {
              * @default false
              */
             is_completed: boolean;
+            /** Work Item Id */
+            work_item_id?: string | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
         };
@@ -4496,6 +4605,10 @@ export interface components {
              * @default 0
              */
             days_overdue: number;
+            /** Work Item Id */
+            work_item_id?: string | null;
+            /** Work Item Lifecycle */
+            work_item_lifecycle?: string | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
             /** Maintenance Plant Code */
@@ -6215,6 +6328,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    open_tasks_api_v1_work_reports_open_tasks_get: {
+        parameters: {
+            query: {
+                /** @description Date of the report being written; lifecycle is evaluated relative to it. */
+                report_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OpenTasksOut"];
                 };
             };
             /** @description Validation Error */
@@ -8053,6 +8198,7 @@ export interface operations {
                 search?: string;
                 sort?: string;
                 order?: string;
+                cycle?: string;
             };
             header?: never;
             path?: never;
@@ -8067,6 +8213,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EmployeesPerformancePageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pending_export_xlsx_api_v1_benchmarks_pending_export_xlsx_get: {
+        parameters: {
+            query?: {
+                cycle?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

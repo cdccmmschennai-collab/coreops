@@ -12,8 +12,15 @@ export const env = {
  * biometric integration or automated attendance capture exists; attendance is
  * entered manually by the PM today, so there is nothing meaningful to correct.
  * Do not enable until the workflow (tables/APIs/approvals) is actually built.
+ *
+ * `taskContinuation` — lets a TASK_BASED activity continue across several daily
+ * reports as one work item with a fixed deadline (open-task suggestions +
+ * Continue/Start-new choice). Mirror of the backend TASK_CONTINUATION_ENABLED;
+ * keep the two in step per environment. Default OFF.
  */
 export const features = {
   attendanceCorrections:
     process.env.NEXT_PUBLIC_FEATURE_ATTENDANCE_CORRECTIONS === "true",
+  taskContinuation:
+    process.env.NEXT_PUBLIC_FEATURE_TASK_CONTINUATION === "true",
 } as const;

@@ -63,7 +63,7 @@ def _clean_state():
         db.execute(
             text(
                 "TRUNCATE TABLE audit_logs, notifications, tasks, work_report_tasks, "
-                "daily_work_reports, attendance_records, leave_requests, "
+                "work_items, daily_work_reports, attendance_records, leave_requests, "
                 "project_managers, project_members, projects, company_calendar_events, "
                 "activity_types, activity_master, maintenance_plants, planning_plants, "
                 "job_codes, employees, offices, users "

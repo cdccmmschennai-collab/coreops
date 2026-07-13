@@ -1,6 +1,7 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  OpenTasks,
   TaskCompletionUpdateBody,
   WorkReport,
   WorkReportCreateBody,
@@ -40,4 +41,9 @@ export const workReportsApi = {
   // these activities often complete days after the report was filed.
   toggleTaskCompletion: (taskId: string, body: TaskCompletionUpdateBody) =>
     api.patch<WorkReportTask>(`/work-reports/tasks/${taskId}/completion`, body),
+  // Unfinished work items the current employee can continue in a report dated
+  // `reportDate` (lifecycle evaluated relative to it). Empty when the feature
+  // is off. Feature-flagged on the client too — only called when enabled.
+  openTasks: (reportDate: string) =>
+    api.get<OpenTasks>(`/work-reports/open-tasks?report_date=${reportDate}`),
 };

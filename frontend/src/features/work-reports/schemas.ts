@@ -199,6 +199,12 @@ const taskSchema = z
     started_date: z.string().optional(),
     due_date: z.string().optional(),
     completed_date: z.string().optional(),
+    // Task continuation (feature-flagged): when set, this row continues an
+    // existing work item rather than starting a new one. UI-managed; sent to the
+    // backend as work_item_id. Empty string = start a new task.
+    work_item_id: z.string().optional().default(""),
+    // Display-only lifecycle for a linked row (from the API in edit mode).
+    work_item_lifecycle: z.string().optional(),
     // Maintenance Plant the employee worked at — independent of the
     // project's own assigned plant. Optional: pick it directly; Planning Plant
     // code/description auto-derive (display-only, never sent to the backend).
@@ -311,6 +317,8 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   started_date:   undefined,
   due_date:       undefined,
   completed_date: undefined,
+  work_item_id:       "",
+  work_item_lifecycle: undefined,
   maintenance_plant_id:          "",
   maintenance_plant_code:        undefined,
   maintenance_plant_description: undefined,
@@ -365,6 +373,7 @@ function toTasks(v: WorkReportFormValues) {
     bom_count:     toCount(t.bom_count),
     spares_count:  toCount(t.spares_count),
     is_completed:  t.is_completed,
+    work_item_id:  orNull(t.work_item_id),
     maintenance_plant_id: orNull(t.maintenance_plant_id),
   }));
 }
@@ -441,6 +450,8 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             started_date:   t.started_date ?? undefined,
             due_date:       t.due_date ?? undefined,
             completed_date: t.completed_date ?? undefined,
+            work_item_id:       t.work_item_id ?? "",
+            work_item_lifecycle: t.work_item_lifecycle ?? undefined,
             maintenance_plant_id:          t.maintenance_plant_id ?? "",
             maintenance_plant_code:        t.maintenance_plant_code ?? undefined,
             maintenance_plant_description: t.maintenance_plant_description ?? undefined,

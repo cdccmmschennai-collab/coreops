@@ -63,6 +63,11 @@ class WorkReportTaskIn(BaseModel):
     # TASK_BASED sub-activities only: the completion checkbox. started_date/
     # due_date/completed_date are never client-supplied — see service.py.
     is_completed: bool = False
+    # Task continuation (feature-flagged). When set, this row continues an
+    # existing WorkItem instead of starting a new one; the server validates
+    # ownership/project/sub-activity/date and keeps the item's frozen deadline.
+    # Ignored when TASK_CONTINUATION_ENABLED is off. NULL = start a new task.
+    work_item_id: uuid.UUID | None = None
     # Independent of the project's own assigned plant — which plant the
     # employee actually worked at that day. Planning Plant code/description
     # auto-derive server-side; never client-supplied.
@@ -107,9 +112,16 @@ class WorkReportTaskOut(BaseModel):
     is_completed: bool = False
     completed_date: date | None = None
     # Computed fresh on every read (never stored) — see
-    # activity_master.service.compute_overdue.
+    # activity_master.service.compute_overdue. For a work-item-linked row these
+    # mirror the authoritative WorkItem (see work_items.mirror_fields).
     is_overdue: bool = False
     days_overdue: int = 0
+    # Task continuation (feature-flagged). work_item_id links this daily entry to
+    # a persistent WorkItem; work_item_lifecycle is the derived state
+    # (IN_PROGRESS/DUE_TODAY/OVERDUE/COMPLETED_ON_TIME/COMPLETED_LATE), computed
+    # fresh on read. Both null for legacy standalone rows.
+    work_item_id: uuid.UUID | None = None
+    work_item_lifecycle: str | None = None
     # Maintenance Plant the employee worked at, frozen at save time (see
     # work_reports/service.py `_validate_tasks`). Independent of the
     # project's own assigned plant.
@@ -215,3 +227,28 @@ class WorkReportPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class OpenTaskOut(BaseModel):
+    """One unfinished WorkItem the current employee can continue in a report,
+    evaluated relative to that report's date. Backs GET /work-reports/open-tasks.
+    Carries everything the form needs to prefill a continuation row."""
+
+    work_item_id: uuid.UUID
+    project_id: uuid.UUID
+    project_code: str | None = None
+    project_name: str | None = None
+    activity_id: uuid.UUID | None = None
+    activity_name: str | None = None
+    sub_activity_id: uuid.UUID
+    sub_activity_name: str | None = None
+    started_on: date
+    due_date: date
+    target_days: int
+    # IN_PROGRESS / DUE_TODAY / OVERDUE (completed items are never returned).
+    lifecycle: str
+    days_overdue: int = 0
+
+
+class OpenTasksOut(BaseModel):
+    items: list[OpenTaskOut] = []

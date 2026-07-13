@@ -19,13 +19,15 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import authz
+from app.core.config import settings
 from app.modules.activity_master.models import ActivityMaster, LEVEL_SUB_ACTIVITY
 from app.modules.activity_master.service import compute_benchmark, compute_overdue
+from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
@@ -189,6 +191,53 @@ def _task_based_dates(report_date: date, snap: dict) -> tuple[date | None, date 
     return started, due
 
 
+def _lifecycle_row_kwargs(
+    db: Session,
+    report: DailyWorkReport,
+    task,
+    snap: dict,
+    *,
+    seen: set,
+    legacy_completed_dates: dict | None = None,
+    existing_links: set | None = None,
+) -> dict:
+    """started_date/due_date/is_completed/completed_date/work_item_id for one
+    saved task row.
+
+    Work-item flow (task continuation) when the feature flag is ON and the row's
+    sub-activity is TASK_BASED — the row links to a persistent WorkItem with a
+    fixed deadline. Otherwise the exact legacy standalone behaviour: per-row
+    dates from _task_based_dates, completion stamped on the row itself, no work
+    item. A saved report being edited is always an editable draft here, so
+    completion corrections are allowed (editable=True). `existing_links` are the
+    work items this report already linked before the save (empty on create)."""
+    if (
+        settings.TASK_CONTINUATION_ENABLED
+        and snap["is_task_based"]
+        and getattr(task, "sub_activity_id", None) is not None
+    ):
+        return wi.resolve_task_work_item(
+            db, report=report, task_in=task, snap=snap, editable=True,
+            seen=seen, existing_links=existing_links,
+        )
+    started_date, due_date = _task_based_dates(report.report_date, snap)
+    completed_date = None
+    if task.is_completed:
+        # Preserve an already-stamped completion date across a full row replace
+        # (legacy behaviour); default to today for a fresh completion.
+        preserved = (
+            (legacy_completed_dates or {}).get(getattr(task, "sub_activity_id", None))
+        )
+        completed_date = preserved or _today()
+    return {
+        "work_item_id": None,
+        "started_date": started_date,
+        "due_date": due_date,
+        "is_completed": task.is_completed,
+        "completed_date": completed_date,
+    }
+
+
 def _first_of_previous_month(today: date) -> date:
     first_of_this = today.replace(day=1)
     if first_of_this.month == 1:
@@ -334,10 +383,26 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
     )
     by_report: dict[uuid.UUID, list[WorkReportTask]] = {r.id: [] for r in reports}
     today = _today()
+    # Derive lifecycle for work-item-linked rows in one batched read.
+    item_ids = {row.work_item_id for row in rows if row.work_item_id is not None}
+    items: dict[uuid.UUID, wi.WorkItem] = {}
+    if item_ids:
+        items = {
+            it.id: it
+            for it in db.execute(
+                select(wi.WorkItem).where(wi.WorkItem.id.in_(item_ids))
+            ).scalars()
+        }
     for row in rows:
         # Transient, computed fresh on every read (never stored) — same
         # pattern as report.can_review below.
         row.is_overdue, row.days_overdue = compute_overdue(row.due_date, row.is_completed, today)
+        row.work_item_lifecycle = None
+        item = items.get(row.work_item_id) if row.work_item_id else None
+        if item is not None:
+            row.work_item_lifecycle = wi.lifecycle_of(
+                item.due_date, item.completed_on, today=today
+            ).value
         by_report[row.report_id].append(row)
     for report in reports:
         report.tasks = by_report[report.id]
@@ -675,6 +740,19 @@ def get_work_report(db: Session, actor: User, report_id: uuid.UUID) -> DailyWork
     return _decorate(db, actor, [report])[0]
 
 
+def get_open_tasks(db: Session, actor: User, report_date: date) -> list[dict]:
+    """Unfinished work items the acting employee can continue in a report dated
+    `report_date` (lifecycle evaluated relative to that date). Empty when the
+    feature is off or the actor has no employee profile — legacy NULL-linked
+    rows are never surfaced here."""
+    if not settings.TASK_CONTINUATION_ENABLED:
+        return []
+    me = _current_employee(db, actor)
+    if me is None:
+        return []
+    return wi.get_open_work_items(db, employee_id=me.id, report_date=report_date)
+
+
 # ---------- author writes --------------------------------------------------
 def create_work_report(
     db: Session, actor: User, data: WorkReportCreate
@@ -727,8 +805,9 @@ def create_work_report(
     )
     db.add(report)
     db.flush()
+    seen_work_items: set = set()
     for task, snap in zip(tasks, snapshots):
-        started_date, due_date = _task_based_dates(data.report_date, snap)
+        life = _lifecycle_row_kwargs(db, report, task, snap, seen=seen_work_items)
         db.add(
             WorkReportTask(
                 report_id=report.id,
@@ -744,10 +823,11 @@ def create_work_report(
                 sub_activity_id=task.sub_activity_id,
                 sub_activity_name=snap["sub_activity_name"],
                 activity_name=snap["activity_name"],
-                started_date=started_date,
-                due_date=due_date,
-                is_completed=task.is_completed,
-                completed_date=_today() if task.is_completed else None,
+                started_date=life["started_date"],
+                due_date=life["due_date"],
+                is_completed=life["is_completed"],
+                completed_date=life["completed_date"],
+                work_item_id=life["work_item_id"],
                 maintenance_plant_id=task.maintenance_plant_id,
                 maintenance_plant_code=snap["maintenance_plant_code"],
                 maintenance_plant_description=snap["maintenance_plant_description"],
@@ -801,7 +881,15 @@ def update_work_report(
     no_activity = effective_day_status in NO_ACTIVITY_DAY_STATUSES
 
     if no_activity:
+        # Switching to a leave-type day drops the task lines; reconcile any work
+        # items they linked (block beheading a started-here continued task).
+        old_item_ids = wi.linked_item_ids_for_report(db, report.id)
         db.execute(delete(WorkReportTask).where(WorkReportTask.report_id == report.id))
+        db.flush()
+        if old_item_ids:
+            wi.reconcile_removed_links(
+                db, report_date=report.report_date, removed_item_ids=old_item_ids
+            )
         report.total_minutes = 0
     elif "tasks" in fields and data.tasks is not None:
         total, snapshots = _validate_tasks(db, me.id, data.tasks)
@@ -820,13 +908,18 @@ def update_work_report(
                 )
             ).scalars()
         }
+        # Which work items this report linked BEFORE the row replace, so we can
+        # detect continuations dropped by this edit and block/clean up safely.
+        old_item_ids = wi.linked_item_ids_for_report(db, report.id)
         db.execute(delete(WorkReportTask).where(WorkReportTask.report_id == report.id))
         db.flush()
+        seen_work_items: set = set()
         for task, snap in zip(data.tasks, snapshots):
-            started_date, due_date = _task_based_dates(report.report_date, snap)
-            completed_date = None
-            if task.is_completed:
-                completed_date = old_completed_dates.get(task.sub_activity_id) or _today()
+            life = _lifecycle_row_kwargs(
+                db, report, task, snap,
+                seen=seen_work_items, legacy_completed_dates=old_completed_dates,
+                existing_links=old_item_ids,
+            )
             db.add(
                 WorkReportTask(
                     report_id=report.id,
@@ -842,10 +935,11 @@ def update_work_report(
                     sub_activity_id=task.sub_activity_id,
                     sub_activity_name=snap["sub_activity_name"],
                     activity_name=snap["activity_name"],
-                    started_date=started_date,
-                    due_date=due_date,
-                    is_completed=task.is_completed,
-                    completed_date=completed_date,
+                    started_date=life["started_date"],
+                    due_date=life["due_date"],
+                    is_completed=life["is_completed"],
+                    completed_date=life["completed_date"],
+                    work_item_id=life["work_item_id"],
                     maintenance_plant_id=task.maintenance_plant_id,
                     maintenance_plant_code=snap["maintenance_plant_code"],
                     maintenance_plant_description=snap["maintenance_plant_description"],
@@ -855,6 +949,14 @@ def update_work_report(
                     project_code=snap["project_code"],
                     project_job_code_code=snap["project_job_code_code"],
                 )
+            )
+        db.flush()
+        # Work items no longer referenced by this report: block beheading a
+        # started-here task that others continue, else drop the orphan.
+        removed = old_item_ids - wi.linked_item_ids_for_report(db, report.id)
+        if removed:
+            wi.reconcile_removed_links(
+                db, report_date=report.report_date, removed_item_ids=removed
             )
         report.total_minutes = total
 
@@ -899,8 +1001,16 @@ def update_task_completion(
     parent report's status (draft/submitted/rejected/granted). These
     activities often complete days after the report they were logged on is
     already submitted/locked, so this deliberately bypasses the normal
-    locked-report edit restriction; it only ever touches
-    is_completed/completed_date on this one row, nothing else."""
+    locked-report edit restriction.
+
+    Legacy (work_item_id NULL): touches is_completed/completed_date on this one
+    row only, exactly as before.
+
+    Work-item-linked: the WorkItem is authoritative. Completing stamps the
+    item's completed_on (= this row's report date) and mirrors to every daily
+    entry of the item. Reopening is one-way after submission — allowed only
+    while the owning report is an editable draft; otherwise a 422 is returned
+    rather than silently reopening a completed task."""
     row = db.get(WorkReportTask, task_id)
     if row is None:
         raise AppError("not_found", "Task not found.", 404)
@@ -909,8 +1019,42 @@ def update_task_completion(
         raise AppError("not_found", "Task not found.", 404)
     _assert_author(db, actor, report)
 
+    if row.work_item_id is not None:
+        item = db.get(wi.WorkItem, row.work_item_id)
+        if item is None:
+            raise AppError("not_found", "Task not found.", 404)
+        wi.complete_via_endpoint(
+            db,
+            item=item,
+            is_completed=data.is_completed,
+            report_date=report.report_date,
+            report_editable=report.status in _EDITABLE,
+        )
+        db.flush()
+        # Mirror the authoritative state onto every linked daily entry.
+        mirror = wi.mirror_fields(item)
+        db.execute(
+            update(WorkReportTask)
+            .where(WorkReportTask.work_item_id == item.id)
+            .values(
+                is_completed=mirror["is_completed"],
+                completed_date=mirror["completed_date"],
+            )
+        )
+        db.commit()
+        db.refresh(row)
+        today = _today()
+        row.is_overdue, row.days_overdue = compute_overdue(
+            row.due_date, row.is_completed, today
+        )
+        row.work_item_lifecycle = wi.lifecycle_of(
+            item.due_date, item.completed_on, today=today
+        ).value
+        return row
+
     row.is_completed = data.is_completed
     row.completed_date = _today() if data.is_completed else None
+    row.work_item_lifecycle = None
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -1083,5 +1227,17 @@ def delete_work_report(db: Session, actor: User, report_id: uuid.UUID) -> None:
     _assert_author(db, actor, report)
     if report.status != WorkReportStatus.draft:
         raise AppError("forbidden", "Only draft reports can be deleted.", 403)
+    # Deleting the report cascades its task rows. If those rows started a work
+    # item that later reports still continue, block (can't behead the deadline);
+    # otherwise clean up any now-orphaned work item. reconcile runs after the
+    # cascade so reference counts are final; an AppError here rolls the whole
+    # delete back (nothing is committed yet).
+    linked = wi.linked_item_ids_for_report(db, report.id)
+    report_date = report.report_date
     db.delete(report)
+    db.flush()
+    if linked:
+        wi.reconcile_removed_links(
+            db, report_date=report_date, removed_item_ids=linked
+        )
     db.commit()

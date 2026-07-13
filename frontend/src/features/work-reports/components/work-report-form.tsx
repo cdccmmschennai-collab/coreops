@@ -4,7 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm, type Control } from "react-hook-form";
-import { Plus, Send, Trash2 } from "lucide-react";
+import { ArrowRight, Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -41,9 +41,16 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
+import { features } from "@/lib/env";
 import { formatInt } from "@/lib/format";
 
-import { useCreateWorkReport, useUpdateWorkReport, useWorkReportList } from "../hooks";
+import type { OpenTask } from "../types";
+import {
+  useCreateWorkReport,
+  useOpenTasks,
+  useUpdateWorkReport,
+  useWorkReportList,
+} from "../hooks";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_STATUS_LABEL,
@@ -81,6 +88,22 @@ const NO_APPROVAL_ACTIVITIES = new Set([
   "TRAINING",
   "TRAINER",
 ]);
+
+// Human labels + badge tone for a work item's derived lifecycle.
+const LIFECYCLE_LABEL: Record<string, string> = {
+  IN_PROGRESS: "In progress",
+  DUE_TODAY: "Due today",
+  OVERDUE: "Overdue",
+  COMPLETED_ON_TIME: "Completed",
+  COMPLETED_LATE: "Completed late",
+};
+const LIFECYCLE_VARIANT: Record<string, "neutral" | "warning" | "danger" | "success"> = {
+  IN_PROGRESS: "neutral",
+  DUE_TODAY: "warning",
+  OVERDUE: "danger",
+  COMPLETED_ON_TIME: "success",
+  COMPLETED_LATE: "warning",
+};
 
 /** "2026-06-16" + 2 -> "2026-06-18". Client-side preview only, for a
  * TASK_BASED row that hasn't been saved yet — the server is authoritative
@@ -508,6 +531,81 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const watchedTasks = form.watch("tasks");
   const reportDate = form.watch("report_date");
 
+  // ── Task continuation (feature-flagged) ────────────────────────────────────
+  // Open work items the employee can continue in a report dated `reportDate`.
+  const continuationEnabled = features.taskContinuation && !noActivity;
+  const openTasksQuery = useOpenTasks(reportDate, {
+    enabled: continuationEnabled && !!reportDate,
+  });
+  // Work items already added to this report — don't suggest them again.
+  const addedWorkItemIds = React.useMemo(
+    () => new Set((watchedTasks ?? []).map((t) => t.work_item_id).filter(Boolean)),
+    [watchedTasks],
+  );
+  const openTasks = React.useMemo(
+    () => (openTasksQuery.data?.items ?? []).filter((t) => !addedWorkItemIds.has(t.work_item_id)),
+    [openTasksQuery.data, addedWorkItemIds],
+  );
+  // Open items keyed by "project_id|sub_activity_id" so a manual sub-activity
+  // pick can offer an explicit Continue / Start-new choice for that exact task.
+  const openBySubProject = React.useMemo(() => {
+    const map = new Map<string, OpenTask>();
+    for (const t of openTasksQuery.data?.items ?? []) {
+      map.set(`${t.project_id}|${t.sub_activity_id}`, t);
+    }
+    return map;
+  }, [openTasksQuery.data]);
+  // Rows where the user chose "Start a new task" despite an open item existing —
+  // suppresses the inline Continue/Start-new prompt for that row.
+  const [startNewRows, setStartNewRows] = React.useState<Set<number>>(new Set());
+
+  // Build a prefilled task row that continues an existing work item.
+  const continuationRow = React.useCallback(
+    (t: OpenTask) => ({
+      ...EMPTY_TASK_ROW,
+      project_id: t.project_id,
+      project_name: t.project_name ?? undefined,
+      project_code: t.project_code ?? undefined,
+      activity_id: t.activity_id ?? "",
+      activity_name: t.activity_name ?? undefined,
+      sub_activity_id: t.sub_activity_id,
+      sub_activity_name: t.sub_activity_name ?? undefined,
+      work_item_id: t.work_item_id,
+      work_item_lifecycle: t.lifecycle,
+      started_date: t.started_on,
+      due_date: t.due_date,
+    }),
+    [],
+  );
+
+  // "Continue in today's report" — fills the lone empty first row if untouched,
+  // otherwise appends a new continuation row.
+  const continueTask = React.useCallback(
+    (t: OpenTask) => {
+      const rows = form.getValues("tasks");
+      const first = rows[0];
+      const firstEmpty =
+        rows.length === 1 && !first?.project_id && !first?.sub_activity_id;
+      if (firstEmpty) {
+        replace([continuationRow(t)]);
+      } else {
+        append(continuationRow(t));
+      }
+    },
+    [append, replace, form, continuationRow],
+  );
+
+  // Attach an open work item to an existing row (manual "Continue existing").
+  const attachToRow = React.useCallback(
+    (index: number, t: OpenTask) => {
+      form.setValue(`tasks.${index}.work_item_id`, t.work_item_id);
+      form.setValue(`tasks.${index}.work_item_lifecycle`, t.lifecycle);
+      form.setValue(`tasks.${index}.started_date`, t.started_on);
+      form.setValue(`tasks.${index}.due_date`, t.due_date);
+    },
+    [form],
+  );
+
   // Reset a row's Maintenance Plant selection (and its derived snapshots) —
   // called whenever the row's project changes, since the available plants are
   // scoped to the new project's Planning Plant.
@@ -729,6 +827,59 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
             <Separator />
 
+            {/* ── Open tasks from previous reports (task continuation) ── */}
+            {continuationEnabled && openTasks.length > 0 && (
+              <div className="space-y-3">
+                <div>
+                  <h3 className="text-sm font-medium">Open tasks from previous reports</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Continue one of these in today&apos;s report. The deadline stays
+                    fixed - you can add today&apos;s work and mark the overall task
+                    complete.
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {openTasks.map((t) => (
+                    <div
+                      key={t.work_item_id}
+                      className="flex flex-col gap-3 rounded-lg border border-border bg-muted/30 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">
+                            {t.project_name || t.project_code || "-"}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {`${t.activity_name ?? "-"} / ${t.sub_activity_name ?? "-"}`}
+                          </p>
+                        </div>
+                        <Badge variant={LIFECYCLE_VARIANT[t.lifecycle] ?? "neutral"}>
+                          {t.lifecycle === "OVERDUE" && t.days_overdue > 0
+                            ? `Overdue ${t.days_overdue}d`
+                            : LIFECYCLE_LABEL[t.lifecycle] ?? t.lifecycle}
+                        </Badge>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        <span>Started {t.started_on}</span>
+                        <span>Due {t.due_date}</span>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        className="self-start"
+                        onClick={() => continueTask(t)}
+                      >
+                        <ArrowRight className="h-4 w-4" />
+                        Continue in today&apos;s report
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <Separator />
+              </div>
+            )}
+
             {/* ── Project Task Rows ── */}
             <div className="space-y-3">
               <h3 className="text-sm font-medium">Project activities</h3>
@@ -760,6 +911,20 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                   selectedProject?.code ?? watchedTasks?.[index]?.project_code ?? "—";
                 const jobCodeLabel = selectedProject?.job_code_code ?? "—";
 
+                // Task continuation, per row.
+                const rowSubId = watchedTasks?.[index]?.sub_activity_id;
+                const rowWorkItemId = watchedTasks?.[index]?.work_item_id;
+                const rowLifecycle = watchedTasks?.[index]?.work_item_lifecycle;
+                const rowStarted = watchedTasks?.[index]?.started_date;
+                const isContinuation = continuationEnabled && !!rowWorkItemId;
+                // A manual sub-activity pick that matches an open work item ->
+                // offer an explicit Continue existing / Start a new task choice
+                // (unless already linked or the user chose Start-new for this row).
+                const rowOpenMatch =
+                  continuationEnabled && !rowWorkItemId && selectedProjectId && rowSubId
+                    ? openBySubProject.get(`${selectedProjectId}|${rowSubId}`)
+                    : undefined;
+
                 return (
                   <div
                     key={field.id}
@@ -788,6 +953,56 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
+
+                    {/* Continuation banner: this row continues an existing work
+                        item. Project/Activity/Sub are locked (the backend forbids
+                        changing them on a continuation). */}
+                    {isContinuation && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
+                        <span>
+                          Continuing task started on{" "}
+                          <span className="font-medium">{rowStarted ?? "—"}</span>
+                          {watchedTasks?.[index]?.due_date && (
+                            <> · due {watchedTasks[index].due_date}</>
+                          )}
+                        </span>
+                        {rowLifecycle && (
+                          <Badge variant={LIFECYCLE_VARIANT[rowLifecycle] ?? "neutral"}>
+                            {LIFECYCLE_LABEL[rowLifecycle] ?? rowLifecycle}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Manual pick matched an open work item: explicit choice. */}
+                    {rowOpenMatch && !startNewRows.has(index) && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm">
+                        <span className="text-muted-foreground">
+                          You have an open task for this activity (started{" "}
+                          {rowOpenMatch.started_on}, due {rowOpenMatch.due_date}).
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => attachToRow(index, rowOpenMatch)}
+                          >
+                            Continue existing task
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              setStartNewRows((prev) => new Set(prev).add(index))
+                            }
+                          >
+                            Start a new task
+                          </Button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Row A — Project Name | Project Code | Job Code.
                         Project Code / Job Code are read-only, auto-filled from the
@@ -819,6 +1034,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 searchPlaceholder="Search by name or code…"
                                 emptyMessage="No matching projects."
                                 allowClear={false}
+                                disabled={isContinuation}
                               />
                             </FormControl>
                             <FormMessage />
@@ -903,6 +1119,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 placeholder="Select activity…"
                                 searchPlaceholder="Search activities…"
                                 emptyMessage="No matching activities."
+                                disabled={isContinuation}
                               />
                             </FormControl>
                             <FormMessage />
@@ -937,7 +1154,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                   placeholder={selectedActivityId ? "Select sub-activity…" : "Pick an Activity first"}
                                   searchPlaceholder="Search sub-activities…"
                                   emptyMessage="No matching sub-activities."
-                                  disabled={!selectedActivityId}
+                                  disabled={!selectedActivityId || isContinuation}
                                 />
                               </FormControl>
                               <FormMessage />
@@ -1036,11 +1253,15 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       // Prefer the server-computed due_date (existing row);
                       // for a brand-new row not yet saved, preview it
                       // client-side from the report date + allocated duration.
-                      const periodDays = sub.benchmark_period_days ?? 1;
+                      // due_date = started_on + (target_days - 1): a 1-day task
+                      // is due the day it starts, a 2-day task the next day, etc.
+                      // target_days is clamped to >= 1 (a 0/blank benchmark period
+                      // must never push the due date before the start date).
+                      const periodDays = Math.max(1, sub.benchmark_period_days ?? 1);
                       const previewDue = row?.due_date
                         ? row.due_date
                         : reportDate
-                          ? addDays(reportDate, periodDays)
+                          ? addDays(reportDate, periodDays - 1)
                           : null;
 
                       return (
@@ -1056,7 +1277,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                     onChange={(e) => f.onChange(e.target.checked)}
                                   />
                                 </FormControl>
-                                <span>Task Completed</span>
+                                <span>
+                                  {continuationEnabled
+                                    ? "Complete this overall task today"
+                                    : "Task Completed"}
+                                </span>
                                 <span className="text-xs text-muted-foreground">
                                   (within {periodDays}d
                                   {previewDue ? ` — due ${previewDue}` : ""})

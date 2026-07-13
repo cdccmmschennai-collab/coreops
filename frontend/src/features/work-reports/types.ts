@@ -15,6 +15,10 @@ export type WorkReportCreateBody = components["schemas"]["WorkReportCreate"];
 export type WorkReportUpdateBody = components["schemas"]["WorkReportUpdate"];
 export type WorkReportEditRequestBody = components["schemas"]["WorkReportEditRequest"];
 export type TaskCompletionUpdateBody = components["schemas"]["TaskCompletionUpdate"];
+// Task continuation (feature-flagged): an unfinished work item the current
+// employee can continue in the report being written.
+export type OpenTask = components["schemas"]["OpenTaskOut"];
+export type OpenTasks = components["schemas"]["OpenTasksOut"];
 
 export interface WorkReportListParams {
   employee_id: string;

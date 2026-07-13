@@ -31,6 +31,17 @@ export function useWorkReport(id: string | undefined, options?: { enabled?: bool
   });
 }
 
+/** Open (unfinished) work items the current employee can continue in a report
+ * dated `reportDate`. Feature-flagged; callers pass enabled=false when the
+ * task-continuation feature is off or no date is chosen yet. */
+export function useOpenTasks(reportDate: string, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: workReportKeys.openTasks(reportDate),
+    queryFn: () => workReportsApi.openTasks(reportDate),
+    enabled: (options?.enabled ?? true) && !!reportDate,
+  });
+}
+
 export function useCreateWorkReport() {
   const qc = useQueryClient();
   return useMutation({

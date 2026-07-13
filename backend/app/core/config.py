@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     # only for verifying the email/reminder pipeline. Guarded by PM role too.
     ENABLE_DEBUG_ENDPOINTS: bool = False
 
+    # Task continuation (work_items). Off by default. When false, TASK_BASED
+    # report rows keep the legacy standalone behaviour: no work items are
+    # created, no continuation suggestions are served, and existing APIs/exports
+    # are untouched. When true, saving a TASK_BASED row creates/links a WorkItem
+    # so one activity can span several daily reports with a fixed deadline. The
+    # frontend reads the mirror flag NEXT_PUBLIC_FEATURE_TASK_CONTINUATION; keep
+    # the two in step per environment.
+    TASK_CONTINUATION_ENABLED: bool = False
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

@@ -51,6 +51,22 @@ const COUNT_FIELD_LABEL: Record<string, string> = {
   tags: "Tags", docs: "Docs", bom: "BOM", spares: "Spares",
 };
 
+// Task-continuation lifecycle (derived on the server from the work item's dates).
+const LIFECYCLE_LABEL: Record<string, string> = {
+  IN_PROGRESS: "In progress",
+  DUE_TODAY: "Due today",
+  OVERDUE: "Overdue",
+  COMPLETED_ON_TIME: "Completed",
+  COMPLETED_LATE: "Completed late",
+};
+const LIFECYCLE_VARIANT: Record<string, "neutral" | "warning" | "danger" | "success"> = {
+  IN_PROGRESS: "neutral",
+  DUE_TODAY: "warning",
+  OVERDUE: "danger",
+  COMPLETED_ON_TIME: "success",
+  COMPLETED_LATE: "warning",
+};
+
 /** The NUMERIC benchmark's "actual" value — whichever of
  * tags_count/docs_count/bom_count/spares_count the sub-activity's
  * relevant_count_field named, frozen at submit time. There is no separate
@@ -416,7 +432,13 @@ export function WorkReportDetail({ id }: { id: string }) {
                           <Stat label="Completed" value={t.completed_date ?? "—"} />
                         </div>
                         <div className="flex items-center justify-between gap-3">
-                          {t.is_completed ? (
+                          {t.work_item_lifecycle ? (
+                            <Badge variant={LIFECYCLE_VARIANT[t.work_item_lifecycle] ?? "neutral"}>
+                              {t.work_item_lifecycle === "OVERDUE" && t.days_overdue > 0
+                                ? `Overdue by ${t.days_overdue}d`
+                                : LIFECYCLE_LABEL[t.work_item_lifecycle] ?? t.work_item_lifecycle}
+                            </Badge>
+                          ) : t.is_completed ? (
                             <Badge variant="success">Completed</Badge>
                           ) : t.is_overdue ? (
                             <Badge variant="danger">Overdue by {t.days_overdue}d</Badge>
@@ -431,7 +453,11 @@ export function WorkReportDetail({ id }: { id: string }) {
                               loading={toggleCompletion.isPending}
                               onClick={() => void onToggleCompletion(t.id, !t.is_completed)}
                             >
-                              {t.is_completed ? "Reopen" : "Mark complete"}
+                              {t.is_completed
+                                ? "Reopen"
+                                : t.work_item_id
+                                  ? "Complete this overall task today"
+                                  : "Mark complete"}
                             </Button>
                           )}
                         </div>

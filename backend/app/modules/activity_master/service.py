@@ -278,6 +278,7 @@ def get_overdue_activities(
         select(
             DailyWorkReport.employee_id,
             WorkReportTask.id.label("work_report_task_id"),
+            WorkReportTask.work_item_id,
             WorkReportTask.activity_name,
             WorkReportTask.sub_activity_name,
             WorkReportTask.project_code,
@@ -305,12 +306,22 @@ def get_overdue_activities(
         stmt = stmt.where(DailyWorkReport.employee_id.in_(employee_ids))
 
     rows = db.execute(stmt).all()
-    out = []
+    out: list[dict] = []
+    # A work item spans several daily rows sharing one frozen due_date; collapse
+    # them to ONE overdue result, summing the counted actual and keeping the
+    # earliest entry date. Legacy (work_item_id NULL) rows stay 1:1.
+    by_item: dict[uuid.UUID, dict] = {}
     for r in rows:
         _, days_overdue = compute_overdue(r.due_date, False, today)
-        out.append({
+        if r.work_item_id is not None and r.work_item_id in by_item:
+            agg = by_item[r.work_item_id]
+            agg["actual"] = (agg["actual"] or 0) + (r.actual or 0)
+            agg["report_date"] = min(agg["report_date"], r.report_date)
+            continue
+        entry = {
             "employee_id": r.employee_id,
             "work_report_task_id": r.work_report_task_id,
+            "work_item_id": r.work_item_id,
             "activity_name": r.activity_name,
             "sub_activity_name": r.sub_activity_name,
             "project_code": r.project_code,
@@ -322,7 +333,10 @@ def get_overdue_activities(
             "benchmark_period_days": r.benchmark_period_days,
             "benchmark_unit": r.relevant_count_field,
             "actual": r.actual,
-        })
+        }
+        if r.work_item_id is not None:
+            by_item[r.work_item_id] = entry
+        out.append(entry)
     return out
 
 
@@ -360,6 +374,7 @@ def get_cycle_task_activities(
         select(
             DailyWorkReport.employee_id,
             WorkReportTask.id.label("work_report_task_id"),
+            WorkReportTask.work_item_id,
             WorkReportTask.activity_name,
             WorkReportTask.sub_activity_name,
             WorkReportTask.project_code,
@@ -387,12 +402,22 @@ def get_cycle_task_activities(
         stmt = stmt.where(DailyWorkReport.employee_id.in_(employee_ids))
 
     rows = db.execute(stmt).all()
-    out = []
+    out: list[dict] = []
+    # One result per work item (its daily entries share a frozen due_date and
+    # completion): sum the counted actual across entries, keep the earliest date.
+    # Legacy (work_item_id NULL) rows remain one result per row.
+    by_item: dict[uuid.UUID, dict] = {}
     for r in rows:
         _, days_overdue = compute_overdue(r.due_date, r.is_completed, today)
-        out.append({
+        if r.work_item_id is not None and r.work_item_id in by_item:
+            agg = by_item[r.work_item_id]
+            agg["actual"] = (agg["actual"] or 0) + (r.actual or 0)
+            agg["report_date"] = min(agg["report_date"], r.report_date)
+            continue
+        entry = {
             "employee_id": r.employee_id,
             "work_report_task_id": r.work_report_task_id,
+            "work_item_id": r.work_item_id,
             "activity_name": r.activity_name,
             "sub_activity_name": r.sub_activity_name,
             "project_code": r.project_code,
@@ -405,7 +430,10 @@ def get_cycle_task_activities(
             "benchmark_period_days": r.benchmark_period_days,
             "benchmark_unit": r.relevant_count_field,
             "actual": r.actual,
-        })
+        }
+        if r.work_item_id is not None:
+            by_item[r.work_item_id] = entry
+        out.append(entry)
     return out
 
 
@@ -442,6 +470,7 @@ def get_task_status_activities(
         select(
             DailyWorkReport.employee_id,
             WorkReportTask.id.label("work_report_task_id"),
+            WorkReportTask.work_item_id,
             WorkReportTask.activity_name,
             WorkReportTask.sub_activity_name,
             WorkReportTask.project_name,
@@ -467,12 +496,22 @@ def get_task_status_activities(
         stmt = stmt.where(DailyWorkReport.employee_id.in_(employee_ids))
 
     rows = db.execute(stmt).all()
-    out = []
+    out: list[dict] = []
+    # One row per work item (entries share a frozen due_date + completion): sum
+    # the time spent across daily entries, keep the earliest date. Legacy
+    # (work_item_id NULL) rows remain one result per row.
+    by_item: dict[uuid.UUID, dict] = {}
     for r in rows:
         overdue = not r.is_completed and r.due_date < today
-        out.append({
+        if r.work_item_id is not None and r.work_item_id in by_item:
+            agg = by_item[r.work_item_id]
+            agg["hours_minutes"] += int(r.hours_minutes or 0)
+            agg["report_date"] = min(agg["report_date"], r.report_date)
+            continue
+        entry = {
             "employee_id": r.employee_id,
             "work_report_task_id": r.work_report_task_id,
+            "work_item_id": r.work_item_id,
             "activity_name": r.activity_name,
             "sub_activity_name": r.sub_activity_name,
             "project_name": r.project_name,
@@ -483,7 +522,10 @@ def get_task_status_activities(
             "hours_minutes": int(r.hours_minutes or 0),
             "status": "completed" if r.is_completed else "pending",
             "days_overdue": (today - r.due_date).days if overdue else 0,
-        })
+        }
+        if r.work_item_id is not None:
+            by_item[r.work_item_id] = entry
+        out.append(entry)
     out.sort(key=lambda r: (r["due_date"], r["sub_activity_name"]))
     return out
 
