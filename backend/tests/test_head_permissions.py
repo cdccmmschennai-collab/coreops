@@ -153,8 +153,12 @@ def test_non_member_cannot_view_timeline(
     assert client.get(f"{BASE}/{project.id}/timeline", headers=outsider_hdr).status_code == 403
 
 
-# ---- notification routing (Head -> reporting_pm_id -> project_managers) ----
-def test_routing_prefers_head(db, make_user, make_employee, make_project):
+# ---- activity-request routing (reporting_pm_id -> project_managers; Head excluded) ----
+def test_routing_prefers_pm_not_head(db, make_user, make_employee, make_project):
+    """Approved behavior: a second-activity request routes to the responsible PM
+    (the employee's reporting PM), NEVER the Project Head. Reviewing an activity
+    request (approve/reject) is PM-only, so routing it to the Head - who cannot
+    act on it - was noise. Even with a Head assigned, the reporting PM wins."""
     head_u = make_user("h@x.com", role=UserRole.employee)
     head_e = make_employee(employee_code="RH-1", user_id=head_u.id)
     project = make_project(code="RT-1")
@@ -164,11 +168,13 @@ def test_routing_prefers_head(db, make_user, make_employee, make_project):
 
     rep_pm = make_user("rp@x.com", role=UserRole.project_manager)
     author_e = make_employee(employee_code="RA-1")
-    author_e.reporting_pm_id = rep_pm.id  # must NOT win over the Head
+    author_e.reporting_pm_id = rep_pm.id  # the responsible PM wins over the Head
     db.add(author_e)
     db.commit()
 
-    assert _pm_user_ids(db, project.id, author_e) == [head_u.id]
+    recipients = _pm_user_ids(db, project.id, author_e)
+    assert recipients == [rep_pm.id]      # responsible PM is targeted
+    assert head_u.id not in recipients    # Head is NOT targeted
 
 
 def test_routing_falls_back_to_reporting_pm_when_no_head(db, make_user, make_employee, make_project):

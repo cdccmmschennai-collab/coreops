@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.models import ActivityMaster
@@ -36,6 +37,23 @@ def _fetch_request(db: Session, request_id: uuid.UUID) -> ActivityRequest:
     if req is None:
         raise AppError("not_found", "Activity request not found.", 404)
     return req
+
+
+def _has_pending_request(
+    db: Session, employee_id: uuid.UUID, report_id: uuid.UUID
+) -> bool:
+    """Whether the employee already has a PENDING request for this report — the
+    same predicate the partial unique index enforces at the database level."""
+    return (
+        db.execute(
+            select(ActivityRequest.id).where(
+                ActivityRequest.report_id == report_id,
+                ActivityRequest.employee_id == employee_id,
+                ActivityRequest.status == ActivityRequestStatus.pending.value,
+            )
+        ).first()
+        is not None
+    )
 
 
 def _pm_user_ids(
@@ -176,15 +194,12 @@ def create_request(
         raise AppError(
             "forbidden", "You can only request activities on your own report.", 403
         )
-    # One request in flight at a time — mirrors the form's "no further activities
-    # while a request is pending" rule and guards against duplicate clicks.
-    existing = db.execute(
-        select(ActivityRequest.id).where(
-            ActivityRequest.report_id == data.report_id,
-            ActivityRequest.status == ActivityRequestStatus.pending.value,
-        )
-    ).first()
-    if existing is not None:
+    # One pending request per employee/report — mirrors the form's "no further
+    # activities while a request is pending" rule and guards against duplicate
+    # clicks. This pre-check gives a clean message in the common case; the
+    # partial unique index activity_requests_one_pending_per_report_uq is the
+    # authoritative guard against a concurrent/duplicate insert (handled below).
+    if _has_pending_request(db, employee.id, data.report_id):
         raise AppError(
             "validation_error",
             "A request for this report is already pending approval.",
@@ -204,7 +219,18 @@ def create_request(
         status=ActivityRequestStatus.pending.value,
     )
     db.add(req)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Lost the race to a concurrent/duplicate create: the unique index
+        # rejected the second pending request. Surface it as the same business
+        # validation response the pre-check returns, never a 500.
+        db.rollback()
+        raise AppError(
+            "validation_error",
+            "A request for this report is already pending approval.",
+            422,
+        )
     db.refresh(req)
 
     _attach_names(db, [req])

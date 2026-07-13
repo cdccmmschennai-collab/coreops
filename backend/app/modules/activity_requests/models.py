@@ -54,12 +54,13 @@ class ActivityRequest(UUIDMixin, Base):
     sub_activity_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="RESTRICT"), nullable=False
     )
-    # Legacy Task-link column — Task module removed (Phase 1); FK dropped from the
-    # model so the mapper does not require the gone tasks table. Column dropped in
-    # migration 0053 (Task 7).
-    task_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    # NOTE: there is deliberately no ``task_id`` mapping. The Tasks module was
+    # removed and no runtime code (service, schemas, router, tests) ever reads or
+    # writes an activity-request task_id. Production never had the column at all
+    # (0050 was applied in its legacy shape), and mapping it made every SELECT
+    # emit ``activity_requests.task_id`` -> UndefinedColumn there. A leftover
+    # ``task_id`` column may still exist on clean DBs (created by the rewritten
+    # 0050); it is left unmapped and inert. See migration 0057.
     tags_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -85,4 +86,15 @@ class ActivityRequest(UUIDMixin, Base):
         Index("activity_requests_employee_idx", "employee_id"),
         Index("activity_requests_status_idx", "status"),
         Index("activity_requests_report_idx", "report_id"),
+        # Database-level guard for the "one pending request per employee/report"
+        # rule (see service.create_request). Partial + scoped to non-null
+        # report_id so legacy rows (report_id NULL) are never constrained.
+        # Created by migration 0057.
+        Index(
+            "activity_requests_one_pending_per_report_uq",
+            "employee_id",
+            "report_id",
+            unique=True,
+            postgresql_where=text("status = 'pending' AND report_id IS NOT NULL"),
+        ),
     )
