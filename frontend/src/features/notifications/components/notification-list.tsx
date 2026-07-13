@@ -1,6 +1,5 @@
 "use client";
 
-import * as React from "react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
@@ -10,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Tabs } from "@/components/ui/tabs";
 import { Pagination } from "@/components/data/pagination";
 import { TableSkeleton } from "@/components/feedback/table-skeleton";
+import { useUrlState } from "@/lib/use-url-state";
 
 import { useMarkAllRead, useMarkRead, useNotifications } from "../hooks";
 import { NotificationItemFull } from "./notification-item";
@@ -17,8 +17,12 @@ import { NotificationItemFull } from "./notification-item";
 const LIMIT = 20;
 
 export function NotificationList() {
-  const [tab, setTab] = React.useState<"all" | "unread">("all");
-  const [offset, setOffset] = React.useState(0);
+  // Tab + page persist in the URL so opening a notification's target and coming
+  // back returns to the same tab/page.
+  const [tab, setTab] = useUrlState("tab", "all");
+  const [offsetStr, setOffsetStr] = useUrlState("offset", "0");
+  const offset = Math.max(0, Number(offsetStr) || 0);
+  const setOffset = (o: number) => setOffsetStr(String(o));
 
   const query = useNotifications({
     unread_only: tab === "unread",

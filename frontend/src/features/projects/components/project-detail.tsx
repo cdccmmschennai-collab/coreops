@@ -33,6 +33,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
 import { can } from "@/lib/rbac";
+import { useUrlState } from "@/lib/use-url-state";
 
 import { Tabs } from "@/components/ui/tabs";
 import { ActivitiesTab } from "@/features/project-activities/components/activities-tab";
@@ -188,7 +189,8 @@ export function ProjectDetail({ id }: { id: string }) {
   const project = query.data;
   const [confirm, setConfirm] = React.useState<Project | null>(null);
   const [dateDialogOpen, setDateDialogOpen] = React.useState(false);
-  const [activeTab, setActiveTab] = React.useState("overview");
+  // Active tab lives in the URL so leaving and returning keeps the same tab.
+  const [activeTab, setActiveTab] = useUrlState("tab", "overview");
 
   if (query.isLoading) {
     return (

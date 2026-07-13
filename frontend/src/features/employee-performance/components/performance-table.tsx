@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/table";
 import { weekStartISO } from "@/features/dashboard/utils";
 import { formatInt } from "@/lib/format";
+import { useUrlState } from "@/lib/use-url-state";
 
 import { downloadPendingBenchmarkXlsx } from "../api";
 import { useEmployeesPerformance } from "../hooks";
@@ -101,17 +102,27 @@ function cycleRangeLabel(cycle: BenchmarkCycle): string {
  */
 export function PerformanceTable() {
   const router = useRouter();
-  const [search, setSearch] = React.useState("");
-  const [page, setPage] = React.useState(1);
-  // Default ordering: the employees with the most pending work surface first so
-  // the PM sees who needs attention at a glance (highest pending → lowest).
-  const [sort, setSort] = React.useState<PerformanceSort>("pending");
-  const [order, setOrder] = React.useState<"asc" | "desc">("desc");
-  const [statusFilter, setStatusFilter] = React.useState<StatusFilter>("all");
+  // Search / sort / status / cycle / page all persist in the URL so returning
+  // from an employee detail page restores the exact view. Namespaced (pf_*) to
+  // avoid colliding with anything else on the dashboard URL. Default ordering:
+  // the employees with the most pending work surface first so the PM sees who
+  // needs attention at a glance (highest pending → lowest).
+  const [search, setSearch] = useUrlState("pf_q", "");
+  const [pageStr, setPageStr] = useUrlState("pf_page", "1");
+  const [sortRaw, setSortRaw] = useUrlState("pf_sort", "pending");
+  const [orderRaw, setOrderRaw] = useUrlState("pf_order", "desc");
+  const [statusRaw, setStatusFilter] = useUrlState("pf_status", "all");
   // Fri..Thu benchmark window — defaults to the current (live) cycle for
   // viewing; "previous" lets the PM review/export the finished cycle.
-  const [cycle, setCycle] = React.useState<BenchmarkCycle>("current");
+  const [cycleRaw, setCycleRaw] = useUrlState("pf_cycle", "current");
   const [exporting, setExporting] = React.useState(false);
+
+  const page = Math.max(1, Number(pageStr) || 1);
+  const setPage = (n: number) => setPageStr(String(n));
+  const sort = sortRaw as PerformanceSort;
+  const order = orderRaw as "asc" | "desc";
+  const statusFilter = statusRaw as StatusFilter;
+  const cycle = cycleRaw as BenchmarkCycle;
 
   // Collapse state: default expanded on first visit, then persisted. Read in an
   // effect (not in the initializer) so server and first client render agree.
@@ -143,7 +154,7 @@ export function PerformanceTable() {
   }
 
   function onCycleChange(next: BenchmarkCycle) {
-    setCycle(next);
+    setCycleRaw(next);
     setPage(1);
   }
 
@@ -160,10 +171,10 @@ export function PerformanceTable() {
 
   function toggleSort(key: PerformanceSort) {
     if (sort === key) {
-      setOrder((o) => (o === "asc" ? "desc" : "asc"));
+      setOrderRaw(order === "asc" ? "desc" : "asc");
     } else {
-      setSort(key);
-      setOrder(key === "name" ? "asc" : "desc");
+      setSortRaw(key);
+      setOrderRaw(key === "name" ? "asc" : "desc");
     }
     setPage(1);
   }

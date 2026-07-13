@@ -1,10 +1,9 @@
 "use client";
 
-import * as React from "react";
-
 import { BackButton } from "@/components/shell/back-button";
 import { PageHeader } from "@/components/shell/page-header";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
+import { useUrlState } from "@/lib/use-url-state";
 
 import { useEmployeeOverview } from "../hooks";
 import { AttendanceTab } from "./tabs/attendance-tab";
@@ -28,7 +27,9 @@ const TABS: TabItem[] = [
  * Overview tab reuses the SAME component as the Layer 2 drawer.
  */
 export function EmployeeDetailPage({ employeeId }: { employeeId: string }) {
-  const [tab, setTab] = React.useState("overview");
+  // Active tab lives in the URL so opening a report (or any detail) and coming
+  // back returns to the same tab instead of resetting to Overview.
+  const [tab, setTab] = useUrlState("tab", "overview");
   const { data } = useEmployeeOverview(employeeId);
 
   return (

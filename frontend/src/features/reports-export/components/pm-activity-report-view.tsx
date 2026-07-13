@@ -16,13 +16,13 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { useUrlState } from "@/lib/use-url-state";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useProjectOptions } from "@/features/work-reports/project-options";
 
 import { downloadActivityXlsx } from "../api";
 import { useActivityOptions, useActivityRows, useSubActivityOptions } from "../hooks";
 import {
-  EMPTY_FILTERS,
   type ActivityCell,
   type ActivityReportFilters,
 } from "../types";
@@ -46,7 +46,21 @@ function sumKey(acts: ActivityCell[], key: (typeof COUNTS)[number]["key"]) {
 }
 
 export function PmActivityReportView() {
-  const [filters, setFilters] = React.useState<ActivityReportFilters>(EMPTY_FILTERS);
+  // Filters live in the URL so they survive navigating away and back.
+  const [employeeId, setEmployeeId] = useUrlState("employee_id", "");
+  const [projectId, setProjectId] = useUrlState("project_id", "");
+  const [activityId, setActivityId] = useUrlState("activity_id", "");
+  const [subActivityId, setSubActivityId] = useUrlState("sub_activity_id", "");
+  const [fromDate, setFromDate] = useUrlState("from", "");
+  const [toDate, setToDate] = useUrlState("to", "");
+  const filters: ActivityReportFilters = {
+    employee_id: employeeId,
+    project_id: projectId,
+    activity_id: activityId,
+    sub_activity_id: subActivityId,
+    from: fromDate,
+    to: toDate,
+  };
   const [exporting, setExporting] = React.useState(false);
 
   const { items: employees } = useEmployeeOptions();
@@ -64,10 +78,6 @@ export function PmActivityReportView() {
   const subOptions = (subActivities.data ?? []).filter(
     (s) => !filters.activity_id || s.activity_id === filters.activity_id,
   );
-
-  function patch(p: Partial<ActivityReportFilters>) {
-    setFilters((f) => ({ ...f, ...p }));
-  }
 
   async function onExport() {
     setExporting(true);
@@ -97,7 +107,7 @@ export function PmActivityReportView() {
 
       {/* Filters */}
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        <Select value={filters.employee_id || ALL} onValueChange={(v) => patch({ employee_id: v === ALL ? "" : v })}>
+        <Select value={filters.employee_id || ALL} onValueChange={(v) => setEmployeeId(v === ALL ? "" : v)}>
           <SelectTrigger className="sm:w-56"><SelectValue placeholder="Employee" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All employees</SelectItem>
@@ -107,7 +117,7 @@ export function PmActivityReportView() {
           </SelectContent>
         </Select>
 
-        <Select value={filters.project_id || ALL} onValueChange={(v) => patch({ project_id: v === ALL ? "" : v })}>
+        <Select value={filters.project_id || ALL} onValueChange={(v) => setProjectId(v === ALL ? "" : v)}>
           <SelectTrigger className="sm:w-56"><SelectValue placeholder="Project Code" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All projects</SelectItem>
@@ -117,7 +127,7 @@ export function PmActivityReportView() {
           </SelectContent>
         </Select>
 
-        <Select value={filters.activity_id || ALL} onValueChange={(v) => patch({ activity_id: v === ALL ? "" : v, sub_activity_id: "" })}>
+        <Select value={filters.activity_id || ALL} onValueChange={(v) => { setActivityId(v === ALL ? "" : v); setSubActivityId(""); }}>
           <SelectTrigger className="sm:w-48"><SelectValue placeholder="Activity" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All activities</SelectItem>
@@ -127,7 +137,7 @@ export function PmActivityReportView() {
           </SelectContent>
         </Select>
 
-        <Select value={filters.sub_activity_id || ALL} onValueChange={(v) => patch({ sub_activity_id: v === ALL ? "" : v })}>
+        <Select value={filters.sub_activity_id || ALL} onValueChange={(v) => setSubActivityId(v === ALL ? "" : v)}>
           <SelectTrigger className="sm:w-56"><SelectValue placeholder="Sub Activity" /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All sub activities</SelectItem>
@@ -138,9 +148,9 @@ export function PmActivityReportView() {
         </Select>
 
         <div className="flex items-center gap-1">
-          <Input type="date" className="sm:w-40" value={filters.from} onChange={(e) => patch({ from: e.target.value })} aria-label="From date" />
+          <Input type="date" className="sm:w-40" value={filters.from} onChange={(e) => setFromDate(e.target.value)} aria-label="From date" />
           <span className="text-muted-foreground">→</span>
-          <Input type="date" className="sm:w-40" value={filters.to} onChange={(e) => patch({ to: e.target.value })} aria-label="To date" />
+          <Input type="date" className="sm:w-40" value={filters.to} onChange={(e) => setToDate(e.target.value)} aria-label="To date" />
         </div>
       </div>
 

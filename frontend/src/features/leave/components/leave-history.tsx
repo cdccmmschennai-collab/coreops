@@ -1,6 +1,5 @@
 "use client";
 
-import * as React from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -17,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AppError } from "@/lib/api-client";
+import { useUrlState } from "@/lib/use-url-state";
 
 import { useCancelLeave, useLeaveList } from "../hooks";
 import { LEAVE_TYPE_LABEL } from "../types";
@@ -31,7 +31,10 @@ interface Props {
 /** Employee leave history with cancel action for pending requests. */
 export function LeaveHistory({ employeeId }: Props) {
   const router = useRouter();
-  const [offset, setOffset] = React.useState(0);
+  // Page persists in the URL (namespaced lh_*) so returning from a leave detail
+  // page keeps the same page.
+  const [offsetStr, setOffsetStr] = useUrlState("lh_offset", "0");
+  const offset = Math.max(0, Number(offsetStr) || 0);
   const query = useLeaveList({
     employee_id: employeeId,
     limit: LIMIT,
@@ -117,7 +120,7 @@ export function LeaveHistory({ employeeId }: Props) {
           total={query.data?.total ?? 0}
           limit={LIMIT}
           offset={offset}
-          onPageChange={setOffset}
+          onPageChange={(o) => setOffsetStr(String(o))}
         />
       )}
     </div>
