@@ -428,18 +428,23 @@ def _task_export_cells(r: dict) -> dict:
 def get_pending_benchmark_export(
     db: Session, *, cycle: str = "previous", today: date | None = None
 ) -> dict:
-    """Rows for the PM's pending-benchmark XLSX export.
+    """Rows for the PM's full-cycle benchmark XLSX export.
 
-    An employee is INCLUDED when they have something outstanding this cycle:
-    NUMERIC *reconciled* pending > 0 (a day recovered by a later day's surplus
-    doesn't count, matching the team-alerts backlog), or a TASK_BASED lumpsum
-    that's overdue. Once included, though, we export the employee's WHOLE
-    Fri..Thu benchmark story, not just the shortfall rows: every NUMERIC day
-    (over-, exactly-, or under-target) and every TASK_BASED lumpsum (completed,
-    overdue, or still open). That's what makes the ACHIEVEMENT % legible - a
-    111% employee whose only pending row reads 250/200 now also shows the
-    earlier days where he ran ahead. The two row sources are disjoint by
-    benchmark_type, so nothing duplicates.
+    EVERY employee with ANY benchmark activity this cycle is exported — a
+    NUMERIC ledger day or a TASK_BASED lumpsum — regardless of whether anything
+    is still pending. Management evaluates complete cycle performance, so an
+    employee who met or exceeded every benchmark appears alongside one who fell
+    short; nothing is filtered on pending > 0. Each employee shows their WHOLE
+    Fri..Thu benchmark story: every NUMERIC day (over-, exactly-, or
+    under-target) and every TASK_BASED lumpsum (completed, overdue, or still
+    open). The two row sources are disjoint by benchmark_type, so nothing
+    duplicates.
+
+    Each NUMERIC detail row shows its own *daily* shortage (max(0, daily target
+    - daily actual)); the per-employee TOTAL row instead nets the whole cycle
+    per unit (see the workbook builder), so a day's overachievement compensates
+    another day's shortfall within the same benchmark unit — the total pending
+    is NOT the sum of the daily shortages.
 
     `cycle` picks the Fri..Thu window: "current" is the cycle containing
     today; "previous" (the default) is the last completed one — PMs export on
@@ -450,18 +455,11 @@ def get_pending_benchmark_export(
     # The ledger derives its own bounds from `today`, so any date inside the
     # wanted cycle selects it; use its end day.
     daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
-    effective = _reconcile_effective_pending(daily)
     cycle_tasks = get_cycle_task_activities(db, employee_ids=None, today=cycle_end)
 
-    def _pending(r: dict) -> Decimal:
-        return effective.get((r["employee_id"], r["date"], r["sub_activity_id"]), r["pending"])
-
-    # Inclusion set: still-pending NUMERIC work, or an overdue lumpsum.
-    included = {
-        r["employee_id"] for r in daily if _pending(r) > 0
-    } | {
-        r["employee_id"] for r in cycle_tasks if not r["is_completed"] and r["days_overdue"] > 0
-    }
+    # Inclusion set: everyone with any benchmark activity this cycle, achievers
+    # included. No pending filter.
+    included = {r["employee_id"] for r in daily} | {r["employee_id"] for r in cycle_tasks}
 
     labels: dict[uuid.UUID, str] = {}
     if included:
@@ -470,8 +468,8 @@ def get_pending_benchmark_export(
         ).scalars().all()
         labels = {e.id: f"{e.employee_code} - {e.full_name}" for e in emps}
 
-    # Every NUMERIC day for an included employee (pending shown reconciled, so
-    # an over-/on-target day reads 0). The *_total twins feed the TOTAL row.
+    # Every NUMERIC day for an included employee, showing that day's own
+    # shortage. The *_total twins feed the cycle-netted TOTAL row.
     rows = [
         {
             "employee_label": labels.get(r["employee_id"], "-"),
@@ -482,10 +480,10 @@ def get_pending_benchmark_export(
             "unit": r["benchmark_unit"],
             "target": r["target"],
             "actual": r["actual"],
-            "pending": _pending(r),
+            "pending": r["pending"],  # daily shortage; TOTAL nets the cycle
             "target_total": r["target"],
             "actual_total": r["actual"],
-            "pending_total": _pending(r),
+            "pending_total": r["pending"],
         }
         for r in daily
         if r["employee_id"] in included

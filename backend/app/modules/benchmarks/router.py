@@ -16,7 +16,10 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
 from app.modules.benchmarks import service
-from app.modules.reports_export.export import build_pending_benchmark_workbook
+from app.modules.reports_export.export import (
+    build_pending_benchmark_workbook,
+    date_range_label,
+)
 from app.modules.benchmarks.schemas import (
     EmployeeBenchmarksOut,
     EmployeeOverviewOut,
@@ -71,17 +74,17 @@ def pending_export_xlsx(
     _user: User = PMUser,
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """PM-only Pending Benchmark export — reconciled pending > 0 rows only,
-    grouped employee-wise with a TOTAL row each. Defaults to the previous
-    completed Fri..Thu cycle (PMs export Friday morning); ?cycle=current
-    exports the active one."""
+    """PM-only full-cycle Benchmark export — every benchmark activity row in
+    the cycle for every employee with activity (achievers included, no
+    pending > 0 filter), grouped employee-wise with a TOTAL row each. Defaults
+    to the previous completed Fri..Thu cycle (PMs export Friday morning);
+    ?cycle=current exports the active one."""
     data = service.get_pending_benchmark_export(db, cycle=cycle)
     buf = build_pending_benchmark_workbook(
         data["rows"], data["cycle_start"], data["cycle_end"], data["achievements"]
     )
     filename = (
-        f"pending-benchmark-{data['cycle_start'].isoformat()}"
-        f"-to-{data['cycle_end'].isoformat()}.xlsx"
+        f"BENCHMARK REPORT {date_range_label(data['cycle_start'], data['cycle_end'])}.xlsx"
     )
     return StreamingResponse(
         buf,

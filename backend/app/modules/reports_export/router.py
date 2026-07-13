@@ -76,7 +76,12 @@ def activity_rows_xlsx(
 ) -> StreamingResponse:
     data = _groups(db, current, employee_id, project_id, activity_id, sub_activity_id, date_from, date_to)
     buf = export.build_workbook(data["rows"], data["max_activities"])
-    filename = f"weekly-activity-report-{date.today().isoformat()}.xlsx"
+    # Filename range: the explicit from/to filter when set, else the span of
+    # the rows actually in the report, else today.
+    dates = [r["report_date"] for r in data["rows"]]
+    start = date_from or (min(dates) if dates else date.today())
+    end = date_to or (max(dates) if dates else date.today())
+    filename = f"ACTIVITY REPORT {export.date_range_label(start, end)}.xlsx"
     return StreamingResponse(
         buf,
         media_type=XLSX_MEDIA,

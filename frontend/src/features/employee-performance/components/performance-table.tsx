@@ -269,7 +269,7 @@ export function PerformanceTable() {
               </DropdownMenu>
               <Button onClick={onExport} disabled={exporting}>
                 <Download className="h-4 w-4" />
-                {exporting ? "Exporting…" : "Export Pending Benchmark"}
+                {exporting ? "Exporting…" : "Export Full Cycle Report"}
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-2">

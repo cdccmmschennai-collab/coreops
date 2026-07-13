@@ -50,6 +50,12 @@ _FIXED_LEFT = [
 _REMARKS = ("Day Remarks", 68.4, False)
 
 
+def date_range_label(start, end) -> str:
+    """Human filename range like "03 JUL - 09 JUL" (zero-padded day, uppercase
+    month), used in the download filenames of both XLSX exports."""
+    return f"{start.strftime('%d %b').upper()} - {end.strftime('%d %b').upper()}"
+
+
 def _new_sheet():
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -128,8 +134,13 @@ def _grade_fill(pct):
 def build_pending_benchmark_workbook(
     rows: list[dict], cycle_start, cycle_end, achievements: dict[str, int] | None = None
 ) -> BytesIO:
-    """Pending Benchmark XLSX: employee-wise sections of date-wise pending
-    rows, then one bold TOTAL row per employee.
+    """Full-cycle Benchmark XLSX: employee-wise sections of date-wise detail
+    rows (each showing that day's own shortage), then one bold TOTAL row per
+    employee. The TOTAL row repeats the employee's EMP CODE & NAME value so an
+    Excel filter on an employee returns both their detail rows and their TOTAL
+    row. Its PENDING columns net the whole cycle per unit
+    (MAX(0, cycle_target - cycle_actual)) rather than summing the daily
+    shortages, so a day's overachievement offsets another day's shortfall.
 
     Header is two rows, built so Excel's AutoFilter actually works with the
     grouped layout: row 1 carries ONLY the merged group labels (BENCHMARK
@@ -220,6 +231,11 @@ def build_pending_benchmark_workbook(
                         group_start(gi) + ui,
                         value if isinstance(value, str) else float(value),
                     )
+                # Accumulate cycle target/actual only; the cycle pending is
+                # derived from them on the TOTAL row so a day's overachievement
+                # nets another day's shortfall (see below) instead of summing
+                # the daily shortages.
+                for gi, key in enumerate(("target", "actual")):
                     total_value = row[f"{key}_total"]
                     if total_value is not None:
                         totals[gi][ui] += float(total_value)
@@ -229,9 +245,18 @@ def build_pending_benchmark_workbook(
             style_row(r)
             r += 1
 
-        # TOTAL row: label in SUB ACTIVITY; per-unit sums for units this
-        # employee has numeric contributions in, plus a cross-unit group TOTAL;
-        # ACHIEVEMENT % (full-cycle) and its colour grade span the whole row.
+        # Cycle pending per unit = MAX(0, cycle_target - cycle_actual): a day's
+        # overachievement compensates another day's shortfall within the same
+        # unit, so this is NOT the sum of the daily shortages shown above.
+        for ui in range(n_units):
+            totals[2][ui] = max(0.0, totals[0][ui] - totals[1][ui])
+
+        # TOTAL row: EMP CODE & NAME repeated (so an Excel filter on the
+        # employee returns their detail rows AND this TOTAL row) and TOTAL in
+        # SUB ACTIVITY; per-unit sums for units this employee has numeric
+        # contributions in, plus a cross-unit group TOTAL; ACHIEVEMENT %
+        # (full-cycle) and its colour grade span the whole row.
+        ws.cell(r, 1, label)
         ws.cell(r, 5, "TOTAL")
         any_used = any(used)
         for gi in range(len(_PB_GROUPS)):

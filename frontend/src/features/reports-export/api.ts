@@ -38,11 +38,14 @@ export async function downloadActivityXlsx(f: ActivityReportFilters): Promise<vo
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Export failed (${res.status})`);
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const filename =
+    /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? "activity-report.xlsx";
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "weekly-activity-report.xlsx";
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();

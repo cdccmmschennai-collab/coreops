@@ -11,6 +11,7 @@ import pytest
 
 from app.modules.activity_master.service import compute_week_bounds
 from app.modules.projects.models import ProjectStatus
+from app.modules.reports_export.export import date_range_label
 from app.modules.users.models import UserRole
 
 BASE = "/api/v1/work-reports"
@@ -35,7 +36,7 @@ def activity_admin(auth_header):
     return auth_header(email="pm@x.com", role=UserRole.project_manager)
 
 
-def _make_sub_activity(client, admin_header, *, benchmark_value, name="Sub"):
+def _make_sub_activity(client, admin_header, *, benchmark_value, name="Sub", count_field="tags"):
     a = client.post(
         "/api/v1/activity-master/activities", json={"name": f"Activity for {name}"}, headers=admin_header
     ).json()
@@ -43,7 +44,7 @@ def _make_sub_activity(client, admin_header, *, benchmark_value, name="Sub"):
         f"/api/v1/activity-master/activities/{a['id']}/sub-activities",
         json={
             "name": name, "benchmark_type": "NUMERIC",
-            "benchmark_value": benchmark_value, "relevant_count_field": "tags",
+            "benchmark_value": benchmark_value, "relevant_count_field": count_field,
         },
         headers=admin_header,
     ).json()
@@ -68,12 +69,12 @@ def _make_task_sub(client, admin_header, *, name):
     return a, sub
 
 
-def _submit(client, header, project_id, sub_id, report_date, tags):
+def _submit(client, header, project_id, sub_id, report_date, qty, count_field="tags"):
     payload = {
         "report_date": report_date.isoformat(),
         "tasks": [{
             "project_id": str(project_id), "description": "work",
-            "sub_activity_id": sub_id, "tags_count": tags,
+            "sub_activity_id": sub_id, f"{count_field}_count": qty,
         }],
     }
     created = client.post(BASE, headers=header, json=payload)
@@ -101,11 +102,11 @@ def _fill(cell):
 
 
 def _total_rows_by_label(ws):
-    """Map each employee label -> its TOTAL row index. The label lives on the
-    data rows; the TOTAL row's own EMP cell is blank, so read the row above it
-    (always a data row of the same employee section)."""
+    """Map each employee label -> its TOTAL row index. The TOTAL row now repeats
+    the employee's EMP CODE & NAME in column 1 (so a per-employee Excel filter
+    keeps it), so read it directly."""
     return {
-        ws.cell(r - 1, 1).value: r
+        ws.cell(r, 1).value: r
         for r in range(3, ws.max_row + 1)
         if ws.cell(r, 5).value == "TOTAL"
     }
@@ -128,9 +129,9 @@ GREEN = "FFC6EFCE"
 RED = "FFFFC7CE"
 
 # Column map after the per-group TOTAL sub-columns + ACHIEVEMENT % were added.
-TGT_TAGS, TGT_TOTAL = 6, 10
-ACT_TAGS, ACT_TOTAL = 11, 15
-PEN_TAGS, PEN_TOTAL = 16, 20
+TGT_TAGS, TGT_DOCS, TGT_TOTAL = 6, 7, 10
+ACT_TAGS, ACT_DOCS, ACT_TOTAL = 11, 12, 15
+PEN_TAGS, PEN_DOCS, PEN_TOTAL = 16, 17, 20
 ACH, CYC_START, CYC_END = 21, 22, 23
 
 
@@ -174,7 +175,7 @@ def test_default_export_is_previous_cycle_with_grouped_header_and_total(
     assert res.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-    assert f"pending-benchmark-{cycle_start.isoformat()}-to-{cycle_end.isoformat()}.xlsx" in (
+    assert f"BENCHMARK REPORT {date_range_label(cycle_start, cycle_end)}.xlsx" in (
         res.headers["content-disposition"]
     )
 
@@ -216,7 +217,8 @@ def test_default_export_is_previous_cycle_with_grouped_header_and_total(
     assert _cell_date(ws.cell(3, CYC_START).value) == cycle_start
     assert _cell_date(ws.cell(3, CYC_END).value) == cycle_end
 
-    assert ws.cell(4, 1).value is None
+    # TOTAL row repeats the full "CODE - NAME" so an employee filter keeps it.
+    assert ws.cell(4, 1).value == "E-1 - Test User"
     assert ws.cell(4, 5).value == "TOTAL"
     assert ws.cell(4, TGT_TAGS).value == 250
     assert ws.cell(4, TGT_TOTAL).value == 250       # cross-unit group total
@@ -356,12 +358,13 @@ def test_task_based_lumpsum_rows_case_a_and_b(client, db, setup_author, activity
     assert _fill(ws.cell(5, 1)) == RED
 
 
-def test_recovered_deficit_is_reconciled_away_and_employee_excluded(
+def test_later_overachievement_offsets_earlier_shortage(
     client, setup_author, activity_admin,
 ):
-    """A later day's surplus pays down an earlier deficit (frozen
-    reconciliation); an employee with nothing left pending after that has no
-    rows at all — the export is header-only."""
+    """A later day's surplus offsets an earlier day's shortfall at the cycle
+    TOTAL, even though each detail row keeps its own daily shortage. The
+    employee (fully recovered, nothing net pending) is STILL exported — the
+    full-cycle report is not filtered on pending > 0."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=250, name="FMTL")
     cycle_start, _ = _prev_cycle()
@@ -372,7 +375,47 @@ def test_recovered_deficit_is_reconciled_away_and_employee_excluded(
     res = client.get(EXPORT_URL, headers=activity_admin)
     assert res.status_code == 200
     ws = _load_sheet(res.content)
-    assert ws.max_row == 2  # header only — no data rows, no TOTAL row
+    label = "E-1 - Test User"
+
+    # Both days appear, each with its OWN daily shortage.
+    early = _find_row(ws, label, "FMTL", cycle_start)
+    assert ws.cell(early, PEN_TAGS).value == 150   # early day still shows 150
+    late = _find_row(ws, label, "FMTL", monday)
+    assert ws.cell(late, PEN_TAGS).value == 0      # over-target day shows 0
+
+    # TOTAL nets the whole cycle: 500 target / 500 actual -> 0 pending, 100%.
+    total = _total_rows_by_label(ws)[label]
+    assert ws.cell(total, TGT_TAGS).value == 500
+    assert ws.cell(total, ACT_TAGS).value == 500
+    assert ws.cell(total, PEN_TAGS).value == 0     # NOT 150 (sum of daily shortages)
+    assert ws.cell(total, PEN_TOTAL).value == 0
+    assert ws.cell(total, ACH).value == 1.0
+    assert _fill(ws.cell(total, 1)) == GREEN
+
+
+def test_earlier_overachievement_offsets_later_shortage(
+    client, setup_author, activity_admin,
+):
+    """The mirror case: an early day's surplus offsets a later day's shortfall
+    at the cycle TOTAL. The later short day keeps its own daily shortage, but
+    the netted TOTAL pending is 0."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=250, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    monday = cycle_start + timedelta(days=3)
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 400)  # surplus 150
+    _submit(client, a["header"], a["project"].id, sub["id"], monday, 100)       # short 150
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+
+    assert ws.cell(_find_row(ws, label, "FMTL", cycle_start), PEN_TAGS).value == 0
+    assert ws.cell(_find_row(ws, label, "FMTL", monday), PEN_TAGS).value == 150
+
+    total = _total_rows_by_label(ws)[label]
+    assert ws.cell(total, PEN_TAGS).value == 0     # 500 target / 500 actual
+    assert ws.cell(total, ACH).value == 1.0
+    assert _fill(ws.cell(total, 1)) == GREEN
 
 
 def test_achievement_grades_full_cycle_not_visible_pending(
@@ -513,3 +556,148 @@ def test_completed_count_based_lumpsum_counts_toward_percentage(
     total = _total_rows_by_label(ws)[label]
     assert ws.cell(total, ACH).value == 0.95
     assert _fill(ws.cell(total, 1)) is None
+
+
+# --- full-cycle export: achievers included, cycle-netted totals -------------
+
+def test_employee_with_no_pending_is_still_exported(client, setup_author, activity_admin):
+    """An employee who met every benchmark exactly (nothing pending) is still
+    exported — the full-cycle report is not filtered on pending > 0."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 100)  # exactly met
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    assert label in _total_rows_by_label(ws)
+    total = _total_rows_by_label(ws)[label]
+    assert ws.cell(total, PEN_TAGS).value == 0
+    assert ws.cell(total, ACH).value == 1.0
+    assert _fill(ws.cell(total, 1)) == GREEN
+
+
+def test_employee_exceeding_100_percent_is_exported(client, setup_author, activity_admin):
+    """An overachiever (actual > target, zero pending) is exported and their
+    ACHIEVEMENT % is NOT capped at 100."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 175)  # 175%
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    total = _total_rows_by_label(ws)["E-1 - Test User"]
+    assert ws.cell(total, PEN_TAGS).value == 0
+    assert ws.cell(total, ACH).value == 1.75  # uncapped
+    assert _fill(ws.cell(total, 1)) == GREEN
+
+
+def test_total_row_repeats_exact_employee_code_and_name(client, setup_author, activity_admin):
+    """The TOTAL row's EMP CODE & NAME cell holds the IDENTICAL value used on
+    the detail rows (not blank, not the bare name) so an Excel employee filter
+    returns both the detail rows and the TOTAL row."""
+    a = setup_author(code="CDC002", first_name="RAMASRINIVASAMOORTHY", last_name="D")
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 80)
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    expected = "CDC002 - RAMASRINIVASAMOORTHY D"
+    detail = _find_row(ws, expected, "FMTL", cycle_start)
+    total = _total_rows_by_label(ws)[expected]
+    assert ws.cell(detail, 1).value == expected
+    # TOTAL cell equals the detail cell exactly — same string, same case/spacing.
+    assert ws.cell(total, 1).value == ws.cell(detail, 1).value == expected
+
+
+def test_percentage_uses_the_entire_cycle(client, setup_author, activity_admin):
+    """ACHIEVEMENT % is computed from the whole cycle's summed actual/target,
+    not from any single visible row: (120 + 60) / (100 + 100) = 90%."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    day2 = cycle_start + timedelta(days=1)
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 120)  # over
+    _submit(client, a["header"], a["project"].id, sub["id"], day2, 60)          # short
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    total = _total_rows_by_label(ws)["E-1 - Test User"]
+    # Cross-day: totals net to 180/200 = 90%, pending = max(0, 200-180) = 20.
+    assert ws.cell(total, TGT_TAGS).value == 200
+    assert ws.cell(total, ACT_TAGS).value == 180
+    assert ws.cell(total, PEN_TAGS).value == 20
+    assert ws.cell(total, ACH).value == 0.9
+
+
+def test_no_numeric_target_does_not_divide_by_zero(client, db, setup_author, activity_admin):
+    """An employee whose only benchmark activity is a plain (non-count)
+    TASK_BASED task has no numeric target — the export includes them without a
+    division-by-zero, leaving ACHIEVEMENT % blank."""
+    import uuid as uuid_mod
+
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, task = _make_task_sub(client, activity_admin, name="PLAIN")
+    cycle_start, cycle_end = _prev_cycle()
+    payload = {
+        "report_date": cycle_start.isoformat(),
+        "tasks": [{"project_id": str(a["project"].id), "description": "x", "sub_activity_id": task["id"]}],
+    }
+    body = client.post(BASE, headers=a["header"], json=payload).json()
+    assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
+    row = db.get(WorkReportTask, uuid_mod.UUID(body["tasks"][0]["id"]))
+    row.due_date = cycle_end - timedelta(days=1)
+    db.commit()
+
+    res = client.get(EXPORT_URL, headers=activity_admin)
+    assert res.status_code == 200  # no ZeroDivisionError
+    ws = _load_sheet(res.content)
+    total = _total_rows_by_label(ws)["E-1 - Test User"]
+    assert ws.cell(total, ACH).value is None  # no numeric target -> blank
+    assert _fill(ws.cell(total, 1)) is None
+
+
+def test_compensation_is_scoped_per_employee(client, setup_author, activity_admin):
+    """One employee's overachievement must NOT offset a different employee's
+    shortfall. Each employee's TOTAL nets only their own cycle."""
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+
+    over = setup_author(email="o@x.com", code="O-1", proj_code="PO", last_name="Over")
+    _submit(client, over["header"], over["project"].id, sub["id"], cycle_start, 300)  # +200
+
+    under = setup_author(email="u@x.com", code="U-1", proj_code="PU", last_name="Under")
+    _submit(client, under["header"], under["project"].id, sub["id"], cycle_start, 40)  # short 60
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    totals = _total_rows_by_label(ws)
+
+    u = totals["U-1 - Test Under"]
+    assert ws.cell(u, PEN_TAGS).value == 60   # NOT wiped out by O-1's surplus
+    assert ws.cell(u, ACH).value == 0.4
+    o = totals["O-1 - Test Over"]
+    assert ws.cell(o, PEN_TAGS).value == 0
+    assert ws.cell(o, ACH).value == 3.0
+
+
+def test_compensation_is_scoped_per_benchmark_unit(client, setup_author, activity_admin):
+    """Within one employee, a TAGS surplus must NOT offset a DOCS shortfall —
+    pending is netted per unit. TAGS 150/100 (over) and DOCS 40/100 (short 60)
+    leaves DOCS pending 60, TAGS pending 0."""
+    a = setup_author()
+    _, tags_sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="TAGGED")
+    _, docs_sub = _make_sub_activity(
+        client, activity_admin, benchmark_value=100, name="DOCD", count_field="docs"
+    )
+    cycle_start, _ = _prev_cycle()
+    day2 = cycle_start + timedelta(days=1)  # one work report per date, so split days
+    _submit(client, a["header"], a["project"].id, tags_sub["id"], cycle_start, 150)  # +50 tags
+    _submit(client, a["header"], a["project"].id, docs_sub["id"], day2, 40, count_field="docs")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    total = _total_rows_by_label(ws)["E-1 - Test User"]
+    assert ws.cell(total, PEN_TAGS).value == 0    # tags fully met
+    assert ws.cell(total, PEN_DOCS).value == 60   # docs shortfall NOT offset by tags surplus
+    # % is still whole-cycle across units: (150 + 40) / (100 + 100) = 95%.
+    assert ws.cell(total, ACH).value == 0.95
