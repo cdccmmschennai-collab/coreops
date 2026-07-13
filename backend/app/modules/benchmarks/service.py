@@ -197,6 +197,7 @@ def _status_from_pct(pct: Decimal | None) -> str:
 
 
 _PERF_SORTABLE = {"productivity", "pending", "actual", "target", "name"}
+_PERF_STATUS = {"all", "needs_review", "on_track"}
 
 
 def get_employees_performance(
@@ -205,6 +206,7 @@ def get_employees_performance(
     page: int = 1,
     page_size: int = 10,
     search: str = "",
+    status: str = "all",
     sort: str = "productivity",
     order: str = "asc",
     cycle: str = "current",
@@ -256,6 +258,17 @@ def get_employees_performance(
             r for r in rows
             if q in r["name"].lower() or q in r["employee_code"].lower()
         ]
+
+    # Status filter — the same rule the frontend Status badge uses: any pending
+    # backlog → "Needs Review", zero → "On Track". Applied BEFORE sort/paginate
+    # so `total` and the page slice both reflect the filtered set (a filter that
+    # matches one employee must report total 1, not the full roster count).
+    if status not in _PERF_STATUS:
+        status = "all"
+    if status == "needs_review":
+        rows = [r for r in rows if r["pending"] > 0]
+    elif status == "on_track":
+        rows = [r for r in rows if r["pending"] <= 0]
 
     if sort not in _PERF_SORTABLE:
         sort = "productivity"
