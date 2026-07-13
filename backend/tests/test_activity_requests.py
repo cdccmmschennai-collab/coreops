@@ -103,6 +103,46 @@ def test_approve_creates_second_report_row(db, scenario, sub_activity):
     assert new_row.sub_activity_name == "Bearing Check"
 
 
+def test_activity_request_notifies_pm_not_head(
+    db, make_user, make_employee, make_project, make_project_member, sub_activity
+):
+    """The activity-request notification targets the PM (who reviews it on the
+    home-page request bar), never the project Head (who cannot act on it)."""
+    from app.modules.notifications.models import Notification
+
+    pm_u = make_user("pm2@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="PM-2", user_id=pm_u.id)
+    head_u = make_user("head2@x.com", role=UserRole.employee)
+    head_e = make_employee(employee_code="HEAD-2", user_id=head_u.id)
+    emp_u = make_user("emp2@x.com", role=UserRole.employee)
+    emp_e = make_employee(employee_code="E-2", user_id=emp_u.id)
+    # The employee reports to the PM; the project has a (different) Head.
+    emp_e.reporting_pm_id = pm_u.id
+    project = make_project(code="P-2", status=ProjectStatus.active)
+    project.head_employee_id = head_e.id
+    db.add_all([emp_e, project])
+    db.commit()
+    make_project_member(project_id=project.id, employee_id=emp_e.id)
+
+    report = wr_svc.create_work_report(
+        db, emp_u,
+        WorkReportCreate(
+            report_date=TODAY,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="a", minutes_spent=60)],
+        ),
+    )
+    ar_svc.create_request(
+        db, emp_u,
+        ActivityRequestCreate(
+            report_id=report.id, project_id=project.id, sub_activity_id=sub_activity.id
+        ),
+    )
+
+    recipients = set(db.execute(select(Notification.user_id)).scalars().all())
+    assert pm_u.id in recipients          # PM is notified
+    assert head_u.id not in recipients    # Head is NOT notified
+
+
 def test_second_pending_request_is_blocked(db, scenario, sub_activity):
     _pm_u, emp_u, project, report = scenario
     ar_svc.create_request(

@@ -41,22 +41,19 @@ def _fetch_request(db: Session, request_id: uuid.UUID) -> ActivityRequest:
 def _pm_user_ids(
     db: Session, project_id: uuid.UUID, employee: Employee
 ) -> list[uuid.UUID]:
-    """Notification target user ids for a project, in fallback order (spec R4):
-    the project **Head**, else the employee's **reporting PM**, else the
-    project's assigned PMs (``project_managers``, deprecated in place until
-    Phase 6). Each step is used only when the previous one is absent."""
-    # 1. Head of the project.
-    head_emp_id = db.execute(
-        select(Project.head_employee_id).where(Project.id == project_id)
-    ).scalar_one_or_none()
-    if head_emp_id is not None:
-        head = db.get(Employee, head_emp_id)
-        if head is not None and head.user_id is not None:
-            return [head.user_id]
-    # 2. The employee's reporting PM (a user id).
+    """Notification target user ids for an activity request, in fallback order:
+    the employee's **reporting PM**, else the project's assigned PMs
+    (``project_managers``, deprecated in place until Phase 6). Each step is used
+    only when the previous one is absent.
+
+    The project **Head** is deliberately NOT notified: reviewing an activity
+    request (approve/reject) is PM-only (see _ensure_pm), and the PM already sees
+    pending requests on the home-page activity-request bar. Notifying the Head —
+    who has no way to act on it — was noise, so it routes straight to the PM."""
+    # 1. The employee's reporting PM (a user id).
     if employee.reporting_pm_id is not None:
         return [employee.reporting_pm_id]
-    # 3. The project's assigned PMs.
+    # 2. The project's assigned PMs.
     ids = db.execute(
         select(ProjectManager.user_id).where(
             ProjectManager.project_id == project_id
