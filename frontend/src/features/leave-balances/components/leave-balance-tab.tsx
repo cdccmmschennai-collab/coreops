@@ -17,6 +17,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+import { useUrlState } from "@/lib/use-url-state";
+
 import { useLeaveBalances } from "../hooks";
 import type { LeaveBalance, SortDir } from "../types";
 import { LeaveBalanceEditDialog } from "./leave-balance-edit-dialog";
@@ -24,19 +26,32 @@ import { LeaveBalanceEditDialog } from "./leave-balance-edit-dialog";
 const LIMIT = 20;
 
 export function LeaveBalanceTab() {
-  const [rawSearch, setRawSearch] = React.useState("");
-  const [search, setSearch] = React.useState("");
-  const [sortDir, setSortDir] = React.useState<SortDir>("asc");
-  const [offset, setOffset] = React.useState(0);
+  // Search / sort / page persist in the URL (namespaced lb_*) so switching
+  // attendance tabs away and back keeps the same view.
+  const [search, setSearch] = useUrlState("lb_q", "");
+  const [sortRaw, setSortDir] = useUrlState("lb_sort", "asc");
+  const [offsetStr, setOffsetStr] = useUrlState("lb_offset", "0");
+  const sortDir = sortRaw as SortDir;
+  const offset = Math.max(0, Number(offsetStr) || 0);
+  const setOffset = (o: number) => setOffsetStr(String(o));
+
+  const [rawSearch, setRawSearch] = React.useState(search);
   const [editing, setEditing] = React.useState<LeaveBalance | null>(null);
 
-  // Debounce the search box; reset to the first page on a new query.
+  // Debounce the search box; reset to the first page on a new query. Skip the
+  // first run so a page/search restored from the URL isn't reset on mount.
+  const firstRun = React.useRef(true);
   React.useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
     const t = setTimeout(() => {
       setSearch(rawSearch);
       setOffset(0);
     }, 300);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawSearch]);
 
   const query = useLeaveBalances({
@@ -49,7 +64,7 @@ export function LeaveBalanceTab() {
   const total = query.data?.total ?? 0;
 
   function toggleSort() {
-    setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    setSortDir(sortDir === "asc" ? "desc" : "asc");
     setOffset(0);
   }
 

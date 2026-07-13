@@ -17,6 +17,7 @@ import { LeaveTab } from "@/features/leave/components/leave-tab";
 import { LeaveBalanceTab } from "@/features/leave-balances/components/leave-balance-tab";
 import { features } from "@/lib/env";
 import { can } from "@/lib/rbac";
+import { useUrlState } from "@/lib/use-url-state";
 
 import { HolidayManager } from "@/features/calendar/components/holiday-manager";
 
@@ -37,7 +38,10 @@ export function AttendanceView() {
   const { role, employeeId } = useAuth();
   const canManage = can(role, "attendance.manage");
   const canRequestLeave = Boolean(employeeId) && can(role, "leave.request");
-  const [tab, setTab] = React.useState<TabKey>("calendar");
+  // Active tab lives in the URL (also the deep-link target used by the PM
+  // dashboard "Leave requests" shortcut, /attendance?tab=leave), so switching
+  // tabs and returning to the page keeps the same tab.
+  const [rawTab, setTab] = useUrlState("tab", "calendar");
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
 
   // Deep-link: /attendance?leave=request opens the Request Leave dialog
@@ -49,16 +53,12 @@ export function AttendanceView() {
     }
   }, [searchParams, canRequestLeave]);
 
-  // Deep-link: /attendance?tab=leave selects a tab on load (used by the PM
-  // dashboard "Leave requests" shortcut). leave-balance is manager-only.
-  React.useEffect(() => {
-    const t = searchParams.get("tab") as TabKey | null;
-    if (!t) return;
-    const allowed: TabKey[] = ["calendar", "history", "leave", "holidays"];
-    if (canManage) allowed.push("leave-balance");
-    if (features.attendanceCorrections) allowed.push("corrections");
-    if (allowed.includes(t)) setTab(t);
-  }, [searchParams, canManage]);
+  // Only allow tabs the current user can see; anything else (a stale URL, or a
+  // manager-only tab for a non-manager) falls back to Calendar.
+  const allowedTabs: TabKey[] = ["calendar", "history", "leave", "holidays"];
+  if (canManage) allowedTabs.push("leave-balance");
+  if (features.attendanceCorrections) allowedTabs.push("corrections");
+  const tab = (allowedTabs as string[]).includes(rawTab) ? (rawTab as TabKey) : "calendar";
 
   const actions = (
     <>

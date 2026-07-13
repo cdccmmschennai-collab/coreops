@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarOff, FileText, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
@@ -41,6 +42,7 @@ function ProjectDot({ i }: { i: number }) {
 // ── main view ────────────────────────────────────────────────────────────────
 
 export function EmployeeDashboard() {
+  const router = useRouter();
   const { user, employee, employeeId } = useAuth();
 
   // Greet by employee full name — never the username/email/login id.
@@ -149,7 +151,7 @@ export function EmployeeDashboard() {
                     <TableRow
                       key={r.id}
                       className="cursor-pointer"
-                      onClick={() => window.location.assign(`/work-reports/${r.id}`)}
+                      onClick={() => router.push(`/work-reports/${r.id}`)}
                     >
                       <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                       <TableCell

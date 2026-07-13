@@ -73,7 +73,9 @@ export function ProjectManagerDashboard() {
 
       {/* Employee Performance — the primary dashboard section.
           Row click → /dashboard/employees/{id} for all per-employee detail. */}
-      <PerformanceTable />
+      <React.Suspense fallback={null}>
+        <PerformanceTable />
+      </React.Suspense>
 
       {/* Deliverables + shortcuts (mirrors the employee dashboard layout). */}
       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

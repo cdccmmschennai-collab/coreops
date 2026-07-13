@@ -295,9 +295,16 @@ export function WorkReportDetail({ id }: { id: string }) {
 
   return (
     <>
-      <Link href="/reports" className="text-sm text-primary hover:underline">
+      {/* Go back to the list the user came from so their filters survive
+          (router.back restores the previous URL, including its query string);
+          fall back to a bare /reports only on a direct load with no history. */}
+      <button
+        type="button"
+        onClick={() => (window.history.length > 1 ? router.back() : router.push("/reports"))}
+        className="text-sm text-primary hover:underline"
+      >
         ← Reports
-      </Link>
+      </button>
       <PageHeader
         className="mt-2"
         title={`${employeeName} · ${report.report_date}`}

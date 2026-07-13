@@ -13,7 +13,11 @@ export default function ReportsPage() {
   // PMs get the Weekly Activity Report (preview + Excel export). Team leads /
   // employees keep the existing report list — submission workflow untouched.
   if (isManagerial(role)) {
-    return <PmActivityReportView />;
+    return (
+      <Suspense>
+        <PmActivityReportView />
+      </Suspense>
+    );
   }
   return (
     <Suspense>

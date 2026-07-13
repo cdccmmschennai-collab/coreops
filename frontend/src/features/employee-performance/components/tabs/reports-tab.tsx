@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -25,6 +27,7 @@ function projectLabel(report: WorkReport): string {
 
 // Layer 3, tab 5 — this week's work-report history for the employee.
 export function ReportsTab({ employeeId }: { employeeId: string }) {
+  const router = useRouter();
   const { data, isLoading } = useEmployeeWeekReports(employeeId);
   const reports = data?.items ?? [];
 
@@ -53,7 +56,7 @@ export function ReportsTab({ employeeId }: { employeeId: string }) {
               <TableRow
                 key={r.id}
                 className="cursor-pointer"
-                onClick={() => window.location.assign(`/work-reports/${r.id}`)}
+                onClick={() => router.push(`/work-reports/${r.id}`)}
               >
                 <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{projectLabel(r)}</TableCell>
