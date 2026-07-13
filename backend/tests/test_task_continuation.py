@@ -377,12 +377,25 @@ def test_completed_task_cannot_be_continued(flag_on, client, author, pm_header):
 def test_submitted_completed_cannot_be_reopened(flag_on, client, author, pm_header):
     a = author()
     _, sub = _task_sub(client, pm_header, period=3)
+    # Complete while the report is still a draft (the new model completes on the
+    # editable report), then submit -> completion is frozen read-only.
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=TODAY, is_completed=True).json()
+    tid = r1["tasks"][0]["id"]
+    client.post(f"{BASE}/{r1['id']}/submit", headers=a["header"])
+    _complete_via_endpoint(client, a["header"], tid, is_completed=False, expect=422)
+
+
+def test_cannot_complete_on_submitted_report(flag_on, client, author, pm_header):
+    """A submitted (non-editable) report cannot complete an open task via PATCH —
+    completion is read-only once submitted (new control rule)."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=3)
     r1 = _post_report(client, a["header"], project_id=a["project"].id,
                       sub_id=sub["id"], on_date=TODAY).json()
     tid = r1["tasks"][0]["id"]
     client.post(f"{BASE}/{r1['id']}/submit", headers=a["header"])
-    _complete_via_endpoint(client, a["header"], tid, is_completed=True)   # allowed
-    _complete_via_endpoint(client, a["header"], tid, is_completed=False, expect=422)
+    _complete_via_endpoint(client, a["header"], tid, is_completed=True, expect=422)
 
 
 def test_draft_completion_can_be_corrected(flag_on, client, author, pm_header, db):
@@ -530,9 +543,215 @@ def test_overdue_reader_dedupes(flag_on, client, author, pm_header, db):
     assert len([r for r in overdue if str(r["work_item_id"]) == wid]) == 1
 
 
+def test_completing_on_continuation_day_clears_earlier_benchmark(
+    flag_on, client, author, pm_header, db
+):
+    """Regression: completing a task on a LATER continuation day (via the report
+    FORM, not the completion endpoint) must clear the earlier day's benchmark
+    from every reader. The originating row's mirrored is_completed stays stale by
+    design ('benchmark only') — the readers derive completion from the
+    authoritative work item, so the whole item drops out regardless."""
+    import uuid as _uuid
+
+    a = author()
+    _, sub = _task_sub(client, pm_header, name="Cont", period=1,   # due == start
+                       count_field="tags", value=1000)
+    d0 = compute_week_bounds(TODAY)[0] - timedelta(days=7)         # prev-cycle Friday
+    d1 = d0 + timedelta(days=1)
+    r0 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=d0, tags=100).json()
+    wid = r0["tasks"][0]["work_item_id"]
+    # Continue on d1 and tick "complete" on the FORM (is_completed=True), which is
+    # the create/update path — NOT the PATCH completion endpoint.
+    _post_report(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=d1, work_item_id=wid,
+                 is_completed=True, tags=100)
+
+    # Work item is authoritatively completed on d1; the d0 row's flag stays stale.
+    item = db.get(WorkItem, _uuid.UUID(wid))
+    assert item.completed_on == d1
+    d0_row_completed = db.execute(text(
+        "SELECT t.is_completed FROM work_report_tasks t "
+        "JOIN daily_work_reports r ON r.id = t.report_id "
+        "WHERE t.work_item_id = :w AND r.report_date = :d"
+    ), {"w": wid, "d": d0}).scalar()
+    assert d0_row_completed is False                     # stale by design
+
+    eid = {a["emp"].id}
+    today = d0 + timedelta(days=3)                       # due (d0) now past & in-cycle
+    # Overdue reader: the completed item must NOT appear (the bug: it did).
+    overdue = get_overdue_activities(db, employee_ids=eid, today=today)
+    assert [r for r in overdue if str(r["work_item_id"]) == wid] == []
+    # Task-status reader: present once, marked completed rather than pending.
+    status = [r for r in get_task_status_activities(db, employee_ids=eid, today=today)
+              if str(r["work_item_id"]) == wid]
+    assert len(status) == 1 and status[0]["status"] == "completed"
+    # Cycle reader (pending-export source): completion is authoritative.
+    cyc = [r for r in get_cycle_task_activities(db, employee_ids=eid, today=today)
+           if str(r["work_item_id"]) == wid]
+    assert len(cyc) == 1 and cyc[0]["is_completed"] is True
+
+
+# --------------------------------------------------------------------------
+# daily-row vs overall-task completion semantics
+# --------------------------------------------------------------------------
+def test_start_10_complete_on_11_separates_daily_and_overall(
+    flag_on, client, author, pm_header, db
+):
+    """Scenario 1: start 10 July, complete via the 11 July continuation form."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=1)      # due == start
+    d10 = TODAY - timedelta(days=1)
+    d11 = TODAY
+    r10 = _post_report(client, a["header"], project_id=a["project"].id,
+                       sub_id=sub["id"], on_date=d10).json()
+    wid = r10["tasks"][0]["work_item_id"]
+    r11 = _post_report(client, a["header"], project_id=a["project"].id,
+                       sub_id=sub["id"], on_date=d11, work_item_id=wid,
+                       is_completed=True).json()
+
+    # 11 July completion row.
+    t11 = r11["tasks"][0]
+    assert t11["row_is_completed"] is True
+    assert t11["row_completed_date"] == d11.isoformat()
+    assert t11["completed_on_this_report"] is True
+    assert t11["overall_completed_on"] == d11.isoformat()
+    assert t11["overall_lifecycle"] == "COMPLETED_LATE"    # completed d11 > due d10
+    assert t11["can_complete_here"] is False               # already completed
+
+    # 10 July originating row — completion lives on the 11 July report.
+    t10 = _get_report(client, a["header"], r10["id"])["tasks"][0]
+    assert t10["row_is_completed"] is False
+    assert t10["row_completed_date"] is None
+    assert t10["completed_on_this_report"] is False
+    assert t10["overall_completed_on"] == d11.isoformat()
+    assert t10["overall_lifecycle"] == "COMPLETED_LATE"
+    assert t10["completion_report_id"] == r11["id"]        # link to where completed
+    assert t10["can_complete_here"] is False               # NO active control here
+
+
+def test_completed_item_cannot_be_backdated_from_earlier_report(
+    flag_on, client, author, pm_header, db
+):
+    """Scenario 2: once completed on a later report, an earlier report cannot
+    re-complete / backdate the overall completion."""
+    import uuid as _uuid
+
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=3)
+    d10 = TODAY - timedelta(days=1)
+    r10 = _post_report(client, a["header"], project_id=a["project"].id,
+                       sub_id=sub["id"], on_date=d10).json()
+    wid = r10["tasks"][0]["work_item_id"]
+    tid10 = r10["tasks"][0]["id"]
+    _post_report(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=TODAY, work_item_id=wid,
+                 is_completed=True)
+    # PATCH-completing the (still editable) 10 July draft is rejected.
+    _complete_via_endpoint(client, a["header"], tid10, is_completed=True, expect=422)
+    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on == TODAY
+
+
+def test_submitted_completion_is_read_only_in_output(
+    flag_on, client, author, pm_header
+):
+    """Scenario 3: a submitted report exposes no active completion control."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=3)
+    r = _post_report(client, a["header"], project_id=a["project"].id,
+                     sub_id=sub["id"], on_date=TODAY).json()
+    client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
+    t = _get_report(client, a["header"], r["id"])["tasks"][0]
+    assert t["can_complete_here"] is False
+
+
+def test_open_task_completed_via_current_continuation(
+    flag_on, client, author, pm_header, db
+):
+    """Scenario 4: an open task is completable on the latest continuation, not on
+    an earlier entry."""
+    import uuid as _uuid
+
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=3)
+    d10 = TODAY - timedelta(days=1)
+    r10 = _post_report(client, a["header"], project_id=a["project"].id,
+                       sub_id=sub["id"], on_date=d10).json()
+    wid = r10["tasks"][0]["work_item_id"]
+    r11 = _post_report(client, a["header"], project_id=a["project"].id,
+                       sub_id=sub["id"], on_date=TODAY, work_item_id=wid).json()
+    t11 = r11["tasks"][0]
+    assert t11["can_complete_here"] is True                # latest, editable, open
+    t10 = _get_report(client, a["header"], r10["id"])["tasks"][0]
+    assert t10["can_complete_here"] is False               # not the latest entry
+
+    res = _complete_via_endpoint(client, a["header"], t11["id"]).json()
+    assert res["completed_on_this_report"] is True
+    assert res["overall_completed_on"] == TODAY.isoformat()
+    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on == TODAY
+
+
+def test_patch_and_form_completion_produce_identical_state(
+    flag_on, client, author, pm_header
+):
+    """Scenario 5: form-save completion and PATCH completion yield identical row
+    and work-item state."""
+    def build(email, code, pcode, *, via):
+        a = author(email=email, code=code, proj_code=pcode)
+        _, sub = _task_sub(client, pm_header, name=code, period=1)
+        d0 = TODAY - timedelta(days=1)
+        r0 = _post_report(client, a["header"], project_id=a["project"].id,
+                          sub_id=sub["id"], on_date=d0).json()
+        wid = r0["tasks"][0]["work_item_id"]
+        if via == "form":
+            r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                              sub_id=sub["id"], on_date=TODAY, work_item_id=wid,
+                              is_completed=True).json()
+        else:
+            r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                              sub_id=sub["id"], on_date=TODAY, work_item_id=wid).json()
+            _complete_via_endpoint(client, a["header"], r1["tasks"][0]["id"])
+            r1 = _get_report(client, a["header"], r1["id"])
+        t0 = _get_report(client, a["header"], r0["id"])["tasks"][0]
+        t1 = r1["tasks"][0]
+        return (
+            t0["row_is_completed"], t0["completed_on_this_report"],
+            t0["overall_completed_on"], t0["completion_report_id"] == r1["id"],
+            t1["row_is_completed"], t1["completed_on_this_report"],
+            t1["overall_completed_on"],
+        )
+
+    form_state = build("f@x.com", "F-1", "PF-1", via="form")
+    patch_state = build("p@x.com", "P-1", "PP-1", via="patch")
+    assert form_state == patch_state
+    # Concrete expected shape: d0 open, TODAY the completion row.
+    assert form_state == (False, False, TODAY.isoformat(), True,
+                          True, True, TODAY.isoformat())
+
+
 # --------------------------------------------------------------------------
 # backward compatibility (flag OFF) + NUMERIC untouched
 # --------------------------------------------------------------------------
+def test_legacy_row_completion_unchanged(client, author, pm_header):
+    """Scenario 6: with the flag OFF a TASK_BASED row has no work item and the
+    PATCH endpoint toggles just that row, even after submit (legacy bypass)."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=2)
+    r = _post_report(client, a["header"], project_id=a["project"].id,
+                     sub_id=sub["id"], on_date=TODAY).json()
+    t = r["tasks"][0]
+    assert t["work_item_id"] is None
+    assert t["can_complete_here"] is None            # not a work-item-gated row
+    tid = t["id"]
+    client.post(f"{BASE}/{r['id']}/submit", headers=a["header"])
+    res = _complete_via_endpoint(client, a["header"], tid, is_completed=True).json()
+    assert res["row_is_completed"] is True
+    assert res["overall_completed_on"] is None       # no work item
+    res2 = _complete_via_endpoint(client, a["header"], tid, is_completed=False).json()
+    assert res2["row_is_completed"] is False
+
+
+
 def test_flag_off_creates_no_work_item(client, author, pm_header, db):
     a = author()
     _, sub = _task_sub(client, pm_header, period=2)

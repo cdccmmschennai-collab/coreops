@@ -4609,6 +4609,26 @@ export interface components {
             work_item_id?: string | null;
             /** Work Item Lifecycle */
             work_item_lifecycle?: string | null;
+            /**
+             * Row Is Completed
+             * @default false
+             */
+            row_is_completed: boolean;
+            /** Row Completed Date */
+            row_completed_date?: string | null;
+            /** Overall Completed On */
+            overall_completed_on?: string | null;
+            /** Overall Lifecycle */
+            overall_lifecycle?: string | null;
+            /**
+             * Completed On This Report
+             * @default false
+             */
+            completed_on_this_report: boolean;
+            /** Completion Report Id */
+            completion_report_id?: string | null;
+            /** Can Complete Here */
+            can_complete_here?: boolean | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
             /** Maintenance Plant Code */

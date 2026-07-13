@@ -261,10 +261,19 @@ def get_overdue_activities(
     benchmark_unit) and the task's counted `actual` — additive extras for the
     pending-benchmark export's lumpsum rows; the Pydantic alert schemas
     ignore them."""
-    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+    from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
 
     today = today or date.today()
     week_start, _ = compute_week_bounds(today)
+    # Completion is authoritative on the work item (approved design §12): once its
+    # completed_on is set, EVERY daily row of the item counts as done -- including
+    # an earlier row whose mirrored is_completed flag is stale because the task was
+    # finished on a later continuation. Legacy (work_item_id NULL) rows fall back
+    # to the row's own is_completed.
+    completed_flag = case(
+        (WorkReportTask.work_item_id.is_not(None), WorkItem.completed_on.is_not(None)),
+        else_=WorkReportTask.is_completed,
+    )
 
     actual_expr = case(
         (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
@@ -292,12 +301,13 @@ def get_overdue_activities(
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
         .where(
             ActivityMaster.benchmark_type == "TASK_BASED",
             WorkReportTask.due_date.is_not(None),
             WorkReportTask.due_date >= week_start,
             WorkReportTask.due_date < today,
-            WorkReportTask.is_completed.is_(False),
+            completed_flag.is_(False),
         )
     )
     if employee_ids is not None:
@@ -357,10 +367,15 @@ def get_cycle_task_activities(
     get_overdue_activities, plus `is_completed` and `days_overdue` (0 when
     completed or not yet past due), so the export can render a Completed /
     Overdue / Pending cell trio without a second query."""
-    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+    from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
 
     today = today or date.today()
     week_start, week_end = compute_week_bounds(today)
+    # Authoritative completion from the work item (see get_overdue_activities).
+    completed_flag = case(
+        (WorkReportTask.work_item_id.is_not(None), WorkItem.completed_on.is_not(None)),
+        else_=WorkReportTask.is_completed,
+    )
 
     actual_expr = case(
         (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
@@ -381,7 +396,7 @@ def get_cycle_task_activities(
             WorkReportTask.project_name,
             DailyWorkReport.report_date,
             WorkReportTask.due_date,
-            WorkReportTask.is_completed,
+            completed_flag.label("is_completed"),
             ActivityMaster.benchmark_value,
             ActivityMaster.benchmark_period_days,
             ActivityMaster.relevant_count_field,
@@ -389,6 +404,7 @@ def get_cycle_task_activities(
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
         .where(
             ActivityMaster.benchmark_type == "TASK_BASED",
             WorkReportTask.due_date.is_not(None),
@@ -457,10 +473,15 @@ def get_task_status_activities(
     the week rather than to overdue-only rows. `days_overdue` is kept for the
     schema but only non-zero for an uncompleted task already past its due_date
     within this same week (not displayed on the employee card)."""
-    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+    from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
 
     today = today or date.today()
     week_start, week_end = compute_week_bounds(today)
+    # Authoritative completion from the work item (see get_overdue_activities).
+    completed_flag = case(
+        (WorkReportTask.work_item_id.is_not(None), WorkItem.completed_on.is_not(None)),
+        else_=WorkReportTask.is_completed,
+    )
 
     hours_expr = func.coalesce(WorkReportTask.minutes_spent, 0) + func.coalesce(
         WorkReportTask.task_minutes_spent, 0
@@ -477,12 +498,15 @@ def get_task_status_activities(
             WorkReportTask.project_code,
             DailyWorkReport.report_date,
             WorkReportTask.due_date,
-            WorkReportTask.completed_date,
-            WorkReportTask.is_completed,
+            func.coalesce(WorkItem.completed_on, WorkReportTask.completed_date).label(
+                "completed_date"
+            ),
+            completed_flag.label("is_completed"),
             hours_expr.label("hours_minutes"),
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
         .where(
             ActivityMaster.benchmark_type == "TASK_BASED",
             WorkReportTask.due_date.is_not(None),

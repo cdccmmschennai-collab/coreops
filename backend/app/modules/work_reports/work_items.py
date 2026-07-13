@@ -73,15 +73,82 @@ def days_overdue_of(
     return (today - due_date).days
 
 
-def mirror_fields(item: WorkItem) -> dict:
+def mirror_fields(item: WorkItem, report_date: date) -> dict:
     """The legacy work_report_tasks columns a linked row mirrors from its work
-    item, so every existing reader/serializer keeps working unchanged."""
+    item, evaluated for the row's own report date.
+
+    Row-level completion is deliberately per-report: is_completed/completed_date
+    mean "the overall task was completed ON THIS report's date" (this row IS the
+    completion row), NOT merely that the item is completed somewhere. So an
+    earlier daily entry of a task finished on a later report stays is_completed =
+    False. started_date/due_date are the item's frozen values, shared by every
+    entry. The authoritative overall completion lives on WorkItem.completed_on."""
+    completed_here = item.completed_on is not None and item.completed_on == report_date
     return {
         "started_date": item.started_on,
         "due_date": item.due_date,
-        "is_completed": item.completed_on is not None,
-        "completed_date": item.completed_on,
+        "is_completed": completed_here,
+        "completed_date": item.completed_on if completed_here else None,
     }
+
+
+def has_later_linked_entry(
+    db: Session, *, item_id: uuid.UUID, report_date: date
+) -> bool:
+    """True when the work item has a linked daily entry dated AFTER report_date.
+    Used to stop an earlier report from completing (backdating) a task that has
+    already been continued on a later report."""
+    n = db.execute(
+        select(func.count())
+        .select_from(WorkReportTask)
+        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
+        .where(
+            WorkReportTask.work_item_id == item_id,
+            DailyWorkReport.report_date > report_date,
+        )
+    ).scalar_one()
+    return n > 0
+
+
+def _guard_complete_here(db: Session, *, item: WorkItem, report_date: date) -> None:
+    """Shared rule for both completion paths: this report may only be the one that
+    completes the task if it isn't already completed on a different report and no
+    later continuation exists (which would make completing here a backdate)."""
+    if item.completed_on is not None and item.completed_on != report_date:
+        raise AppError(
+            "validation_error",
+            "This task was already completed on another report and cannot be "
+            "completed again here.",
+            422,
+        )
+    if has_later_linked_entry(db, item_id=item.id, report_date=report_date):
+        raise AppError(
+            "validation_error",
+            "This task has been continued in a later report. Complete it on the "
+            "most recent report instead.",
+            422,
+        )
+
+
+def completion_report_ids(
+    db: Session, item_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Map each COMPLETED work item id -> the report_id whose report_date equals
+    the item's completed_on (the report where completion actually occurred), so
+    an earlier report can link to "where this task was completed"."""
+    if not item_ids:
+        return {}
+    rows = db.execute(
+        select(WorkItem.id, WorkReportTask.report_id)
+        .join(WorkReportTask, WorkReportTask.work_item_id == WorkItem.id)
+        .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
+        .where(
+            WorkItem.id.in_(item_ids),
+            WorkItem.completed_on.is_not(None),
+            DailyWorkReport.report_date == WorkItem.completed_on,
+        )
+    ).all()
+    return {iid: rid for iid, rid in rows}
 
 
 # ---------- resolve a task row to a work item on save ----------------------
@@ -146,7 +213,7 @@ def resolve_task_work_item(
         )
         db.add(item)
         db.flush()  # assign item.id for the row FK
-        return {"work_item_id": item.id, **mirror_fields(item)}
+        return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}
 
     # LINK — continue an existing work item.
     if work_item_id in seen:
@@ -186,25 +253,34 @@ def resolve_task_work_item(
             422,
         )
 
-    _apply_completion(item, is_completed=is_completed, report=report, editable=editable)
-    return {"work_item_id": item.id, **mirror_fields(item)}
+    _apply_completion(db, item, is_completed=is_completed, report=report, editable=editable)
+    return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}
 
 
 def _apply_completion(
-    item: WorkItem, *, is_completed: bool, report: DailyWorkReport, editable: bool
+    db: Session,
+    item: WorkItem,
+    *,
+    is_completed: bool,
+    report: DailyWorkReport,
+    editable: bool,
 ) -> None:
     """Completion transitions for a LINK save (checkbox on the report form).
 
-    Completing is one-way after submission; correcting is allowed only while the
-    report is still an editable draft AND it was this very report that completed
-    the item (approved design §9/§10 — never reopen a completion that belongs to
-    another, submitted report)."""
+    Completing stamps completed_on = this report's date, but only when the task
+    is genuinely completable here: not already completed on another report and
+    with no later continuation (see _guard_complete_here) -- an old report must
+    never backdate a task finished on a later one. Completing is one-way after
+    submission; correcting is allowed only while the report is still an editable
+    draft AND it was this very report that completed the item (§9/§10)."""
     if is_completed:
+        _guard_complete_here(db, item=item, report_date=report.report_date)
         if item.completed_on is None:
             # completed_on = this report's date (§9). Guaranteed >= started_on by
             # the report_date >= started_on check in resolve_task_work_item.
             item.completed_on = report.report_date
-        # already completed: keep the original completion date, don't move it.
+        # already completed on THIS date: idempotent no-op (the guard proved it
+        # isn't a different-report completion).
         return
 
     # Unchecking. Only correct a completion made on THIS editable report.
@@ -279,15 +355,47 @@ def complete_via_endpoint(
     report_editable: bool,
 ) -> None:
     """Completion toggle from PATCH /work-reports/tasks/{id}/completion for a
-    linked row. Completing stamps completed_on = the row's report date. Reopening
-    is refused once the owning report is submitted (one-way after submit, §9);
-    while the report is still a draft the author may correct it."""
+    linked row. Behaviour is identical to a report-form completion:
+
+      * completing stamps completed_on = THIS row's report date, but only on an
+        editable report, only while the task is open, and only when this is a
+        valid completion point (not already completed elsewhere, no later
+        continuation to backdate over);
+      * reopening is allowed only on the report that actually completed the task
+        and only while that report is still editable (one-way after submit).
+
+    The caller mirrors just THIS row from the item afterwards -- it must NOT
+    propagate is_completed to sibling rows (row-level completion is per report)."""
     if is_completed:
-        if item.completed_on is None:
-            item.completed_on = max(item.started_on, report_date)
+        if item.completed_on is not None:
+            if item.completed_on == report_date:
+                return  # idempotent — already completed here
+            raise AppError(
+                "validation_error",
+                "This task was already completed on another report and cannot be "
+                "completed again here.",
+                422,
+            )
+        if not report_editable:
+            raise AppError(
+                "validation_error",
+                "This report is submitted; complete the task on an editable "
+                "report instead.",
+                422,
+            )
+        _guard_complete_here(db, item=item, report_date=report_date)
+        item.completed_on = report_date
         return
+
+    # Reopening.
     if item.completed_on is None:
         return  # already open — no-op
+    if item.completed_on != report_date:
+        raise AppError(
+            "validation_error",
+            "This task was completed on a different report; reopen it there.",
+            422,
+        )
     if not report_editable:
         raise AppError(
             "validation_error",

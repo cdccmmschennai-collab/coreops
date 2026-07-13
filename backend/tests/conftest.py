@@ -75,6 +75,22 @@ def _clean_state():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _default_feature_flags():
+    # Pin feature flags to their code defaults so the suite is deterministic
+    # regardless of the developer's local backend/.env (which may enable a flag
+    # for manual testing). Individual tests opt in via their own fixtures
+    # (e.g. `flag_on` for task continuation).
+    from app.core.config import settings
+
+    prev = settings.TASK_CONTINUATION_ENABLED
+    settings.TASK_CONTINUATION_ENABLED = False
+    try:
+        yield
+    finally:
+        settings.TASK_CONTINUATION_ENABLED = prev
+
+
 @pytest.fixture()
 def db():
     session = SessionLocal()

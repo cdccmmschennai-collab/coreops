@@ -19,7 +19,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -382,10 +382,15 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
         .all()
     )
     by_report: dict[uuid.UUID, list[WorkReportTask]] = {r.id: [] for r in reports}
+    report_by_id = {r.id: r for r in reports}
     today = _today()
-    # Derive lifecycle for work-item-linked rows in one batched read.
+    # Batched reads for the work-item-linked rows: the items themselves, the
+    # latest linked entry date per item (completion is only offered on the most
+    # recent report), and the report where each completed item was completed.
     item_ids = {row.work_item_id for row in rows if row.work_item_id is not None}
     items: dict[uuid.UUID, wi.WorkItem] = {}
+    latest_entry_date: dict[uuid.UUID, date] = {}
+    completion_rids: dict[uuid.UUID, uuid.UUID] = {}
     if item_ids:
         items = {
             it.id: it
@@ -393,16 +398,54 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
                 select(wi.WorkItem).where(wi.WorkItem.id.in_(item_ids))
             ).scalars()
         }
+        for iid, d in db.execute(
+            select(WorkReportTask.work_item_id, func.max(DailyWorkReport.report_date))
+            .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
+            .where(WorkReportTask.work_item_id.in_(item_ids))
+            .group_by(WorkReportTask.work_item_id)
+        ).all():
+            latest_entry_date[iid] = d
+        completion_rids = wi.completion_report_ids(db, item_ids)
     for row in rows:
         # Transient, computed fresh on every read (never stored) — same
         # pattern as report.can_review below.
         row.is_overdue, row.days_overdue = compute_overdue(row.due_date, row.is_completed, today)
         row.work_item_lifecycle = None
+        # Explicit daily vs overall completion fields (default: legacy / non-item).
+        row.row_is_completed = bool(row.is_completed)
+        row.row_completed_date = row.completed_date
+        row.overall_completed_on = None
+        row.overall_lifecycle = None
+        row.completed_on_this_report = False
+        row.completion_report_id = None
+        row.can_complete_here = None
         item = items.get(row.work_item_id) if row.work_item_id else None
         if item is not None:
+            report = report_by_id.get(row.report_id)
             row.work_item_lifecycle = wi.lifecycle_of(
                 item.due_date, item.completed_on, today=today
             ).value
+            row.overall_lifecycle = row.work_item_lifecycle
+            row.overall_completed_on = item.completed_on
+            row.completion_report_id = completion_rids.get(item.id)
+            row.completed_on_this_report = (
+                item.completed_on is not None
+                and report is not None
+                and report.report_date == item.completed_on
+            )
+            # Active completion control only when the task is open, this report is
+            # editable, and this is the latest linked entry (no later report to
+            # backdate over). Earlier/older linked rows get a read-only view.
+            is_latest = (
+                report is not None
+                and latest_entry_date.get(item.id) == report.report_date
+            )
+            row.can_complete_here = (
+                item.completed_on is None
+                and report is not None
+                and report.status in _EDITABLE
+                and is_latest
+            )
         by_report[row.report_id].append(row)
     for report in reports:
         report.tasks = by_report[report.id]
@@ -998,19 +1041,21 @@ def update_task_completion(
     db: Session, actor: User, task_id: uuid.UUID, data: TaskCompletionUpdate
 ) -> WorkReportTask:
     """Toggle a TASK_BASED row's completion checkbox — independent of the
-    parent report's status (draft/submitted/rejected/granted). These
-    activities often complete days after the report they were logged on is
-    already submitted/locked, so this deliberately bypasses the normal
-    locked-report edit restriction.
+    parent report's status. A legacy standalone task often completes days after
+    its report is submitted, so that path still bypasses the locked-report edit
+    restriction.
 
     Legacy (work_item_id NULL): touches is_completed/completed_date on this one
     row only, exactly as before.
 
-    Work-item-linked: the WorkItem is authoritative. Completing stamps the
-    item's completed_on (= this row's report date) and mirrors to every daily
-    entry of the item. Reopening is one-way after submission — allowed only
-    while the owning report is an editable draft; otherwise a 422 is returned
-    rather than silently reopening a completed task."""
+    Work-item-linked: the WorkItem is authoritative and completion is per report.
+    Completing stamps the item's completed_on = THIS row's report date and marks
+    ONLY this row completed; sibling rows on other dates are left untouched (an
+    earlier entry of a task finished today stays False). Completing is refused
+    when the task is already completed on another report, when this report is not
+    editable, or when a later continuation exists (which would backdate the
+    overall completion). Reopening is allowed only on the report that completed
+    the task and only while it is still editable. See work_items.py for the rules."""
     row = db.get(WorkReportTask, task_id)
     if row is None:
         raise AppError("not_found", "Task not found.", 404)
@@ -1031,35 +1076,21 @@ def update_task_completion(
             report_editable=report.status in _EDITABLE,
         )
         db.flush()
-        # Mirror the authoritative state onto every linked daily entry.
-        mirror = wi.mirror_fields(item)
-        db.execute(
-            update(WorkReportTask)
-            .where(WorkReportTask.work_item_id == item.id)
-            .values(
-                is_completed=mirror["is_completed"],
-                completed_date=mirror["completed_date"],
-            )
-        )
+        # Mirror ONLY this row from the item (row-level, per-report completion).
+        m = wi.mirror_fields(item, report.report_date)
+        row.is_completed = m["is_completed"]
+        row.completed_date = m["completed_date"]
+        db.add(row)
         db.commit()
-        db.refresh(row)
-        today = _today()
-        row.is_overdue, row.days_overdue = compute_overdue(
-            row.due_date, row.is_completed, today
-        )
-        row.work_item_lifecycle = wi.lifecycle_of(
-            item.due_date, item.completed_on, today=today
-        ).value
-        return row
+    else:
+        row.is_completed = data.is_completed
+        row.completed_date = _today() if data.is_completed else None
+        db.add(row)
+        db.commit()
 
-    row.is_completed = data.is_completed
-    row.completed_date = _today() if data.is_completed else None
-    row.work_item_lifecycle = None
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    row.is_overdue, row.days_overdue = compute_overdue(row.due_date, row.is_completed, _today())
-    return row
+    # Re-decorate so the response carries the daily/overall completion fields.
+    _attach_tasks(db, [report])
+    return next(t for t in report.tasks if t.id == task_id)
 
 
 _COUNT_FIELD_COLUMNS = {

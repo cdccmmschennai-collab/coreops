@@ -1279,7 +1279,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 </FormControl>
                                 <span>
                                   {continuationEnabled
-                                    ? "Complete this overall task today"
+                                    ? reportDate
+                                      ? `Complete this overall task on ${reportDate}`
+                                      : "Complete this overall task on this report"
                                     : "Task Completed"}
                                 </span>
                                 <span className="text-xs text-muted-foreground">

@@ -425,42 +425,115 @@ export function WorkReportDetail({ id }: { id: string }) {
                         this shows on drafts too; gate on started_date rather
                         than benchmark_type_snapshot (which is submit-only). */}
                     {t.started_date && (
-                      <div className="mt-4 space-y-2 border-t border-border pt-3">
+                      <div className="mt-4 space-y-3 border-t border-border pt-3">
                         <div className="grid grid-cols-3 gap-x-6 gap-y-3">
                           <Stat label="Started" value={t.started_date} />
                           <Stat label="Due" value={t.due_date ?? "—"} />
-                          <Stat label="Completed" value={t.completed_date ?? "—"} />
+                          <Stat
+                            label="Completed"
+                            value={
+                              t.work_item_id
+                                ? t.overall_completed_on ?? "—"
+                                : t.completed_date ?? "—"
+                            }
+                          />
                         </div>
-                        <div className="flex items-center justify-between gap-3">
-                          {t.work_item_lifecycle ? (
-                            <Badge variant={LIFECYCLE_VARIANT[t.work_item_lifecycle] ?? "neutral"}>
-                              {t.work_item_lifecycle === "OVERDUE" && t.days_overdue > 0
-                                ? `Overdue by ${t.days_overdue}d`
-                                : LIFECYCLE_LABEL[t.work_item_lifecycle] ?? t.work_item_lifecycle}
-                            </Badge>
-                          ) : t.is_completed ? (
-                            <Badge variant="success">Completed</Badge>
-                          ) : t.is_overdue ? (
-                            <Badge variant="danger">Overdue by {t.days_overdue}d</Badge>
-                          ) : (
-                            <Badge variant="neutral">In progress</Badge>
-                          )}
-                          {isAuthor && (
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="sm"
-                              loading={toggleCompletion.isPending}
-                              onClick={() => void onToggleCompletion(t.id, !t.is_completed)}
-                            >
-                              {t.is_completed
-                                ? "Reopen"
-                                : t.work_item_id
-                                  ? "Complete this overall task today"
-                                  : "Mark complete"}
-                            </Button>
-                          )}
-                        </div>
+
+                        {t.work_item_id ? (
+                          /* Work-item row: keep the daily entry and the overall
+                             task visibly separate — an earlier report of a task
+                             completed later must not present an active checkbox. */
+                          <>
+                            <div className="space-y-0.5">
+                              <p className="text-xs text-muted-foreground">Work on this report</p>
+                              <p className="text-sm font-medium">
+                                {t.completed_on_this_report
+                                  ? `Completed on ${report.report_date}`
+                                  : `Not completed on ${report.report_date}`}
+                              </p>
+                            </div>
+
+                            <div className="flex items-end justify-between gap-3">
+                              <div className="min-w-0 space-y-1">
+                                <p className="text-xs text-muted-foreground">Overall task</p>
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                  {t.overall_lifecycle && (
+                                    <Badge variant={LIFECYCLE_VARIANT[t.overall_lifecycle] ?? "neutral"}>
+                                      {t.overall_lifecycle === "OVERDUE" && t.days_overdue > 0
+                                        ? `Overdue by ${t.days_overdue}d`
+                                        : LIFECYCLE_LABEL[t.overall_lifecycle] ?? t.overall_lifecycle}
+                                    </Badge>
+                                  )}
+                                  {t.overall_completed_on && !t.completed_on_this_report && (
+                                    <span className="text-xs text-muted-foreground">
+                                      Completed on {t.overall_completed_on}
+                                      {t.completion_report_id && (
+                                        <>
+                                          {" · "}
+                                          <Link
+                                            href={`/work-reports/${t.completion_report_id}`}
+                                            className="text-primary hover:underline"
+                                          >
+                                            View completion report
+                                          </Link>
+                                        </>
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Completion control only where the server says it's
+                                  valid (open task, editable report, latest linked
+                                  entry). The completion row can be reopened while
+                                  still editable; otherwise completion is read-only. */}
+                              {isAuthor && t.can_complete_here === true && (
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  loading={toggleCompletion.isPending}
+                                  onClick={() => void onToggleCompletion(t.id, true)}
+                                >
+                                  {`Complete this overall task on ${report.report_date}`}
+                                </Button>
+                              )}
+                              {isAuthor && t.completed_on_this_report && isEditable && (
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  loading={toggleCompletion.isPending}
+                                  onClick={() => void onToggleCompletion(t.id, false)}
+                                >
+                                  Reopen
+                                </Button>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          /* Legacy standalone TASK_BASED row — unchanged. */
+                          <div className="flex items-center justify-between gap-3">
+                            {t.is_completed ? (
+                              <Badge variant="success">Completed</Badge>
+                            ) : t.is_overdue ? (
+                              <Badge variant="danger">Overdue by {t.days_overdue}d</Badge>
+                            ) : (
+                              <Badge variant="neutral">In progress</Badge>
+                            )}
+                            {isAuthor && (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                loading={toggleCompletion.isPending}
+                                onClick={() => void onToggleCompletion(t.id, !t.is_completed)}
+                              >
+                                {t.is_completed ? "Reopen" : "Mark complete"}
+                              </Button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 

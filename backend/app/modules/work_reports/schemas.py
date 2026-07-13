@@ -122,6 +122,26 @@ class WorkReportTaskOut(BaseModel):
     # fresh on read. Both null for legacy standalone rows.
     work_item_id: uuid.UUID | None = None
     work_item_lifecycle: str | None = None
+    # Explicit daily-row vs overall-task completion (task continuation), so the
+    # UI never has to overload is_completed/completed_date (which are row-level).
+    #   row_*            — completion state of THIS report row.
+    #   overall_*        — the authoritative WorkItem completion + derived state.
+    #   completed_on_this_report — True only when this report is where the overall
+    #                      task was completed (row.is_completed AND
+    #                      report_date == work_item.completed_on).
+    #   completion_report_id — the report where completion happened (may be a
+    #                      later report than this one).
+    #   can_complete_here — server verdict on whether the completion control
+    #                      should be active on THIS row (open task, editable
+    #                      report, latest linked entry, not completed elsewhere).
+    #                      Null for legacy non-work-item rows.
+    row_is_completed: bool = False
+    row_completed_date: date | None = None
+    overall_completed_on: date | None = None
+    overall_lifecycle: str | None = None
+    completed_on_this_report: bool = False
+    completion_report_id: uuid.UUID | None = None
+    can_complete_here: bool | None = None
     # Maintenance Plant the employee worked at, frozen at save time (see
     # work_reports/service.py `_validate_tasks`). Independent of the
     # project's own assigned plant.
