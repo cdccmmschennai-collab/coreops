@@ -38,14 +38,15 @@ import { useUrlState } from "@/lib/use-url-state";
 
 import { downloadPendingBenchmarkXlsx } from "../api";
 import { useEmployeesPerformance } from "../hooks";
-import type { BenchmarkCycle, EmployeePerformanceRow, PerformanceSort } from "../types";
+import type {
+  BenchmarkCycle,
+  EmployeePerformanceRow,
+  PerformanceSort,
+  PerformanceStatusFilter,
+} from "../types";
 
 const PAGE_SIZE = 7;
 const COLLAPSE_KEY = "employeePerformanceCollapsed";
-
-// Status filter — client-side, derived from each row's Pending value (the same
-// rule the Status badge uses). "all" shows everyone.
-type StatusFilter = "all" | "needs_review" | "on_track";
 
 /** True when the employee has pending work (→ "Needs Review", else "On Track"). */
 function needsReview(pending: string): boolean {
@@ -121,7 +122,7 @@ export function PerformanceTable() {
   const setPage = (n: number) => setPageStr(String(n));
   const sort = sortRaw as PerformanceSort;
   const order = orderRaw as "asc" | "desc";
-  const statusFilter = statusRaw as StatusFilter;
+  const statusFilter = statusRaw as PerformanceStatusFilter;
   const cycle = cycleRaw as BenchmarkCycle;
 
   // Collapse state: default expanded on first visit, then persisted. Read in an
@@ -143,6 +144,7 @@ export function PerformanceTable() {
     page,
     page_size: PAGE_SIZE,
     search,
+    status: statusFilter,
     sort,
     order,
     cycle,
@@ -155,6 +157,15 @@ export function PerformanceTable() {
 
   function onCycleChange(next: BenchmarkCycle) {
     setCycleRaw(next);
+    setPage(1);
+  }
+
+  // Any change to search/status/cycle/sort narrows the result set, so page 1 is
+  // the only page guaranteed to exist — reset before the new results load
+  // instead of relying on the clamp effect below (which is a defensive fallback,
+  // not the primary reset).
+  function onStatusChange(next: PerformanceStatusFilter) {
+    setStatusFilter(next);
     setPage(1);
   }
 
@@ -182,14 +193,18 @@ export function PerformanceTable() {
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
 
-  // Status filter runs client-side on the loaded rows so it's instant and needs
-  // no backend change. It stacks with the (server-side) search: rows already
-  // match the search query, and we further narrow them by status here.
-  const visibleRows = React.useMemo(() => {
-    if (statusFilter === "all") return rows;
-    const want = statusFilter === "needs_review";
-    return rows.filter((row) => needsReview(row.pending) === want);
-  }, [rows, statusFilter]);
+  // Never sit on a page past the last one — a stale page restored from the URL
+  // or a roster that shrank would otherwise show an empty table with Prev still
+  // clickable. Snap back to the last real page so navigation stays in range and
+  // ascends 1..N cleanly.
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  React.useEffect(() => {
+    // Only once real data has loaded — otherwise the loading render (total 0)
+    // would reset a legitimately-persisted page before the roster arrives.
+    if (data && page > pageCount) setPage(pageCount);
+    // setPage is derived from the URL setter; data/page/pageCount gate the run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, page, pageCount]);
 
   // Measure the content so expand/collapse animates to an exact pixel height
   // (same approach as the "Benchmark Activities" card). The content stays
@@ -205,7 +220,7 @@ export function PerformanceTable() {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [visibleRows, isLoading]);
+  }, [rows, isLoading]);
 
   return (
     <Card className="overflow-hidden">
@@ -292,7 +307,7 @@ export function PerformanceTable() {
               />
               <Select
                 value={statusFilter}
-                onValueChange={(value) => setStatusFilter(value as StatusFilter)}
+                onValueChange={(value) => onStatusChange(value as PerformanceStatusFilter)}
               >
                 <SelectTrigger className="w-[150px]" aria-label="Filter by status">
                   <SelectValue />
@@ -325,14 +340,14 @@ export function PerformanceTable() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visibleRows.map((row) => (
+                  {rows.map((row) => (
                     <Row
                       key={row.id}
                       row={row}
                       onClick={() => router.push(`/dashboard/employees/${row.id}`)}
                     />
                   ))}
-                  {visibleRows.length === 0 && (
+                  {rows.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
                         No employees match.
@@ -341,12 +356,14 @@ export function PerformanceTable() {
                   )}
                 </TableBody>
               </Table>
-              <Pagination
-                total={total}
-                limit={PAGE_SIZE}
-                offset={(page - 1) * PAGE_SIZE}
-                onPageChange={(offset) => setPage(Math.floor(offset / PAGE_SIZE) + 1)}
-              />
+              {total > PAGE_SIZE && (
+                <Pagination
+                  total={total}
+                  limit={PAGE_SIZE}
+                  offset={(page - 1) * PAGE_SIZE}
+                  onPageChange={(offset) => setPage(Math.floor(offset / PAGE_SIZE) + 1)}
+                />
+              )}
             </>
           )}
         </div>

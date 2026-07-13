@@ -50,6 +50,7 @@ def employees_performance(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     search: str = "",
+    status: str = Query("all", pattern="^(all|needs_review|on_track)$"),
     sort: str = "productivity",
     order: str = Query("asc", pattern="^(asc|desc)$"),
     cycle: str = Query("current", pattern="^(current|previous)$"),
@@ -62,8 +63,8 @@ def employees_performance(
     the finished cycle — matches the pending export's options)."""
     return EmployeesPerformancePageOut.model_validate(
         service.get_employees_performance(
-            db, page=page, page_size=page_size, search=search, sort=sort,
-            order=order, cycle=cycle,
+            db, page=page, page_size=page_size, search=search, status=status,
+            sort=sort, order=order, cycle=cycle,
         )
     )
 

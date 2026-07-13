@@ -43,6 +43,11 @@ export interface EmployeeOverview {
 
 export type PerformanceSort = "name" | "productivity" | "pending" | "actual" | "target";
 
+/** Status filter — mirrors the Status badge: any pending backlog → "Needs
+ * Review", zero → "On Track". "all" shows everyone. Applied server-side (before
+ * pagination) so the returned total is the filtered count. */
+export type PerformanceStatusFilter = "all" | "needs_review" | "on_track";
+
 /** Fri..Thu benchmark window — "current" contains today, "previous" is the
  * last completed cycle. Drives both the comparison table and the export. */
 export type BenchmarkCycle = "current" | "previous";
@@ -51,6 +56,7 @@ export interface PerformanceParams {
   page: number;
   page_size: number;
   search: string;
+  status: PerformanceStatusFilter;
   sort: PerformanceSort;
   order: "asc" | "desc";
   cycle: BenchmarkCycle;

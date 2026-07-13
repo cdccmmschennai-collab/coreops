@@ -15,6 +15,7 @@ function toQuery(p: PerformanceParams): string {
   sp.set("page", String(p.page));
   sp.set("page_size", String(p.page_size));
   if (p.search) sp.set("search", p.search);
+  if (p.status !== "all") sp.set("status", p.status);
   sp.set("sort", p.sort);
   sp.set("order", p.order);
   sp.set("cycle", p.cycle);
