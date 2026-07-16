@@ -1,9 +1,12 @@
 """Unit tests for the Daily Report Reminder — pure logic, no database.
 
-Covers the working-day window (weekend skipping) and template rendering /
-grouping. The data collection against the DB is exercised via the /debug
-endpoints and the dispatcher's own logging, per the phased testing plan.
+Covers the working-day window (weekend skipping), the PM-exclusion rule, and
+template / CSV rendering. The data collection against the DB is exercised via the
+/debug endpoints and the dispatcher's own logging, per the phased testing plan.
 """
+import csv
+import io
+import re
 import uuid
 from datetime import date, datetime
 
@@ -65,64 +68,152 @@ def _reminder() -> PMReminder:
     )
 
 
-def test_template_subject_and_text_layout():
+def test_subject_contains_the_generated_date():
+    rendered = render_daily_report_reminder(
+        _reminder(), now=datetime(2026, 7, 9, 17, 15)
+    )
+    assert rendered.subject == "CoreOps | Outstanding Daily Reports | 09 Jul 2026"
+
+
+def test_template_text_layout_has_four_columns_and_summary():
     rendered = render_daily_report_reminder(
         _reminder(), now=datetime(2026, 7, 6, 9, 30)
     )
-    assert rendered.subject == "CoreOps • Outstanding Daily Reports"
     text = rendered.text_body
-    assert text.startswith("Hello Alex,")
-    assert "The following employees have pending daily work reports." in text
-    # ASCII grid table with the Employee ID + Name column header.
-    assert "Employee ID & Name" in text
-    assert "Missing Report Dates" in text
-    # First column shows "<code> <name>"; dates separated by the bullet.
-    assert "EMP001 David" in text
-    assert "EMP002 John" in text
+    assert text.startswith("CoreOps\nDaily Reporting Compliance")
+    assert "Hello Alex," in text
+    assert (
+        "The following employees have outstanding daily work reports as of "
+        "06 Jul 2026, 09:30 AM IST." in text
+    )
+    # The same four columns as the HTML and the CSV.
+    for header in ("Employee ID", "Employee Name", "Missing Days", "Missing Report Dates"):
+        assert header in text
+    # Code and name are separate cells, not "EMP001 David". Cells are padded to
+    # the column width, so match the pipes rather than exact spacing.
+    assert "EMP001 David" not in text
+    assert re.search(r"\|\s*EMP001\s*\|\s*David\s*\|\s*2\s*\|", text)
+    assert re.search(r"\|\s*EMP002\s*\|\s*John\s*\|\s*1\s*\|", text)
     assert "02 Jul • 03 Jul" in text  # David's two dates, bullet-separated
-    # Sorted by employee name.
-    assert text.index("David") < text.index("John")
-    # Summary section (new business-notification wording).
-    assert "Employees with Missing Reports : 2" in text
-    assert "Total Missing Report Days : 3" in text
-    assert text.rstrip().endswith("CoreOps")
+    assert text.index("David") < text.index("John")  # sorted by name
+    assert "Employees with Missing Reports: 2" in text
+    assert "Total Missing Report Days: 3" in text
+    assert "attached as a CSV file" in text
+    assert text.rstrip().endswith("Automated notification - please do not reply.")
 
 
-def test_template_html_table_and_summary():
+def test_plain_text_fallback_has_no_html_css_or_urls():
+    text = render_daily_report_reminder(_reminder()).text_body
+    for token in ("<", ">", "http", "style=", "padding:", "Content-Type"):
+        assert token not in text
+
+
+def test_template_html_columns_summary_and_greeting():
     html = render_daily_report_reminder(
         _reminder(), now=datetime(2026, 7, 6, 9, 30)
     ).html_body
-    # Bordered table header (escaped ampersand) and both columns.
-    assert "Employee ID &amp; Name" in html
-    assert "Missing Report Dates" in html
-    # Employee ID + Name in the first column.
-    assert "EMP001 David" in html and "EMP002 John" in html
+    assert "Hello Alex" in html
+    assert "Daily Reporting Compliance" in html
+    for header in ("Employee ID", "Employee Name", "Missing Days", "Missing Report Dates"):
+        assert header in html
+    # Employee code and name land in separate cells.
+    assert '>EMP001</td><td style="' in html.replace("\n", "")
+    assert ">David</td>" in html and ">John</td>" in html
     # Dates bullet-separated, not stuck together.
     assert "02 Jul • 03 Jul" in html
     assert "02 Jul03 Jul" not in html
-    # Summary totals (new wording).
-    assert "Employees with Missing Reports : <strong>2</strong>" in html
-    assert "Total Missing Report Days : <strong>3</strong>" in html
+    assert "Employees with Missing Reports: <strong>2</strong>" in html
+    assert "Total Missing Report Days: <strong>3</strong>" in html
+    assert "Automated notification - please do not reply." in html
 
 
-def test_template_html_is_flat_internal_notification():
-    """No dark hero, no marketing card, plain white background."""
+def test_template_html_is_outlook_safe_constrained_table_layout():
     html = render_daily_report_reminder(_reminder()).html_body
+    # Table-based, centered, ~700px container, white background.
+    assert "max-width:700px" in html
+    assert '<table role="presentation"' in html
+    assert 'align="center"' in html
     assert "background:#ffffff" in html
-    assert "#0f172a" not in html          # no dark hero/banner
-    assert "border-radius" not in html    # no rounded promotional cards
-    assert "Outstanding Daily Reports" in html
+    assert "Arial" in html
+    # None of the constructs Outlook cannot render, and no marketing chrome.
+    for banned in (
+        "display:flex",
+        "flex-direction",
+        "display:grid",
+        "grid-template",
+        "<style",
+        "<link",
+        "<script",
+        "<svg",
+        "border-radius",
+        "#0f172a",          # no dark hero/banner block
+    ):
+        assert banned not in html
 
 
-def test_template_html_greets_pm_by_name():
-    reminder = _reminder()
-    html = render_daily_report_reminder(
-        reminder, now=datetime(2026, 7, 6, 15, 0)
-    ).html_body
-    assert "Hello Alex" in html
-    assert "Outstanding Daily Reports" in html
-    assert "03 Jul" in html and "02 Jul" in html
-    assert "John" in html
+def test_missing_days_count_matches_the_dates_listed():
+    rendered = render_daily_report_reminder(_reminder())
+    rows = _csv_rows(rendered.csv_bytes)
+    by_code = {r["Employee ID"]: r for r in rows}
+    assert by_code["EMP001"]["Missing Days"] == "2"   # David: 02 + 03 Jul
+    assert by_code["EMP002"]["Missing Days"] == "1"   # John: 03 Jul
+    for row in rows:
+        assert int(row["Missing Days"]) == len(row["Missing Report Dates"].split(","))
+
+
+# --- CSV attachment ---------------------------------------------------------
+
+
+def _csv_rows(csv_bytes: bytes) -> list[dict]:
+    """Decode the attachment the way Excel does and parse it as CSV."""
+    text = csv_bytes.decode("utf-8-sig")
+    return list(csv.DictReader(io.StringIO(text)))
+
+
+def test_csv_filename_uses_the_generated_date():
+    rendered = render_daily_report_reminder(
+        _reminder(), now=datetime(2026, 7, 9, 17, 15)
+    )
+    assert rendered.csv_filename == "coreops_outstanding_reports_2026-07-09.csv"
+
+
+def test_csv_is_valid_comma_separated_content_with_bom_and_crlf():
+    rendered = render_daily_report_reminder(_reminder())
+    raw = rendered.csv_bytes
+    # Excel needs the BOM to decode UTF-8 (the bullet in the HTML body, non-ASCII
+    # employee names) instead of falling back to the local ANSI code page.
+    assert raw.startswith(b"\xef\xbb\xbf")
+    assert b"\r\n" in raw
+    text = raw.decode("utf-8-sig")
+    assert text.splitlines()[0] == (
+        "Employee ID,Employee Name,Missing Days,Missing Report Dates"
+    )
+    rows = _csv_rows(raw)
+    assert len(rows) == 2
+    assert [r["Employee ID"] for r in rows] == ["EMP001", "EMP002"]
+    # Multiple dates stay in ONE quoted cell, comma-separated.
+    assert '"02 Jul, 03 Jul"' in text
+    assert rows[0]["Missing Report Dates"] == "02 Jul, 03 Jul"
+
+
+def test_csv_contains_only_the_recipient_pms_employees():
+    mine = PMReminder(
+        pm_id=uuid.uuid4(),
+        pm_name="Alex",
+        pm_email="alex@example.com",
+        employees_checked=1,
+        days=[
+            MissingReportDay(
+                report_date=date(2026, 7, 3),
+                employees=[MissingEmployee(uuid.uuid4(), "David", "EMP001")],
+            )
+        ],
+    )
+    rows = _csv_rows(render_daily_report_reminder(mine).csv_bytes)
+    assert [r["Employee Name"] for r in rows] == ["David"]
+    # An employee from another PM's group ("John"/EMP002) never leaks in.
+    assert all("John" not in r["Employee Name"] for r in rows)
+    assert all(r["Employee ID"] != "EMP002" for r in rows)
 
 
 def test_total_missing_counts_all_employees_across_days():
@@ -163,12 +254,36 @@ class _StubEmailService:
     def __init__(self, bad_recipient):
         self.bad_recipient = bad_recipient
         self.sent_to = []
+        self.sends = []
 
-    def send(self, *, to, subject, html_body, text_body=None):
+    def send(self, *, to, subject, html_body, text_body=None, attachments=None):
         if to == self.bad_recipient:
             raise EmailSendError(f"SMTP recipient refused: {to}")
         self.sent_to.append(to)
+        self.sends.append(
+            {"to": to, "subject": subject, "attachments": attachments or []}
+        )
         return True
+
+
+def test_dispatcher_routes_each_pm_their_own_csv():
+    """Recipient routing is unchanged and the CSV is per-PM."""
+    reminders = [_pm("alex@example.com"), _pm("dana@example.com")]
+    email = _StubEmailService(bad_recipient=None)
+
+    run_daily_report_reminders(
+        db=object(), email_service=email, service=_StubService(reminders)
+    )
+
+    assert email.sent_to == ["alex@example.com", "dana@example.com"]
+    for send in email.sends:
+        assert len(send["attachments"]) == 1
+        attachment = send["attachments"][0]
+        assert attachment.filename.startswith("coreops_outstanding_reports_")
+        assert attachment.filename.endswith(".csv")
+        assert attachment.maintype == "text" and attachment.subtype == "csv"
+        rows = _csv_rows(attachment.content)
+        assert [r["Employee Name"] for r in rows] == ["John"]
 
 
 def test_one_invalid_recipient_does_not_block_the_others():
@@ -200,6 +315,116 @@ def test_one_invalid_recipient_does_not_block_the_others():
     # The good ones are marked sent with no error.
     good = [o for o in result.outcomes if o.pm_email != "broken@@invalid"]
     assert all(o.email_sent and o.error is None for o in good)
+
+
+# --- PM exclusion (data layer, against the real DB) -------------------------
+
+
+def _make_pm_user(db, email: str):
+    from app.core.security import hash_password
+    from app.modules.users.models import User, UserRole
+
+    user = User(
+        email=email, password_hash=hash_password("x"), role=UserRole.project_manager
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def _make_reporting_employee(db, *, code, first_name, pm_id, user_id=None):
+    from app.modules.employees.models import Employee, EmployeeStatus
+
+    emp = Employee(
+        employee_code=code,
+        first_name=first_name,
+        last_name="Test",
+        user_id=user_id,
+        reporting_pm_id=pm_id,
+        status=EmployeeStatus.active,
+        date_of_joining=date(2020, 1, 1),
+    )
+    db.add(emp)
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
+def test_pm_employees_are_excluded_from_rows_and_totals(db):
+    """A user with the global project_manager role never owes a daily report.
+
+    The exclusion must happen in the data layer, so employees_checked, the email
+    rows and total_missing all agree.
+    """
+    from app.core.security import hash_password
+    from app.modules.users.models import User, UserRole
+
+    pm = _make_pm_user(db, "alex@example.com")
+    _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+
+    # A second PM who happens to report to Alex - excluded as a submitter.
+    junior_pm_user = _make_pm_user(db, "bob@example.com")
+    _make_reporting_employee(
+        db, code="EMP002", first_name="Bob", pm_id=pm.id, user_id=junior_pm_user.id
+    )
+
+    # A normal employee WITH a login, and one with no login at all: both included.
+    emp_user = User(
+        email="carol@example.com",
+        password_hash=hash_password("x"),
+        role=UserRole.employee,
+    )
+    db.add(emp_user)
+    db.commit()
+    db.refresh(emp_user)
+    _make_reporting_employee(
+        db, code="EMP003", first_name="Carol", pm_id=pm.id, user_id=emp_user.id
+    )
+    _make_reporting_employee(db, code="EMP004", first_name="Erin", pm_id=pm.id)
+
+    # Nobody submitted anything, so every checked employee owes the full window.
+    reminders = DailyReportReminderService().collect(db, today=date(2026, 7, 6))
+    assert len(reminders) == 1
+    reminder = reminders[0]
+
+    names = {e.name for day in reminder.days for e in day.employees}
+    assert "Bob Test" not in names                    # the PM is gone
+    assert {"David Test", "Carol Test", "Erin Test"} <= names
+
+    # 4 employees report to Alex, but only 3 are counted / rowed / totalled.
+    assert reminder.employees_checked == 3
+    assert reminder.total_missing == 3 * DEFAULT_LOOKBACK_WORKING_DAYS
+
+    rendered = render_daily_report_reminder(reminder)
+    assert "EMP002" not in rendered.html_body
+    assert "EMP002" not in rendered.text_body
+    csv_codes = [r["Employee ID"] for r in _csv_rows(rendered.csv_bytes)]
+    assert sorted(csv_codes) == ["EMP001", "EMP003", "EMP004"]
+
+
+def test_pm_remains_a_recipient_for_their_reporting_employees(db):
+    """Excluded as a submitter, still emailed as a manager."""
+    pm = _make_pm_user(db, "alex@example.com")
+    _make_reporting_employee(
+        db, code="EMP002", first_name="Bob", pm_id=pm.id, user_id=pm.id
+    )
+    _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+
+    reminders = DailyReportReminderService().collect(db, today=date(2026, 7, 6))
+    assert [r.pm_email for r in reminders] == ["alex@example.com"]
+    assert reminders[0].employees_checked == 1
+
+
+def test_pm_with_only_pm_reports_gets_no_email(db):
+    """If every 'employee' under a PM is itself a PM, there is nothing to chase."""
+    pm = _make_pm_user(db, "alex@example.com")
+    junior = _make_pm_user(db, "bob@example.com")
+    _make_reporting_employee(
+        db, code="EMP002", first_name="Bob", pm_id=pm.id, user_id=junior.id
+    )
+
+    assert DailyReportReminderService().collect(db, today=date(2026, 7, 6)) == []
 
 
 def test_celery_task_returns_summary_even_when_a_recipient_fails(monkeypatch):

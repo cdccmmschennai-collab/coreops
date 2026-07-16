@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import smtplib
 import ssl
+from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr
 
@@ -28,6 +29,16 @@ logger = logging.getLogger("coreops.notifications.email")
 
 class EmailSendError(RuntimeError):
     """Raised when an email could not be delivered to the SMTP server."""
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """One file to attach. ``content`` is raw bytes; no encoding is applied."""
+
+    filename: str
+    content: bytes
+    maintype: str = "text"
+    subtype: str = "csv"
 
 
 class EmailService:
@@ -43,6 +54,7 @@ class EmailService:
         subject: str,
         html_body: str,
         text_body: str | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> bool:
         """Send one message. Returns True if handed to SMTP, False if skipped.
 
@@ -68,7 +80,9 @@ class EmailService:
                 "SMTP is not configured (SMTP_HOST / SMTP_FROM missing)."
             )
 
-        message = self._build_message(recipients, subject, html_body, text_body)
+        message = self._build_message(
+            recipients, subject, html_body, text_body, attachments
+        )
 
         try:
             self._deliver(message, recipients)
@@ -92,6 +106,7 @@ class EmailService:
         subject: str,
         html_body: str,
         text_body: str | None,
+        attachments: list[Attachment] | None = None,
     ) -> EmailMessage:
         settings = self._settings
         message = EmailMessage()
@@ -101,6 +116,15 @@ class EmailService:
         # A plain-text part is always set so non-HTML clients render something.
         message.set_content(text_body or _html_to_text_fallback(html_body))
         message.add_alternative(html_body, subtype="html")
+        for attachment in attachments or []:
+            # add_attachment on a multipart/alternative message promotes it to
+            # multipart/mixed, keeping the text+html alternative intact.
+            message.add_attachment(
+                attachment.content,
+                maintype=attachment.maintype,
+                subtype=attachment.subtype,
+                filename=attachment.filename,
+            )
         return message
 
     def _deliver(self, message: EmailMessage, recipients: list[str]) -> None:

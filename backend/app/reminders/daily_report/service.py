@@ -14,6 +14,12 @@ Business rules:
 
 Only employees currently assigned to a PM (``employees.reporting_pm_id``) are
 considered, and only active PMs / active employees.
+
+Employees whose linked user account has the global ``project_manager`` role are
+never treated as report submitters: they are excluded here, in the data layer, so
+that every downstream count (``employees_checked``, ``total_missing``, the email
+table, and the CSV) agrees. PMs still *receive* reminders for the employees who
+report to them.
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.employees.models import Employee, EmployeeStatus
@@ -140,11 +146,20 @@ class DailyReportReminderService:
     def _employees_by_pm(
         self, db: Session, pm_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, list[Employee]]:
+        # Users with the global project_manager role do not submit daily reports,
+        # so their employee records are dropped before anything is counted.
+        pm_user_ids = select(User.id).where(User.role == UserRole.project_manager)
         rows = db.execute(
             select(Employee).where(
                 Employee.reporting_pm_id.in_(pm_ids),
                 Employee.status == EmployeeStatus.active,
                 Employee.deleted_at.is_(None),
+                # An employee with no login cannot be a PM; ``NOT IN`` alone would
+                # discard those rows because NULL NOT IN (...) is NULL.
+                or_(
+                    Employee.user_id.is_(None),
+                    Employee.user_id.notin_(pm_user_ids),
+                ),
             )
         ).scalars()
         grouped: dict[uuid.UUID, list[Employee]] = {}

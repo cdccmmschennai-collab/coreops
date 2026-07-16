@@ -44,7 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.core.database import SessionLocal
-from app.notifications.email_service import EmailSendError, EmailService
+from app.notifications.email_service import Attachment, EmailSendError, EmailService
 from app.reminders.daily_report.service import DailyReportReminderService, PMReminder
 from app.reminders.daily_report.template import render_daily_report_reminder
 
@@ -57,10 +57,18 @@ def _expected_greeting(reminder: PMReminder) -> str:
     return f"Hello {reminder.pm_name},"
 
 
+def _greeting_line(rendered) -> str:
+    """The 'Hello <Manager Name>,' line from the text body ('' if absent)."""
+    for line in rendered.text_body.splitlines():
+        if line.startswith("Hello "):
+            return line
+    return ""
+
+
 def _check_greeting(reminder: PMReminder, rendered) -> bool:
-    """The rendered text body must open with 'Hello <Manager Name>,'."""
+    """The text body and the HTML must both greet the PM by name."""
     expected = _expected_greeting(reminder)
-    text_ok = rendered.text_body.startswith(expected)
+    text_ok = _greeting_line(rendered) == expected
     html_ok = f"Hello {reminder.pm_name}" in rendered.html_body
     return text_ok and html_ok
 
@@ -73,7 +81,9 @@ def _print_reminder(reminder: PMReminder, rendered, greeting_ok: bool) -> None:
     print(f"  Employees checked : {reminder.employees_checked}")
     print(f"  Missing reports   : {reminder.total_missing}")
     print(f"  Subject           : {rendered.subject}")
-    print(f"  Greeting line     : {rendered.text_body.splitlines()[0]}")
+    print(f"  Greeting line     : {_greeting_line(rendered)}")
+    print(f"  CSV attachment    : {rendered.csv_filename} "
+          f"({len(rendered.csv_bytes)} bytes)")
     status = "PASS" if greeting_ok else "FAIL"
     print(f"  Greeting 'Hello {reminder.pm_name},' -> {status}")
 
@@ -98,6 +108,13 @@ def main() -> int:
         "--today",
         help="Compute the missing-report window as of this date (YYYY-MM-DD). "
         "Defaults to today.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=1,
+        help="Send at most N emails to the test inbox (default 1). Rendering and "
+        "the greeting check still run for every PM. Use 0 for no cap.",
     )
     args = parser.parse_args()
 
@@ -141,7 +158,11 @@ def main() -> int:
         _print_reminder(reminder, rendered, greeting_ok)
 
         if not send:
-            print("  Action            : DRY-RUN — not sent")
+            print("  Action            : DRY-RUN - not sent")
+            continue
+
+        if args.limit and sent_count >= args.limit:
+            print(f"  Action            : SKIPPED (--limit {args.limit} reached)")
             continue
 
         # The ONLY destination is the test inbox. reminder.pm_email is never used.
@@ -151,6 +172,14 @@ def main() -> int:
                 subject=rendered.subject,
                 html_body=rendered.html_body,
                 text_body=rendered.text_body,
+                attachments=[
+                    Attachment(
+                        filename=rendered.csv_filename,
+                        content=rendered.csv_bytes,
+                        maintype="text",
+                        subtype="csv",
+                    )
+                ],
             )
         except EmailSendError as exc:
             failed_count += 1

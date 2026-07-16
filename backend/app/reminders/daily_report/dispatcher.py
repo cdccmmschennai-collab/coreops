@@ -14,7 +14,7 @@ from datetime import date
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.notifications.email_service import EmailSendError, EmailService
+from app.notifications.email_service import Attachment, EmailSendError, EmailService
 from app.reminders.daily_report.service import DailyReportReminderService
 from app.reminders.daily_report.template import render_daily_report_reminder
 
@@ -109,11 +109,21 @@ def _process_pm(reminder, email_service: EmailService) -> PMOutcome:
 
     try:
         rendered = render_daily_report_reminder(reminder)
+        # Built from this PM's own reminder rows, so the CSV can never contain
+        # another PM's reporting employees.
         sent = email_service.send(
             to=reminder.pm_email,
             subject=rendered.subject,
             html_body=rendered.html_body,
             text_body=rendered.text_body,
+            attachments=[
+                Attachment(
+                    filename=rendered.csv_filename,
+                    content=rendered.csv_bytes,
+                    maintype="text",
+                    subtype="csv",
+                )
+            ],
         )
         logger.info(
             "reminder.email_sent pm=%s sent=%s missing=%d",
