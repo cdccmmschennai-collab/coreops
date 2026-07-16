@@ -12,6 +12,7 @@ Styling mirrors the company template: Arial 10 bold white header on teal
 (FF76A5AF), thin borders, centered count columns, wrapped Day Remarks, real
 Excel dates. Employee title rows are bold on a light teal tint (FFD9E2E1).
 Sheet: 'Weekly Activity Report'."""
+from decimal import Decimal
 from io import BytesIO
 from itertools import groupby
 
@@ -25,9 +26,6 @@ _HEADER_FILL = PatternFill(fill_type="solid", fgColor="FF76A5AF")
 _HEADER_FONT = Font(name="Arial", size=10, bold=True, color="FFFFFFFF")
 _GROUP_FILL = PatternFill(fill_type="solid", fgColor="FFD9E2E1")
 _GROUP_FONT = Font(name="Arial", size=10, bold=True)
-# Employee TOTAL-row achievement grading (soft Excel "good"/"bad" tints).
-_ACH_GREEN = PatternFill(fill_type="solid", fgColor="FFC6EFCE")  # >= 100%: on track
-_ACH_RED = PatternFill(fill_type="solid", fgColor="FFFFC7CE")    # < 95%: needs attention
 _DATA_FONT = Font(name="Arial", size=10)
 _THIN = Side(style="thin")
 _BORDER = Border(top=_THIN, bottom=_THIN, left=_THIN, right=_THIN)
@@ -103,75 +101,127 @@ def _finalize(wb) -> BytesIO:
 
 PENDING_SHEET_NAME = "Pending Benchmark"
 
+# --- Benchmark report styling — matched cell-for-cell to the company reference
+# workbook (BENCHMARK REPORT 03 JUL - 09 JUL). Only three colours exist in this
+# sheet: the yellow header, and the green/red shade on the DIFFERENCE % cell.
+# Everything else is white/no fill with black Arial 10 text and thin borders.
+_PB_HEADER_FILL = PatternFill(fill_type="solid", fgColor="FFFFFF00")
+# No colour= -> automatic (black), exactly as the reference stores it.
+_PB_HEADER_FONT = Font(name="Arial", size=10, bold=True)
+_PB_TOTAL_FONT = Font(name="Arial", size=10, bold=True)
+# DIFFERENCE % cell shade, keyed off ACHIEVEMENT %. Nothing else is ever shaded.
+_DIFF_GREEN = PatternFill(fill_type="solid", fgColor="FFC6EFCE")  # > 100%: ahead
+_DIFF_RED = PatternFill(fill_type="solid", fgColor="FFFFC7CE")    # < 95%: needs attention
+_PB_HEADER_ROW_HEIGHT = {1: 15.0, 2: 25.5}
+_PB_DEFAULT_ROW_HEIGHT = 15.0
+
+# Final column order (21 columns, A..U): the five identity columns, the two
+# percentage columns, the three 4-unit groups, then the cycle bounds. No ROW
+# TYPE, no per-group TOTAL sub-column, no EMPLOYEE TOTAL.
 _PB_LEFT = [
     ("EMP CODE & NAME", 26.0),
     ("DATE", 12.0),
-    ("PROJECT CODE & TITLE", 28.0),
+    ("PROJECT CODE & TITLE", 86.0),
     ("ACTIVITY", 22.0),
-    ("SUB ACTIVITY", 22.0),
+    ("SUB ACTIVITY", 118.140625),
+    ("ACHIEVEMENT %", 18.85546875),
+    ("DIFFERENCE %", 15.0),
 ]
+_PB_DATE_COL = 2      # DATE
+_PB_PROJECT_COL = 3   # PROJECT CODE & TITLE — carries the "TOTAL" marker
+_PB_ACTIVITY_COL = 4  # ACTIVITY
+_PB_SUB_COL = 5       # SUB ACTIVITY
+_PB_ACH_COL = 6       # ACHIEVEMENT % — decides the shade, never wears it
+_PB_DIFF_COL = 7      # DIFFERENCE % — the only shaded cell in the body
 _PB_GROUPS = ["BENCHMARK TARGET", "ACTUAL COMPLETED", "PENDING BENCHMARK"]
 _PB_UNITS = ["tags", "docs", "bom", "spares"]  # ledger benchmark_unit values
-_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES", "TOTAL"]  # 4 units + row/group total
-_PB_GROUP_WIDTH = len(_PB_UNIT_LABELS)  # 5 columns per group
-_PB_ACH = ("ACHIEVEMENT %", 15.0)
+_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES"]  # 4 units per group, no group total
+_PB_GROUP_WIDTH = len(_PB_UNIT_LABELS)  # 4 columns per group
+# Per-group unit widths: the leading TAGS column is widened to carry the merged
+# group label above it; the other three stay 12.
+_PB_UNIT_WIDTHS = [
+    [21.42578125, 12.0, 12.0, 12.0],  # BENCHMARK TARGET  H:K
+    [16.85546875, 12.0, 12.0, 12.0],  # ACTUAL COMPLETED  L:O
+    [17.7109375, 12.0, 12.0, 12.0],   # PENDING BENCHMARK P:S
+]
 _PB_RIGHT = [("CYCLE START", 13.0), ("CYCLE END", 13.0)]
+_PB_NUMFMT_PCT = "0.00%"
 
 
-def _grade_fill(pct):
-    """Employee TOTAL-row fill by achievement %: >=100 green (reward eligible),
-    95-99 no fill (acceptable), <95 red (needs attention). None (no numeric
-    target for the cycle) grades to no fill."""
-    if pct is None:
+def _difference_fill(achievement):
+    """Shade for the DIFFERENCE % cell, chosen from the ACHIEVEMENT % fraction
+    (1.0 == 100%). Strict boundaries: <95% red, 95%..100% inclusive no shade,
+    >100% green. `None` (no numeric target — a textual task row) never shades.
+
+    This fill lands on the DIFFERENCE % cell ONLY. The ACHIEVEMENT % cell that
+    decides it, and every other cell on the row, stay unfilled."""
+    if achievement is None:
         return None
-    if pct >= 100:
-        return _ACH_GREEN
-    if pct >= 95:
-        return None
-    return _ACH_RED
+    if achievement > 1.0:
+        return _DIFF_GREEN
+    if achievement < 0.95:
+        return _DIFF_RED
+    return None
+
+
+def _is_numeric(value) -> bool:
+    """Strict numeric-value check: a genuine number, never a status string.
+
+    Only genuinely numeric benchmark values feed the totals and the achievement
+    %. Textual task cells ("FINISH WITHIN A DAY", "FINISHED", "NO PENDING",
+    "N DAYS OVERDUE", "NOT COMPLETED", ...) are strings and are excluded — they
+    are never coerced to zero and never create a subtotal."""
+    return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
 
 
 def build_pending_benchmark_workbook(
-    rows: list[dict], cycle_start, cycle_end, achievements: dict[str, int] | None = None
+    rows: list[dict], cycle_start, cycle_end
 ) -> BytesIO:
-    """Full-cycle Benchmark XLSX: employee-wise sections of date-wise detail
-    rows (each showing that day's own shortage), then one bold TOTAL row per
-    employee. The TOTAL row repeats the employee's EMP CODE & NAME value so an
-    Excel filter on an employee returns both their detail rows and their TOTAL
-    row. Its PENDING columns net the whole cycle per unit
-    (MAX(0, cycle_target - cycle_actual)) rather than summing the daily
-    shortages, so a day's overachievement offsets another day's shortfall.
+    """Full-cycle Benchmark XLSX, grouped employee -> sub-activity.
 
-    Header is two rows, built so Excel's AutoFilter actually works with the
-    grouped layout: row 1 carries ONLY the merged group labels (BENCHMARK
-    TARGET / ACTUAL COMPLETED / PENDING BENCHMARK, each across its four unit
-    sub-columns); row 2 is the real header row with a label in every column
-    (flat labels + TAGS/DOCS/BOM/SPARES per group) and the AutoFilter is
-    anchored on row 2 — merging flat labels across both rows would leave the
-    filter row with empty MergedCells and break per-column filtering.
+    Layout, styling, colours, fonts, borders, number formats, column widths,
+    merged header cells, freeze panes and AutoFilter are matched cell-for-cell
+    to the company reference workbook. Within an employee, each sub-activity's
+    date-wise detail rows are followed by ONE bold TOTAL row for that exact
+    sub-activity (never one combined per-employee total). Two distinct
+    behaviours, decided per row by whether its benchmark value is genuinely
+    numeric (see _is_numeric), NOT by benchmark_type:
 
-    Each group spans four unit sub-columns (TAGS/DOCS/BOM/SPARES) plus a
-    per-group TOTAL column that carries the employee's cross-unit sum on the
-    TOTAL row only. After the three groups comes ACHIEVEMENT % (populated on
-    the TOTAL row only), then CYCLE START/END.
+    - A NUMERIC sub-activity (NUMERIC ledger days, or a count-based lumpsum with
+      real numbers) gets its detail rows plus one TOTAL row carrying the
+      sub-activity's per-unit target/actual/net-pending, its ACHIEVEMENT % and
+      its DIFFERENCE %.
+    - A purely TEXTUAL task sub-activity ("FINISH WITHIN A DAY" / "FINISHED" /
+      "NO PENDING", etc.) shows its detail rows ONLY — no TOTAL row, no
+      percentages, no shading, no participation in any numeric total.
 
-    Each data row's values land only in the sub-column matching its benchmark
-    unit (a sub-activity has exactly one counted field). Cell values may be
-    numbers (NUMERIC ledger rows) or text (lumpsum/task rows, e.g. "1000 TAGS
-    PER DAY", "NOT COMPLETED"); the TOTAL row sums the *_total twins only, so
-    text rows never pollute the numeric totals. ACHIEVEMENT % arrives from the
-    service (full-cycle actual/target) and colours the whole TOTAL row. `rows`
-    must arrive sorted employee-first (the service guarantees it)."""
-    achievements = achievements or {}
+    The TOTAL row repeats the exact EMP CODE & NAME, ACTIVITY and SUB ACTIVITY
+    of its detail rows (so an Excel employee filter, or a sub-activity filter,
+    keeps both the detail rows and the total), writes "TOTAL" in the PROJECT
+    column, and leaves DATE blank. Its PENDING columns net the whole cycle per
+    unit (MAX(0, cycle_target - cycle_actual)) rather than summing the daily
+    shortages, so a day's overachievement offsets another day's shortfall — but
+    only within the same employee + sub-activity + unit. Nothing crosses
+    sub-activities, units, employees or cycles.
+
+    ACHIEVEMENT % = total_actual / total_target summed across the four units,
+    uncapped, formatted 0.00%; blank when total_target is 0 (no divide by zero).
+    DIFFERENCE % = ABS(achievement - 100%), formatted 0.00%, blank whenever
+    ACHIEVEMENT % is. Only the DIFFERENCE % cell is ever shaded (see
+    _difference_fill) — never the achievement cell, never a full row.
+
+    Header is two rows: row 1 carries ONLY the merged group labels, row 2 the
+    real per-column header the AutoFilter anchors on. `rows` must arrive sorted
+    employee -> activity -> sub-activity -> date -> project (the service
+    guarantees it)."""
     wb, ws = _new_sheet()
     ws.title = PENDING_SHEET_NAME
 
     n_left = len(_PB_LEFT)
     n_units = len(_PB_UNITS)
-    ach_col = n_left + 1 + len(_PB_GROUPS) * _PB_GROUP_WIDTH  # ACHIEVEMENT % column
-    first_right = ach_col + 1  # first CYCLE column
+    first_right = n_left + 1 + len(_PB_GROUPS) * _PB_GROUP_WIDTH  # first CYCLE column
     total_cols = first_right + len(_PB_RIGHT) - 1
-    date_cols = {2, first_right, first_right + 1}
+    date_cols = {_PB_DATE_COL, first_right, first_right + 1}
 
     def group_start(gi: int) -> int:
         return n_left + 1 + gi * _PB_GROUP_WIDTH
@@ -181,96 +231,132 @@ def build_pending_benchmark_workbook(
         ws.column_dimensions[get_column_letter(idx)].width = width
     for gi, group in enumerate(_PB_GROUPS):
         start = group_start(gi)
-        # Group label spans the unit columns only; the TOTAL column sits outside.
         ws.merge_cells(start_row=1, start_column=start, end_row=1, end_column=start + n_units - 1)
         ws.cell(1, start, group)
         for ui, unit_label in enumerate(_PB_UNIT_LABELS):
             ws.cell(2, start + ui, unit_label)
-            ws.column_dimensions[get_column_letter(start + ui)].width = 12.0
-    ws.cell(2, ach_col, _PB_ACH[0])
-    ws.column_dimensions[get_column_letter(ach_col)].width = _PB_ACH[1]
+            ws.column_dimensions[get_column_letter(start + ui)].width = _PB_UNIT_WIDTHS[gi][ui]
     for ri, (label, width) in enumerate(_PB_RIGHT):
         col = first_right + ri
         ws.cell(2, col, label)
         ws.column_dimensions[get_column_letter(col)].width = width
+    # Yellow header across the FULL A1:U2 block — the cells left blank above the
+    # identity/cycle columns carry the same style as the labelled ones.
     for row in (1, 2):
         for col in range(1, total_cols + 1):
             cell = ws.cell(row=row, column=col)
-            cell.font = _HEADER_FONT
-            cell.fill = _HEADER_FILL
+            cell.font = _PB_HEADER_FONT
+            cell.fill = _PB_HEADER_FILL
             cell.border = _BORDER
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = _PB_HEADER_ROW_HEIGHT[row]
     ws.freeze_panes = "A3"
+    ws.sheet_format.defaultRowHeight = _PB_DEFAULT_ROW_HEIGHT
 
-    def style_row(r: int, bold: bool = False, fill=None) -> None:
+    def style_row(r: int, bold: bool = False) -> None:
+        """Body style: Arial 10, thin borders all round, vertical top, no fill.
+        A:G and T:U left, the three unit groups (H:S) centered. Bold on a TOTAL
+        row. No fill is applied here — the DIFFERENCE % cell is shaded by its
+        writer and is the only shaded body cell."""
         for col in range(1, total_cols + 1):
             cell = ws.cell(row=r, column=col)
             _style_data_cell(cell, n_left < col < first_right, False, col in date_cols)
             if bold:
-                cell.font = _GROUP_FONT
-            if fill is not None:
-                cell.fill = fill
+                cell.font = _PB_TOTAL_FONT
 
     unit_col = {u: i for i, u in enumerate(_PB_UNITS)}
-    r = 3
-    for label, emp_rows in groupby(rows, key=lambda x: x["employee_label"]):
-        totals = [[0.0] * n_units for _ in _PB_GROUPS]
-        used = [False] * n_units
-        for row in emp_rows:
-            ws.cell(r, 1, row["employee_label"])
-            ws.cell(r, 2, row["date"])
-            ws.cell(r, 3, row["project"])
-            ws.cell(r, 4, row["activity"])
-            ws.cell(r, 5, row["sub_activity"])
-            ui = unit_col.get(row["unit"])
-            if ui is not None:
-                for gi, key in enumerate(("target", "actual", "pending")):
-                    value = row[key]
-                    ws.cell(
-                        r,
-                        group_start(gi) + ui,
-                        value if isinstance(value, str) else float(value),
-                    )
-                # Accumulate cycle target/actual only; the cycle pending is
-                # derived from them on the TOTAL row so a day's overachievement
-                # nets another day's shortfall (see below) instead of summing
-                # the daily shortages.
-                for gi, key in enumerate(("target", "actual")):
-                    total_value = row[f"{key}_total"]
-                    if total_value is not None:
-                        totals[gi][ui] += float(total_value)
-                        used[ui] = True
-            ws.cell(r, first_right, cycle_start)
-            ws.cell(r, first_right + 1, cycle_end)
-            style_row(r)
-            r += 1
 
-        # Cycle pending per unit = MAX(0, cycle_target - cycle_actual): a day's
-        # overachievement compensates another day's shortfall within the same
-        # unit, so this is NOT the sum of the daily shortages shown above.
+    def write_sub_total_row(
+        r: int, *, emp_label: str, activity: str, sub_activity: str, totals, used,
+    ) -> None:
+        """One bold TOTAL row for a numeric sub-activity. Nets each unit's cycle
+        pending in place (MAX(0, target - actual)), then writes the per-unit
+        target/actual/pending sums, the uncapped ACHIEVEMENT % and the
+        DIFFERENCE % — shading the DIFFERENCE % cell alone. Repeats the exact
+        emp/activity/sub-activity, writes "TOTAL" in PROJECT, leaves DATE
+        blank."""
         for ui in range(n_units):
             totals[2][ui] = max(0.0, totals[0][ui] - totals[1][ui])
-
-        # TOTAL row: EMP CODE & NAME repeated (so an Excel filter on the
-        # employee returns their detail rows AND this TOTAL row) and TOTAL in
-        # SUB ACTIVITY; per-unit sums for units this employee has numeric
-        # contributions in, plus a cross-unit group TOTAL; ACHIEVEMENT %
-        # (full-cycle) and its colour grade span the whole row.
-        ws.cell(r, 1, label)
-        ws.cell(r, 5, "TOTAL")
-        any_used = any(used)
+        ws.cell(r, 1, emp_label)                        # exact CODE - NAME (filterable)
+        # DATE (col _PB_DATE_COL) stays blank on the total row.
+        ws.cell(r, _PB_PROJECT_COL, "TOTAL")            # PROJECT column marks the total
+        ws.cell(r, _PB_ACTIVITY_COL, activity)          # exact activity name
+        ws.cell(r, _PB_SUB_COL, sub_activity)           # exact sub-activity name (filterable)
         for gi in range(len(_PB_GROUPS)):
             for ui in range(n_units):
                 if used[ui]:
                     ws.cell(r, group_start(gi) + ui, totals[gi][ui])
-            if any_used:
-                ws.cell(r, group_start(gi) + n_units, sum(totals[gi]))
-        pct = achievements.get(label)
-        if pct is not None:
-            cell = ws.cell(r, ach_col, pct / 100)
-            cell.number_format = "0%"
-        style_row(r, bold=True, fill=_grade_fill(pct))
-        r += 1
+        ws.cell(r, first_right, cycle_start)
+        ws.cell(r, first_right + 1, cycle_end)
+        style_row(r, bold=True)
+
+        total_target = sum(totals[0])
+        total_actual = sum(totals[1])
+        # Uncapped actual/target; blank when target is 0 -> N/A, never a /0.
+        achievement = (total_actual / total_target) if total_target > 0 else None
+        if achievement is None:
+            return
+        ach_cell = ws.cell(r, _PB_ACH_COL, achievement)
+        ach_cell.number_format = _PB_NUMFMT_PCT
+        # Distance from target in either direction: 125% and 75% both read 25%.
+        # Rounded well past the 2dp the cell shows, purely to keep binary-float
+        # noise (0.3999999999999999) out of the formula bar.
+        diff_cell = ws.cell(r, _PB_DIFF_COL, round(abs(achievement - 1.0), 10))
+        diff_cell.number_format = _PB_NUMFMT_PCT
+        # The ONLY shaded cell in the body of the sheet.
+        fill = _difference_fill(achievement)
+        if fill is not None:
+            diff_cell.fill = fill
+
+    r = 3
+    for _emp_label, emp_rows in groupby(rows, key=lambda x: x["employee_label"]):
+        for _gkey, sub_rows in groupby(emp_rows, key=lambda x: x["group_key"]):
+            sub_rows = list(sub_rows)
+            totals = [[0.0] * n_units for _ in _PB_GROUPS]
+            used = [False] * n_units
+            # All rows in a group share one sub_activity_id -> one activity name
+            # and one exact sub-activity name; take them from the first row.
+            activity = sub_rows[0]["activity"]
+            sub_activity = sub_rows[0]["sub_activity"]
+
+            for row in sub_rows:
+                ws.cell(r, 1, row["employee_label"])
+                ws.cell(r, _PB_DATE_COL, row["date"])
+                ws.cell(r, _PB_PROJECT_COL, row["project"])
+                ws.cell(r, _PB_ACTIVITY_COL, row["activity"])
+                ws.cell(r, _PB_SUB_COL, row["sub_activity"])
+                # ACHIEVEMENT % / DIFFERENCE % stay blank on every detail row.
+                ui = unit_col.get(row["unit"])
+                if ui is not None:
+                    for gi, key in enumerate(("target", "actual", "pending")):
+                        value = row[key]
+                        ws.cell(
+                            r,
+                            group_start(gi) + ui,
+                            value if isinstance(value, str) else float(value),
+                        )
+                    # Accumulate cycle target/actual only, and only for genuinely
+                    # numeric benchmark values; the pending is derived from them
+                    # on the total row so a day's overachievement nets another
+                    # day's shortfall per unit. Textual task cells are skipped.
+                    for gi, key in enumerate(("target", "actual")):
+                        total_value = row[f"{key}_total"]
+                        if _is_numeric(total_value):
+                            totals[gi][ui] += float(total_value)
+                            used[ui] = True
+                ws.cell(r, first_right, cycle_start)
+                ws.cell(r, first_right + 1, cycle_end)
+                style_row(r)
+                r += 1
+
+            # A numeric sub-activity gets exactly one TOTAL row; a purely textual
+            # task group (no genuinely numeric value in any row) gets NONE.
+            if any(used):
+                write_sub_total_row(
+                    r, emp_label=sub_rows[0]["employee_label"], activity=activity,
+                    sub_activity=sub_activity, totals=totals, used=used,
+                )
+                r += 1
 
     # Filter on the flattened header row (2) across all data rows.
     ws.auto_filter.ref = f"A2:{get_column_letter(total_cols)}{max(r - 1, 2)}"

@@ -40,7 +40,7 @@ from app.shared.errors import register_error_handlers
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Workforce Management System API",
+        title="Coreops API",
         version="1.0.0",
         docs_url=f"{settings.API_V1_PREFIX}/docs",
         openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",

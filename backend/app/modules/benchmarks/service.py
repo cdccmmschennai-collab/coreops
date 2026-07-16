@@ -6,7 +6,7 @@ No notifications, no persistence, no scheduled jobs — every value here is
 recomputed from scratch on each call."""
 import uuid
 from datetime import date, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -379,6 +379,24 @@ def _project_label(code: str | None, name: str | None) -> str:
     return code or name or ""
 
 
+def _normalize_sub_activity_label(name: str | None) -> str:
+    """Collapse internal whitespace and uppercase a sub-activity name, for the
+    LEGACY fallback grouping key only (rows with no sub_activity_id)."""
+    return " ".join((name or "").split()).upper()
+
+
+def _sub_activity_group_key(sub_activity_id: uuid.UUID | None, sub_activity_name: str | None) -> str:
+    """Primary per-sub-activity aggregation key for the full-cycle export. The
+    export groups on employee + cycle + sub_activity; the cycle is constant for
+    one export, so the varying part is the employee (grouped upstream) and this
+    key. It uses the sub_activity_id so two sub-activities that merely share a
+    similar displayed NAME never collapse into one total; a normalized label is
+    used only as a fallback for legacy rows that predate the id."""
+    if sub_activity_id is not None:
+        return f"id:{sub_activity_id}"
+    return f"name:{_normalize_sub_activity_label(sub_activity_name)}"
+
+
 def _fmt_qty(value: Decimal) -> str:
     """Trim trailing zeros for display inside text cells (1000.00 -> 1000)."""
     return f"{value.normalize():f}"
@@ -482,7 +500,8 @@ def get_pending_benchmark_export(
         labels = {e.id: f"{e.employee_code} - {e.full_name}" for e in emps}
 
     # Every NUMERIC day for an included employee, showing that day's own
-    # shortage. The *_total twins feed the cycle-netted TOTAL row.
+    # shortage. The *_total twins feed the per-sub-activity SUB ACTIVITY TOTAL
+    # row (netted across dates within one employee + sub-activity + unit).
     rows = [
         {
             "employee_label": labels.get(r["employee_id"], "-"),
@@ -490,10 +509,12 @@ def get_pending_benchmark_export(
             "project": _project_label(r["project_code"], r["project_name"]),
             "activity": r["activity_name"] or "",
             "sub_activity": r["sub_activity_name"],
+            "sub_activity_id": r["sub_activity_id"],
+            "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
             "unit": r["benchmark_unit"],
             "target": r["target"],
             "actual": r["actual"],
-            "pending": r["pending"],  # daily shortage; TOTAL nets the cycle
+            "pending": r["pending"],  # daily shortage; the subtotal nets the cycle
             "target_total": r["target"],
             "actual_total": r["actual"],
             "pending_total": r["pending"],
@@ -509,45 +530,34 @@ def get_pending_benchmark_export(
             "project": _project_label(r["project_code"], r["project_name"]),
             "activity": r["activity_name"] or "",
             "sub_activity": r["sub_activity_name"],
+            "sub_activity_id": r["sub_activity_id"],
+            "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
             **_task_export_cells(r),
         }
         for r in cycle_tasks
         if r["employee_id"] in included
     ]
 
-    # ACHIEVEMENT %, one per employee TOTAL row, from the WHOLE cycle's numeric
-    # totals: every NUMERIC day plus count-based lumpsum (CASE A) twins. So a
-    # day recovered by overachievement still counts (Mon 60/120 + Tue 50/20 =
-    # 140/110 = 127%). Non-count lumpsum (CASE B, target_total None) and any
-    # text value never enter the numeric math.
-    full_target: dict[uuid.UUID, Decimal] = {}
-    full_actual: dict[uuid.UUID, Decimal] = {}
-    for r in daily:
-        full_target[r["employee_id"]] = full_target.get(r["employee_id"], Decimal("0")) + r["target"]
-        full_actual[r["employee_id"]] = full_actual.get(r["employee_id"], Decimal("0")) + r["actual"]
-    for r in cycle_tasks:
-        cells = _task_export_cells(r)
-        if cells["target_total"] is not None:
-            eid = r["employee_id"]
-            full_target[eid] = full_target.get(eid, Decimal("0")) + cells["target_total"]
-            full_actual[eid] = full_actual.get(eid, Decimal("0")) + cells["actual_total"]
-    achievements: dict[str, int] = {}
-    for eid in included:
-        target = full_target.get(eid, Decimal("0"))
-        if target > 0:
-            pct = (full_actual.get(eid, Decimal("0")) / target * 100).quantize(
-                Decimal("1"), rounding=ROUND_HALF_UP
-            )
-            achievements[labels.get(eid, "-")] = int(pct)
-
-    # Employee-wise sections, date-wise within each — the workbook builder
-    # groups on contiguous employee_label runs.
-    rows.sort(key=lambda r: (r["employee_label"], r["date"], r["sub_activity"]))
+    # Sort so every row of one sub-activity stays contiguous before its SUB
+    # ACTIVITY TOTAL: employee, then activity, then sub-activity name (the
+    # required display order), then group_key (keeps two same-named-but-distinct
+    # sub-activities apart), then date, then project. ACHIEVEMENT % / DIFFERENCE
+    # % are derived per SUB ACTIVITY TOTAL by the workbook builder from the
+    # *_total twins, so they are not precomputed per employee here.
+    rows.sort(
+        key=lambda r: (
+            r["employee_label"],
+            r["activity"] or "",
+            r["sub_activity"] or "",
+            r["group_key"],
+            r["date"],
+            r["project"],
+        )
+    )
     return {
         "rows": rows,
         "cycle_start": cycle_start,
         "cycle_end": cycle_end,
-        "achievements": achievements,
     }
 
 

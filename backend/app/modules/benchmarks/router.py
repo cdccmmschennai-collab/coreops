@@ -77,12 +77,14 @@ def pending_export_xlsx(
 ) -> StreamingResponse:
     """PM-only full-cycle Benchmark export — every benchmark activity row in
     the cycle for every employee with activity (achievers included, no
-    pending > 0 filter), grouped employee-wise with a TOTAL row each. Defaults
-    to the previous completed Fri..Thu cycle (PMs export Friday morning);
-    ?cycle=current exports the active one."""
+    pending > 0 filter), grouped employee -> sub-activity. Each numeric
+    sub-activity gets one TOTAL row with its own achievement %; textual task
+    sub-activities show detail rows only. Defaults to the previous completed
+    Fri..Thu cycle (PMs export Friday morning); ?cycle=current exports the
+    active one."""
     data = service.get_pending_benchmark_export(db, cycle=cycle)
     buf = build_pending_benchmark_workbook(
-        data["rows"], data["cycle_start"], data["cycle_end"], data["achievements"]
+        data["rows"], data["cycle_start"], data["cycle_end"]
     )
     filename = (
         f"BENCHMARK REPORT {date_range_label(data['cycle_start'], data['cycle_end'])}.xlsx"
