@@ -61,10 +61,15 @@ class ActivityRequest(UUIDMixin, Base):
     # emit ``activity_requests.task_id`` -> UndefinedColumn there. A leftover
     # ``task_id`` column may still exist on clean DBs (created by the rewritten
     # 0050); it is left unmapped and inert. See migration 0057.
+    # Requested workload hints, copied onto the work_report_tasks row on
+    # approval. Not benchmark inputs in their own right — the request never
+    # produces performance figures (migration 0059 added pages/records).
     tags_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     spares_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    pages_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    records_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=ActivityRequestStatus.pending.value
     )

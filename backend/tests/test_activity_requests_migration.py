@@ -35,12 +35,13 @@ from app.modules.activity_requests.models import (
     ActivityRequestStatus,
 )
 
-_MIG_PATH = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "alembic"
-    / "versions"
-    / "0057_reconcile_activity_requests.py"
-)
+_VERSIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
+_MIG_PATH = _VERSIONS / "0057_reconcile_activity_requests.py"
+# 0059 adds pages_count/records_count to this same table. Production applies it
+# right after 0057, and the ORM (which these tests read through) expects the
+# resulting six-unit shape — so the legacy-shape simulation below must run both
+# to reproduce reality. See _apply_0059_columns.
+_MIG_0059_PATH = _VERSIONS / "0059_activity_req_pages_records.py"
 
 # Exactly the shape production is running: original 0050 (pre-rewrite) + 0051's
 # report_id. Legacy requested_* columns, current_activity_id, the per-employee
@@ -89,6 +90,27 @@ def _load_migration():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def _apply_0059_columns(operations, conn) -> None:
+    """Apply 0059's guarded add-column step on this connection.
+
+    The legacy DDL below recreates activity_requests as PRODUCTION ran it (four
+    count columns, no pages/records). 0057 alone therefore leaves a table the
+    CURRENT ORM cannot read, since the model now maps six units — not a bug in
+    either migration, just an incomplete simulation: production runs 0057 then
+    0059. Replaying 0059's real body (rather than hand-writing the DDL) keeps
+    this test honest if that migration ever changes."""
+    spec = importlib.util.spec_from_file_location("mig0059", _MIG_0059_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    cols = {c["name"] for c in sa.inspect(conn).get_columns(mod.TABLE)}
+    for name in mod._NEW_COLUMNS:
+        if name not in cols:
+            operations.add_column(
+                mod.TABLE,
+                sa.Column(name, sa.Integer(), server_default="0", nullable=False),
+            )
 
 
 def _cols(conn) -> dict:
@@ -197,7 +219,9 @@ def test_reconcile_from_production_shape():
         assert ("employee_id",) in fk_cols
 
         # Existing data survived the rename and is readable through the ORM,
-        # counts defaulting to zero.
+        # counts defaulting to zero. The ORM maps six units, so complete the
+        # chain (0057 -> 0059) exactly as production does before reading.
+        _apply_0059_columns(ops, conn)
         sess = SASession(bind=conn)
         r = sess.get(ActivityRequest, legacy_id)
         assert r is not None
@@ -206,11 +230,16 @@ def test_reconcile_from_production_shape():
         assert r.sub_activity_id == ids["sub"]
         assert r.status == ActivityRequestStatus.pending.value
         assert (r.tags_count, r.docs_count, r.bom_count, r.spares_count) == (0, 0, 0, 0)
+        # 0059's units backfill to 0 on a legacy row: no workload was requested.
+        assert (r.pages_count, r.records_count) == (0, 0)
         sess.close()
 
         # Idempotent: a second pass over the now-canonical table is a no-op.
+        # Compared against the shape as it stands NOW (0057 + 0059), not the
+        # pre-0059 snapshot taken above.
+        settled = set(_cols(conn))
         mod._reconcile(ops, conn)
-        assert set(_cols(conn)) == set(after)
+        assert set(_cols(conn)) == settled
     finally:
         trans.rollback()  # undoes the drop/recreate + seeds — canonical restored
         conn.close()

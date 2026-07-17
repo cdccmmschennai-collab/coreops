@@ -25,7 +25,12 @@ from sqlalchemy.orm import Session
 
 from app.core import authz
 from app.core.config import settings
-from app.modules.activity_master.models import ActivityMaster, LEVEL_SUB_ACTIVITY
+from app.modules.activity_master.models import (
+    COUNT_FIELD_BY_UNIT,
+    LEVEL_SUB_ACTIVITY,
+    TASK_BENCHMARK_TYPES,
+    ActivityMaster,
+)
 from app.modules.activity_master.service import compute_benchmark, compute_overdue
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee
@@ -328,7 +333,11 @@ def _validate_tasks(
                 activity_type = (
                     f"{activity_name} / {sub_activity_name}" if activity_name else sub_activity_name
                 )
-            is_task_based = sub.benchmark_type == "TASK_BASED"
+            # Every TASK mode gets a due date + completion + carry-forward: the
+            # legacy TASK_BASED, TASK_STATUS_ONLY, and TASK_WITH_QUANTITY (whose
+            # quantity side is handled separately by the benchmark calc — having
+            # a quantity does not stop it being a deadline-bearing task).
+            is_task_based = sub.benchmark_type in TASK_BENCHMARK_TYPES
             benchmark_period_days = sub.benchmark_period_days
         # Optional Maintenance Plant selection — independent of the project's
         # own assigned plant; which plant the employee worked at that day.
@@ -637,6 +646,8 @@ def build_activity_rows(
             "docs": task.docs_count,
             "bom": task.bom_count,
             "spares": task.spares_count,
+            "pages": task.pages_count,
+            "records": task.records_count,
             "remarks": report.remarks,
         })
 
@@ -680,6 +691,8 @@ def build_activity_rows(
                 "docs": None,
                 "bom": None,
                 "spares": None,
+                "pages": None,
+                "records": None,
                 "remarks": report.remarks,
             })
 
@@ -735,6 +748,8 @@ def build_activity_groups(
                 "docs": r["docs"],
                 "bom": r["bom"],
                 "spares": r["spares"],
+                "pages": r["pages"],
+                "records": r["records"],
             }
             for r in day_rows
             if r["project_code"] is not None
@@ -863,6 +878,8 @@ def create_work_report(
                 docs_count=task.docs_count,
                 bom_count=task.bom_count,
                 spares_count=task.spares_count,
+                pages_count=task.pages_count,
+                records_count=task.records_count,
                 sub_activity_id=task.sub_activity_id,
                 sub_activity_name=snap["sub_activity_name"],
                 activity_name=snap["activity_name"],
@@ -975,6 +992,8 @@ def update_work_report(
                     docs_count=task.docs_count,
                     bom_count=task.bom_count,
                     spares_count=task.spares_count,
+                    pages_count=task.pages_count,
+                    records_count=task.records_count,
                     sub_activity_id=task.sub_activity_id,
                     sub_activity_name=snap["sub_activity_name"],
                     activity_name=snap["activity_name"],
@@ -1093,12 +1112,9 @@ def update_task_completion(
     return next(t for t in report.tasks if t.id == task_id)
 
 
-_COUNT_FIELD_COLUMNS = {
-    "tags": "tags_count",
-    "docs": "docs_count",
-    "bom": "bom_count",
-    "spares": "spares_count",
-}
+# Single source of truth for unit -> column (app.modules.activity_master.models).
+# Kept as a module-level alias so existing readers of this name still work.
+_COUNT_FIELD_COLUMNS = COUNT_FIELD_BY_UNIT
 
 
 def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:

@@ -216,6 +216,8 @@ def create_request(
         docs_count=data.docs_count,
         bom_count=data.bom_count,
         spares_count=data.spares_count,
+        pages_count=data.pages_count,
+        records_count=data.records_count,
         status=ActivityRequestStatus.pending.value,
     )
     db.add(req)
@@ -382,7 +384,12 @@ def _create_task_from_request(
         docs_count=req.docs_count,
         bom_count=req.bom_count,
         spares_count=req.spares_count,
+        pages_count=req.pages_count,
+        records_count=req.records_count,
         sub_activity_id=req.sub_activity_id,
+        # The approved row starts OPEN regardless of the requested quantity: a
+        # workload hint is not progress, and completion is only ever the
+        # employee's explicit choice on their own report.
         is_completed=False,
         maintenance_plant_id=None,
     )
@@ -403,6 +410,8 @@ def _create_task_from_request(
             docs_count=row.docs_count,
             bom_count=row.bom_count,
             spares_count=row.spares_count,
+            pages_count=row.pages_count,
+            records_count=row.records_count,
             sub_activity_id=row.sub_activity_id,
             sub_activity_name=snap["sub_activity_name"],
             activity_name=snap["activity_name"],

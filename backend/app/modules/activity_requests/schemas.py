@@ -17,10 +17,15 @@ class ActivityRequestCreate(BaseModel):
     project_id: uuid.UUID
     activity_id: uuid.UUID | None = None
     sub_activity_id: uuid.UUID
+    # Requested workload hints only — six units, same shape/validation as the
+    # work-report row they become on approval. These never create benchmark
+    # performance, complete a task, or affect pending calculations.
     tags_count: int = Field(default=0, ge=0)
     docs_count: int = Field(default=0, ge=0)
     bom_count: int = Field(default=0, ge=0)
     spares_count: int = Field(default=0, ge=0)
+    pages_count: int = Field(default=0, ge=0)
+    records_count: int = Field(default=0, ge=0)
 
 
 class ActivityRequestOut(BaseModel):
@@ -36,6 +41,8 @@ class ActivityRequestOut(BaseModel):
     docs_count: int
     bom_count: int
     spares_count: int
+    pages_count: int
+    records_count: int
     status: ActivityRequestStatus
     requested_at: datetime
     approved_by: uuid.UUID | None

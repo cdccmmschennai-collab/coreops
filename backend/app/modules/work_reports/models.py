@@ -250,6 +250,12 @@ class WorkReportTask(UUIDMixin, Base):
     docs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     bom_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     spares_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # PAGES / RECORDS units (migration 0058). Same convention as the four above:
+    # NOT NULL DEFAULT 0, so an unused unit is 0 rather than NULL and every
+    # SUM()/comparison stays arithmetic. A record and a document are distinct
+    # measurable units — records_count is NOT a view over docs_count.
+    pages_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    records_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     # Activity Master link (replaces free-text `activity_type` as the selection
     # mechanism going forward; `activity_type` itself is kept, auto-derived from
     # these for backward compat — see work_reports/service.py `_validate_tasks`).

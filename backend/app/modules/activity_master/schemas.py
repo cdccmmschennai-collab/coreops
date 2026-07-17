@@ -6,8 +6,17 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-BenchmarkType = Literal["NUMERIC", "TASK_BASED"]
-RelevantCountField = Literal["tags", "docs", "bom", "spares"]
+# NUMERIC / TASK_BASED are LEGACY values kept so historical rows still validate
+# on read; new configuration uses the three explicit modes. See
+# activity_master/models.py for the behaviour each one implies.
+BenchmarkType = Literal[
+    "NUMERIC",
+    "TASK_BASED",
+    "NUMERIC_DAILY",
+    "TASK_STATUS_ONLY",
+    "TASK_WITH_QUANTITY",
+]
+RelevantCountField = Literal["tags", "docs", "bom", "spares", "pages", "records"]
 
 
 class ActivityMasterOut(BaseModel):
@@ -31,7 +40,13 @@ class ActivityMasterOut(BaseModel):
 
 class SubActivityFlatOut(BaseModel):
     """Leaf rows flattened with the parent Activity's name — for the work-report
-    cascading-select / combobox use case."""
+    cascading-select / combobox use case.
+
+    Carries the FULL benchmark configuration, not just the calculation inputs:
+    the report form renders the master's own guidance (benchmark_remarks) and
+    measurement unit next to the selection. Those two fields were missing here
+    while present on the column and on ActivityMasterOut, which is precisely why
+    guidance such as "500 REQUIRED PAGES/DAY" never reached the employee."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +57,14 @@ class SubActivityFlatOut(BaseModel):
     benchmark_type: BenchmarkType | None
     benchmark_value: Decimal | None
     benchmark_period_days: int | None
+    # Supplementary display text written by the business. benchmark_remarks is
+    # the Activity Master's guidance to the employee — NOT the employee's own
+    # report remarks (WorkReportTask.description / DailyWorkReport.remarks), and
+    # it is read-only on the report page.
+    benchmark_unit_note: str | None
+    benchmark_remarks: str | None
+    # The real, calculation-driving unit. benchmark_unit_note is free text and
+    # must never be used as the unit's source.
     relevant_count_field: RelevantCountField | None
     is_active: bool
 
@@ -70,14 +93,23 @@ class SubActivityCreate(BaseModel):
     is_active: bool = True
 
     @model_validator(mode="after")
-    def _numeric_requires_value_and_count_field(self) -> "SubActivityCreate":
-        if self.benchmark_type == "NUMERIC":
+    def _quantity_modes_require_value_and_count_field(self) -> "SubActivityCreate":
+        # Mirrors the DB constraints: every mode that carries a quantity needs a
+        # target and a unit to read the actual from. TASK_STATUS_ONLY needs
+        # neither. Imported here (not at module import) to keep the schema layer
+        # free of a hard dependency on the model at import time.
+        from app.modules.activity_master.models import QUANTITY_BENCHMARK_TYPES
+
+        if self.benchmark_type in QUANTITY_BENCHMARK_TYPES:
             if self.benchmark_value is None:
-                raise ValueError("benchmark_value is required when benchmark_type is NUMERIC.")
+                raise ValueError(
+                    f"benchmark_value is required when benchmark_type is "
+                    f"{self.benchmark_type}."
+                )
             if self.relevant_count_field is None:
                 raise ValueError(
-                    "relevant_count_field is required when benchmark_type is NUMERIC "
-                    "(it's the benchmark's actual-value source)."
+                    f"relevant_count_field is required when benchmark_type is "
+                    f"{self.benchmark_type} (it's the benchmark's actual-value source)."
                 )
         return self
 

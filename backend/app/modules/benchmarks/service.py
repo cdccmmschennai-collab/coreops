@@ -461,15 +461,22 @@ def get_pending_benchmark_export(
 ) -> dict:
     """Rows for the PM's full-cycle benchmark XLSX export.
 
-    EVERY employee with ANY benchmark activity this cycle is exported — a
-    NUMERIC ledger day or a TASK_BASED lumpsum — regardless of whether anything
-    is still pending. Management evaluates complete cycle performance, so an
+    EVERY employee with ANY benchmark activity this cycle is exported — a daily
+    quantity ledger day or a task lumpsum — regardless of whether anything is
+    still pending. Management evaluates complete cycle performance, so an
     employee who met or exceeded every benchmark appears alongside one who fell
     short; nothing is filtered on pending > 0. Each employee shows their WHOLE
-    Fri..Thu benchmark story: every NUMERIC day (over-, exactly-, or
-    under-target) and every TASK_BASED lumpsum (completed, overdue, or still
-    open). The two row sources are disjoint by benchmark_type, so nothing
-    duplicates.
+    Fri..Thu benchmark story: every daily-quantity day (over-, exactly-, or
+    under-target) and every task lumpsum (completed, overdue, or still open).
+
+    The two row sources are disjoint BY CONSTRUCTION, so nothing duplicates:
+    the ledger selects DAILY_QUANTITY_BENCHMARK_TYPES (NUMERIC, NUMERIC_DAILY)
+    while the lumpsum query selects TASK_BENCHMARK_TYPES (TASK_BASED,
+    TASK_STATUS_ONLY, TASK_WITH_QUANTITY), and those two sets are defined as
+    disjoint in activity_master/models.py. TASK_WITH_QUANTITY carries a quantity
+    but is exported through the lumpsum side only — _task_row_cells CASE A gives
+    it real target/actual/pending numbers, so it still participates in the
+    numeric subtotal without being counted twice.
 
     Each NUMERIC detail row shows its own *daily* shortage (max(0, daily target
     - daily actual)); the per-employee TOTAL row instead nets the whole cycle

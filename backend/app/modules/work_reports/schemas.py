@@ -55,13 +55,18 @@ class WorkReportTaskIn(BaseModel):
     docs_count: int = Field(default=0, ge=0)
     bom_count: int = Field(default=0, ge=0)
     spares_count: int = Field(default=0, ge=0)
+    pages_count: int = Field(default=0, ge=0)
+    records_count: int = Field(default=0, ge=0)
     # Activity Master selection — replaces free-text activity_type going forward.
-    # NUMERIC sub-activities are benchmarked against whichever of
-    # tags_count/docs_count/bom_count/spares_count above the master's
-    # relevant_count_field names — there is no separate actual-count input.
+    # QUANTITY sub-activities are benchmarked against whichever of the six count
+    # fields above the master's relevant_count_field names — there is no separate
+    # actual-count input.
     sub_activity_id: uuid.UUID | None = None
-    # TASK_BASED sub-activities only: the completion checkbox. started_date/
+    # TASK sub-activities only: the completion checkbox. started_date/
     # due_date/completed_date are never client-supplied — see service.py.
+    # This flag means "the whole task is finished", NOT "today's work is done":
+    # it is never inferred from a count above, so entering pages_count=500 on a
+    # TASK_WITH_QUANTITY row leaves the task open and carrying forward.
     is_completed: bool = False
     # Task continuation (feature-flagged). When set, this row continues an
     # existing WorkItem instead of starting a new one; the server validates
@@ -91,6 +96,8 @@ class WorkReportTaskOut(BaseModel):
     docs_count: int = 0
     bom_count: int = 0
     spares_count: int = 0
+    pages_count: int = 0
+    records_count: int = 0
     # Activity Master (snapshots frozen at save time; null for rows predating
     # this feature, or rows whose sub-activity carries no benchmark).
     sub_activity_id: uuid.UUID | None = None
@@ -100,7 +107,8 @@ class WorkReportTaskOut(BaseModel):
     benchmark_value_snapshot: Decimal | None = None
     benchmark_period_days_snapshot: int | None = None
     benchmark_type_snapshot: str | None = None
-    # Which count field (tags/docs/bom/spares) fed the calc above.
+    # Which count field (tags/docs/bom/spares/pages/records) fed the calc above.
+    # Historical rows legitimately still read 'docs' etc.; never rewritten on read.
     relevant_count_field_snapshot: str | None = None
     deficit: Decimal | None = None
     productivity_pct: Decimal | None = None

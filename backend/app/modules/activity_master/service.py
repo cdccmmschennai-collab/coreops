@@ -14,8 +14,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.activity_master.models import (
+    COUNT_FIELD_BY_UNIT,
+    DAILY_QUANTITY_BENCHMARK_TYPES,
     LEVEL_ACTIVITY,
     LEVEL_SUB_ACTIVITY,
+    QUANTITY_BENCHMARK_TYPES,
+    TASK_BENCHMARK_TYPES,
     ActivityMaster,
 )
 from app.modules.activity_master.schemas import (
@@ -31,19 +35,45 @@ _BENCHMARK_FIELDS = (
 )
 
 
+def actual_count_expr():
+    """SQL expression picking the WorkReportTask count column named by
+    ActivityMaster.relevant_count_field.
+
+    Derived from COUNT_FIELD_BY_UNIT so the six units are declared exactly once.
+    Every ledger/overdue/cycle query below shares this; previously the same
+    four-way case() was hand-repeated in each, which is how a new unit gets
+    silently dropped from one of them. else_=0 keeps an unset/unknown unit
+    arithmetic rather than NULL."""
+    from app.modules.work_reports.models import WorkReportTask
+
+    return case(
+        *[
+            (ActivityMaster.relevant_count_field == unit, getattr(WorkReportTask, column))
+            for unit, column in COUNT_FIELD_BY_UNIT.items()
+        ],
+        else_=0,
+    )
+
+
 def compute_benchmark(
     benchmark_type: str | None,
     benchmark_value: Decimal | float | None,
     actual_value: int | None,
 ) -> tuple[Decimal | None, Decimal | None]:
-    """Returns (deficit, productivity_pct). NUMERIC only — TASK_BASED and no-
-    benchmark rows never get a deficit/productivity calculation, by design.
+    """Returns (deficit, productivity_pct). QUANTITY modes only (NUMERIC,
+    NUMERIC_DAILY, TASK_WITH_QUANTITY) — TASK_STATUS_ONLY / legacy TASK_BASED and
+    no-benchmark rows never get a deficit/productivity calculation, by design.
+
+    Membership-tested rather than compared to a literal, so the legacy 'NUMERIC'
+    stored on historical rows and in benchmark_type_snapshot keeps working
+    identically to the new NUMERIC_DAILY.
 
     `actual_value` is whichever of the work report task's existing
-    tags_count/docs_count/bom_count/spares_count the sub-activity's
-    relevant_count_field points to — there's no separate "actual count" entry,
-    by design (callers must not enter the same production number twice)."""
-    if benchmark_type != "NUMERIC" or benchmark_value is None:
+    tags_count/docs_count/bom_count/spares_count/pages_count/records_count the
+    sub-activity's relevant_count_field points to — there's no separate "actual
+    count" entry, by design (callers must not enter the same production number
+    twice). productivity_pct is deliberately uncapped: 120% must read as 120%."""
+    if benchmark_type not in QUANTITY_BENCHMARK_TYPES or benchmark_value is None:
         return None, None
     value = Decimal(str(benchmark_value))
     if value == 0:
@@ -123,13 +153,7 @@ def get_daily_benchmark_ledger(
     today = today or date.today()
     week_start, week_end = compute_week_bounds(today)
 
-    actual_expr = case(
-        (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
-        (ActivityMaster.relevant_count_field == "docs", WorkReportTask.docs_count),
-        (ActivityMaster.relevant_count_field == "bom", WorkReportTask.bom_count),
-        (ActivityMaster.relevant_count_field == "spares", WorkReportTask.spares_count),
-        else_=0,
-    )
+    actual_expr = actual_count_expr()
     hours_expr = func.coalesce(WorkReportTask.minutes_spent, 0) + func.coalesce(
         WorkReportTask.task_minutes_spent, 0
     )
@@ -155,7 +179,13 @@ def get_daily_benchmark_ledger(
             DailyWorkReport.status == WorkReportStatus.submitted,
             DailyWorkReport.report_date >= week_start,
             DailyWorkReport.report_date <= week_end,
-            ActivityMaster.benchmark_type == "NUMERIC",
+            # Pure per-day production only: legacy NUMERIC + NUMERIC_DAILY.
+            # TASK_WITH_QUANTITY is deliberately EXCLUDED even though it carries
+            # a quantity — it reaches the export via get_cycle_task_activities
+            # instead, which renders a counted lumpsum's target/actual/pending
+            # while keeping its completion/carry-forward. Including it here too
+            # would list the same work twice and double-count the cycle.
+            ActivityMaster.benchmark_type.in_(DAILY_QUANTITY_BENCHMARK_TYPES),
         )
     )
     if employee_ids is not None:
@@ -275,13 +305,7 @@ def get_overdue_activities(
         else_=WorkReportTask.is_completed,
     )
 
-    actual_expr = case(
-        (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
-        (ActivityMaster.relevant_count_field == "docs", WorkReportTask.docs_count),
-        (ActivityMaster.relevant_count_field == "bom", WorkReportTask.bom_count),
-        (ActivityMaster.relevant_count_field == "spares", WorkReportTask.spares_count),
-        else_=0,
-    )
+    actual_expr = actual_count_expr()
 
     stmt = (
         select(
@@ -303,7 +327,7 @@ def get_overdue_activities(
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
         .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
         .where(
-            ActivityMaster.benchmark_type == "TASK_BASED",
+            ActivityMaster.benchmark_type.in_(TASK_BENCHMARK_TYPES),
             WorkReportTask.due_date.is_not(None),
             WorkReportTask.due_date >= week_start,
             WorkReportTask.due_date < today,
@@ -377,13 +401,7 @@ def get_cycle_task_activities(
         else_=WorkReportTask.is_completed,
     )
 
-    actual_expr = case(
-        (ActivityMaster.relevant_count_field == "tags", WorkReportTask.tags_count),
-        (ActivityMaster.relevant_count_field == "docs", WorkReportTask.docs_count),
-        (ActivityMaster.relevant_count_field == "bom", WorkReportTask.bom_count),
-        (ActivityMaster.relevant_count_field == "spares", WorkReportTask.spares_count),
-        else_=0,
-    )
+    actual_expr = actual_count_expr()
 
     stmt = (
         select(
@@ -407,7 +425,7 @@ def get_cycle_task_activities(
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
         .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
         .where(
-            ActivityMaster.benchmark_type == "TASK_BASED",
+            ActivityMaster.benchmark_type.in_(TASK_BENCHMARK_TYPES),
             WorkReportTask.due_date.is_not(None),
             WorkReportTask.due_date >= week_start,
             WorkReportTask.due_date <= week_end,
@@ -510,7 +528,7 @@ def get_task_status_activities(
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
         .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
         .where(
-            ActivityMaster.benchmark_type == "TASK_BASED",
+            ActivityMaster.benchmark_type.in_(TASK_BENCHMARK_TYPES),
             WorkReportTask.due_date.is_not(None),
             WorkReportTask.due_date >= week_start,
             WorkReportTask.due_date <= week_end,
@@ -608,6 +626,10 @@ def list_all_sub_activities_flat(db: Session, *, active_only: bool = True) -> li
             "benchmark_type": sub.benchmark_type,
             "benchmark_value": sub.benchmark_value,
             "benchmark_period_days": sub.benchmark_period_days,
+            # The master's own guidance + unit note. Without these the report
+            # form cannot render the configured benchmark guidance panel.
+            "benchmark_unit_note": sub.benchmark_unit_note,
+            "benchmark_remarks": sub.benchmark_remarks,
             "relevant_count_field": sub.relevant_count_field,
             "is_active": sub.is_active,
         }
@@ -691,14 +713,18 @@ def update_activity_master(
     new_type = fields.get("benchmark_type", row.benchmark_type)
     new_value = fields.get("benchmark_value", row.benchmark_value)
     new_count_field = fields.get("relevant_count_field", row.relevant_count_field)
-    if new_type == "NUMERIC":
+    if new_type in QUANTITY_BENCHMARK_TYPES:
         if new_value is None:
-            raise AppError("validation_error", "benchmark_value is required when benchmark_type is NUMERIC.", 422)
+            raise AppError(
+                "validation_error",
+                f"benchmark_value is required when benchmark_type is {new_type}.",
+                422,
+            )
         if new_count_field is None:
             raise AppError(
                 "validation_error",
-                "relevant_count_field is required when benchmark_type is NUMERIC "
-                "(it's the benchmark's actual-value source).",
+                f"relevant_count_field is required when benchmark_type is {new_type} "
+                f"(it's the benchmark's actual-value source).",
                 422,
             )
 

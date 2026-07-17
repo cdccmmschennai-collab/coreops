@@ -529,7 +529,21 @@ def test_daily_ledger_scoped_by_employee_ids(client, db, setup_author, activity_
 
 
 def test_overdue_activities_lists_past_due_incomplete_rows(client, db, setup_author, activity_admin):
-    from app.modules.activity_master.service import get_overdue_activities
+    """Overdue is scoped to the CURRENT Fri..Thu cycle (week_start <= due_date <
+    today), so both dates here are anchored to the cycle rather than to the real
+    calendar date.
+
+    The earlier `due = today - 2 days` was fragile: on a Friday or Saturday the
+    cycle has only just begun, so a deadline two days ago belongs to the
+    *previous* cycle and is correctly excluded — the test failed on those two
+    days while the product behaved exactly as designed. Anchoring to
+    compute_week_bounds keeps the assertion honest on all seven days. The
+    Friday-reset behaviour itself is unchanged and still enforced by
+    test_overdue_excludes_previous_cycle below."""
+    from app.modules.activity_master.service import (
+        compute_week_bounds,
+        get_overdue_activities,
+    )
     from app.modules.work_reports.models import WorkReportTask
 
     a = setup_author()
@@ -542,14 +556,20 @@ def test_overdue_activities_lists_past_due_incomplete_rows(client, db, setup_aut
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
+    # Due today (1-day activity) -> not yet overdue.
     assert get_overdue_activities(db, employee_ids={a["emp"].id}, today=TODAY_D) == []
 
+    # A deadline on the cycle's first day, evaluated two days into that same
+    # cycle: inside the window (due_date >= week_start) and past (due_date <
+    # today) on every calendar day.
+    week_start, _ = compute_week_bounds(TODAY_D)
+    as_of = week_start + timedelta(days=2)
     row = db.get(WorkReportTask, created["tasks"][0]["id"])
-    row.due_date = TODAY_D - timedelta(days=2)
+    row.due_date = week_start
     db.add(row)
     db.commit()
 
-    overdue = get_overdue_activities(db, employee_ids={a["emp"].id}, today=TODAY_D)
+    overdue = get_overdue_activities(db, employee_ids={a["emp"].id}, today=as_of)
     assert len(overdue) == 1
     assert overdue[0]["sub_activity_name"] == "AUDIT QUERY"
     assert overdue[0]["days_overdue"] == 2
@@ -559,6 +579,36 @@ def test_overdue_activities_lists_past_due_incomplete_rows(client, db, setup_aut
         f"{BASE}/tasks/{created['tasks'][0]['id']}/completion",
         json={"is_completed": True}, headers=a["header"],
     )
+    assert get_overdue_activities(db, employee_ids={a["emp"].id}, today=as_of) == []
+
+
+def test_overdue_excludes_previous_cycle(client, db, setup_author, activity_admin):
+    """The Friday reset, asserted directly: a deadline in the previous cycle is
+    never reported as overdue, however long it has been open. This is the
+    behaviour that made the old date arithmetic above look broken, so it is now
+    pinned by its own test rather than left implicit."""
+    from app.modules.activity_master.service import (
+        compute_week_bounds,
+        get_overdue_activities,
+    )
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_type="TASK_BASED", name="STALE")
+    created = client.post(
+        BASE, headers=a["header"],
+        json={"report_date": TODAY, "tasks": [{
+            "project_id": str(a["project"].id), "description": "work",
+            "sub_activity_id": sub["id"],
+        }]},
+    ).json()
+
+    week_start, _ = compute_week_bounds(TODAY_D)
+    row = db.get(WorkReportTask, created["tasks"][0]["id"])
+    row.due_date = week_start - timedelta(days=1)  # last cycle's Thursday
+    db.add(row)
+    db.commit()
+
     assert get_overdue_activities(db, employee_ids={a["emp"].id}, today=TODAY_D) == []
 
 
