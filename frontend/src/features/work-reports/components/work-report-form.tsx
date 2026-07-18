@@ -32,6 +32,13 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
 import {
+  COUNT_FIELD_KEY,
+  COUNT_FIELD_LABEL,
+  isQuantityBenchmark,
+  isTaskBenchmark,
+  type RelevantCountField,
+} from "@/features/activity-master/types";
+import {
   useCreateActivityRequest,
   useDeleteActivityRequest,
   useMyActivityRequests,
@@ -71,12 +78,21 @@ interface WorkReportFormProps {
   reportId?: string;
 }
 
-const COUNT_FIELD_KEY = {
-  tags: "tags_count",
-  docs: "docs_count",
-  bom: "bom_count",
-  spares: "spares_count",
-} as const;
+// COUNT_FIELD_KEY / COUNT_FIELD_LABEL are imported from activity-master/types:
+// one declaration of the six units, mirroring the backend's COUNT_FIELD_BY_UNIT.
+
+/** The form field name for a unit, typed against the task row's count fields. */
+type CountFieldName =
+  | "tags_count" | "docs_count" | "bom_count"
+  | "spares_count" | "pages_count" | "records_count";
+
+const countFieldName = (u: RelevantCountField): CountFieldName =>
+  COUNT_FIELD_KEY[u] as CountFieldName;
+
+const ALL_COUNT_FIELDS: CountFieldName[] = [
+  "tags_count", "docs_count", "bom_count",
+  "spares_count", "pages_count", "records_count",
+];
 
 // Second activities under these parent Activities are routine (meetings /
 // training) rather than extra project work, so they don't need PM approval —
@@ -118,6 +134,77 @@ function addDays(isoDate: string, days: number): string | null {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** "2026-07-18" -> "18 Jul 2026". Parsed from the string's own parts rather
+ *  than via Date, which would shift the day by the UTC offset in IST. */
+function formatDueDate(isoDate: string | null | undefined): string | null {
+  if (!isoDate) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
+  if (!m) return null;
+  const month = MONTH_ABBR[Number(m[2]) - 1];
+  if (!month) return null;
+  return `${Number(m[3])} ${month} ${m[1]}`;
+}
+
+/** Words that carry no instruction of their own — they only glue a period or a
+ *  target together ("COMPLETE IN 1 DAY", "500 REQUIRED PAGES/DAY"). */
+const FILLER_REMARK_WORDS = new Set([
+  "COMPLETE", "COMPLETED", "COMPLETION", "FINISH", "WITHIN", "IN", "PER", "A",
+  "AN", "OF", "TARGET", "REQUIRED", "REQUIREMENT", "MINIMUM", "MIN", "DAY",
+  "DAYS", "DAILY", "EVERY", "AND", "THE", "IS", "TO", "BE",
+]);
+
+/**
+ * True when benchmark_remarks says nothing the structured fields do not already
+ * say - "1DAY" beside a 1-day period, or "500 REQUIRED PAGES/DAY" beside a
+ * target of 500 PAGES. Such remarks are dropped rather than repeated under a
+ * "Note:" line.
+ *
+ * Case and whitespace are normalised for the COMPARISON ONLY; the stored
+ * Activity Master value is never touched, and a remark with any leftover
+ * meaningful word is always shown verbatim.
+ */
+function isDuplicateRemark(
+  remarks: string,
+  periodDays: number | null | undefined,
+  benchmarkValue: number | null | undefined,
+  unit: RelevantCountField | null | undefined,
+): boolean {
+  const tokens = remarks
+    .toUpperCase()
+    // "1DAY" carries no separator, so split digit/letter runs apart first.
+    .replace(/(\d)([A-Z])/g, "$1 $2")
+    .replace(/([A-Z])(\d)/g, "$1 $2")
+    .split(/[^A-Z0-9.]+/)
+    .filter(Boolean);
+  if (!tokens.length) return true;
+
+  const unitWords = unit
+    ? new Set([
+        COUNT_FIELD_LABEL[unit].toUpperCase(),
+        // "PAGES" configured, "PAGE" written (or the reverse).
+        COUNT_FIELD_LABEL[unit].toUpperCase().replace(/S$/, ""),
+        `${COUNT_FIELD_LABEL[unit].toUpperCase()}S`,
+      ])
+    : new Set<string>();
+
+  return tokens.every((raw) => {
+    const token = raw.replace(/\.$/, "");
+    if (!token) return true;
+    if (FILLER_REMARK_WORDS.has(token)) return true;
+    if (unitWords.has(token)) return true;
+    const num = Number(token);
+    if (!Number.isNaN(num)) {
+      return num === periodDays || num === benchmarkValue;
+    }
+    return false;
+  });
 }
 
 /**
@@ -391,14 +478,17 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return !rowIsNoApproval(first) && !rowIsNoApproval(second);
   }
 
-  // A NUMERIC sub-activity must have its benchmarked count filled in — the same
-  // guard used on submit, factored out so the "Request PM" path enforces it too.
+  // A quantity sub-activity (NUMERIC / NUMERIC_DAILY / TASK_WITH_QUANTITY) must
+  // have its benchmarked count filled in — the same guard used on submit,
+  // factored out so the "Request PM" path enforces it too.
   function validateBenchmarks(rows: WorkReportFormValues["tasks"]): boolean {
     let ok = true;
     rows.forEach((t, i) => {
       const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
-      const countField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
-      const key = countField ? COUNT_FIELD_KEY[countField] : null;
+      const countField = isQuantityBenchmark(sub?.benchmark_type)
+        ? sub!.relevant_count_field
+        : null;
+      const key = countField ? countFieldName(countField) : null;
       if (key && Number(t[key] || 0) <= 0) {
         form.setError(`tasks.${i}.${key}`, {
           message: `Required — ${sub!.name} has a benchmark target`,
@@ -445,10 +535,14 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         project_id: draft.project_id,
         activity_id: draft.activity_id || null,
         sub_activity_id: draft.sub_activity_id,
+        // Each unit travels in its OWN field — a requested page count must never
+        // be sent as docs_count.
         tags_count: Number(draft.tags_count) || 0,
         docs_count: Number(draft.docs_count) || 0,
         bom_count: Number(draft.bom_count) || 0,
         spares_count: Number(draft.spares_count) || 0,
+        pages_count: Number(draft.pages_count) || 0,
+        records_count: Number(draft.records_count) || 0,
       });
       toast.success(
         "Your request has been sent to your Project Manager for approval.",
@@ -1143,12 +1237,41 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 <Combobox
                                   value={f.value || ""}
                                   onValueChange={(v) => {
+                                    const prev = form.getValues(
+                                      `tasks.${index}.sub_activity_id`,
+                                    );
                                     f.onChange(v);
                                     const sub = v ? subActivityById.get(v) : undefined;
                                     form.setValue(`tasks.${index}.sub_activity_name`, sub?.name);
                                     form.setValue(`tasks.${index}.activity_name`, sub?.activity_name);
                                     // Server derives activity_type from the new selection.
                                     form.setValue(`tasks.${index}.activity_type`, "");
+                                    // Clear the OLD sub-activity's benchmarked count
+                                    // when the selection actually changes: 200 typed
+                                    // against a DOCS activity must not silently
+                                    // survive as docs_count once the row is switched
+                                    // to a PAGES one. Only the previous unit's field
+                                    // is reset — counts the employee entered for
+                                    // other units are left alone, and the new unit's
+                                    // own field is never wiped (it may be being
+                                    // re-selected on an edit).
+                                    if (prev && prev !== v) {
+                                      const prevSub = subActivityById.get(prev);
+                                      const prevUnit = isQuantityBenchmark(
+                                        prevSub?.benchmark_type,
+                                      )
+                                        ? prevSub!.relevant_count_field
+                                        : null;
+                                      const newUnit = isQuantityBenchmark(sub?.benchmark_type)
+                                        ? sub!.relevant_count_field
+                                        : null;
+                                      if (prevUnit && prevUnit !== newUnit) {
+                                        form.setValue(
+                                          `tasks.${index}.${countFieldName(prevUnit)}`,
+                                          "0",
+                                        );
+                                      }
+                                    }
                                   }}
                                   options={options}
                                   placeholder={selectedActivityId ? "Select sub-activity…" : "Pick an Activity first"}
@@ -1164,90 +1287,183 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       />
                     </div>
 
-                    {/* Row B2: Tags / Docs / BOM / Spares. The sub-activity's
-                        benchmarked count is starred/highlighted with its target;
-                        the rest are optional operational counts. */}
-                    <div className="grid gap-4 sm:grid-cols-4">
-                      {(() => {
-                        const subId = watchedTasks?.[index]?.sub_activity_id;
-                        const sub = subId ? subActivityById.get(subId) : undefined;
-                        // The benchmark target is shown directly on whichever count
-                        // field the sub-activity names — there is no separate
-                        // "Actual Count" entry, so the same number is never typed twice.
-                        const targetField = sub?.benchmark_type === "NUMERIC" ? sub.relevant_count_field : null;
-                        // A half day halves every benchmark target (100 -> 50),
-                        // matching the deficit/productivity the backend freezes
-                        // at submit time.
-                        const isHalfDay = dayStatus === "half_day";
-                        const targetValue =
-                          sub?.benchmark_value != null
-                            ? isHalfDay
-                              ? sub.benchmark_value / 2
-                              : sub.benchmark_value
-                            : null;
+                    {/* Activity Master guidance for a quantity-only mode
+                        (NUMERIC / NUMERIC_DAILY). Task modes render their note
+                        inside the Task benchmark card instead, so the same
+                        remark is never printed twice on one row.
 
-                        return (
-                          [
-                            ["tags_count",   "Tags",   "tags"],
-                            ["docs_count",   "Docs",   "docs"],
-                            ["bom_count",    "BOM",    "bom"],
-                            ["spares_count", "Spares", "spares"],
-                          ] as const
-                        ).map(([name, label, countField]) => {
-                          const isTarget = targetField === countField;
-                          return (
-                            <FormField
-                              key={name}
-                              control={form.control}
-                              name={`tasks.${index}.${name}`}
-                              render={({ field: f }) => (
-                                <FormItem>
-                                  <FormLabel
-                                    className={
-                                      isTarget
-                                        ? "block text-xs font-medium leading-none text-foreground"
-                                        : "block text-xs leading-none text-muted-foreground"
-                                    }
-                                  >
-                                    {label}
-                                    {isTarget && (
-                                      <>
-                                        <span className="text-destructive"> *</span>
-                                        <span className="font-normal text-muted-foreground">
-                                          {" "}(Target: {formatInt(targetValue)}/{sub!.benchmark_period_days ?? 1}d)
-                                        </span>
-                                      </>
-                                    )}
-                                  </FormLabel>
-                                  <FormControl>
-                                    <Input
-                                      type="number"
-                                      min={0}
-                                      placeholder="0"
-                                      className={isTarget ? "border-primary" : undefined}
-                                      {...f}
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-                          );
-                        });
-                      })()}
-                    </div>
-
-                    {/* Row C: TASK_BASED sub-activities only — a single
-                        completion checkbox. No status dropdown, no manual
-                        date entry: started_date/due_date/completed_date are
-                        all system-managed (see schemas.ts). NUMERIC
-                        sub-activities have no extra row here: the benchmark
-                        target is shown directly on the matching count field
-                        above (Tags/Docs/BOM/Spares), not a separate entry. */}
+                        Read-only: this is guidance TO the employee, deliberately
+                        kept distinct from their own Remarks input below. A
+                        remark that merely restates the configured target or
+                        period is dropped - see isDuplicateRemark. */}
                     {(() => {
                       const subId = watchedTasks?.[index]?.sub_activity_id;
                       const sub = subId ? subActivityById.get(subId) : undefined;
-                      if (sub?.benchmark_type !== "TASK_BASED") return null;
+                      if (!sub || isTaskBenchmark(sub.benchmark_type)) return null;
+                      const remarks = sub.benchmark_remarks?.trim();
+                      if (!remarks) return null;
+                      const unit = isQuantityBenchmark(sub.benchmark_type)
+                        ? sub.relevant_count_field
+                        : null;
+                      if (
+                        isDuplicateRemark(
+                          remarks,
+                          sub.benchmark_period_days,
+                          sub.benchmark_value,
+                          unit,
+                        )
+                      ) {
+                        return null;
+                      }
+                      return (
+                        // whitespace-pre-line: multi-line remarks keep their line
+                        // breaks and stored wording verbatim.
+                        <p className="whitespace-pre-line text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Note:</span>{" "}
+                          {remarks}
+                        </p>
+                      );
+                    })()}
+
+                    {/* Row B2: quantity counts. The sub-activity's configured unit
+                        is shown prominently with its read-only target; the other
+                        five stay collapsed so six equal inputs are never presented.
+                        A status-only task has no quantity of its own, so nothing is
+                        promoted for it. */}
+                    {(() => {
+                      const subId = watchedTasks?.[index]?.sub_activity_id;
+                      const sub = subId ? subActivityById.get(subId) : undefined;
+                      const row = watchedTasks?.[index];
+                      // The configured unit — the ONLY field the benchmark reads.
+                      const unit = isQuantityBenchmark(sub?.benchmark_type)
+                        ? sub!.relevant_count_field
+                        : null;
+                      const targetName = unit ? countFieldName(unit) : null;
+                      // A half day halves every benchmark target (100 -> 50),
+                      // matching the deficit/productivity the backend freezes
+                      // at submit time.
+                      const isHalfDay = dayStatus === "half_day";
+                      const targetValue =
+                        sub?.benchmark_value != null
+                          ? isHalfDay
+                            ? sub.benchmark_value / 2
+                            : sub.benchmark_value
+                          : null;
+
+                      const others = ALL_COUNT_FIELDS.filter((n) => n !== targetName);
+                      // Never hide a stored value: if any collapsed unit already
+                      // carries a number (a legacy row, or an edit after the
+                      // master's unit changed), the panel opens so it stays
+                      // visible and editable rather than silently invisible.
+                      const othersHaveValues = others.some(
+                        (n) => Number(row?.[n] ?? 0) > 0,
+                      );
+
+                      const renderCount = (
+                        name: CountFieldName,
+                        label: string,
+                        prominent: boolean,
+                      ) => (
+                        <FormField
+                          key={name}
+                          control={form.control}
+                          name={`tasks.${index}.${name}`}
+                          render={({ field: f }) => (
+                            <FormItem>
+                              <FormLabel
+                                className={
+                                  prominent
+                                    ? "block text-sm font-semibold leading-none text-foreground"
+                                    : "block text-xs leading-none text-muted-foreground"
+                                }
+                              >
+                                {label}
+                                {prominent && <span className="text-destructive"> *</span>}
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  placeholder="0"
+                                  className={prominent ? "border-primary" : undefined}
+                                  {...f}
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      );
+
+                      return (
+                        <div className="space-y-3">
+                          {targetName && unit && (
+                            <div className="rounded-md border border-primary/40 p-3">
+                              <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
+                                <span className="text-sm font-medium text-foreground">
+                                  {COUNT_FIELD_LABEL[unit]}
+                                </span>
+                              </div>
+                              <div className="sm:max-w-xs">
+                                {/* The target IS the input's label: the employee
+                                    reads what is expected of them on the same line
+                                    they type into. It comes from Activity Master
+                                    and is never re-entered here. */}
+                                {renderCount(
+                                  targetName,
+                                  `Target: ${formatInt(targetValue)} ${COUNT_FIELD_LABEL[
+                                    unit
+                                  ].toUpperCase()} / ${sub!.benchmark_period_days ?? 1}d`,
+                                  true,
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <details open={othersHaveValues} className="group">
+                            <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
+                              <span className="group-open:hidden">
+                                + Other counts (optional)
+                              </span>
+                              <span className="hidden group-open:inline">
+                                - Other counts (optional)
+                              </span>
+                            </summary>
+                            <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                              {others.map((name) =>
+                                renderCount(
+                                  name,
+                                  COUNT_FIELD_LABEL[
+                                    (Object.keys(COUNT_FIELD_KEY) as RelevantCountField[]).find(
+                                      (u) => COUNT_FIELD_KEY[u] === name,
+                                    )!
+                                  ],
+                                  false,
+                                ),
+                              )}
+                            </div>
+                          </details>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Row C: every TASK mode (TASK_BASED / TASK_STATUS_ONLY /
+                        TASK_WITH_QUANTITY) — one compact benchmark + completion
+                        card. The headline is generated from the structured
+                        fields (benchmark_value / benchmark_period_days /
+                        relevant_count_field / due_date), so the rule is stated
+                        once and Activity Master remarks only appear when they add
+                        something the structured fields do not already say.
+
+                        No status dropdown, no manual date entry:
+                        started_date/due_date/completed_date are all system-managed
+                        (see schemas.ts).
+
+                        Quantity-only modes (NUMERIC / NUMERIC_DAILY) get NO card:
+                        they are pure daily production with nothing to complete. */}
+                    {(() => {
+                      const subId = watchedTasks?.[index]?.sub_activity_id;
+                      const sub = subId ? subActivityById.get(subId) : undefined;
+                      if (!isTaskBenchmark(sub?.benchmark_type)) return null;
 
                       const row = watchedTasks?.[index];
                       // Prefer the server-computed due_date (existing row);
@@ -1257,42 +1473,99 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                       // is due the day it starts, a 2-day task the next day, etc.
                       // target_days is clamped to >= 1 (a 0/blank benchmark period
                       // must never push the due date before the start date).
-                      const periodDays = Math.max(1, sub.benchmark_period_days ?? 1);
+                      const periodDays = Math.max(1, sub!.benchmark_period_days ?? 1);
                       const previewDue = row?.due_date
                         ? row.due_date
                         : reportDate
                           ? addDays(reportDate, periodDays - 1)
                           : null;
+                      const dueLabel = formatDueDate(previewDue);
+
+                      const unit = isQuantityBenchmark(sub!.benchmark_type)
+                        ? sub!.relevant_count_field
+                        : null;
+                      // Same half-day rule as the quantity input above: a half
+                      // day halves the target the employee is measured against.
+                      const target =
+                        sub!.benchmark_value != null
+                          ? dayStatus === "half_day"
+                            ? sub!.benchmark_value / 2
+                            : sub!.benchmark_value
+                          : null;
+
+                      const remarks = sub!.benchmark_remarks?.trim();
+                      const showNote =
+                        remarks &&
+                        !isDuplicateRemark(
+                          remarks,
+                          sub!.benchmark_period_days,
+                          sub!.benchmark_value,
+                          unit,
+                        );
 
                       return (
-                        <FormField
-                          control={form.control}
-                          name={`tasks.${index}.is_completed`}
-                          render={({ field: f }) => (
-                            <FormItem>
-                              <label className="flex items-center gap-2 text-sm">
-                                <FormControl>
-                                  <Checkbox
-                                    checked={f.value}
-                                    onChange={(e) => f.onChange(e.target.checked)}
-                                  />
-                                </FormControl>
-                                <span>
-                                  {continuationEnabled
-                                    ? reportDate
-                                      ? `Complete this overall task on ${reportDate}`
-                                      : "Complete this overall task on this report"
-                                    : "Task Completed"}
-                                </span>
-                                <span className="text-xs text-muted-foreground">
-                                  (within {periodDays}d
-                                  {previewDue ? ` — due ${previewDue}` : ""})
-                                </span>
-                              </label>
-                              <FormMessage />
-                            </FormItem>
+                        <div className="rounded-md border border-border p-3">
+                          <p className="text-xs font-medium text-foreground">
+                            Task benchmark
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {/* A quantity task states its target on the input's
+                                own label, which is authoritative - the card adds
+                                only the deadline, never a second copy of the
+                                target. A status-only task has no quantity input,
+                                so it states the whole rule here. */}
+                            {unit && target != null && dueLabel ? (
+                              <>Due: {dueLabel}</>
+                            ) : (
+                              <>
+                                Complete within {periodDays}{" "}
+                                {periodDays === 1 ? "day" : "days"}.
+                                {dueLabel ? ` Due: ${dueLabel}` : ""}
+                              </>
+                            )}
+                          </p>
+                          {showNote && (
+                            // whitespace-pre-line: multi-line remarks keep their
+                            // line breaks and stored wording verbatim.
+                            <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">
+                              <span className="font-medium text-foreground">Note:</span>{" "}
+                              {remarks}
+                            </p>
                           )}
-                        />
+                          <FormField
+                            control={form.control}
+                            name={`tasks.${index}.is_completed`}
+                            render={({ field: f }) => (
+                              <FormItem className="mt-3">
+                                {/* Stated once, above the box - the checked state
+                                    replaces it rather than adding a second copy. */}
+                                {!f.value && (
+                                  <p className="mb-2 text-xs text-muted-foreground">
+                                    Leave unchecked if unfinished; the task will
+                                    continue in your next report.
+                                  </p>
+                                )}
+                                <label className="flex items-center gap-2 text-sm">
+                                  <FormControl>
+                                    <Checkbox
+                                      checked={f.value}
+                                      onChange={(e) => f.onChange(e.target.checked)}
+                                    />
+                                  </FormControl>
+                                  <span className="font-medium text-foreground">
+                                    Mark task fully completed
+                                  </span>
+                                </label>
+                                {f.value && (
+                                  <p className="mt-2 text-xs font-medium text-foreground">
+                                    Task completed - it will no longer carry forward.
+                                  </p>
+                                )}
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
                       );
                     })()}
                   </div>

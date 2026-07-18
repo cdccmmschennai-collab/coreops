@@ -50,21 +50,26 @@ import {
   useUpdateActivity,
   useUpdateSubActivity,
 } from "../hooks";
+import {
+  ALL_BENCHMARK_TYPES,
+  BENCHMARK_TYPE_LABEL,
+  COUNT_FIELDS,
+  COUNT_FIELD_LABEL,
+  SELECTABLE_BENCHMARK_TYPES,
+  isQuantityBenchmark,
+  isTaskBenchmark,
+} from "../types";
 import type { ActivityMaster, BenchmarkType, RelevantCountField } from "../types";
 
 const NONE = "__none__";
-const BENCHMARK_TYPES = ["NUMERIC", "TASK_BASED"] as const;
-const BENCHMARK_TYPE_LABEL: Record<BenchmarkType, string> = {
-  NUMERIC: "Numeric (count vs. target)",
-  TASK_BASED: "Task-based (duration + status only)",
-};
-const COUNT_FIELDS = ["tags", "docs", "bom", "spares"] as const;
-const COUNT_FIELD_LABEL: Record<RelevantCountField, string> = {
-  tags: "Tag Count",
-  docs: "Document Count",
-  bom: "BOM Count",
-  spares: "Spares Count",
-};
+// BENCHMARK_TYPE_LABEL / COUNT_FIELD_LABEL / COUNT_FIELDS and the mode-set
+// helpers all come from ../types — one declaration shared with the report form,
+// mirroring the backend's own sets.
+//
+// SELECTABLE_BENCHMARK_TYPES offers only the three current modes. The legacy
+// NUMERIC / TASK_BASED remain valid, keep working, and still render a readable
+// label on existing records — they are simply not offered for new ones.
+const BENCHMARK_TYPES = SELECTABLE_BENCHMARK_TYPES;
 
 // ── Activity form ────────────────────────────────────────────────────────────
 
@@ -166,7 +171,9 @@ const subActivityFormSchema = z
   .object({
     code: z.string().trim().max(50).optional().default(""),
     name: z.string().trim().min(1, "Name is required").max(200),
-    benchmark_type: z.union([z.enum(BENCHMARK_TYPES), z.literal(NONE)]),
+    // Validates against ALL modes (a legacy record must load and re-save); the
+    // dropdown separately narrows to the three offered for new configuration.
+    benchmark_type: z.union([z.enum(ALL_BENCHMARK_TYPES), z.literal(NONE)]),
     benchmark_value: z.string().optional().default(""),
     benchmark_period_days: z.string().optional().default(""),
     benchmark_unit_note: z.string().trim().max(100).optional().default(""),
@@ -174,19 +181,36 @@ const subActivityFormSchema = z
     relevant_count_field: z.union([z.enum(COUNT_FIELDS), z.literal(NONE)]),
   })
   .superRefine((v, ctx) => {
-    if (v.benchmark_type === "NUMERIC" && !v.benchmark_value.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Required for a Numeric benchmark",
-        path: ["benchmark_value"],
-      });
+    if (v.benchmark_type === NONE) return;
+    const type = v.benchmark_type as BenchmarkType;
+    // Mirrors the backend's DB constraints exactly: every QUANTITY mode needs a
+    // target and a measurement unit; every TASK mode needs a period to compute
+    // its due date from. TASK_WITH_QUANTITY is both, so it needs all three.
+    if (isQuantityBenchmark(type)) {
+      if (!v.benchmark_value.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Required — this benchmark measures a quantity",
+          path: ["benchmark_value"],
+        });
+      }
+      if (v.relevant_count_field === NONE) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Required — this is the field the benchmark reads as the actual value",
+          path: ["relevant_count_field"],
+        });
+      }
     }
-    if (v.benchmark_type === "NUMERIC" && v.relevant_count_field === NONE) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Required — this is the field the benchmark reads as the actual value",
-        path: ["relevant_count_field"],
-      });
+    if (isTaskBenchmark(type)) {
+      const days = Number(v.benchmark_period_days);
+      if (!v.benchmark_period_days.trim() || !Number.isFinite(days) || days < 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Required — the task's allocated duration in days (minimum 1)",
+          path: ["benchmark_period_days"],
+        });
+      }
     }
   });
 type SubActivityFormValues = z.infer<typeof subActivityFormSchema>;
@@ -232,14 +256,27 @@ function SubActivityForm({
   });
 
   const benchmarkType = form.watch("benchmark_type");
+  const typeOrNull = benchmarkType === NONE ? null : (benchmarkType as BenchmarkType);
+  // Which fields the chosen mode actually needs. TASK_WITH_QUANTITY is both, so
+  // it shows target + unit + period together.
+  const showQuantityFields = isQuantityBenchmark(typeOrNull);
+  const showTaskFields = isTaskBenchmark(typeOrNull);
+  const isLegacyType =
+    typeOrNull != null &&
+    !(SELECTABLE_BENCHMARK_TYPES as readonly string[]).includes(typeOrNull);
 
   async function onSubmit(values: SubActivityFormValues) {
+    const type = values.benchmark_type === NONE ? null : values.benchmark_type;
+    // A quantity mode is the only thing that gives the target and unit meaning:
+    // switching a record to a status-only task must not leave a stale 500/pages
+    // behind for the benchmark to pick up.
+    const carriesQuantity = isQuantityBenchmark(type);
     const body = {
       code: values.code || null,
       name: values.name,
-      benchmark_type: values.benchmark_type === NONE ? null : values.benchmark_type,
+      benchmark_type: type,
       benchmark_value:
-        values.benchmark_type === "NUMERIC" && values.benchmark_value.trim()
+        carriesQuantity && values.benchmark_value.trim()
           ? Number(values.benchmark_value)
           : null,
       benchmark_period_days: values.benchmark_period_days.trim()
@@ -247,7 +284,10 @@ function SubActivityForm({
         : null,
       benchmark_unit_note: values.benchmark_unit_note || null,
       benchmark_remarks: values.benchmark_remarks || null,
-      relevant_count_field: values.relevant_count_field === NONE ? null : values.relevant_count_field,
+      relevant_count_field:
+        carriesQuantity && values.relevant_count_field !== NONE
+          ? values.relevant_count_field
+          : null,
     };
     try {
       if (editing) {
@@ -324,21 +364,31 @@ function SubActivityForm({
                             {BENCHMARK_TYPE_LABEL[t]}
                           </SelectItem>
                         ))}
+                        {/* An existing record on a legacy mode keeps its value
+                            readable and selectable-back; legacy modes are never
+                            offered to records that don't already use one. */}
+                        {isLegacyType && (
+                          <SelectItem value={benchmarkType}>
+                            {BENCHMARK_TYPE_LABEL[benchmarkType as BenchmarkType]}
+                          </SelectItem>
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
                   </FormItem>
                 )}
               />
-              {benchmarkType === "NUMERIC" && (
+              {showQuantityFields && (
                 <FormField
                   control={form.control}
                   name="benchmark_value"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Benchmark Value</FormLabel>
+                      <FormLabel>
+                        Target quantity <span className="text-destructive">*</span>
+                      </FormLabel>
                       <FormControl>
-                        <Input {...field} inputMode="decimal" placeholder="e.g. 250" />
+                        <Input {...field} inputMode="decimal" placeholder="e.g. 500" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -351,7 +401,10 @@ function SubActivityForm({
                   name="benchmark_period_days"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Period (days)</FormLabel>
+                      <FormLabel>
+                        Period (days)
+                        {showTaskFields && <span className="text-destructive"> *</span>}
+                      </FormLabel>
                       <FormControl>
                         <Input {...field} inputMode="numeric" placeholder="e.g. 1" />
                       </FormControl>
@@ -363,14 +416,14 @@ function SubActivityForm({
             </div>
             {benchmarkType !== NONE && (
               <div className="grid gap-3 sm:grid-cols-2">
-                {benchmarkType === "NUMERIC" && (
+                {showQuantityFields && (
                   <FormField
                     control={form.control}
                     name="relevant_count_field"
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>
-                          Benchmark Source Field <span className="text-destructive">*</span>
+                          Measurement unit <span className="text-destructive">*</span>
                         </FormLabel>
                         <Select
                           value={field.value === NONE ? undefined : field.value}
@@ -523,10 +576,21 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
               <TableRow key={sub.id} className={!sub.is_active ? "opacity-50" : ""}>
                 <TableCell className="font-medium">{sub.name}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {sub.benchmark_type === "NUMERIC" &&
+                  {/* Quantity modes show target/period/unit; a status-only task
+                      has no quantity to show. Driven by the shared mode sets, so
+                      legacy NUMERIC/TASK_BASED records render correctly too. */}
+                  {isQuantityBenchmark(sub.benchmark_type) &&
                     `${formatInt(sub.benchmark_value)} / ${sub.benchmark_period_days ?? 1}d` +
-                    (sub.relevant_count_field ? ` (${COUNT_FIELD_LABEL[sub.relevant_count_field]})` : "")}
-                  {sub.benchmark_type === "TASK_BASED" && "Task-based"}
+                    (sub.relevant_count_field
+                      ? ` (${COUNT_FIELD_LABEL[sub.relevant_count_field].toUpperCase()})`
+                      : "")}
+                  {isTaskBenchmark(sub.benchmark_type) && (
+                    <span className="block text-xs text-muted-foreground">
+                      {isQuantityBenchmark(sub.benchmark_type)
+                        ? "Task - quantity, duration and completion"
+                        : "Task - duration and completion"}
+                    </span>
+                  )}
                   {!sub.benchmark_type && "—"}
                 </TableCell>
                 <TableCell className="text-center">

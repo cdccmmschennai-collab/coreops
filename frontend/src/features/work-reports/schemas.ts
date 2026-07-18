@@ -184,14 +184,17 @@ const taskSchema = z
     sub_activity_id: z.string().optional().default(""),
     sub_activity_name: z.string().optional(),
     activity_name: z.string().optional(),
-    // NUMERIC sub-activities are benchmarked directly against whichever of
-    // these four the chosen sub-activity's relevant_count_field names — there
+    // Quantity sub-activities are benchmarked directly against whichever of
+    // these six the chosen sub-activity's relevant_count_field names — there
     // is no separate "actual count" field, so a value is never entered twice.
-    tags_count:   countSchema.default("0"),
-    docs_count:   countSchema.default("0"),
-    bom_count:    countSchema.default("0"),
-    spares_count: countSchema.default("0"),
-    // TASK_BASED sub-activities only — the completion checkbox. started_date/
+    // Each unit has its own field: pages never share docs_count.
+    tags_count:    countSchema.default("0"),
+    docs_count:    countSchema.default("0"),
+    bom_count:     countSchema.default("0"),
+    spares_count:  countSchema.default("0"),
+    pages_count:   countSchema.default("0"),
+    records_count: countSchema.default("0"),
+    // Task sub-activities only — the completion checkbox. started_date/
     // due_date/completed_date are never user-entered; they're system-managed
     // (shown read-only from the API, set via the dedicated completion-toggle
     // endpoint — see useToggleTaskCompletion).
@@ -313,6 +316,8 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   docs_count:     "0",
   bom_count:      "0",
   spares_count:   "0",
+  pages_count:    "0",
+  records_count:  "0",
   is_completed:   false,
   started_date:   undefined,
   due_date:       undefined,
@@ -372,6 +377,8 @@ function toTasks(v: WorkReportFormValues) {
     docs_count:    toCount(t.docs_count),
     bom_count:     toCount(t.bom_count),
     spares_count:  toCount(t.spares_count),
+    pages_count:   toCount(t.pages_count),
+    records_count: toCount(t.records_count),
     is_completed:  t.is_completed,
     work_item_id:  orNull(t.work_item_id),
     maintenance_plant_id: orNull(t.maintenance_plant_id),
@@ -446,6 +453,8 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             docs_count:    String(t.docs_count ?? 0),
             bom_count:     String(t.bom_count ?? 0),
             spares_count:  String(t.spares_count ?? 0),
+            pages_count:   String(t.pages_count ?? 0),
+            records_count: String(t.records_count ?? 0),
             is_completed:   t.is_completed ?? false,
             started_date:   t.started_date ?? undefined,
             due_date:       t.due_date ?? undefined,

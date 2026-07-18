@@ -8,10 +8,15 @@ export interface ActivityRequest {
   activity_id: string | null;
   sub_activity_id: string;
   task_id: string | null;
+  // Requested workload hints — never benchmark inputs. Copied onto the
+  // work-report row when the PM approves; the request itself never produces
+  // performance, completion or pending.
   tags_count: number;
   docs_count: number;
   bom_count: number;
   spares_count: number;
+  pages_count: number;
+  records_count: number;
   status: ActivityRequestStatus;
   requested_at: string;
   approved_by: string | null;
@@ -41,6 +46,8 @@ export interface ActivityRequestCreateBody {
   docs_count?: number;
   bom_count?: number;
   spares_count?: number;
+  pages_count?: number;
+  records_count?: number;
 }
 
 export const ACTIVITY_REQUEST_STATUS_LABEL: Record<ActivityRequestStatus, string> = {

@@ -49,6 +49,26 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 
 const COUNT_FIELD_LABEL: Record<string, string> = {
   tags: "Tags", docs: "Docs", bom: "BOM", spares: "Spares",
+  pages: "Pages", records: "Records",
+};
+
+/** Every unit, paired with its count field — the read-side mirror of the
+ *  backend's COUNT_FIELD_BY_UNIT. */
+const COUNT_UNITS = [
+  ["tags", "Tags"], ["docs", "Docs"], ["bom", "BOM"],
+  ["spares", "Spares"], ["pages", "Pages"], ["records", "Records"],
+] as const;
+
+const countFor = (t: WorkReportTask, unit: string): number => {
+  switch (unit) {
+    case "tags":    return t.tags_count ?? 0;
+    case "docs":    return t.docs_count ?? 0;
+    case "bom":     return t.bom_count ?? 0;
+    case "spares":  return t.spares_count ?? 0;
+    case "pages":   return t.pages_count ?? 0;
+    case "records": return t.records_count ?? 0;
+    default:        return 0;
+  }
 };
 
 // Task-continuation lifecycle (derived on the server from the work item's dates).
@@ -72,13 +92,10 @@ const LIFECYCLE_VARIANT: Record<string, "neutral" | "warning" | "danger" | "succ
  * relevant_count_field named, frozen at submit time. There is no separate
  * actual-count field; this just reads the existing count straight off. */
 function benchmarkActualCount(t: WorkReportTask): number | "—" {
-  switch (t.relevant_count_field_snapshot) {
-    case "tags":   return t.tags_count ?? 0;
-    case "docs":   return t.docs_count ?? 0;
-    case "bom":    return t.bom_count ?? 0;
-    case "spares": return t.spares_count ?? 0;
-    default:       return "—";
-  }
+  // Historical rows legitimately carry a legacy snapshot ('docs' etc.); it is
+  // read as stored and never rewritten.
+  if (!t.relevant_count_field_snapshot) return "—";
+  return countFor(t, t.relevant_count_field_snapshot);
 }
 
 /** A second activity the author has requested but the PM hasn't decided yet.
@@ -545,13 +562,30 @@ export function WorkReportDetail({ id }: { id: string }) {
                     )}
 
                     {/* Counts — operational reporting, independent of the
-                        benchmark above. */}
-                    <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3">
-                      <Stat label="Tags" value={t.tags_count ?? 0} />
-                      <Stat label="Docs" value={t.docs_count ?? 0} />
-                      <Stat label="BOM" value={t.bom_count ?? 0} />
-                      <Stat label="Spares" value={t.spares_count ?? 0} />
-                    </div>
+                        benchmark above. Only units that carry a value are shown,
+                        plus the row's own benchmarked unit (even at zero, since
+                        "0 pages today" is itself the reportable fact). Six
+                        zero-valued units are never listed. */}
+                    {(() => {
+                      const benchmarked = t.relevant_count_field_snapshot;
+                      const shown = COUNT_UNITS.filter(
+                        ([unit]) => countFor(t, unit) > 0 || unit === benchmarked,
+                      );
+                      if (shown.length === 0) return null;
+                      return (
+                        <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3">
+                          {shown.map(([unit, label]) => (
+                            <Stat
+                              key={unit}
+                              label={
+                                unit === benchmarked ? `${label} (benchmarked)` : label
+                              }
+                              value={countFor(t, unit)}
+                            />
+                          ))}
+                        </div>
+                      );
+                    })()}
 
                     {/* Per-activity remarks */}
                     {t.description && (

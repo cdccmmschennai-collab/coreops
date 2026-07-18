@@ -12,6 +12,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AppError } from "@/lib/api-client";
+import {
+  COUNT_FIELDS,
+  COUNT_FIELD_LABEL,
+  type RelevantCountField,
+} from "@/features/activity-master/types";
 
 import {
   useApproveActivityRequest,
@@ -140,6 +145,7 @@ export function ActivityRequestsView() {
                   projectCode={r.project_code}
                   activity={r.activity_name}
                   subActivity={r.sub_activity_name}
+                  request={r}
                 />
               </CardContent>
             </Card>
@@ -150,6 +156,17 @@ export function ActivityRequestsView() {
   );
 }
 
+/** Each unit's own field on the request. A requested page count is never read
+ *  from docs_count, so PAGES and RECORDS surface under their own labels. */
+const REQUEST_COUNT_FIELD: Record<RelevantCountField, keyof ActivityRequest> = {
+  tags: "tags_count",
+  docs: "docs_count",
+  bom: "bom_count",
+  spares: "spares_count",
+  pages: "pages_count",
+  records: "records_count",
+};
+
 /** One activity summary (project code / activity / sub-activity) inside a row. */
 function ActivityBlock({
   label,
@@ -157,13 +174,24 @@ function ActivityBlock({
   activity,
   subActivity,
   muted,
+  request,
 }: {
   label: string;
   projectCode?: string | null;
   activity?: string | null;
   subActivity?: string | null;
   muted?: boolean;
+  request?: ActivityRequest;
 }) {
+  // Only units the employee actually filled in; a request rarely carries more
+  // than one, and six zero rows would bury the one that matters.
+  const requestedCounts = request
+    ? COUNT_FIELDS.map((unit) => ({
+        unit,
+        value: Number(request[REQUEST_COUNT_FIELD[unit]] ?? 0),
+      })).filter((c) => c.value > 0)
+    : [];
+
   return (
     <div
       className={
@@ -188,6 +216,14 @@ function ActivityBlock({
           <dt className="w-24 shrink-0 text-xs text-muted-foreground">Sub Activity</dt>
           <dd className="font-medium">{subActivity || "-"}</dd>
         </div>
+        {requestedCounts.map((c) => (
+          <div key={c.unit} className="flex gap-2">
+            <dt className="w-24 shrink-0 text-xs text-muted-foreground">
+              Requested quantity - {COUNT_FIELD_LABEL[c.unit]}
+            </dt>
+            <dd className="font-medium tabular-nums">{c.value}</dd>
+          </div>
+        ))}
       </dl>
     </div>
   );
