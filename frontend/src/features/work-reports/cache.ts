@@ -1,6 +1,10 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import { workReportKeys } from "./keys";
+// Explicit .ts extension: this module is exercised directly by cache.test.ts
+// under Node's ESM test runner, which does not do extensionless resolution.
+// Permitted by allowImportingTsExtensions (see tsconfig.json) and resolved
+// as-is by the Next bundler.
+import { workReportKeys } from "./keys.ts";
 import type { WorkReport } from "./types";
 
 /**

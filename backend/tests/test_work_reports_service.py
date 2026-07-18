@@ -518,3 +518,111 @@ def make_user_helper(db, email, role=UserRole.project_manager):
     u = User(email=email, password_hash=hash_password("pw"), role=role, is_active=True)
     db.add(u); db.commit(); db.refresh(u)
     return u
+
+
+# ---------- count persistence ----------------------------------------------
+# Regression cover for the "saved 83, saw 81" report. The root cause was a
+# front-end native number input reacting to the mouse wheel, but the fix is
+# only trustworthy if the server is proven to store submitted counts verbatim:
+# no benchmark recalculation, no clamping, and no loss when update() deletes
+# and re-inserts the WorkReportTask rows.
+
+
+def _counted_task(project_id, **counts):
+    """A task row carrying explicit counts; minutes are incidental here."""
+    return WorkReportTaskIn(
+        project_id=project_id, description="work", minutes_spent=60, **counts
+    )
+
+
+def test_update_persists_exact_count(db, author):
+    """81 -> 83 stores exactly 83, not 81 and not a neighbouring value."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-COUNT")
+
+    r = svc.create_work_report(
+        db, u,
+        WorkReportCreate(report_date=TODAY, tasks=[_counted_task(p.id, tags_count=81)]),
+    )
+    assert r.tasks[0].tags_count == 81
+
+    r = svc.update_work_report(
+        db, u,
+        r.id,
+        WorkReportUpdate(tasks=[_counted_task(p.id, tags_count=83)]),
+    )
+
+    assert r.tasks[0].tags_count == 83
+
+    # Re-read from the database rather than trusting the returned ORM objects:
+    # the response must be built from the newly persisted rows.
+    db.expire_all()
+    assert svc.get_work_report(db, u, r.id).tasks[0].tags_count == 83
+
+
+def test_update_preserves_every_count_field(db, author):
+    """Replacing task rows on update carries all six counts through intact."""
+    u, e, p = author(email="a@x.com", code="E-2", proj_code="P-COUNT-ALL")
+
+    r = svc.create_work_report(
+        db, u,
+        WorkReportCreate(report_date=TODAY, tasks=[_counted_task(p.id)]),
+    )
+
+    r = svc.update_work_report(
+        db, u,
+        r.id,
+        WorkReportUpdate(tasks=[_counted_task(
+            p.id,
+            tags_count=83, docs_count=12, bom_count=7,
+            spares_count=0, pages_count=125, records_count=9,
+        )]),
+    )
+
+    db.expire_all()
+    t = svc.get_work_report(db, u, r.id).tasks[0]
+    assert (
+        t.tags_count, t.docs_count, t.bom_count,
+        t.spares_count, t.pages_count, t.records_count,
+    ) == (83, 12, 7, 0, 125, 9)
+
+
+def test_repeated_updates_do_not_drift_a_count(db, author):
+    """The reported symptom was intermittent; saving twice must not shift it."""
+    u, e, p = author(email="a@x.com", code="E-3", proj_code="P-COUNT-DRIFT")
+
+    r = svc.create_work_report(
+        db, u,
+        WorkReportCreate(report_date=TODAY, tasks=[_counted_task(p.id, tags_count=81)]),
+    )
+    for _ in range(3):
+        r = svc.update_work_report(
+            db, u, r.id,
+            WorkReportUpdate(tasks=[_counted_task(p.id, tags_count=83)]),
+        )
+        db.expire_all()
+        assert svc.get_work_report(db, u, r.id).tasks[0].tags_count == 83
+
+
+def test_zero_count_is_stored_as_zero(db, author):
+    """An emptied field arrives as 0 and stays 0 rather than becoming NULL."""
+    u, e, p = author(email="a@x.com", code="E-4", proj_code="P-COUNT-ZERO")
+
+    r = svc.create_work_report(
+        db, u,
+        WorkReportCreate(report_date=TODAY, tasks=[_counted_task(p.id, tags_count=81)]),
+    )
+    r = svc.update_work_report(
+        db, u, r.id,
+        WorkReportUpdate(tasks=[_counted_task(p.id, tags_count=0)]),
+    )
+
+    db.expire_all()
+    assert svc.get_work_report(db, u, r.id).tasks[0].tags_count == 0
+
+
+def test_negative_count_is_rejected_at_the_schema(db, author):
+    """ge=0 on the schema is the server-side backstop for the input filter."""
+    u, e, p = author(email="a@x.com", code="E-5", proj_code="P-COUNT-NEG")
+
+    with pytest.raises(Exception):
+        _counted_task(p.id, tags_count=-1)
