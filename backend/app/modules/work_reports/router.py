@@ -35,6 +35,7 @@ from app.modules.users.models import User
 from app.modules.work_reports import service
 from app.modules.work_reports.schemas import (
     OpenTasksOut,
+    ReportScopeOut,
     TaskCompletionUpdate,
     WorkReportCreate,
     WorkReportEditRequest,
@@ -102,6 +103,19 @@ def open_tasks(
     report dated `report_date`, ordered OVERDUE, DUE_TODAY, then IN_PROGRESS by
     nearest due date. Empty when the task-continuation feature is off."""
     return OpenTasksOut(items=service.get_open_tasks(db, current, report_date))
+
+
+@router.get("/scope", response_model=ReportScopeOut)
+def report_scope(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ReportScopeOut:
+    """Filter metadata for the reports view: whether the caller Heads projects
+    or Leads activities, the accessible projects, the led activities per
+    project, and each project's active members. PMs get an empty scope (they
+    use the org-wide employee filter). Informational only — the report
+    endpoints enforce the same scope server-side."""
+    return ReportScopeOut.model_validate(service.get_report_scope(db, current))
 
 
 @router.get("/{report_id}", response_model=WorkReportOut)

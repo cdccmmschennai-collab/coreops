@@ -42,6 +42,16 @@ export function useOpenTasks(reportDate: string, options?: { enabled?: boolean }
   });
 }
 
+/** Report-filter scope for Heads / Activity Leads. Callers pass enabled=false
+ * for managers, who use the org-wide employee filter instead. */
+export function useReportScope(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: workReportKeys.scope(),
+    queryFn: () => workReportsApi.scope(),
+    enabled: options?.enabled ?? true,
+  });
+}
+
 export function useCreateWorkReport() {
   const qc = useQueryClient();
   return useMutation({

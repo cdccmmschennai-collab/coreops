@@ -2,6 +2,7 @@ import { api } from "@/lib/api-client";
 
 import type {
   OpenTasks,
+  ReportScope,
   TaskCompletionUpdateBody,
   WorkReport,
   WorkReportCreateBody,
@@ -46,4 +47,7 @@ export const workReportsApi = {
   // is off. Feature-flagged on the client too — only called when enabled.
   openTasks: (reportDate: string) =>
     api.get<OpenTasks>(`/work-reports/open-tasks?report_date=${reportDate}`),
+  // Filter metadata for Heads / Activity Leads: accessible projects, led
+  // activities, and active members. PMs get an empty scope (org-wide filter).
+  scope: () => api.get<ReportScope>("/work-reports/scope"),
 };

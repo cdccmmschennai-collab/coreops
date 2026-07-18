@@ -165,6 +165,34 @@ def reviewable_project_ids(db: Session, actor: User) -> set[uuid.UUID]:
     return set(head_ids)
 
 
+def led_activity_pairs(
+    db: Session,
+    actor: User,
+) -> set[tuple[uuid.UUID, uuid.UUID]]:
+    """Exact (project_id, activity_id) combinations the caller Leads.
+
+    Read-only visibility helper for Activity-Lead report scoping. Deliberately
+    SEPARATE from ``reviewable_project_ids``: that set is Project-Head review
+    authority (grant-edit, can_review, Head self-edit) and must never widen to
+    Leads. A Lead only *sees* task rows on these exact pairs — the same
+    Activity Master activity in a different project is NOT included unless the
+    caller is assigned Lead there too.
+    """
+    emp_id = _actor_employee_id(db, actor)
+    if emp_id is None:
+        return set()
+    rows = db.execute(
+        select(ProjectActivityMember.project_id, ProjectActivityMember.activity_id)
+        .join(Project, Project.id == ProjectActivityMember.project_id)
+        .where(
+            ProjectActivityMember.employee_id == emp_id,
+            ProjectActivityMember.role == ActivityMemberRole.lead,
+            Project.deleted_at.is_(None),
+        )
+    ).all()
+    return {(project_id, activity_id) for project_id, activity_id in rows}
+
+
 def can_review_report(db: Session, actor: User, project_ids: set[uuid.UUID]) -> bool:
     """Whether the caller may review (grant edit access on) a report whose lines
     touch ``project_ids``.

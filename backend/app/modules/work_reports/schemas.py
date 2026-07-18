@@ -11,6 +11,7 @@ import enum
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -247,6 +248,11 @@ class WorkReportOut(BaseModel):
     # Head of one of this (submitted) report's projects, so they may edit it
     # directly instead of requesting edit access. Set in service.
     can_self_edit: bool = False
+    # Per-actor: True when this (another employee's) report is visible only
+    # through the viewer's Activity-Lead assignments, so `tasks` was trimmed to
+    # just the led activities' rows — a partial view of a mixed report. Set in
+    # service (_restrict_to_led_rows); always False for PM/Head/own reports.
+    scoped_to_led_activities: bool = False
     created_at: datetime
 
 
@@ -255,6 +261,42 @@ class WorkReportPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class ReportScopeMember(BaseModel):
+    """One active member of a scope project — the employee-filter option."""
+
+    employee_id: uuid.UUID
+    employee_code: str
+    name: str
+
+
+class ReportScopeActivity(BaseModel):
+    activity_id: uuid.UUID
+    name: str | None = None
+
+
+class ReportScopeProject(BaseModel):
+    """One project the caller can see foreign reports from. access='head'
+    means the whole project (activities is empty = all); access='lead' means
+    only the listed led activities."""
+
+    project_id: uuid.UUID
+    code: str
+    name: str
+    access: Literal["head", "lead"]
+    activities: list[ReportScopeActivity] = []
+    members: list[ReportScopeMember] = []
+
+
+class ReportScopeOut(BaseModel):
+    """GET /work-reports/scope — filter metadata for the reports view. Purely
+    informational: the list/detail/export endpoints enforce the same scope
+    server-side regardless of supplied query parameters."""
+
+    is_project_head: bool = False
+    is_activity_lead: bool = False
+    projects: list[ReportScopeProject] = []
 
 
 class OpenTaskOut(BaseModel):

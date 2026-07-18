@@ -671,6 +671,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/work-reports/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report Scope
+         * @description Filter metadata for the reports view: whether the caller Heads projects
+         *     or Leads activities, the accessible projects, the led activities per
+         *     project, and each project's active members. PMs get an empty scope (they
+         *     use the org-wide employee filter). Informational only — the report
+         *     endpoints enforce the same scope server-side.
+         */
+        get: operations["report_scope_api_v1_work_reports_scope_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/work-reports/{report_id}": {
         parameters: {
             query?: never;
@@ -1398,7 +1422,7 @@ export interface paths {
         };
         /**
          * Employees Performance
-         * @description Layer 1 â comparison table. Comparison columns only (reuses the frozen
+         * @description Layer 1 — comparison table. Comparison columns only (reuses the frozen
          *     _employee_comparison rollup); no overview/analytics fields here.
          *
          *     `week_offset` selects the Fri..Thu window: 0 = the cycle containing today,
@@ -1425,7 +1449,7 @@ export interface paths {
         };
         /**
          * Pending Export Xlsx
-         * @description PM-only full-cycle Benchmark export â every benchmark activity row in
+         * @description PM-only full-cycle Benchmark export — every benchmark activity row in
          *     the cycle for every employee with activity (achievers included, no
          *     pending > 0 filter), grouped employee -> sub-activity. Each numeric
          *     sub-activity gets one TOTAL row with its own achievement %; textual task
@@ -1433,7 +1457,7 @@ export interface paths {
          *
          *     `week_offset` selects the Fri..Thu window (0 = current, up to 3 back);
          *     `cycle=current|previous` remains as a legacy alias. Defaults to the previous
-         *     completed cycle â PMs export Friday morning, once Thursday's reports are in.
+         *     completed cycle — PMs export Friday morning, once Thursday's reports are in.
          *     The filename always names the SELECTED cycle, never today.
          */
         get: operations["pending_export_xlsx_api_v1_benchmarks_pending_export_xlsx_get"];
@@ -1454,7 +1478,7 @@ export interface paths {
         };
         /**
          * Employee Overview
-         * @description Layer 2/3 â shared overview aggregation for the drawer and the route's
+         * @description Layer 2/3 — shared overview aggregation for the drawer and the route's
          *     Overview tab.
          */
         get: operations["employee_overview_api_v1_benchmarks_employees__employee_id__overview_get"];
@@ -1475,7 +1499,7 @@ export interface paths {
         };
         /**
          * Employee Benchmarks
-         * @description Layer 3 Benchmarks tab â full weekly ledger + overdue for one employee,
+         * @description Layer 3 Benchmarks tab — full weekly ledger + overdue for one employee,
          *     so the client reconciles backlog (same logic as the employee's own widget).
          */
         get: operations["employee_benchmarks_api_v1_benchmarks_employees__employee_id__benchmarks_get"];
@@ -1832,7 +1856,7 @@ export interface components {
         };
         /**
          * ActivityCreate
-         * @description Top-level Activity. parent_id is implicit (None) â never accepted here.
+         * @description Top-level Activity. parent_id is implicit (None) — never accepted here.
          */
         ActivityCreate: {
             /** Code */
@@ -2513,7 +2537,7 @@ export interface components {
         };
         /**
          * DailyBenchmarkRowOut
-         * @description One row of 'My Alerts' / 'Team Benchmark Backlog' â a single day's
+         * @description One row of 'My Alerts' / 'Team Benchmark Backlog' — a single day's
          *     actual/target/pending for one NUMERIC sub-activity, with pending > 0
          *     (a clean day doesn't show up in this list, though it still counts
          *     toward the weekly productivity %). `sub_activity_name` is the "Activity
@@ -2592,7 +2616,7 @@ export interface components {
         };
         /**
          * DeliverableConflictOut
-         * @description One Planned deliverable whose target date falls within Â±2 days of a
+         * @description One Planned deliverable whose target date falls within ±2 days of a
          *     leave request, on a project the requesting employee is assigned to.
          */
         DeliverableConflictOut: {
@@ -2720,7 +2744,7 @@ export interface components {
          * EmployeeBenchmarksOut
          * @description One employee's FULL weekly daily ledger (every NUMERIC sub-activity day,
          *     not just the pending ones) + overdue, so the client can run the same
-         *     backlog reconciliation the employee's own widget does â later-day surplus
+         *     backlog reconciliation the employee's own widget does — later-day surplus
          *     paying down earlier deficits. Raw per-day pending lives in `daily`;
          *     reconciliation is applied client-side (display only).
          */
@@ -2855,7 +2879,7 @@ export interface components {
         };
         /**
          * EmployeePerformanceRowOut
-         * @description One row of the PM comparison table (Layer 1). Comparison columns ONLY â
+         * @description One row of the PM comparison table (Layer 1). Comparison columns ONLY —
          *     inspection/overview fields deliberately live on EmployeeOverviewOut so the
          *     table can't grow into an analytics surface. `productivity` is None when the
          *     employee logged no NUMERIC benchmark work this week; `status` is derived
@@ -3254,7 +3278,7 @@ export interface components {
         };
         /**
          * MaintenancePlantOut
-         * @description Flattened with the parent Planning Plant's code/description â the
+         * @description Flattened with the parent Planning Plant's code/description — the
          *     shape both the Project form and the Work Report row need (pick the
          *     Maintenance Plant, auto-show the Planning Plant info).
          */
@@ -3519,7 +3543,7 @@ export interface components {
         };
         /**
          * OverdueActivityOut
-         * @description One row of 'My Alerts' / 'Team Overdue Activities' â a TASK_BASED
+         * @description One row of 'My Alerts' / 'Team Overdue Activities' — a TASK_BASED
          *     work-report-task row past its due_date and not completed.
          */
         OverdueActivityOut: {
@@ -3874,6 +3898,86 @@ export interface components {
             /** Planned Completion Date */
             planned_completion_date?: string | null;
         };
+        /** ReportScopeActivity */
+        ReportScopeActivity: {
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /** Name */
+            name?: string | null;
+        };
+        /**
+         * ReportScopeMember
+         * @description One active member of a scope project — the employee-filter option.
+         */
+        ReportScopeMember: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * ReportScopeOut
+         * @description GET /work-reports/scope — filter metadata for the reports view. Purely
+         *     informational: the list/detail/export endpoints enforce the same scope
+         *     server-side regardless of supplied query parameters.
+         */
+        ReportScopeOut: {
+            /**
+             * Is Project Head
+             * @default false
+             */
+            is_project_head: boolean;
+            /**
+             * Is Activity Lead
+             * @default false
+             */
+            is_activity_lead: boolean;
+            /**
+             * Projects
+             * @default []
+             */
+            projects: components["schemas"]["ReportScopeProject"][];
+        };
+        /**
+         * ReportScopeProject
+         * @description One project the caller can see foreign reports from. access='head'
+         *     means the whole project (activities is empty = all); access='lead' means
+         *     only the listed led activities.
+         */
+        ReportScopeProject: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "head" | "lead";
+            /**
+             * Activities
+             * @default []
+             */
+            activities: components["schemas"]["ReportScopeActivity"][];
+            /**
+             * Members
+             * @default []
+             */
+            members: components["schemas"]["ReportScopeMember"][];
+        };
         /** RoleUpdate */
         RoleUpdate: {
             role: components["schemas"]["UserRole"];
@@ -3912,7 +4016,7 @@ export interface components {
         };
         /**
          * SubActivityFlatOut
-         * @description Leaf rows flattened with the parent Activity's name â for the work-report
+         * @description Leaf rows flattened with the parent Activity's name — for the work-report
          *     cascading-select / combobox use case.
          *
          *     Carries the FULL benchmark configuration, not just the calculation inputs:
@@ -4092,7 +4196,7 @@ export interface components {
         };
         /**
          * TaskCompletionUpdate
-         * @description Body for PATCH /work-reports/tasks/{task_id}/completion â the *only*
+         * @description Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*
          *     way a TASK_BASED row's completion is changed once the parent report is
          *     submitted/locked, since these activities often complete days after the
          *     report they were logged on. Independent of report.status by design.
@@ -4103,7 +4207,7 @@ export interface components {
         };
         /**
          * TaskStatusOut
-         * @description One row of 'My Alerts' / 'Overdue Tasks' panel â a TASK_BASED
+         * @description One row of 'My Alerts' / 'Overdue Tasks' panel — a TASK_BASED
          *     work-report-task row, broader than OverdueActivityOut: also covers
          *     due-today and rows completed this week, with `status` driving the
          *     Pending/Due Today/Completed badge in the UI.
@@ -4180,7 +4284,7 @@ export interface components {
         };
         /**
          * TeamComparisonRowOut
-         * @description One row of the PM 'compare employee performance' table â an employee's
+         * @description One row of the PM 'compare employee performance' table — an employee's
          *     weekly benchmark rollup (summed target/actual/pending + productivity %).
          *     productivity_pct is None when the employee logged no NUMERIC benchmark
          *     work this week (no target to measure against).
@@ -4470,6 +4574,11 @@ export interface components {
              */
             can_self_edit: boolean;
             /**
+             * Scoped To Led Activities
+             * @default false
+             */
+            scoped_to_led_activities: boolean;
+            /**
              * Created At
              * Format: date-time
              */
@@ -4497,7 +4606,7 @@ export interface components {
          *
          *     Mirrors WorkReportStatus but adds the **virtual** ``requested`` value: a
          *     ``submitted`` report that carries a pending edit request
-         *     (``edit_requested_at IS NOT NULL``). No such status is persisted â the
+         *     (``edit_requested_at IS NOT NULL``). No such status is persisted — the
          *     service translates the filter into a compound WHERE clause so pagination and
          *     counts stay correct. To keep the two mutually exclusive, the ``submitted``
          *     filter here means submitted *without* a pending edit request.
@@ -6443,6 +6552,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    report_scope_api_v1_work_reports_scope_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportScopeOut"];
                 };
             };
         };

@@ -328,6 +328,16 @@ export function WorkReportDetail({ id }: { id: string }) {
         actions={actions}
       />
 
+      {/* Activity-Lead partial view — the API trimmed this report's tasks to
+          just the activities the viewer leads. */}
+      {report.scoped_to_led_activities && (
+        <div className="mb-4 max-w-2xl rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground">
+          <span className="font-medium">Partial view.</span> Only the activities
+          you lead are shown; this report may contain other activities that are
+          not visible to you.
+        </div>
+      )}
+
       {/* Edit access granted — shown only to the author who requested it */}
       {report.status === "granted" && isAuthor && (
         <div className="mb-4 max-w-2xl rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground">
