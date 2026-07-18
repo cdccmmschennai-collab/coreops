@@ -163,6 +163,10 @@ def get_daily_benchmark_ledger(
             DailyWorkReport.employee_id,
             DailyWorkReport.report_date,
             DailyWorkReport.day_status,
+            # The employee's own DAY remark for this report date. Distinct from
+            # ActivityMaster.benchmark_remarks (guidance TO the employee) — the
+            # export's DAY REMARKS column carries only this one.
+            DailyWorkReport.remarks.label("day_remarks"),
             ActivityMaster.parent_id.label("activity_id"),
             ActivityMaster.id.label("sub_activity_id"),
             ActivityMaster.name.label("sub_activity_name"),
@@ -219,6 +223,9 @@ def get_daily_benchmark_ledger(
                 # Same for every row of a given (employee, date) report; used to
                 # halve the day's target on a half day.
                 "day_status": r.day_status,
+                # Also per-report, not per-task: every detail row of this date
+                # repeats it, so a filtered row still reads on its own.
+                "day_remarks": r.day_remarks,
             },
         )
         bucket["actual"] += Decimal(r.actual or 0)
@@ -258,6 +265,7 @@ def get_daily_benchmark_ledger(
             "sub_activity_id": sub_activity_id,
             "sub_activity_name": m["sub_activity_name"],
             "benchmark_unit": m["relevant_count_field"],
+            "day_remarks": bucket["day_remarks"],
             "project_name": project_name,
             "project_code": project_code,
             "hours_minutes": bucket["hours_minutes"],
@@ -414,6 +422,9 @@ def get_cycle_task_activities(
             WorkReportTask.project_code,
             WorkReportTask.project_name,
             DailyWorkReport.report_date,
+            # See the ledger query: the employee's DAY remark, never the
+            # Activity Master benchmark guidance.
+            DailyWorkReport.remarks.label("day_remarks"),
             WorkReportTask.due_date,
             completed_flag.label("is_completed"),
             ActivityMaster.benchmark_value,
@@ -459,6 +470,7 @@ def get_cycle_task_activities(
             "project_code": r.project_code,
             "project_name": r.project_name,
             "report_date": r.report_date,
+            "day_remarks": r.day_remarks,
             "due_date": r.due_date,
             "is_completed": r.is_completed,
             "days_overdue": days_overdue,

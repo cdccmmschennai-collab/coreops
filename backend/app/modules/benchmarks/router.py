@@ -9,7 +9,7 @@ tab. Everything is computed live from Phase 1's get_daily_benchmark_ledger
 """
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -35,6 +35,23 @@ AuthUser = Depends(get_current_user)
 PMUser = Depends(require_role("project_manager"))
 
 
+def _selected_cycle(cycle: str | None, week_offset: int | None, *, default: int = 0) -> int:
+    """The single cycle selector for both the table and the export.
+
+    `week_offset` wins when supplied; `cycle=current|previous` is the legacy
+    alias kept working for existing clients. Both funnel through
+    service.resolve_week_offset, so there is one source of truth and an
+    unsupported value is REJECTED (422) rather than quietly serving a different
+    cycle than the caller asked for."""
+    raw = week_offset if week_offset is not None else cycle
+    if raw is None:
+        raw = default
+    try:
+        return service.resolve_week_offset(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/my-alerts", response_model=MyAlertsOut)
 def my_alerts(user: User = AuthUser, db: Session = Depends(get_db)) -> MyAlertsOut:
     return MyAlertsOut.model_validate(service.get_my_alerts(db, user))
@@ -53,25 +70,37 @@ def employees_performance(
     status: str = Query("all", pattern="^(all|needs_review|on_track)$"),
     sort: str = "productivity",
     order: str = Query("asc", pattern="^(asc|desc)$"),
-    cycle: str = Query("current", pattern="^(current|previous)$"),
+    cycle: str | None = Query(None, description="Legacy alias: current|previous"),
+    week_offset: int | None = Query(
+        None, ge=0, le=service.MAX_WEEK_OFFSET,
+        description="0 = current Fri..Thu cycle, 1 = previous, up to 3",
+    ),
     _user: User = PMUser,
     db: Session = Depends(get_db),
 ) -> EmployeesPerformancePageOut:
     """Layer 1 — comparison table. Comparison columns only (reuses the frozen
-    _employee_comparison rollup); no overview/analytics fields here. `cycle`
-    switches the Fri..Thu window (current for live view, previous to review
-    the finished cycle — matches the pending export's options)."""
+    _employee_comparison rollup); no overview/analytics fields here.
+
+    `week_offset` selects the Fri..Thu window: 0 = the cycle containing today,
+    up to 3 cycles back. `cycle=current|previous` stays accepted as a legacy
+    alias for offsets 0 and 1; both resolve through the same
+    service.resolve_week_offset, so the table and the export can never disagree
+    about which cycle was asked for."""
     return EmployeesPerformancePageOut.model_validate(
         service.get_employees_performance(
             db, page=page, page_size=page_size, search=search, status=status,
-            sort=sort, order=order, cycle=cycle,
+            sort=sort, order=order, cycle=_selected_cycle(cycle, week_offset),
         )
     )
 
 
 @router.get("/pending-export.xlsx")
 def pending_export_xlsx(
-    cycle: str = Query("previous", pattern="^(previous|current)$"),
+    cycle: str | None = Query(None, description="Legacy alias: current|previous"),
+    week_offset: int | None = Query(
+        None, ge=0, le=service.MAX_WEEK_OFFSET,
+        description="0 = current Fri..Thu cycle, 1 = previous, up to 3",
+    ),
     _user: User = PMUser,
     db: Session = Depends(get_db),
 ) -> StreamingResponse:
@@ -79,10 +108,15 @@ def pending_export_xlsx(
     the cycle for every employee with activity (achievers included, no
     pending > 0 filter), grouped employee -> sub-activity. Each numeric
     sub-activity gets one TOTAL row with its own achievement %; textual task
-    sub-activities show detail rows only. Defaults to the previous completed
-    Fri..Thu cycle (PMs export Friday morning); ?cycle=current exports the
-    active one."""
-    data = service.get_pending_benchmark_export(db, cycle=cycle)
+    sub-activities show detail rows only.
+
+    `week_offset` selects the Fri..Thu window (0 = current, up to 3 back);
+    `cycle=current|previous` remains as a legacy alias. Defaults to the previous
+    completed cycle — PMs export Friday morning, once Thursday's reports are in.
+    The filename always names the SELECTED cycle, never today."""
+    data = service.get_pending_benchmark_export(
+        db, cycle=_selected_cycle(cycle, week_offset, default=1)
+    )
     buf = build_pending_benchmark_workbook(
         data["rows"], data["cycle_start"], data["cycle_end"]
     )

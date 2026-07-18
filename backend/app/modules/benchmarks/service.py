@@ -209,7 +209,7 @@ def get_employees_performance(
     status: str = "all",
     sort: str = "productivity",
     order: str = "asc",
-    cycle: str = "current",
+    cycle: str | int | None = 0,
     today: date | None = None,
 ) -> dict:
     """Layer 1 comparison list. Lists ALL active employees (a no-activity
@@ -217,9 +217,10 @@ def get_employees_performance(
     roster). Reuses the frozen _employee_comparison rollup for employees with
     benchmark activity this cycle; everyone else is filled with zeros.
 
-    `cycle` selects the Fri..Thu window ("current" default for viewing;
-    "previous" lets a PM review the finished cycle) — same live recompute as
-    the pending export, no persistence."""
+    `cycle` selects the Fri..Thu window as an offset back from today's cycle
+    (0 = current, up to MAX_WEEK_OFFSET); "current"/"previous" still resolve to
+    0 and 1. Same live recompute as the pending export, through the same
+    _cycle_window, so table and export always agree."""
     _, cycle_end = _cycle_window(cycle, today or date.today())
     daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
 
@@ -361,14 +362,58 @@ def get_employee_benchmarks(
     }
 
 
-def _cycle_window(cycle: str, today: date) -> tuple[date, date]:
-    """Fri..Thu bounds of the requested cycle: "current" contains today,
-    "previous" is the last completed one."""
-    cycle_start, cycle_end = compute_week_bounds(today)
-    if cycle == "previous":
-        cycle_start -= timedelta(days=7)
-        cycle_end -= timedelta(days=7)
-    return cycle_start, cycle_end
+MAX_WEEK_OFFSET = 3
+# Legacy string cycle values, kept working as aliases. The integer offset is the
+# single source of truth — these only translate into it.
+_CYCLE_ALIASES = {"current": 0, "previous": 1}
+
+
+def resolve_week_offset(cycle: str | int | None) -> int:
+    """The one place a cycle selector becomes an integer offset.
+
+    Accepts the integer offsets 0..3 (0 = the cycle containing today, N = N
+    cycles back) and the two legacy aliases "current" (0) and "previous" (1).
+    Anything else — a negative offset, an offset past MAX_WEEK_OFFSET, or an
+    unknown string — raises ValueError rather than silently falling back to a
+    different cycle, which would hand back data for a period nobody asked for."""
+    if cycle is None:
+        return 0
+    if isinstance(cycle, bool):
+        raise ValueError(f"invalid cycle: {cycle!r}")
+    if isinstance(cycle, int):
+        offset = cycle
+    else:
+        text = str(cycle).strip().lower()
+        if text in _CYCLE_ALIASES:
+            return _CYCLE_ALIASES[text]
+        try:
+            offset = int(text)
+        except ValueError:
+            raise ValueError(f"invalid cycle: {cycle!r}") from None
+    if not 0 <= offset <= MAX_WEEK_OFFSET:
+        raise ValueError(
+            f"week_offset must be an integer from 0 to {MAX_WEEK_OFFSET}, got {offset}"
+        )
+    return offset
+
+
+def _cycle_window(cycle: str | int | None, today: date) -> tuple[date, date]:
+    """Fri..Thu bounds of the requested cycle, `week_offset` cycles back from
+    the one containing `today`. Offset 0 is the current cycle, 1 the previous,
+    up to MAX_WEEK_OFFSET. Every caller (table data AND export) resolves through
+    here, so the selector can never disagree between the two."""
+    offset = resolve_week_offset(cycle)
+    cycle_start, _ = compute_week_bounds(today)
+    cycle_start -= timedelta(days=7 * offset)
+    # A cycle is always exactly 7 calendar days, Friday..Thursday.
+    return cycle_start, cycle_start + timedelta(days=6)
+
+
+def _day_remarks(value: str | None) -> str:
+    """DAY REMARKS cell: the employee's own remark for that report date, or ""
+    when unset or whitespace-only. Never Activity Master's benchmark_remarks —
+    that is guidance TO the employee and belongs nowhere in this column."""
+    return (value or "").strip()
 
 
 def _project_label(code: str | None, name: str | None) -> str:
@@ -457,7 +502,7 @@ def _task_export_cells(r: dict) -> dict:
 
 
 def get_pending_benchmark_export(
-    db: Session, *, cycle: str = "previous", today: date | None = None
+    db: Session, *, cycle: str | int | None = 1, today: date | None = None
 ) -> dict:
     """Rows for the PM's full-cycle benchmark XLSX export.
 
@@ -484,10 +529,17 @@ def get_pending_benchmark_export(
     another day's shortfall within the same benchmark unit — the total pending
     is NOT the sum of the daily shortages.
 
-    `cycle` picks the Fri..Thu window: "current" is the cycle containing
-    today; "previous" (the default) is the last completed one — PMs export on
-    Friday morning after Thursday's reports are in. Nothing is persisted; the
-    previous cycle is recomputed live from the same work-report rows."""
+    `cycle` picks the Fri..Thu window as an offset back from the one containing
+    today (0 = current, 1 = previous, up to MAX_WEEK_OFFSET); the legacy
+    "current"/"previous" strings still resolve to 0 and 1. The default is the
+    last completed cycle — PMs export on Friday morning after Thursday's reports
+    are in.
+
+    Cycle isolation is structural, not filtered after the fact: both source
+    queries derive their own Fri..Thu bounds from the `today` they are handed,
+    so passing this cycle's end date makes them select exactly this cycle's
+    rows. Nothing is persisted or cached; every cycle is recomputed live from
+    the same work-report rows, so no neighbouring cycle can leak in."""
     cycle_start, cycle_end = _cycle_window(cycle, today or date.today())
 
     # The ledger derives its own bounds from `today`, so any date inside the
@@ -520,6 +572,7 @@ def get_pending_benchmark_export(
             "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
             "unit": r["benchmark_unit"],
             "target": r["target"],
+            "day_remarks": _day_remarks(r.get("day_remarks")),
             "actual": r["actual"],
             "pending": r["pending"],  # daily shortage; the subtotal nets the cycle
             "target_total": r["target"],
@@ -539,6 +592,7 @@ def get_pending_benchmark_export(
             "sub_activity": r["sub_activity_name"],
             "sub_activity_id": r["sub_activity_id"],
             "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
+            "day_remarks": _day_remarks(r.get("day_remarks")),
             **_task_export_cells(r),
         }
         for r in cycle_tasks

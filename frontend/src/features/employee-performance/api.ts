@@ -3,11 +3,11 @@ import { getToken } from "@/lib/auth-storage";
 import { env } from "@/lib/env";
 
 import type {
-  BenchmarkCycle,
   EmployeeBenchmarks,
   EmployeeOverview,
   EmployeesPerformancePage,
   PerformanceParams,
+  WeekOffset,
 } from "./types";
 
 function toQuery(p: PerformanceParams): string {
@@ -18,7 +18,7 @@ function toQuery(p: PerformanceParams): string {
   if (p.status !== "all") sp.set("status", p.status);
   sp.set("sort", p.sort);
   sp.set("order", p.order);
-  sp.set("cycle", p.cycle);
+  sp.set("week_offset", String(p.weekOffset));
   return sp.toString();
 }
 
@@ -43,11 +43,16 @@ export const performanceApi = {
  * api-client) because the response is a binary blob, not JSON — but still
  * attaches the bearer token.
  */
-export async function downloadPendingBenchmarkXlsx(cycle: BenchmarkCycle): Promise<void> {
-  const res = await fetch(`${env.apiBaseUrl}/benchmarks/pending-export.xlsx?cycle=${cycle}`, {
-    headers: { Authorization: `Bearer ${getToken() ?? ""}` },
-    cache: "no-store",
-  });
+export async function downloadPendingBenchmarkXlsx(weekOffset: WeekOffset): Promise<void> {
+  const res = await fetch(
+    `${env.apiBaseUrl}/benchmarks/pending-export.xlsx?week_offset=${weekOffset}`,
+    {
+      headers: { Authorization: `Bearer ${getToken() ?? ""}` },
+      // Each cycle is recomputed live; never serve a previously selected
+      // cycle's workbook from cache.
+      cache: "no-store",
+    },
+  );
   if (!res.ok) throw new Error(`Export failed (${res.status})`);
   const disposition = res.headers.get("content-disposition") ?? "";
   const filename =

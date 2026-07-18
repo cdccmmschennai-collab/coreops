@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start -p 3100",
     "typecheck": "tsc --noEmit",
+    "test:unit": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
     "gen:api": "openapi-typescript openapi.json -o src/types/openapi.ts"
   },
   "dependencies": {

@@ -115,34 +115,48 @@ _DIFF_RED = PatternFill(fill_type="solid", fgColor="FFFFC7CE")    # < 95%: needs
 _PB_HEADER_ROW_HEIGHT = {1: 15.0, 2: 25.5}
 _PB_DEFAULT_ROW_HEIGHT = 15.0
 
-# Final column order (21 columns, A..U): the five identity columns, the two
-# percentage columns, the three 4-unit groups, then the cycle bounds. No ROW
-# TYPE, no per-group TOTAL sub-column, no EMPLOYEE TOTAL.
+# Final column order (28 columns, A..AB): the identity columns with the two
+# percentage columns early (so they read beside the activity rather than off
+# past the wide SUB ACTIVITY / PROJECT cells), then DAY REMARKS, PROJECT, the
+# three 6-unit groups, then the cycle bounds. No ROW TYPE, no per-group TOTAL
+# sub-column, no EMPLOYEE TOTAL.
+#
+# Widths travel with the SEMANTIC field, not with a column letter: SUB ACTIVITY
+# keeps 118.140625 and PROJECT keeps 86.0 wherever they sit.
 _PB_LEFT = [
     ("EMP CODE & NAME", 26.0),
     ("DATE", 12.0),
-    ("PROJECT CODE & TITLE", 86.0),
     ("ACTIVITY", 22.0),
-    ("SUB ACTIVITY", 118.140625),
     ("ACHIEVEMENT %", 18.85546875),
     ("DIFFERENCE %", 15.0),
+    ("SUB ACTIVITY", 118.140625),
+    ("DAY REMARKS", 50.0),
+    ("PROJECT CODE & TITLE", 86.0),
 ]
 _PB_DATE_COL = 2      # DATE
-_PB_PROJECT_COL = 3   # PROJECT CODE & TITLE — carries the "TOTAL" marker
-_PB_ACTIVITY_COL = 4  # ACTIVITY
-_PB_SUB_COL = 5       # SUB ACTIVITY
-_PB_ACH_COL = 6       # ACHIEVEMENT % — decides the shade, never wears it
-_PB_DIFF_COL = 7      # DIFFERENCE % — the only shaded cell in the body
+_PB_ACTIVITY_COL = 3  # ACTIVITY
+_PB_ACH_COL = 4       # ACHIEVEMENT % — decides the shade, never wears it
+_PB_DIFF_COL = 5      # DIFFERENCE % — the only shaded cell in the body
+_PB_SUB_COL = 6       # SUB ACTIVITY
+# DAY REMARKS — the employee's own remark for that report DATE, repeated on
+# every detail row of the date so a filtered row still reads on its own. Blank
+# on a TOTAL row: a total spans the cycle, not one specific day. Never carries
+# Activity Master's benchmark_remarks.
+_PB_REMARKS_COL = 7
+_PB_PROJECT_COL = 8   # PROJECT CODE & TITLE — carries the "TOTAL" marker
 _PB_GROUPS = ["BENCHMARK TARGET", "ACTUAL COMPLETED", "PENDING BENCHMARK"]
-_PB_UNITS = ["tags", "docs", "bom", "spares"]  # ledger benchmark_unit values
-_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES"]  # 4 units per group, no group total
-_PB_GROUP_WIDTH = len(_PB_UNIT_LABELS)  # 4 columns per group
+# ledger benchmark_unit values — must stay in the same order as, and cover every
+# value of, activity_master.models.COUNT_FIELD_BY_UNIT: a unit missing here has
+# no column and its rows would silently land nowhere.
+_PB_UNITS = ["tags", "docs", "bom", "spares", "pages", "records"]
+_PB_UNIT_LABELS = ["TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS"]  # no group total
+_PB_GROUP_WIDTH = len(_PB_UNIT_LABELS)  # 6 columns per group
 # Per-group unit widths: the leading TAGS column is widened to carry the merged
-# group label above it; the other three stay 12.
+# group label above it; the rest stay 12.
 _PB_UNIT_WIDTHS = [
-    [21.42578125, 12.0, 12.0, 12.0],  # BENCHMARK TARGET  H:K
-    [16.85546875, 12.0, 12.0, 12.0],  # ACTUAL COMPLETED  L:O
-    [17.7109375, 12.0, 12.0, 12.0],   # PENDING BENCHMARK P:S
+    [21.42578125, 12.0, 12.0, 12.0, 12.0, 12.0],  # BENCHMARK TARGET  I:N
+    [16.85546875, 12.0, 12.0, 12.0, 12.0, 12.0],  # ACTUAL COMPLETED  O:T
+    [17.7109375, 12.0, 12.0, 12.0, 12.0, 12.0],   # PENDING BENCHMARK U:Z
 ]
 _PB_RIGHT = [("CYCLE START", 13.0), ("CYCLE END", 13.0)]
 _PB_NUMFMT_PCT = "0.00%"
@@ -204,7 +218,7 @@ def build_pending_benchmark_workbook(
     only within the same employee + sub-activity + unit. Nothing crosses
     sub-activities, units, employees or cycles.
 
-    ACHIEVEMENT % = total_actual / total_target summed across the four units,
+    ACHIEVEMENT % = total_actual / total_target summed across the six units,
     uncapped, formatted 0.00%; blank when total_target is 0 (no divide by zero).
     DIFFERENCE % = ABS(achievement - 100%), formatted 0.00%, blank whenever
     ACHIEVEMENT % is. Only the DIFFERENCE % cell is ever shaded (see
@@ -240,7 +254,7 @@ def build_pending_benchmark_workbook(
         col = first_right + ri
         ws.cell(2, col, label)
         ws.column_dimensions[get_column_letter(col)].width = width
-    # Yellow header across the FULL A1:U2 block — the cells left blank above the
+    # Yellow header across the FULL A1:AA2 block — the cells left blank above the
     # identity/cycle columns carry the same style as the labelled ones.
     for row in (1, 2):
         for col in range(1, total_cols + 1):
@@ -255,7 +269,7 @@ def build_pending_benchmark_workbook(
 
     def style_row(r: int, bold: bool = False) -> None:
         """Body style: Arial 10, thin borders all round, vertical top, no fill.
-        A:G and T:U left, the three unit groups (H:S) centered. Bold on a TOTAL
+        A:H and AA:AB left, the three unit groups (I:Z) centered. Bold on a TOTAL
         row. No fill is applied here — the DIFFERENCE % cell is shaded by its
         writer and is the only shaded body cell."""
         for col in range(1, total_cols + 1):
@@ -263,6 +277,11 @@ def build_pending_benchmark_workbook(
             _style_data_cell(cell, n_left < col < first_right, False, col in date_cols)
             if bold:
                 cell.font = _PB_TOTAL_FONT
+        # Free-text day remarks wrap instead of spilling across the unit columns.
+        remarks_cell = ws.cell(row=r, column=_PB_REMARKS_COL)
+        remarks_cell.alignment = Alignment(
+            horizontal="left", vertical="top", wrap_text=True
+        )
 
     unit_col = {u: i for i, u in enumerate(_PB_UNITS)}
 
@@ -273,8 +292,8 @@ def build_pending_benchmark_workbook(
         pending in place (MAX(0, target - actual)), then writes the per-unit
         target/actual/pending sums, the uncapped ACHIEVEMENT % and the
         DIFFERENCE % — shading the DIFFERENCE % cell alone. Repeats the exact
-        emp/activity/sub-activity, writes "TOTAL" in PROJECT, leaves DATE
-        blank."""
+        emp/activity/sub-activity, writes "TOTAL" in PROJECT, leaves DATE and
+        DAY REMARKS blank (a total spans the cycle, not one specific day)."""
         for ui in range(n_units):
             totals[2][ui] = max(0.0, totals[0][ui] - totals[1][ui])
         ws.cell(r, 1, emp_label)                        # exact CODE - NAME (filterable)
@@ -325,6 +344,9 @@ def build_pending_benchmark_workbook(
                 ws.cell(r, _PB_PROJECT_COL, row["project"])
                 ws.cell(r, _PB_ACTIVITY_COL, row["activity"])
                 ws.cell(r, _PB_SUB_COL, row["sub_activity"])
+                # Repeated on every detail row of this employee+date: the sheet
+                # is filterable, so a row must read on its own.
+                ws.cell(r, _PB_REMARKS_COL, row.get("day_remarks") or None)
                 # ACHIEVEMENT % / DIFFERENCE % stay blank on every detail row.
                 ui = unit_col.get(row["unit"])
                 if ui is not None:

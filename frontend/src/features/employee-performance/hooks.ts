@@ -14,7 +14,14 @@ export function useEmployeesPerformance(params: PerformanceParams) {
   return useQuery({
     queryKey: performanceKeys.list(params),
     queryFn: () => performanceApi.list(params),
-    placeholderData: (prev) => prev, // keep previous page while paginating/searching
+    // Keep the previous rows on screen while paginating/searching/sorting so the
+    // table doesn't blink — but NEVER across a cycle change. Carrying them over
+    // would show one cycle's numbers under another cycle's label until the new
+    // request lands, which reads as "the week selector did nothing".
+    placeholderData: (prev, prevQuery) => {
+      const prevParams = (prevQuery?.queryKey?.[2] ?? null) as PerformanceParams | null;
+      return prevParams?.weekOffset === params.weekOffset ? prev : undefined;
+    },
   });
 }
 

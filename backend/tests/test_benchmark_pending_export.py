@@ -2,7 +2,8 @@
 the Fri..Thu cycle bounds behind it.
 
 Layout and styling are matched cell-for-cell to the company reference workbook
-(BENCHMARK REPORT 03 JUL - 09 JUL): 21 columns A..U, a two-level yellow header,
+(BENCHMARK REPORT 03 JUL - 09 JUL): 28 columns A..AB (six units per group:
+TAGS DOCS BOM SPARES PAGES RECORDS), a two-level yellow header,
 white body rows, bold white TOTAL rows, and a red/green shade on the
 DIFFERENCE % cell ONLY. Each NUMERIC sub-activity gets its own TOTAL row
 (per-unit target/actual/net-pending + its own uncapped achievement % and the
@@ -14,6 +15,7 @@ from io import BytesIO
 
 import openpyxl
 import pytest
+from openpyxl.utils import get_column_letter
 
 from app.modules.activity_master.service import compute_week_bounds
 from app.modules.projects.models import ProjectStatus
@@ -126,13 +128,16 @@ def _fill(cell):
     return cell.fill.fgColor.rgb if cell.fill and cell.fill.fill_type else None
 
 
-# --- column map (21 cols, A..U; ACHIEVEMENT % = F, DIFFERENCE % = G) ---------
-EMP, DATE_C, PROJECT, ACTIVITY, SUB, ACH, DIFF = 1, 2, 3, 4, 5, 6, 7
-TGT_TAGS, TGT_DOCS, TGT_BOM, TGT_SPARES = 8, 9, 10, 11
-ACT_TAGS, ACT_DOCS, ACT_BOM, ACT_SPARES = 12, 13, 14, 15
-PEN_TAGS, PEN_DOCS, PEN_BOM, PEN_SPARES = 16, 17, 18, 19
-CYC_START, CYC_END = 20, 21
-LAST_COL = 21
+# --- column map (28 cols, A..AB; ACHIEVEMENT % = D, DIFFERENCE % = E) --------
+# Six units per group: TAGS DOCS BOM SPARES PAGES RECORDS.
+# DAY REMARKS (G) sits between SUB ACTIVITY and PROJECT; PROJECT (H) carries the
+# TOTAL marker.
+EMP, DATE_C, ACTIVITY, ACH, DIFF, SUB, REMARKS, PROJECT = 1, 2, 3, 4, 5, 6, 7, 8
+TGT_TAGS, TGT_DOCS, TGT_BOM, TGT_SPARES, TGT_PAGES, TGT_RECORDS = 9, 10, 11, 12, 13, 14
+ACT_TAGS, ACT_DOCS, ACT_BOM, ACT_SPARES, ACT_PAGES, ACT_RECORDS = 15, 16, 17, 18, 19, 20
+PEN_TAGS, PEN_DOCS, PEN_BOM, PEN_SPARES, PEN_PAGES, PEN_RECORDS = 21, 22, 23, 24, 25, 26
+CYC_START, CYC_END = 27, 28
+LAST_COL = 28
 
 # The only two body colours, and they land on the DIFFERENCE % cell alone.
 GREEN = "FFC6EFCE"   # achievement > 100%
@@ -140,15 +145,26 @@ RED = "FFFFC7CE"     # achievement < 95%
 HEADER_YELLOW = "FFFFFF00"
 
 # Exact widths from the reference workbook.
+# Widths travel with the SEMANTIC field, not the old column letter: SUB ACTIVITY
+# keeps 118.140625 (now F) and PROJECT keeps 86.0 (now H).
 EXPECTED_WIDTHS = {
-    "A": 26.0, "B": 12.0, "C": 86.0, "D": 22.0, "E": 118.140625,
-    "F": 18.85546875, "G": 15.0,
-    "H": 21.42578125, "I": 12.0, "J": 12.0, "K": 12.0,
-    "L": 16.85546875, "M": 12.0, "N": 12.0, "O": 12.0,
-    "P": 17.7109375, "Q": 12.0, "R": 12.0, "S": 12.0,
-    "T": 13.0, "U": 13.0,
+    "A": 26.0,           # EMP CODE & NAME
+    "B": 12.0,           # DATE
+    "C": 22.0,           # ACTIVITY
+    "D": 18.85546875,    # ACHIEVEMENT %
+    "E": 15.0,           # DIFFERENCE %
+    "F": 118.140625,     # SUB ACTIVITY
+    "G": 50.0,           # DAY REMARKS
+    "H": 86.0,           # PROJECT CODE & TITLE
+    # BENCHMARK TARGET I:N — the leading column carries the merged group label.
+    "I": 21.42578125, "J": 12.0, "K": 12.0, "L": 12.0, "M": 12.0, "N": 12.0,
+    # ACTUAL COMPLETED O:T
+    "O": 16.85546875, "P": 12.0, "Q": 12.0, "R": 12.0, "S": 12.0, "T": 12.0,
+    # PENDING BENCHMARK U:Z
+    "U": 17.7109375, "V": 12.0, "W": 12.0, "X": 12.0, "Y": 12.0, "Z": 12.0,
+    "AA": 13.0, "AB": 13.0,
 }
-EXPECTED_MERGES = {"H1:K1", "L1:O1", "P1:S1"}
+EXPECTED_MERGES = {"I1:N1", "O1:T1", "U1:Z1"}
 
 
 def _detail_row(ws, label, sub, on_date):
@@ -193,7 +209,7 @@ def _assert_only_diff_cell_shaded(ws, row):
         for c in range(1, LAST_COL + 1)
         if c != DIFF and _fill(ws.cell(row, c)) is not None
     ]
-    assert shaded == [], f"row {row} must only ever shade its G cell; shaded: {shaded}"
+    assert shaded == [], f"row {row} must only ever shade its E cell; shaded: {shaded}"
 
 
 # --- cycle bounds -----------------------------------------------------------
@@ -217,7 +233,7 @@ def test_export_rejects_unknown_cycle(client, activity_admin):
     assert client.get(f"{EXPORT_URL}?cycle=nope", headers=activity_admin).status_code == 422
 
 
-# --- layout: exact 21-column order, two-level header -------------------------
+# --- layout: exact 27-column order, two-level header -------------------------
 
 def test_default_export_is_previous_cycle_with_reference_layout(client, setup_author, activity_admin):
     a = setup_author()
@@ -239,13 +255,13 @@ def test_default_export_is_previous_cycle_with_reference_layout(client, setup_au
     ws = _load_sheet(res.content)
     assert ws.title == PENDING_SHEET_NAME
 
-    # Row 2 = the real header row, in the exact required order A..U.
+    # Row 2 = the real header row, in the exact required order A..AB.
     assert [ws.cell(2, c).value for c in range(1, LAST_COL + 1)] == [
-        "EMP CODE & NAME", "DATE", "PROJECT CODE & TITLE", "ACTIVITY", "SUB ACTIVITY",
-        "ACHIEVEMENT %", "DIFFERENCE %",
-        "TAGS", "DOCS", "BOM", "SPARES",
-        "TAGS", "DOCS", "BOM", "SPARES",
-        "TAGS", "DOCS", "BOM", "SPARES",
+        "EMP CODE & NAME", "DATE", "ACTIVITY", "ACHIEVEMENT %", "DIFFERENCE %",
+        "SUB ACTIVITY", "DAY REMARKS", "PROJECT CODE & TITLE",
+        "TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS",
+        "TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS",
+        "TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS",
         "CYCLE START", "CYCLE END",
     ]
     # None of the withdrawn columns exist anywhere in the header.
@@ -253,17 +269,17 @@ def test_default_export_is_previous_cycle_with_reference_layout(client, setup_au
     assert labels.isdisjoint(
         {"ROW TYPE", "TARGET TOTAL", "ACTUAL TOTAL", "PENDING TOTAL", "EMPLOYEE TOTAL"}
     )
-    # Row 1 holds ONLY the three merged group labels; A1:G1 and T1:U1 are blank.
+    # Row 1 holds ONLY the three merged group labels; A1:H1 and AA1:AB1 are blank.
     assert ws.cell(1, TGT_TAGS).value == "BENCHMARK TARGET"
     assert ws.cell(1, ACT_TAGS).value == "ACTUAL COMPLETED"
     assert ws.cell(1, PEN_TAGS).value == "PENDING BENCHMARK"
-    for c in list(range(1, DIFF + 1)) + [CYC_START, CYC_END]:
+    for c in list(range(1, PROJECT + 1)) + [CYC_START, CYC_END]:
         assert ws.cell(1, c).value is None
-    # Exactly 21 columns: nothing in col 22.
+    # Exactly 28 columns: nothing in col 29.
     assert ws.cell(2, LAST_COL + 1).value is None
 
     assert {str(m) for m in ws.merged_cells.ranges} == EXPECTED_MERGES
-    assert ws.auto_filter.ref == "A2:U4"
+    assert ws.auto_filter.ref == "A2:AB4"
 
     # Detail row, then its sub-activity TOTAL. No employee grand total.
     d = _detail_row(ws, "E-1 - Test User", "FMTL", cycle_start)
@@ -577,7 +593,7 @@ def test_employee_with_no_pending_is_still_exported(client, setup_author, activi
 # --- required acceptance cases: the three shade bands ------------------------
 
 def test_acceptance_below_95_shades_difference_cell_red(client, setup_author, activity_admin):
-    """Target 65 / actual 60 -> 92.31% achievement, 7.69% difference. The G cell
+    """Target 65 / actual 60 -> 92.31% achievement, 7.69% difference. The E cell
     alone is red; F and every other cell stay unfilled."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=65, name="FMTL")
@@ -675,7 +691,7 @@ def test_no_full_row_is_ever_coloured(client, setup_author, activity_admin):
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("G") for coord in filled), filled
+    assert all(coord.startswith("E") for coord in filled), filled
     assert set(filled.values()) <= {RED, GREEN}
 
 
@@ -905,7 +921,7 @@ def test_no_numeric_target_does_not_divide_by_zero(client, db, setup_author, act
 
 def test_header_style_matches_reference(client, setup_author, activity_admin):
     """Yellow FFFFFF00 Arial 10 bold centred+wrapped with thin borders across the
-    WHOLE A1:U2 block, including the blank cells above A:G and T:U."""
+    WHOLE A1:AB2 block, including the blank cells above A:H and AA:AB."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
@@ -923,9 +939,9 @@ def test_header_style_matches_reference(client, setup_author, activity_admin):
 
     # Every style-bearing header cell. Inside a merge only the anchor holds the
     # style — Excel paints it across the merged span — so the continuation cells
-    # of H1:K1 / L1:O1 / P1:S1 are skipped, exactly as the reference stores them.
+    # of H1:M1 / N1:S1 / T1:Y1 are skipped, exactly as the reference stores them.
     merged_continuations = {
-        c for c in range(TGT_TAGS, PEN_SPARES + 1)
+        c for c in range(TGT_TAGS, PEN_RECORDS + 1)
         if c not in (TGT_TAGS, ACT_TAGS, PEN_TAGS)
     }
     for row in (1, 2):
@@ -955,7 +971,7 @@ def test_worksheet_configuration_matches_reference(client, setup_author, activit
     assert {str(m) for m in ws.merged_cells.ranges} == EXPECTED_MERGES
     assert ws.freeze_panes == "A3"
     assert ws.auto_filter.ref.startswith("A2:")
-    assert ws.auto_filter.ref == f"A2:U{ws.max_row}"
+    assert ws.auto_filter.ref == f"A2:AB{ws.max_row}"
     assert ws.row_dimensions[1].height == 15.0
     assert ws.row_dimensions[2].height == 25.5
     assert ws.sheet_format.defaultRowHeight == 15.0
@@ -983,8 +999,8 @@ def test_detail_and_total_row_style_matches_reference(client, setup_author, acti
             assert cell.font.sz == 10
             assert cell.font.bold is bold, cell.coordinate
             assert cell.alignment.vertical == "top"
-            # A:G and T:U left, the three unit groups (H:S) centered.
-            expected_h = "center" if TGT_TAGS <= c <= PEN_SPARES else "left"
+            # A:H and AA:AB left, the three unit groups (I:Z) centered.
+            expected_h = "center" if TGT_TAGS <= c <= PEN_RECORDS else "left"
             assert cell.alignment.horizontal == expected_h, cell.coordinate
             for side in ("top", "bottom", "left", "right"):
                 assert getattr(cell.border, side).style == _BORDER.top.style == "thin"
@@ -995,8 +1011,789 @@ def test_detail_and_total_row_style_matches_reference(client, setup_author, acti
     assert ws.cell(t, ACH).number_format == "0.00%"
     assert ws.cell(t, DIFF).number_format == "0.00%"
 
-    # Detail row is entirely unfilled; the total row shades only its G cell.
+    # Detail row is entirely unfilled; the total row shades only its E cell.
     for c in range(1, LAST_COL + 1):
         assert _fill(ws.cell(d, c)) is None, ws.cell(d, c).coordinate
     assert _fill(ws.cell(t, DIFF)) == RED
     _assert_only_diff_cell_shaded(ws, t)
+
+
+# --- PAGES / RECORDS: the two units added alongside TAGS/DOCS/BOM/SPARES -----
+#
+# These pin the Phase 4 widening (4 units -> 6). The failure they guard against
+# is a page or record count landing in the DOCS columns: three DOC IDB
+# sub-activities were migrated DOCS -> RECORDS by migration 0058, and a
+# regression there would silently mix records into a documents column.
+
+def _make_daily_sub(client, admin_header, *, benchmark_value, name, count_field):
+    """NUMERIC_DAILY sub-activity measured in `count_field` (the mode the three
+    DOC IDB activities use after migration 0058)."""
+    a = client.post(
+        "/api/v1/activity-master/activities", json={"name": f"Activity for {name}"},
+        headers=admin_header,
+    ).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{a['id']}/sub-activities",
+        json={
+            "name": name, "benchmark_type": "NUMERIC_DAILY",
+            "benchmark_value": benchmark_value, "relevant_count_field": count_field,
+        },
+        headers=admin_header,
+    ).json()
+    return a, sub
+
+
+def _make_task_qty_sub(client, admin_header, *, benchmark_value, name, count_field, period=1):
+    """TASK_WITH_QUANTITY sub-activity (the mode the three MTL activities use):
+    carries a quantity AND a completion deadline."""
+    a = client.post(
+        "/api/v1/activity-master/activities", json={"name": f"Activity for {name}"},
+        headers=admin_header,
+    ).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{a['id']}/sub-activities",
+        json={
+            "name": name, "benchmark_type": "TASK_WITH_QUANTITY",
+            "benchmark_value": benchmark_value, "relevant_count_field": count_field,
+            "benchmark_period_days": period,
+        },
+        headers=admin_header,
+    ).json()
+    return a, sub
+
+
+def _unit_cells(ws, row):
+    """Every unit cell on `row` that carries a value, keyed "GROUP UNIT". Lets a
+    test assert where a number landed AND that it landed nowhere else."""
+    groups = (("TGT", TGT_TAGS), ("ACT", ACT_TAGS), ("PEN", PEN_TAGS))
+    units = ("TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS")
+    return {
+        f"{g} {u}": ws.cell(row, start + i).value
+        for g, start in groups
+        for i, u in enumerate(units)
+        if ws.cell(row, start + i).value is not None
+    }
+
+
+def test_pages_below_target_is_red(client, setup_author, activity_admin):
+    """Target 500 PAGES, actual 400 -> pending 100, achievement 80%,
+    difference 20%, G red."""
+    a = setup_author()
+    _, sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 400, count_field="pages")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    t = _sub_total_row(ws, "E-1 - Test User", "MTL-PAGES")
+    assert ws.cell(t, TGT_PAGES).value == 500
+    assert ws.cell(t, ACT_PAGES).value == 400
+    assert ws.cell(t, PEN_PAGES).value == 100
+    assert ws.cell(t, ACH).value == 0.8
+    assert ws.cell(t, DIFF).value == pytest.approx(0.2)
+    assert ws.cell(t, ACH).number_format == "0.00%"
+    assert ws.cell(t, DIFF).number_format == "0.00%"
+    assert _fill(ws.cell(t, DIFF)) == RED
+    _assert_only_diff_cell_shaded(ws, t)
+
+
+def test_pages_above_target_is_green_and_uncapped(client, setup_author, activity_admin):
+    """Target 500 PAGES, actual 620 -> pending 0, achievement 124% (NOT capped
+    at 100), difference 24%, G green."""
+    a = setup_author()
+    _, sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 620, count_field="pages")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    t = _sub_total_row(ws, "E-1 - Test User", "MTL-PAGES")
+    assert ws.cell(t, TGT_PAGES).value == 500
+    assert ws.cell(t, ACT_PAGES).value == 620
+    assert ws.cell(t, PEN_PAGES).value == 0
+    assert ws.cell(t, ACH).value == pytest.approx(1.24)
+    assert ws.cell(t, DIFF).value == pytest.approx(0.24)
+    assert _fill(ws.cell(t, DIFF)) == GREEN
+    _assert_only_diff_cell_shaded(ws, t)
+
+
+def test_records_below_target_is_red(client, setup_author, activity_admin):
+    """Target 1000 RECORDS, actual 850 -> pending 150, achievement 85%,
+    difference 15%, G red."""
+    a = setup_author()
+    _, sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=1000, name="DOC IDB-QC", count_field="records"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 850, count_field="records")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    t = _sub_total_row(ws, "E-1 - Test User", "DOC IDB-QC")
+    assert ws.cell(t, TGT_RECORDS).value == 1000
+    assert ws.cell(t, ACT_RECORDS).value == 850
+    assert ws.cell(t, PEN_RECORDS).value == 150
+    assert ws.cell(t, ACH).value == 0.85
+    assert ws.cell(t, DIFF).value == pytest.approx(0.15)
+    assert _fill(ws.cell(t, DIFF)) == RED
+    _assert_only_diff_cell_shaded(ws, t)
+
+
+def test_pages_values_land_only_in_pages_columns(client, setup_author, activity_admin):
+    """A PAGES benchmark must touch the PAGES columns and NOTHING else - in
+    particular not DOCS."""
+    a = setup_author()
+    _, sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 400, count_field="pages")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    d = _detail_row(ws, label, "MTL-PAGES", cycle_start)
+    t = _sub_total_row(ws, label, "MTL-PAGES")
+    assert _unit_cells(ws, d) == {"TGT PAGES": 500, "ACT PAGES": 400, "PEN PAGES": 100}
+    assert _unit_cells(ws, t) == {"TGT PAGES": 500, "ACT PAGES": 400, "PEN PAGES": 100}
+
+
+def test_records_values_land_only_in_records_columns_never_docs(
+    client, setup_author, activity_admin
+):
+    """The DOCS -> RECORDS regression guard: a migrated DOC IDB sub-activity's
+    numbers must appear under RECORDS and leave every DOCS column empty."""
+    a = setup_author()
+    _, sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=1000, name="DOC IDB-REWORK", count_field="records"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 850, count_field="records")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    d = _detail_row(ws, label, "DOC IDB-REWORK", cycle_start)
+    t = _sub_total_row(ws, label, "DOC IDB-REWORK")
+    assert _unit_cells(ws, d) == {"TGT RECORDS": 1000, "ACT RECORDS": 850, "PEN RECORDS": 150}
+    assert _unit_cells(ws, t) == {"TGT RECORDS": 1000, "ACT RECORDS": 850, "PEN RECORDS": 150}
+    for row in (d, t):
+        for col in (TGT_DOCS, ACT_DOCS, PEN_DOCS):
+            assert ws.cell(row, col).value is None, f"records leaked into DOCS at {col}"
+
+
+def test_unrelated_docs_activity_still_lands_under_docs(client, setup_author, activity_admin):
+    """Widening to six units must not disturb a genuine DOCS activity: it stays
+    in the DOCS columns and out of the RECORDS ones."""
+    a = setup_author()
+    _, sub = _make_sub_activity(
+        client, activity_admin, benchmark_value=200, name="DOC-REAL", count_field="docs"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 150, count_field="docs")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    t = _sub_total_row(ws, label, "DOC-REAL")
+    assert _unit_cells(ws, t) == {"TGT DOCS": 200, "ACT DOCS": 150, "PEN DOCS": 50}
+    assert ws.cell(t, ACH).value == 0.75
+
+
+def test_pages_and_records_coexist_without_compensating(client, setup_author, activity_admin):
+    """A PAGES surplus must not offset a RECORDS shortfall: separate
+    sub-activities, separate subtotals, separate percentages."""
+    a = setup_author()
+    _, pages_sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
+    )
+    _, rec_sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=1000, name="DOC IDB-QC", count_field="records"
+    )
+    cycle_start, _ = _prev_cycle()
+    day2 = cycle_start + timedelta(days=1)  # one report per date
+    _submit(client, a["header"], a["project"].id, pages_sub["id"], cycle_start, 620, count_field="pages")
+    _submit(client, a["header"], a["project"].id, rec_sub["id"], day2, 850, count_field="records")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    p = _sub_total_row(ws, label, "MTL-PAGES")
+    r = _sub_total_row(ws, label, "DOC IDB-QC")
+    assert ws.cell(p, PEN_PAGES).value == 0 and ws.cell(p, ACH).value == pytest.approx(1.24)
+    assert ws.cell(r, PEN_RECORDS).value == 150 and ws.cell(r, ACH).value == 0.85
+    assert _fill(ws.cell(p, DIFF)) == GREEN
+    assert _fill(ws.cell(r, DIFF)) == RED
+
+
+def test_task_with_quantity_pages_counted_exactly_once(client, setup_author, activity_admin):
+    """TASK_WITH_QUANTITY carries a quantity AND a deadline, so it could be
+    picked up by both the daily-quantity ledger and the task lumpsum query. It
+    must appear through the lumpsum side ONLY: one subtotal, counted once."""
+    a = setup_author()
+    _, sub = _make_task_qty_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-TASK-PAGES", count_field="pages"
+    )
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 400, count_field="pages")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    # Exactly one subtotal, and exactly one detail row for the sub-activity.
+    assert len(_sub_total_rows(ws, label, "MTL-TASK-PAGES")) == 1
+    details = [
+        r for r in range(3, ws.max_row + 1)
+        if ws.cell(r, SUB).value == "MTL-TASK-PAGES"
+        and ws.cell(r, PROJECT).value != "TOTAL"
+    ]
+    assert len(details) == 1
+    # Counted once: the target is 500, not 1000.
+    t = _sub_total_row(ws, label, "MTL-TASK-PAGES")
+    assert ws.cell(t, TGT_PAGES).value == 500
+    assert ws.cell(t, ACT_PAGES).value == 400
+    assert ws.cell(t, PEN_PAGES).value == 100
+    assert ws.cell(t, ACH).value == 0.8
+    assert _fill(ws.cell(t, DIFF)) == RED
+
+
+def test_textual_task_beside_pages_gets_no_subtotal_and_blank_f_g(
+    client, setup_author, activity_admin
+):
+    """A textual "FINISH WITHIN A DAY" task keeps its detail rows only - no
+    subtotal, blank ACHIEVEMENT %/DIFFERENCE %, no shading - while a PAGES
+    activity for the same employee still totals normally."""
+    a = setup_author()
+    _, pages_sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
+    )
+    _, text_sub = _make_task_sub(client, activity_admin, name="TEXT-TASK")
+    cycle_start, _ = _prev_cycle()
+    payload = {
+        "report_date": cycle_start.isoformat(),
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "p",
+             "sub_activity_id": pages_sub["id"], "pages_count": 400},
+            {"project_id": str(a["project"].id), "description": "t",
+             "sub_activity_id": text_sub["id"]},
+        ],
+    }
+    body = client.post(BASE, headers=a["header"], json=payload).json()
+    assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    assert _sub_total_rows(ws, label, "TEXT-TASK") == []
+    d = _detail_row(ws, label, "TEXT-TASK", cycle_start)
+    assert ws.cell(d, TGT_TAGS).value == "FINISH WITHIN A DAY"
+    assert ws.cell(d, ACH).value is None
+    assert ws.cell(d, DIFF).value is None
+    for c in range(1, LAST_COL + 1):
+        assert _fill(ws.cell(d, c)) is None, ws.cell(d, c).coordinate
+    # The PAGES activity is unaffected by the textual row sharing the report.
+    t = _sub_total_row(ws, label, "MTL-PAGES")
+    assert ws.cell(t, ACH).value == 0.8
+
+
+def test_only_column_e_is_ever_filled_across_six_units(client, setup_author, activity_admin):
+    """Sheet-wide colour audit with PAGES and RECORDS in play: outside the yellow
+    header, the ONLY filled cells in the whole workbook are DIFFERENCE % cells (column E),
+    and they only ever carry the two approved colours."""
+    a = setup_author()
+    _, pages_sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
+    )
+    _, rec_sub = _make_daily_sub(
+        client, activity_admin, benchmark_value=1000, name="DOC IDB-QC", count_field="records"
+    )
+    cycle_start, _ = _prev_cycle()
+    day2 = cycle_start + timedelta(days=1)
+    _submit(client, a["header"], a["project"].id, pages_sub["id"], cycle_start, 620, count_field="pages")
+    _submit(client, a["header"], a["project"].id, rec_sub["id"], day2, 850, count_field="records")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    filled = {
+        ws.cell(r, c).coordinate: _fill(ws.cell(r, c))
+        for r in range(3, ws.max_row + 1)
+        for c in range(1, LAST_COL + 1)
+        if _fill(ws.cell(r, c)) is not None
+    }
+    assert all(coord.startswith("E") for coord in filled), filled
+    assert set(filled.values()) <= {RED, GREEN}
+    # The header keeps its yellow across all 28 columns. Row 1's merged
+    # continuation cells hold no style of their own (Excel paints the anchor's
+    # fill across the span), so only the anchors are checked there.
+    anchors = (TGT_TAGS, ACT_TAGS, PEN_TAGS)
+    for c in range(1, LAST_COL + 1):
+        if not (TGT_TAGS <= c <= PEN_RECORDS) or c in anchors:
+            assert _fill(ws.cell(1, c)) == HEADER_YELLOW, ws.cell(1, c).coordinate
+        assert _fill(ws.cell(2, c)) == HEADER_YELLOW, ws.cell(2, c).coordinate
+
+
+# --- Phase 4.1: DAY REMARKS column + current-plus-three-cycle selection ------
+#
+# DAY REMARKS (G) carries WorkReport.remarks - the employee's own remark for
+# that report DATE. It is NOT ActivityMaster.benchmark_remarks (guidance TO the
+# employee, e.g. "500 REQUIRED PAGES/DAY"), which must never appear here.
+
+def _submit_with_remarks(client, header, project_id, sub_id, report_date, qty,
+                         remarks, count_field="tags"):
+    """Submit one day's report carrying a day-level remark."""
+    payload = {
+        "report_date": report_date.isoformat(),
+        "remarks": remarks,
+        "tasks": [{
+            "project_id": str(project_id), "description": "work",
+            "sub_activity_id": sub_id, f"{count_field}_count": qty,
+        }],
+    }
+    created = client.post(BASE, headers=header, json=payload)
+    assert created.status_code == 201, created.text
+    res = client.post(f"{BASE}/{created.json()['id']}/submit", headers=header)
+    assert res.status_code == 200, res.text
+
+
+def test_day_remarks_is_column_g_and_project_is_column_h(client, setup_author, activity_admin):
+    """Header positions the reorder must hold: ACTIVITY C, ACHIEVEMENT D,
+    DIFFERENCE E, SUB ACTIVITY F, DAY REMARKS G, PROJECT H, groups from I."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 80)
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    assert ws.cell(2, 3).value == "ACTIVITY"
+    assert ws.cell(2, 4).value == "ACHIEVEMENT %"
+    assert ws.cell(2, 5).value == "DIFFERENCE %"
+    assert ws.cell(2, 6).value == "SUB ACTIVITY"
+    assert ws.cell(2, 7).value == "DAY REMARKS"
+    assert ws.cell(2, 8).value == "PROJECT CODE & TITLE"
+    # The unit groups start at I (column 9) and the sheet ends at AB (28).
+    assert ws.cell(1, 9).value == "BENCHMARK TARGET"
+    assert get_column_letter(ws.max_column) == "AB"
+    assert {str(m) for m in ws.merged_cells.ranges} == {"I1:N1", "O1:T1", "U1:Z1"}
+    assert ws.freeze_panes == "A3"
+
+
+def test_day_remark_repeats_on_every_detail_row_of_that_day(
+    client, setup_author, activity_admin
+):
+    """One report, two sub-activities: both detail rows carry the same day
+    remark, so filtering to either row alone still shows it."""
+    a = setup_author()
+    _, s1 = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL-AUDIT")
+    _, s2 = _make_sub_activity(
+        client, activity_admin, benchmark_value=200, name="MTL-DOC", count_field="docs"
+    )
+    cycle_start, _ = _prev_cycle()
+    payload = {
+        "report_date": cycle_start.isoformat(),
+        "remarks": "Checked audit queries",
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "x",
+             "sub_activity_id": s1["id"], "tags_count": 80},
+            {"project_id": str(a["project"].id), "description": "y",
+             "sub_activity_id": s2["id"], "docs_count": 150},
+        ],
+    }
+    body = client.post(BASE, headers=a["header"], json=payload).json()
+    assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    for sub_name in ("FMTL-AUDIT", "MTL-DOC"):
+        d = _detail_row(ws, label, sub_name, cycle_start)
+        assert ws.cell(d, REMARKS).value == "Checked audit queries", sub_name
+    # No merged cells were introduced to achieve the repeat.
+    assert {str(m) for m in ws.merged_cells.ranges} == EXPECTED_MERGES
+
+
+def test_different_days_show_their_own_remarks(client, setup_author, activity_admin):
+    """Each report date carries its own remark; one day's text never bleeds
+    into another's row."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    day2 = cycle_start + timedelta(days=1)
+    _submit_with_remarks(client, a["header"], a["project"].id, sub["id"],
+                         cycle_start, 80, "Day one remark")
+    _submit_with_remarks(client, a["header"], a["project"].id, sub["id"],
+                         day2, 90, "Day two remark")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    assert ws.cell(_detail_row(ws, label, "FMTL", cycle_start), REMARKS).value == "Day one remark"
+    assert ws.cell(_detail_row(ws, label, "FMTL", day2), REMARKS).value == "Day two remark"
+
+
+def test_blank_and_whitespace_remarks_stay_blank(client, setup_author, activity_admin):
+    """No remark, or a whitespace-only one, leaves the cell empty - never a
+    stray space, and never filled in from somewhere else."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    day2 = cycle_start + timedelta(days=1)
+    _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 80)  # no remarks
+    _submit_with_remarks(client, a["header"], a["project"].id, sub["id"], day2, 90, "   ")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    label = "E-1 - Test User"
+    assert ws.cell(_detail_row(ws, label, "FMTL", cycle_start), REMARKS).value is None
+    assert ws.cell(_detail_row(ws, label, "FMTL", day2), REMARKS).value is None
+
+
+def test_total_row_has_blank_day_remarks_and_total_in_column_h(
+    client, setup_author, activity_admin
+):
+    """A TOTAL row spans the cycle, not one day, so DAY REMARKS is blank and the
+    TOTAL marker sits in PROJECT (column H) with the percentages in D and E."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    _submit_with_remarks(client, a["header"], a["project"].id, sub["id"],
+                         cycle_start, 80, "Some day remark")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
+    assert ws.cell(t, EMP).value == "E-1 - Test User"
+    assert ws.cell(t, DATE_C).value is None          # B blank
+    assert ws.cell(t, ACTIVITY).value == "Activity for FMTL"
+    assert ws.cell(t, ACH).value == 0.8              # D
+    assert ws.cell(t, DIFF).value == pytest.approx(0.2)   # E
+    assert ws.cell(t, SUB).value == "FMTL"           # F
+    assert ws.cell(t, REMARKS).value is None         # G blank on a total
+    assert ws.cell(t, PROJECT).value == "TOTAL"      # H marker
+    assert ws.cell(t, ACH).number_format == "0.00%"
+    assert ws.cell(t, DIFF).number_format == "0.00%"
+    assert _fill(ws.cell(t, DIFF)) == RED
+    _assert_only_diff_cell_shaded(ws, t)
+
+
+def test_day_remarks_never_carries_benchmark_remarks(client, db, setup_author, activity_admin):
+    """Activity Master's benchmark_remarks is guidance TO the employee; it must
+    never be substituted into the employee's DAY REMARKS column."""
+    import uuid as uuid_mod
+
+    from app.modules.activity_master.models import ActivityMaster
+
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=500, name="MTL-PAGES",
+                                count_field="pages")
+    master = db.get(ActivityMaster, uuid_mod.UUID(sub["id"]))
+    master.benchmark_remarks = "500 REQUIRED PAGES/DAY"
+    db.commit()
+
+    cycle_start, _ = _prev_cycle()
+    _submit_with_remarks(client, a["header"], a["project"].id, sub["id"],
+                         cycle_start, 400, "Waiting on vendor drawings", count_field="pages")
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    d = _detail_row(ws, "E-1 - Test User", "MTL-PAGES", cycle_start)
+    assert ws.cell(d, REMARKS).value == "Waiting on vendor drawings"
+    # The Activity Master guidance appears nowhere in the sheet.
+    everywhere = {
+        ws.cell(r, c).value
+        for r in range(1, ws.max_row + 1)
+        for c in range(1, LAST_COL + 1)
+    }
+    assert "500 REQUIRED PAGES/DAY" not in everywhere
+
+
+def test_day_remarks_cell_wraps_and_is_top_aligned(client, setup_author, activity_admin):
+    """Free-text remarks wrap inside column G rather than spilling across the
+    unit columns."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    cycle_start, _ = _prev_cycle()
+    _submit_with_remarks(client, a["header"], a["project"].id, sub["id"],
+                         cycle_start, 80, "A fairly long day remark " * 5)
+
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    d = _detail_row(ws, "E-1 - Test User", "FMTL", cycle_start)
+    cell = ws.cell(d, REMARKS)
+    assert cell.alignment.wrap_text is True
+    assert cell.alignment.vertical == "top"
+    assert ws.column_dimensions["G"].width == 50.0
+
+
+# --- cycle selection: current plus the previous three ------------------------
+
+def test_resolve_week_offset_accepts_offsets_and_legacy_aliases():
+    """One resolver, one source of truth: integer offsets 0..3 plus the two
+    legacy strings."""
+    from app.modules.benchmarks.service import resolve_week_offset
+
+    assert [resolve_week_offset(i) for i in range(4)] == [0, 1, 2, 3]
+    assert resolve_week_offset("current") == 0
+    assert resolve_week_offset("previous") == 1
+    assert resolve_week_offset("2") == 2          # query strings arrive as text
+    assert resolve_week_offset(None) == 0
+
+
+@pytest.mark.parametrize("bad", [-1, 4, 99, "next", "", "1.5"])
+def test_resolve_week_offset_rejects_unsupported_values(bad):
+    """An unsupported selector is REJECTED, never silently swapped for another
+    cycle - that would hand back a period nobody asked for."""
+    from app.modules.benchmarks.service import resolve_week_offset
+
+    with pytest.raises(ValueError):
+        resolve_week_offset(bad)
+
+
+@pytest.mark.parametrize("offset", [0, 1, 2, 3])
+def test_cycle_window_walks_back_whole_friday_to_thursday_weeks(offset):
+    """Offset N is exactly N weeks before the current cycle, and every cycle is
+    a 7-day Friday..Thursday span."""
+    from app.modules.benchmarks.service import _cycle_window
+
+    current_start, _ = compute_week_bounds(TODAY_D)
+    start, end = _cycle_window(offset, TODAY_D)
+    assert start == current_start - timedelta(days=7 * offset)
+    assert end == start + timedelta(days=6)
+    assert (end - start).days + 1 == 7           # exactly seven calendar dates
+    assert start.weekday() == 4 and end.weekday() == 3   # Friday .. Thursday
+
+
+def test_legacy_cycle_strings_match_their_offsets():
+    """current == offset 0 and previous == offset 1, so old clients keep
+    working against the same windows."""
+    from app.modules.benchmarks.service import _cycle_window
+
+    assert _cycle_window("current", TODAY_D) == _cycle_window(0, TODAY_D)
+    assert _cycle_window("previous", TODAY_D) == _cycle_window(1, TODAY_D)
+
+
+def test_export_week_offset_selects_the_right_cycle_and_filename(
+    client, setup_author, activity_admin
+):
+    """One submission per cycle for four cycles; each week_offset exports only
+    its own cycle's row, and the filename names the SELECTED cycle."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+
+    # A distinct actual per cycle makes leakage obvious.
+    actuals = {0: 10, 1: 20, 2: 30, 3: 40}
+    for offset, qty in actuals.items():
+        _submit(client, a["header"], a["project"].id, sub["id"],
+                current_start - timedelta(days=7 * offset), qty)
+
+    for offset, qty in actuals.items():
+        res = client.get(f"{EXPORT_URL}?week_offset={offset}", headers=activity_admin)
+        assert res.status_code == 200, res.text
+        start = current_start - timedelta(days=7 * offset)
+        end = start + timedelta(days=6)
+        # Filename names the selected cycle, not today.
+        assert f"BENCHMARK REPORT {date_range_label(start, end)}.xlsx" in (
+            res.headers["content-disposition"]
+        )
+        ws = _load_sheet(res.content)
+        # Exactly this cycle's dates, and only this cycle's actual.
+        dates = {
+            _cell_date(ws.cell(r, DATE_C).value)
+            for r in range(3, ws.max_row + 1)
+            if ws.cell(r, DATE_C).value is not None
+        }
+        assert dates == {start}, f"offset {offset} leaked dates {dates}"
+        t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
+        assert ws.cell(t, ACT_TAGS).value == qty
+        assert _cell_date(ws.cell(t, CYC_START).value) == start
+        assert _cell_date(ws.cell(t, CYC_END).value) == end
+
+
+def test_no_rows_leak_between_neighbouring_cycles(client, setup_author, activity_admin):
+    """Adjacent cycles stay disjoint: offset 1 never shows offset 0's or
+    offset 2's rows, and no pending value carries across."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+    for offset, qty in ((0, 10), (1, 60), (2, 30)):
+        _submit(client, a["header"], a["project"].id, sub["id"],
+                current_start - timedelta(days=7 * offset), qty)
+
+    ws = _load_sheet(
+        client.get(f"{EXPORT_URL}?week_offset=1", headers=activity_admin).content
+    )
+    t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
+    # Only the middle cycle's numbers: 60/100, pending 40 - not 10 or 30.
+    assert ws.cell(t, ACT_TAGS).value == 60
+    assert ws.cell(t, PEN_TAGS).value == 40
+    assert ws.cell(t, ACH).value == 0.6
+
+
+@pytest.mark.parametrize("bad", ["-1", "4", "next"])
+def test_export_rejects_invalid_week_offset(client, activity_admin, bad):
+    res = client.get(f"{EXPORT_URL}?week_offset={bad}", headers=activity_admin)
+    assert res.status_code == 422, res.text
+
+
+def test_export_legacy_cycle_param_still_works(client, setup_author, activity_admin):
+    """?cycle=current|previous keeps selecting offsets 0 and 1."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+    _submit(client, a["header"], a["project"].id, sub["id"], current_start, 10)
+    _submit(client, a["header"], a["project"].id, sub["id"],
+            current_start - timedelta(days=7), 20)
+
+    for cycle, expected_start, qty in (
+        ("current", current_start, 10),
+        ("previous", current_start - timedelta(days=7), 20),
+    ):
+        ws = _load_sheet(
+            client.get(f"{EXPORT_URL}?cycle={cycle}", headers=activity_admin).content
+        )
+        t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
+        assert ws.cell(t, ACT_TAGS).value == qty
+        assert _cell_date(ws.cell(t, CYC_START).value) == expected_start
+
+
+def test_performance_table_and_export_agree_on_the_selected_cycle(
+    client, setup_author, activity_admin
+):
+    """The selected offset drives BOTH the comparison table and the export -
+    one resolver, so they cannot disagree."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+    _submit(client, a["header"], a["project"].id, sub["id"], current_start, 10)
+    _submit(client, a["header"], a["project"].id, sub["id"],
+            current_start - timedelta(days=14), 90)
+
+    for offset, expected_actual in ((0, 10), (2, 90)):
+        table = client.get(
+            f"/api/v1/benchmarks/employees-performance?week_offset={offset}",
+            headers=activity_admin,
+        )
+        assert table.status_code == 200, table.text
+        ws = _load_sheet(
+            client.get(f"{EXPORT_URL}?week_offset={offset}", headers=activity_admin).content
+        )
+        t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
+        assert ws.cell(t, ACT_TAGS).value == expected_actual
+
+
+@pytest.mark.parametrize("bad", ["-1", "4", "next"])
+def test_performance_table_rejects_invalid_week_offset(client, activity_admin, bad):
+    res = client.get(
+        f"/api/v1/benchmarks/employees-performance?week_offset={bad}",
+        headers=activity_admin,
+    )
+    assert res.status_code == 422, res.text
+
+
+# --- table <-> export agreement across the four selectable cycles -----------
+#
+# The comparison table and the workbook are two different code paths over the
+# same ledger. They must resolve the SAME Fri..Thu window for a given offset:
+# a regression where one of them re-derived bounds from date.today() would show
+# the current week's numbers under an older week's label.
+
+PERF_URL = "/api/v1/benchmarks/employees-performance"
+
+
+def _table_row(client, header, *, week_offset, employee_code):
+    """One employee's row from the comparison table for the selected cycle."""
+    res = client.get(
+        f"{PERF_URL}?page=1&page_size=100&sort=name&order=asc&week_offset={week_offset}",
+        headers=header,
+    )
+    assert res.status_code == 200, res.text
+    for row in res.json()["items"]:
+        if row["employee_code"] == employee_code:
+            return row
+    raise AssertionError(f"{employee_code} missing from the table (offset {week_offset})")
+
+
+def test_table_and_export_agree_for_every_selectable_cycle(
+    client, setup_author, activity_admin
+):
+    """Seed one employee with a different actual in each of the four cycles,
+    then assert table actual == export actual == the value seeded for that
+    cycle, for every offset."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=500, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+
+    # offset -> actual seeded in that cycle
+    seeded = {0: 100, 1: 200, 2: 300, 3: 400}
+    for offset, qty in seeded.items():
+        _submit(client, a["header"], a["project"].id, sub["id"],
+                current_start - timedelta(days=7 * offset), qty)
+
+    for offset, qty in seeded.items():
+        start = current_start - timedelta(days=7 * offset)
+        end = start + timedelta(days=6)
+
+        # 1) the comparison table
+        row = _table_row(client, activity_admin, week_offset=offset, employee_code="E-1")
+        assert float(row["actual"]) == qty, (
+            f"table actual for offset {offset} was {row['actual']}, expected {qty}"
+        )
+        assert float(row["target"]) == 500
+        assert float(row["pending"]) == max(0, 500 - qty)
+
+        # 2) the workbook, same offset
+        ws = _load_sheet(
+            client.get(f"{EXPORT_URL}?week_offset={offset}", headers=activity_admin).content
+        )
+        t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
+        assert ws.cell(t, ACT_TAGS).value == qty, (
+            f"export actual for offset {offset} was {ws.cell(t, ACT_TAGS).value}, expected {qty}"
+        )
+
+        # 3) they agree with each other, and name the same window
+        assert float(row["actual"]) == ws.cell(t, ACT_TAGS).value
+        assert _cell_date(ws.cell(t, CYC_START).value) == start
+        assert _cell_date(ws.cell(t, CYC_END).value) == end
+
+        # 4) no neighbouring cycle leaked in: only this cycle's date appears
+        dates = {
+            _cell_date(ws.cell(r, DATE_C).value)
+            for r in range(3, ws.max_row + 1)
+            if ws.cell(r, DATE_C).value is not None
+        }
+        assert dates == {start}, f"offset {offset} leaked dates {dates}"
+
+
+def test_each_cycle_returns_a_distinct_table_actual(client, setup_author, activity_admin):
+    """The four offsets must be distinguishable end to end - if the table
+    re-derived its own bounds they would all collapse to one value."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=500, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+    seeded = {0: 100, 1: 200, 2: 300, 3: 400}
+    for offset, qty in seeded.items():
+        _submit(client, a["header"], a["project"].id, sub["id"],
+                current_start - timedelta(days=7 * offset), qty)
+
+    actuals = {
+        offset: float(
+            _table_row(client, activity_admin, week_offset=offset, employee_code="E-1")["actual"]
+        )
+        for offset in (0, 1, 2, 3)
+    }
+    assert actuals == {0: 100.0, 1: 200.0, 2: 300.0, 3: 400.0}
+    assert len(set(actuals.values())) == 4, "offsets are not distinguishable"
+
+
+def test_legacy_cycle_alias_matches_its_offset_on_the_table(
+    client, setup_author, activity_admin
+):
+    """?cycle=current|previous must land on the same rows as offsets 0 and 1."""
+    a = setup_author()
+    _, sub = _make_sub_activity(client, activity_admin, benchmark_value=500, name="FMTL")
+    current_start, _ = compute_week_bounds(TODAY_D)
+    _submit(client, a["header"], a["project"].id, sub["id"], current_start, 100)
+    _submit(client, a["header"], a["project"].id, sub["id"],
+            current_start - timedelta(days=7), 200)
+
+    for alias, offset in (("current", 0), ("previous", 1)):
+        by_alias = client.get(
+            f"{PERF_URL}?page=1&page_size=100&sort=name&order=asc&cycle={alias}",
+            headers=activity_admin,
+        )
+        assert by_alias.status_code == 200, by_alias.text
+        alias_row = next(
+            r for r in by_alias.json()["items"] if r["employee_code"] == "E-1"
+        )
+        offset_row = _table_row(
+            client, activity_admin, week_offset=offset, employee_code="E-1"
+        )
+        assert alias_row == offset_row

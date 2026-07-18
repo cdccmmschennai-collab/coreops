@@ -38,11 +38,14 @@ import { useUrlState } from "@/lib/use-url-state";
 
 import { downloadPendingBenchmarkXlsx } from "../api";
 import { useEmployeesPerformance } from "../hooks";
-import type {
-  BenchmarkCycle,
-  EmployeePerformanceRow,
-  PerformanceSort,
-  PerformanceStatusFilter,
+import {
+  isWeekOffset,
+  WEEK_OFFSET_LABEL,
+  WEEK_OFFSETS,
+  type EmployeePerformanceRow,
+  type PerformanceSort,
+  type PerformanceStatusFilter,
+  type WeekOffset,
 } from "../types";
 
 const PAGE_SIZE = 7;
@@ -78,15 +81,18 @@ function StatusBadge({ pending }: { pending: string }) {
 }
 
 /**
- * Compact label for a benchmark cycle — Friday → Thursday, anchored to IST
- * via `weekStartISO()`; "previous" is the completed cycle one week back.
+ * Compact date range for a benchmark cycle — Friday → Thursday, anchored to IST
+ * via `weekStartISO()`, `weekOffset` whole weeks back from the current cycle.
+ * Computed from the same one-line rule as the backend
+ * (start = currentStart - 7 * offset, end = start + 6), so the label always
+ * names the window the API will actually return.
+ *
  * Handles a cycle that spans two months ("JUN 26 – JUL 2").
  */
-function cycleRangeLabel(cycle: BenchmarkCycle): string {
+function cycleRangeLabel(weekOffset: WeekOffset): string {
   const [y, m, d] = weekStartISO().split("-").map(Number);
-  const offset = cycle === "previous" ? -7 : 0;
-  const fri = new Date(y, m - 1, d + offset);
-  const thu = new Date(y, m - 1, d + offset + 6);
+  const fri = new Date(y, m - 1, d - 7 * weekOffset);
+  const thu = new Date(y, m - 1, d - 7 * weekOffset + 6);
   if (fri.getMonth() === thu.getMonth()) {
     return `${MONTHS_SHORT[fri.getMonth()]} ${fri.getDate()}–${thu.getDate()}`;
   }
@@ -113,9 +119,10 @@ export function PerformanceTable() {
   const [sortRaw, setSortRaw] = useUrlState("pf_sort", "pending");
   const [orderRaw, setOrderRaw] = useUrlState("pf_order", "desc");
   const [statusRaw, setStatusFilter] = useUrlState("pf_status", "all");
-  // Fri..Thu benchmark window — defaults to the current (live) cycle for
-  // viewing; "previous" lets the PM review/export the finished cycle.
-  const [cycleRaw, setCycleRaw] = useUrlState("pf_cycle", "current");
+  // Fri..Thu benchmark window as a whole-week offset (0 = current, up to 3
+  // back). Persisted in the URL as ?weekOffset=N so opening an employee and
+  // coming back — or refreshing — restores the same cycle.
+  const [weekOffsetRaw, setWeekOffsetRaw] = useUrlState("weekOffset", "0");
   const [exporting, setExporting] = React.useState(false);
 
   const page = Math.max(1, Number(pageStr) || 1);
@@ -123,7 +130,10 @@ export function PerformanceTable() {
   const sort = sortRaw as PerformanceSort;
   const order = orderRaw as "asc" | "desc";
   const statusFilter = statusRaw as PerformanceStatusFilter;
-  const cycle = cycleRaw as BenchmarkCycle;
+  // A hand-edited or stale URL must not request a cycle the API rejects; an
+  // out-of-range value falls back to the current cycle.
+  const parsedOffset = Number(weekOffsetRaw);
+  const weekOffset: WeekOffset = isWeekOffset(parsedOffset) ? parsedOffset : 0;
 
   // Collapse state: default expanded on first visit, then persisted. Read in an
   // effect (not in the initializer) so server and first client render agree.
@@ -140,14 +150,14 @@ export function PerformanceTable() {
     });
   }
 
-  const { data, isLoading } = useEmployeesPerformance({
+  const { data, isLoading, isFetching } = useEmployeesPerformance({
     page,
     page_size: PAGE_SIZE,
     search,
     status: statusFilter,
     sort,
     order,
-    cycle,
+    weekOffset,
   });
 
   function onSearch(value: string) {
@@ -155,8 +165,8 @@ export function PerformanceTable() {
     setPage(1);
   }
 
-  function onCycleChange(next: BenchmarkCycle) {
-    setCycleRaw(next);
+  function onCycleChange(next: WeekOffset) {
+    setWeekOffsetRaw(String(next));
     setPage(1);
   }
 
@@ -172,7 +182,7 @@ export function PerformanceTable() {
   async function onExport() {
     setExporting(true);
     try {
-      await downloadPendingBenchmarkXlsx(cycle);
+      await downloadPendingBenchmarkXlsx(weekOffset);
     } catch {
       toast.error("Export failed. Please try again.");
     } finally {
@@ -192,6 +202,10 @@ export function PerformanceTable() {
 
   const rows = data?.items ?? [];
   const total = data?.total ?? 0;
+  // No rows to honestly show yet — either the first load or a cycle change,
+  // which deliberately drops the previous cycle's placeholder data rather than
+  // presenting it under the newly selected week.
+  const showSkeleton = isLoading && rows.length === 0;
 
   // Never sit on a page past the last one — a stale page restored from the URL
   // or a roster that shrank would otherwise show an empty table with Prev still
@@ -266,27 +280,25 @@ export function PerformanceTable() {
                   >
                     <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="text-muted-foreground">
-                      {cycle === "current" ? "This week" : "Previous week"}
+                      {WEEK_OFFSET_LABEL[weekOffset]}
                     </span>
                     <span className="font-semibold tabular text-foreground">
-                      {cycleRangeLabel(cycle)}
+                      {cycleRangeLabel(weekOffset)}
                     </span>
                     <span className="text-xs text-muted-foreground">Fri–Thu</span>
                     <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
-                  {(["current", "previous"] as const).map((option) => (
+                  {WEEK_OFFSETS.map((option) => (
                     <DropdownMenuItem key={option} onSelect={() => onCycleChange(option)}>
                       <div className="flex-1">
-                        <div className="font-medium">
-                          {option === "current" ? "Current Week" : "Previous Week"}
-                        </div>
+                        <div className="font-medium">{WEEK_OFFSET_LABEL[option]}</div>
                         <div className="text-xs text-muted-foreground">
                           {cycleRangeLabel(option)} · Fri–Thu
                         </div>
                       </div>
-                      {cycle === option && (
+                      {weekOffset === option && (
                         <Check className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                       )}
                     </DropdownMenuItem>
@@ -321,14 +333,17 @@ export function PerformanceTable() {
             </div>
           </div>
 
-          {isLoading && rows.length === 0 ? (
-            <div className="space-y-2 p-4">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-9 w-full" />
-              ))}
-            </div>
-          ) : (
-            <>
+          {/* The header and the row area stay mounted while a new cycle loads:
+              swapping in a differently-sized block would resize the animated
+              collapse wrapper and make the whole card jump. Loading renders
+              exactly PAGE_SIZE skeleton rows, so the height is identical to a
+              full page of data and the change reads as a settle, not a jolt. */}
+          <div
+            className={`transition-opacity duration-200 motion-reduce:transition-none ${
+              isFetching ? "opacity-60" : "opacity-100"
+            }`}
+            aria-busy={isFetching}
+          >
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -340,14 +355,22 @@ export function PerformanceTable() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((row) => (
-                    <Row
-                      key={row.id}
-                      row={row}
-                      onClick={() => router.push(`/dashboard/employees/${row.id}`)}
-                    />
-                  ))}
-                  {rows.length === 0 && (
+                  {showSkeleton
+                    ? Array.from({ length: PAGE_SIZE }).map((_, i) => (
+                        <TableRow key={`sk-${i}`}>
+                          <TableCell colSpan={5} className="py-2">
+                            <Skeleton className="h-6 w-full" />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    : rows.map((row) => (
+                        <Row
+                          key={row.id}
+                          row={row}
+                          onClick={() => router.push(`/dashboard/employees/${row.id}`)}
+                        />
+                      ))}
+                  {!showSkeleton && rows.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
                         No employees match.
@@ -364,8 +387,7 @@ export function PerformanceTable() {
                   onPageChange={(offset) => setPage(Math.floor(offset / PAGE_SIZE) + 1)}
                 />
               )}
-            </>
-          )}
+          </div>
         </div>
       </div>
     </Card>
