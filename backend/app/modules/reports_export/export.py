@@ -115,35 +115,42 @@ _DIFF_RED = PatternFill(fill_type="solid", fgColor="FFFFC7CE")    # < 95%: needs
 _PB_HEADER_ROW_HEIGHT = {1: 15.0, 2: 25.5}
 _PB_DEFAULT_ROW_HEIGHT = 15.0
 
-# Final column order (28 columns, A..AB): the identity columns with the two
-# percentage columns early (so they read beside the activity rather than off
-# past the wide SUB ACTIVITY / PROJECT cells), then DAY REMARKS, PROJECT, the
-# three 6-unit groups, then the cycle bounds. No ROW TYPE, no per-group TOTAL
-# sub-column, no EMPLOYEE TOTAL.
+# Final column order (29 columns, A..AC): the identity columns — DAY PART
+# directly after DATE — with the two percentage columns early (so they read
+# beside the activity rather than off past the wide SUB ACTIVITY / PROJECT
+# cells), then REMARKS, PROJECT, the three 6-unit groups, then the cycle
+# bounds. No ROW TYPE, no per-group TOTAL sub-column, no EMPLOYEE TOTAL.
 #
 # Widths travel with the SEMANTIC field, not with a column letter: SUB ACTIVITY
 # keeps 118.140625 and PROJECT keeps 86.0 wherever they sit.
 _PB_LEFT = [
     ("EMP CODE & NAME", 26.0),
     ("DATE", 12.0),
+    # Wide enough for its longest value, "HALF DAY (LEGACY)".
+    ("DAY PART", 18.0),
     ("ACTIVITY", 22.0),
     ("ACHIEVEMENT %", 18.85546875),
     ("DIFFERENCE %", 15.0),
     ("SUB ACTIVITY", 118.140625),
-    ("DAY REMARKS", 50.0),
+    ("REMARKS", 50.0),
     ("PROJECT CODE & TITLE", 86.0),
 ]
 _PB_DATE_COL = 2      # DATE
-_PB_ACTIVITY_COL = 3  # ACTIVITY
-_PB_ACH_COL = 4       # ACHIEVEMENT % — decides the shade, never wears it
-_PB_DIFF_COL = 5      # DIFFERENCE % — the only shaded cell in the body
-_PB_SUB_COL = 6       # SUB ACTIVITY
-# DAY REMARKS — the employee's own remark for that report DATE, repeated on
-# every detail row of the date so a filtered row still reads on its own. Blank
-# on a TOTAL row: a total spans the cycle, not one specific day. Never carries
-# Activity Master's benchmark_remarks.
-_PB_REMARKS_COL = 7
-_PB_PROJECT_COL = 8   # PROJECT CODE & TITLE — carries the "TOTAL" marker
+# DAY PART — FULL DAY / FIRST HALF / SECOND HALF / HALF DAY (LEGACY), repeated
+# on every detail row of its period (never merged). Blank on a TOTAL row: a
+# total spans the cycle, not one period.
+_PB_DAY_PART_COL = 3
+_PB_ACTIVITY_COL = 4  # ACTIVITY
+_PB_ACH_COL = 5       # ACHIEVEMENT % — decides the shade, never wears it
+_PB_DIFF_COL = 6      # DIFFERENCE % — the only shaded cell in the body
+_PB_SUB_COL = 7       # SUB ACTIVITY
+# REMARKS — the remark belonging to the row's OWN period (header remark for
+# FULL DAY / HALF DAY (LEGACY), that half's period remark for FIRST/SECOND
+# HALF), repeated on every detail row so a filtered row still reads on its
+# own. Blank on a TOTAL row: a total spans the cycle, not one specific day.
+# Never carries Activity Master's benchmark_remarks.
+_PB_REMARKS_COL = 8
+_PB_PROJECT_COL = 9   # PROJECT CODE & TITLE — carries the "TOTAL" marker
 _PB_GROUPS = ["BENCHMARK TARGET", "ACTUAL COMPLETED", "PENDING BENCHMARK"]
 # ledger benchmark_unit values — must stay in the same order as, and cover every
 # value of, activity_master.models.COUNT_FIELD_BY_UNIT: a unit missing here has
@@ -154,9 +161,9 @@ _PB_GROUP_WIDTH = len(_PB_UNIT_LABELS)  # 6 columns per group
 # Per-group unit widths: the leading TAGS column is widened to carry the merged
 # group label above it; the rest stay 12.
 _PB_UNIT_WIDTHS = [
-    [21.42578125, 12.0, 12.0, 12.0, 12.0, 12.0],  # BENCHMARK TARGET  I:N
-    [16.85546875, 12.0, 12.0, 12.0, 12.0, 12.0],  # ACTUAL COMPLETED  O:T
-    [17.7109375, 12.0, 12.0, 12.0, 12.0, 12.0],   # PENDING BENCHMARK U:Z
+    [21.42578125, 12.0, 12.0, 12.0, 12.0, 12.0],  # BENCHMARK TARGET  J:O
+    [16.85546875, 12.0, 12.0, 12.0, 12.0, 12.0],  # ACTUAL COMPLETED  P:U
+    [17.7109375, 12.0, 12.0, 12.0, 12.0, 12.0],   # PENDING BENCHMARK V:AA
 ]
 _PB_RIGHT = [("CYCLE START", 13.0), ("CYCLE END", 13.0)]
 _PB_NUMFMT_PCT = "0.00%"
@@ -254,7 +261,7 @@ def build_pending_benchmark_workbook(
         col = first_right + ri
         ws.cell(2, col, label)
         ws.column_dimensions[get_column_letter(col)].width = width
-    # Yellow header across the FULL A1:AA2 block — the cells left blank above the
+    # Yellow header across the FULL A1:AC2 block — the cells left blank above the
     # identity/cycle columns carry the same style as the labelled ones.
     for row in (1, 2):
         for col in range(1, total_cols + 1):
@@ -269,9 +276,9 @@ def build_pending_benchmark_workbook(
 
     def style_row(r: int, bold: bool = False) -> None:
         """Body style: Arial 10, thin borders all round, vertical top, no fill.
-        A:H and AA:AB left, the three unit groups (I:Z) centered. Bold on a TOTAL
-        row. No fill is applied here — the DIFFERENCE % cell is shaded by its
-        writer and is the only shaded body cell."""
+        A:I and AB:AC left, the three unit groups (J:AA) centered. Bold on a
+        TOTAL row. No fill is applied here — the DIFFERENCE % cell is shaded by
+        its writer and is the only shaded body cell."""
         for col in range(1, total_cols + 1):
             cell = ws.cell(row=r, column=col)
             _style_data_cell(cell, n_left < col < first_right, False, col in date_cols)
@@ -292,8 +299,9 @@ def build_pending_benchmark_workbook(
         pending in place (MAX(0, target - actual)), then writes the per-unit
         target/actual/pending sums, the uncapped ACHIEVEMENT % and the
         DIFFERENCE % — shading the DIFFERENCE % cell alone. Repeats the exact
-        emp/activity/sub-activity, writes "TOTAL" in PROJECT, leaves DATE and
-        DAY REMARKS blank (a total spans the cycle, not one specific day)."""
+        emp/activity/sub-activity, writes "TOTAL" in PROJECT, leaves DATE,
+        DAY PART and REMARKS blank (a total spans the cycle, not one specific
+        day or period)."""
         for ui in range(n_units):
             totals[2][ui] = max(0.0, totals[0][ui] - totals[1][ui])
         ws.cell(r, 1, emp_label)                        # exact CODE - NAME (filterable)
@@ -341,6 +349,9 @@ def build_pending_benchmark_workbook(
             for row in sub_rows:
                 ws.cell(r, 1, row["employee_label"])
                 ws.cell(r, _PB_DATE_COL, row["date"])
+                # Repeated (never merged) on every row of the period, so a
+                # filtered row still names its own part of the day.
+                ws.cell(r, _PB_DAY_PART_COL, row.get("day_part") or None)
                 ws.cell(r, _PB_PROJECT_COL, row["project"])
                 ws.cell(r, _PB_ACTIVITY_COL, row["activity"])
                 ws.cell(r, _PB_SUB_COL, row["sub_activity"])

@@ -2,8 +2,9 @@
 the Fri..Thu cycle bounds behind it.
 
 Layout and styling are matched cell-for-cell to the company reference workbook
-(BENCHMARK REPORT 03 JUL - 09 JUL): 28 columns A..AB (six units per group:
-TAGS DOCS BOM SPARES PAGES RECORDS), a two-level yellow header,
+(BENCHMARK REPORT 03 JUL - 09 JUL) plus the DAY PART column: 29 columns A..AC
+(six units per group: TAGS DOCS BOM SPARES PAGES RECORDS), a two-level yellow
+header,
 white body rows, bold white TOTAL rows, and a red/green shade on the
 DIFFERENCE % cell ONLY. Each NUMERIC sub-activity gets its own TOTAL row
 (per-unit target/actual/net-pending + its own uncapped achievement % and the
@@ -128,43 +129,46 @@ def _fill(cell):
     return cell.fill.fgColor.rgb if cell.fill and cell.fill.fill_type else None
 
 
-# --- column map (28 cols, A..AB; ACHIEVEMENT % = D, DIFFERENCE % = E) --------
+# --- column map (29 cols, A..AC; ACHIEVEMENT % = E, DIFFERENCE % = F) --------
 # Six units per group: TAGS DOCS BOM SPARES PAGES RECORDS.
-# DAY REMARKS (G) sits between SUB ACTIVITY and PROJECT; PROJECT (H) carries the
-# TOTAL marker.
-EMP, DATE_C, ACTIVITY, ACH, DIFF, SUB, REMARKS, PROJECT = 1, 2, 3, 4, 5, 6, 7, 8
-TGT_TAGS, TGT_DOCS, TGT_BOM, TGT_SPARES, TGT_PAGES, TGT_RECORDS = 9, 10, 11, 12, 13, 14
-ACT_TAGS, ACT_DOCS, ACT_BOM, ACT_SPARES, ACT_PAGES, ACT_RECORDS = 15, 16, 17, 18, 19, 20
-PEN_TAGS, PEN_DOCS, PEN_BOM, PEN_SPARES, PEN_PAGES, PEN_RECORDS = 21, 22, 23, 24, 25, 26
-CYC_START, CYC_END = 27, 28
-LAST_COL = 28
+# DAY PART (C) sits directly after DATE; REMARKS (H) sits between SUB ACTIVITY
+# and PROJECT; PROJECT (I) carries the TOTAL marker.
+EMP, DATE_C, DAY_PART, ACTIVITY, ACH, DIFF, SUB, REMARKS, PROJECT = (
+    1, 2, 3, 4, 5, 6, 7, 8, 9
+)
+TGT_TAGS, TGT_DOCS, TGT_BOM, TGT_SPARES, TGT_PAGES, TGT_RECORDS = 10, 11, 12, 13, 14, 15
+ACT_TAGS, ACT_DOCS, ACT_BOM, ACT_SPARES, ACT_PAGES, ACT_RECORDS = 16, 17, 18, 19, 20, 21
+PEN_TAGS, PEN_DOCS, PEN_BOM, PEN_SPARES, PEN_PAGES, PEN_RECORDS = 22, 23, 24, 25, 26, 27
+CYC_START, CYC_END = 28, 29
+LAST_COL = 29
 
 # The only two body colours, and they land on the DIFFERENCE % cell alone.
 GREEN = "FFC6EFCE"   # achievement > 100%
 RED = "FFFFC7CE"     # achievement < 95%
 HEADER_YELLOW = "FFFFFF00"
 
-# Exact widths from the reference workbook.
+# Exact widths from the reference workbook, plus the new DAY PART column.
 # Widths travel with the SEMANTIC field, not the old column letter: SUB ACTIVITY
-# keeps 118.140625 (now F) and PROJECT keeps 86.0 (now H).
+# keeps 118.140625 (now G) and PROJECT keeps 86.0 (now I).
 EXPECTED_WIDTHS = {
     "A": 26.0,           # EMP CODE & NAME
     "B": 12.0,           # DATE
-    "C": 22.0,           # ACTIVITY
-    "D": 18.85546875,    # ACHIEVEMENT %
-    "E": 15.0,           # DIFFERENCE %
-    "F": 118.140625,     # SUB ACTIVITY
-    "G": 50.0,           # DAY REMARKS
-    "H": 86.0,           # PROJECT CODE & TITLE
-    # BENCHMARK TARGET I:N — the leading column carries the merged group label.
-    "I": 21.42578125, "J": 12.0, "K": 12.0, "L": 12.0, "M": 12.0, "N": 12.0,
-    # ACTUAL COMPLETED O:T
-    "O": 16.85546875, "P": 12.0, "Q": 12.0, "R": 12.0, "S": 12.0, "T": 12.0,
-    # PENDING BENCHMARK U:Z
-    "U": 17.7109375, "V": 12.0, "W": 12.0, "X": 12.0, "Y": 12.0, "Z": 12.0,
-    "AA": 13.0, "AB": 13.0,
+    "C": 18.0,           # DAY PART — fits "HALF DAY (LEGACY)"
+    "D": 22.0,           # ACTIVITY
+    "E": 18.85546875,    # ACHIEVEMENT %
+    "F": 15.0,           # DIFFERENCE %
+    "G": 118.140625,     # SUB ACTIVITY
+    "H": 50.0,           # REMARKS
+    "I": 86.0,           # PROJECT CODE & TITLE
+    # BENCHMARK TARGET J:O — the leading column carries the merged group label.
+    "J": 21.42578125, "K": 12.0, "L": 12.0, "M": 12.0, "N": 12.0, "O": 12.0,
+    # ACTUAL COMPLETED P:U
+    "P": 16.85546875, "Q": 12.0, "R": 12.0, "S": 12.0, "T": 12.0, "U": 12.0,
+    # PENDING BENCHMARK V:AA
+    "V": 17.7109375, "W": 12.0, "X": 12.0, "Y": 12.0, "Z": 12.0, "AA": 12.0,
+    "AB": 13.0, "AC": 13.0,
 }
-EXPECTED_MERGES = {"I1:N1", "O1:T1", "U1:Z1"}
+EXPECTED_MERGES = {"J1:O1", "P1:U1", "V1:AA1"}
 
 
 def _detail_row(ws, label, sub, on_date):
@@ -233,7 +237,7 @@ def test_export_rejects_unknown_cycle(client, activity_admin):
     assert client.get(f"{EXPORT_URL}?cycle=nope", headers=activity_admin).status_code == 422
 
 
-# --- layout: exact 27-column order, two-level header -------------------------
+# --- layout: exact 29-column order, two-level header -------------------------
 
 def test_default_export_is_previous_cycle_with_reference_layout(client, setup_author, activity_admin):
     a = setup_author()
@@ -255,31 +259,33 @@ def test_default_export_is_previous_cycle_with_reference_layout(client, setup_au
     ws = _load_sheet(res.content)
     assert ws.title == PENDING_SHEET_NAME
 
-    # Row 2 = the real header row, in the exact required order A..AB.
+    # Row 2 = the real header row, in the exact required order A..AC.
     assert [ws.cell(2, c).value for c in range(1, LAST_COL + 1)] == [
-        "EMP CODE & NAME", "DATE", "ACTIVITY", "ACHIEVEMENT %", "DIFFERENCE %",
-        "SUB ACTIVITY", "DAY REMARKS", "PROJECT CODE & TITLE",
+        "EMP CODE & NAME", "DATE", "DAY PART", "ACTIVITY", "ACHIEVEMENT %",
+        "DIFFERENCE %", "SUB ACTIVITY", "REMARKS", "PROJECT CODE & TITLE",
         "TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS",
         "TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS",
         "TAGS", "DOCS", "BOM", "SPARES", "PAGES", "RECORDS",
         "CYCLE START", "CYCLE END",
     ]
-    # None of the withdrawn columns exist anywhere in the header.
+    # None of the withdrawn columns exist anywhere in the header — and the
+    # renamed DAY REMARKS is gone for good.
     labels = {ws.cell(2, c).value for c in range(1, LAST_COL + 1)}
     assert labels.isdisjoint(
-        {"ROW TYPE", "TARGET TOTAL", "ACTUAL TOTAL", "PENDING TOTAL", "EMPLOYEE TOTAL"}
+        {"ROW TYPE", "TARGET TOTAL", "ACTUAL TOTAL", "PENDING TOTAL",
+         "EMPLOYEE TOTAL", "DAY REMARKS", "PERIOD REMARKS"}
     )
-    # Row 1 holds ONLY the three merged group labels; A1:H1 and AA1:AB1 are blank.
+    # Row 1 holds ONLY the three merged group labels; A1:I1 and AB1:AC1 are blank.
     assert ws.cell(1, TGT_TAGS).value == "BENCHMARK TARGET"
     assert ws.cell(1, ACT_TAGS).value == "ACTUAL COMPLETED"
     assert ws.cell(1, PEN_TAGS).value == "PENDING BENCHMARK"
     for c in list(range(1, PROJECT + 1)) + [CYC_START, CYC_END]:
         assert ws.cell(1, c).value is None
-    # Exactly 28 columns: nothing in col 29.
+    # Exactly 29 columns: nothing in col 30.
     assert ws.cell(2, LAST_COL + 1).value is None
 
     assert {str(m) for m in ws.merged_cells.ranges} == EXPECTED_MERGES
-    assert ws.auto_filter.ref == "A2:AB4"
+    assert ws.auto_filter.ref == "A2:AC4"
 
     # Detail row, then its sub-activity TOTAL. No employee grand total.
     d = _detail_row(ws, "E-1 - Test User", "FMTL", cycle_start)
@@ -691,7 +697,7 @@ def test_no_full_row_is_ever_coloured(client, setup_author, activity_admin):
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("E") for coord in filled), filled
+    assert all(coord.startswith("F") for coord in filled), filled
     assert set(filled.values()) <= {RED, GREEN}
 
 
@@ -971,7 +977,7 @@ def test_worksheet_configuration_matches_reference(client, setup_author, activit
     assert {str(m) for m in ws.merged_cells.ranges} == EXPECTED_MERGES
     assert ws.freeze_panes == "A3"
     assert ws.auto_filter.ref.startswith("A2:")
-    assert ws.auto_filter.ref == f"A2:AB{ws.max_row}"
+    assert ws.auto_filter.ref == f"A2:AC{ws.max_row}"
     assert ws.row_dimensions[1].height == 15.0
     assert ws.row_dimensions[2].height == 25.5
     assert ws.sheet_format.defaultRowHeight == 15.0
@@ -1291,9 +1297,9 @@ def test_textual_task_beside_pages_gets_no_subtotal_and_blank_f_g(
     assert ws.cell(t, ACH).value == 0.8
 
 
-def test_only_column_e_is_ever_filled_across_six_units(client, setup_author, activity_admin):
+def test_only_difference_column_is_ever_filled_across_six_units(client, setup_author, activity_admin):
     """Sheet-wide colour audit with PAGES and RECORDS in play: outside the yellow
-    header, the ONLY filled cells in the whole workbook are DIFFERENCE % cells (column E),
+    header, the ONLY filled cells in the whole workbook are DIFFERENCE % cells (column F),
     and they only ever carry the two approved colours."""
     a = setup_author()
     _, pages_sub = _make_daily_sub(
@@ -1314,9 +1320,9 @@ def test_only_column_e_is_ever_filled_across_six_units(client, setup_author, act
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("E") for coord in filled), filled
+    assert all(coord.startswith("F") for coord in filled), filled
     assert set(filled.values()) <= {RED, GREEN}
-    # The header keeps its yellow across all 28 columns. Row 1's merged
+    # The header keeps its yellow across all 29 columns. Row 1's merged
     # continuation cells hold no style of their own (Excel paints the anchor's
     # fill across the span), so only the anchors are checked there.
     anchors = (TGT_TAGS, ACT_TAGS, PEN_TAGS)
@@ -1326,11 +1332,13 @@ def test_only_column_e_is_ever_filled_across_six_units(client, setup_author, act
         assert _fill(ws.cell(2, c)) == HEADER_YELLOW, ws.cell(2, c).coordinate
 
 
-# --- Phase 4.1: DAY REMARKS column + current-plus-three-cycle selection ------
+# --- Phase 4.1: REMARKS column + current-plus-three-cycle selection ----------
 #
-# DAY REMARKS (G) carries WorkReport.remarks - the employee's own remark for
-# that report DATE. It is NOT ActivityMaster.benchmark_remarks (guidance TO the
-# employee, e.g. "500 REQUIRED PAGES/DAY"), which must never appear here.
+# REMARKS (H) carries WorkReport.remarks for full-day rows - the employee's own
+# remark for that report DATE (split-day rows carry their period remarks; see
+# test_pending_export_day_parts.py). It is NOT ActivityMaster.benchmark_remarks
+# (guidance TO the employee, e.g. "500 REQUIRED PAGES/DAY"), which must never
+# appear here.
 
 def _submit_with_remarks(client, header, project_id, sub_id, report_date, qty,
                          remarks, count_field="tags"):
@@ -1349,25 +1357,27 @@ def _submit_with_remarks(client, header, project_id, sub_id, report_date, qty,
     assert res.status_code == 200, res.text
 
 
-def test_day_remarks_is_column_g_and_project_is_column_h(client, setup_author, activity_admin):
-    """Header positions the reorder must hold: ACTIVITY C, ACHIEVEMENT D,
-    DIFFERENCE E, SUB ACTIVITY F, DAY REMARKS G, PROJECT H, groups from I."""
+def test_remarks_is_column_h_and_project_is_column_i(client, setup_author, activity_admin):
+    """Header positions the reorder must hold: DAY PART C, ACTIVITY D,
+    ACHIEVEMENT E, DIFFERENCE F, SUB ACTIVITY G, REMARKS H, PROJECT I,
+    groups from J."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
     _submit(client, a["header"], a["project"].id, sub["id"], cycle_start, 80)
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
-    assert ws.cell(2, 3).value == "ACTIVITY"
-    assert ws.cell(2, 4).value == "ACHIEVEMENT %"
-    assert ws.cell(2, 5).value == "DIFFERENCE %"
-    assert ws.cell(2, 6).value == "SUB ACTIVITY"
-    assert ws.cell(2, 7).value == "DAY REMARKS"
-    assert ws.cell(2, 8).value == "PROJECT CODE & TITLE"
-    # The unit groups start at I (column 9) and the sheet ends at AB (28).
-    assert ws.cell(1, 9).value == "BENCHMARK TARGET"
-    assert get_column_letter(ws.max_column) == "AB"
-    assert {str(m) for m in ws.merged_cells.ranges} == {"I1:N1", "O1:T1", "U1:Z1"}
+    assert ws.cell(2, 3).value == "DAY PART"
+    assert ws.cell(2, 4).value == "ACTIVITY"
+    assert ws.cell(2, 5).value == "ACHIEVEMENT %"
+    assert ws.cell(2, 6).value == "DIFFERENCE %"
+    assert ws.cell(2, 7).value == "SUB ACTIVITY"
+    assert ws.cell(2, 8).value == "REMARKS"
+    assert ws.cell(2, 9).value == "PROJECT CODE & TITLE"
+    # The unit groups start at J (column 10) and the sheet ends at AC (29).
+    assert ws.cell(1, 10).value == "BENCHMARK TARGET"
+    assert get_column_letter(ws.max_column) == "AC"
+    assert {str(m) for m in ws.merged_cells.ranges} == {"J1:O1", "P1:U1", "V1:AA1"}
     assert ws.freeze_panes == "A3"
 
 
@@ -1438,11 +1448,11 @@ def test_blank_and_whitespace_remarks_stay_blank(client, setup_author, activity_
     assert ws.cell(_detail_row(ws, label, "FMTL", day2), REMARKS).value is None
 
 
-def test_total_row_has_blank_day_remarks_and_total_in_column_h(
+def test_total_row_has_blank_remarks_and_total_in_column_i(
     client, setup_author, activity_admin
 ):
-    """A TOTAL row spans the cycle, not one day, so DAY REMARKS is blank and the
-    TOTAL marker sits in PROJECT (column H) with the percentages in D and E."""
+    """A TOTAL row spans the cycle, not one day, so REMARKS is blank and the
+    TOTAL marker sits in PROJECT (column I) with the percentages in E and F."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
@@ -1457,8 +1467,8 @@ def test_total_row_has_blank_day_remarks_and_total_in_column_h(
     assert ws.cell(t, ACH).value == 0.8              # D
     assert ws.cell(t, DIFF).value == pytest.approx(0.2)   # E
     assert ws.cell(t, SUB).value == "FMTL"           # F
-    assert ws.cell(t, REMARKS).value is None         # G blank on a total
-    assert ws.cell(t, PROJECT).value == "TOTAL"      # H marker
+    assert ws.cell(t, REMARKS).value is None         # H blank on a total
+    assert ws.cell(t, PROJECT).value == "TOTAL"      # I marker
     assert ws.cell(t, ACH).number_format == "0.00%"
     assert ws.cell(t, DIFF).number_format == "0.00%"
     assert _fill(ws.cell(t, DIFF)) == RED
@@ -1496,7 +1506,7 @@ def test_day_remarks_never_carries_benchmark_remarks(client, db, setup_author, a
 
 
 def test_day_remarks_cell_wraps_and_is_top_aligned(client, setup_author, activity_admin):
-    """Free-text remarks wrap inside column G rather than spilling across the
+    """Free-text remarks wrap inside column H rather than spilling across the
     unit columns."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
@@ -1509,7 +1519,7 @@ def test_day_remarks_cell_wraps_and_is_top_aligned(client, setup_author, activit
     cell = ws.cell(d, REMARKS)
     assert cell.alignment.wrap_text is True
     assert cell.alignment.vertical == "top"
-    assert ws.column_dimensions["G"].width == 50.0
+    assert ws.column_dimensions["H"].width == 50.0
 
 
 # --- cycle selection: current plus the previous three ------------------------
