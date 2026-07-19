@@ -2024,6 +2024,8 @@ export interface components {
              * Format: uuid
              */
             report_id: string;
+            /** Period Id */
+            period_id?: string | null;
             /**
              * Project Id
              * Format: uuid
@@ -2081,6 +2083,8 @@ export interface components {
             employee_id: string;
             /** Report Id */
             report_id: string | null;
+            /** Period Id */
+            period_id?: string | null;
             /**
              * Project Id
              * Format: uuid
@@ -2147,6 +2151,8 @@ export interface components {
             current_activity_name?: string | null;
             /** Current Sub Activity Name */
             current_sub_activity_name?: string | null;
+            /** Day Part */
+            day_part?: string | null;
         };
         /**
          * ActivityRequestStatus
@@ -2574,6 +2580,11 @@ export interface components {
             benchmark_unit: string | null;
         };
         /**
+         * DayPart
+         * @enum {string}
+         */
+        DayPart: "full_day" | "first_half" | "second_half";
+        /**
          * DayStatus
          * @enum {string}
          */
@@ -2768,6 +2779,15 @@ export interface components {
             pending_count: number;
             /** Pending Dates */
             pending_dates: string[];
+            /** Reported Work Fraction Today */
+            reported_work_fraction_today?: number | null;
+            /** Attendance Work Fraction Today */
+            attendance_work_fraction_today?: number | null;
+            /**
+             * Fraction Mismatch Today
+             * @default false
+             */
+            fraction_mismatch_today: boolean;
         };
         /** EmployeeCreate */
         EmployeeCreate: {
@@ -3898,6 +3918,14 @@ export interface components {
             /** Planned Completion Date */
             planned_completion_date?: string | null;
         };
+        /**
+         * ReportMode
+         * @description How the report's day is divided (migration 0060). full_day = one
+         *     Full-Day period; split_day = a First-Half + a Second-Half period. Always
+         *     exactly ONE report header per (employee, date) either way.
+         * @enum {string}
+         */
+        ReportMode: "full_day" | "split_day";
         /** ReportScopeActivity */
         ReportScopeActivity: {
             /**
@@ -4476,6 +4504,9 @@ export interface components {
              * Format: date
              */
             report_date: string;
+            report_mode?: components["schemas"]["ReportMode"] | null;
+            /** Periods */
+            periods?: components["schemas"]["WorkReportPeriodIn"][] | null;
             day_status?: components["schemas"]["DayStatus"] | null;
             location?: components["schemas"]["WorkLocation"] | null;
             /** Remarks */
@@ -4524,6 +4555,16 @@ export interface components {
              */
             report_date: string;
             status: components["schemas"]["WorkReportStatus"];
+            /**
+             * Report Mode
+             * @default full_day
+             */
+            report_mode: string;
+            /**
+             * Periods
+             * @default []
+             */
+            periods: components["schemas"]["WorkReportPeriodOut"][];
             day_status?: components["schemas"]["DayStatus"] | null;
             location?: components["schemas"]["WorkLocation"] | null;
             /** Remarks */
@@ -4594,6 +4635,48 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /**
+         * WorkReportPeriodIn
+         * @description One reporting period of a split-day (or explicit full-day) payload.
+         *
+         *     There is deliberately NO work_fraction field: fractions are server-derived
+         *     from day_part (full_day 1.0, halves 0.5) and can never be client-supplied.
+         */
+        WorkReportPeriodIn: {
+            day_part: components["schemas"]["DayPart"];
+            period_status: components["schemas"]["DayStatus"];
+            location?: components["schemas"]["WorkLocation"] | null;
+            /** Remarks */
+            remarks?: string | null;
+            /** Tasks */
+            tasks?: components["schemas"]["WorkReportTaskIn"][];
+        };
+        /** WorkReportPeriodOut */
+        WorkReportPeriodOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Day Part */
+            day_part: string;
+            period_status?: components["schemas"]["DayStatus"] | null;
+            location?: components["schemas"]["WorkLocation"] | null;
+            /** Remarks */
+            remarks?: string | null;
+            /** Work Fraction */
+            work_fraction: string;
+            /**
+             * Is Legacy Half Day
+             * @default false
+             */
+            is_legacy_half_day: boolean;
+            /**
+             * Tasks
+             * @default []
+             */
+            tasks: components["schemas"]["WorkReportTaskOut"][];
         };
         /**
          * WorkReportStatus
@@ -4685,6 +4768,10 @@ export interface components {
              * Format: uuid
              */
             project_id: string;
+            /** Period Id */
+            period_id?: string | null;
+            /** Day Part */
+            day_part?: string | null;
             /** Project Name */
             project_name?: string | null;
             /** Project Code */
@@ -4737,6 +4824,10 @@ export interface components {
             activity_name?: string | null;
             /** Benchmark Value Snapshot */
             benchmark_value_snapshot?: string | null;
+            /** Benchmark Base Value Snapshot */
+            benchmark_base_value_snapshot?: string | null;
+            /** Benchmark Fraction Snapshot */
+            benchmark_fraction_snapshot?: string | null;
             /** Benchmark Period Days Snapshot */
             benchmark_period_days_snapshot?: number | null;
             /** Benchmark Type Snapshot */
@@ -4805,6 +4896,9 @@ export interface components {
         };
         /** WorkReportUpdate */
         WorkReportUpdate: {
+            report_mode?: components["schemas"]["ReportMode"] | null;
+            /** Periods */
+            periods?: components["schemas"]["WorkReportPeriodIn"][] | null;
             day_status?: components["schemas"]["DayStatus"] | null;
             location?: components["schemas"]["WorkLocation"] | null;
             /** Remarks */

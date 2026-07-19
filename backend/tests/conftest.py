@@ -63,7 +63,8 @@ def _clean_state():
         db.execute(
             text(
                 "TRUNCATE TABLE audit_logs, notifications, tasks, work_report_tasks, "
-                "work_items, daily_work_reports, attendance_records, leave_requests, "
+                "work_report_periods, work_items, daily_work_reports, "
+                "attendance_records, leave_requests, "
                 "project_managers, project_members, projects, company_calendar_events, "
                 "activity_types, activity_master, maintenance_plants, planning_plants, "
                 "job_codes, employees, offices, users "
@@ -84,11 +85,14 @@ def _default_feature_flags():
     from app.core.config import settings
 
     prev = settings.TASK_CONTINUATION_ENABLED
+    prev_day_parts = settings.REPORT_DAY_PARTS_ENABLED
     settings.TASK_CONTINUATION_ENABLED = False
+    settings.REPORT_DAY_PARTS_ENABLED = False
     try:
         yield
     finally:
         settings.TASK_CONTINUATION_ENABLED = prev
+        settings.REPORT_DAY_PARTS_ENABLED = prev_day_parts
 
 
 @pytest.fixture()

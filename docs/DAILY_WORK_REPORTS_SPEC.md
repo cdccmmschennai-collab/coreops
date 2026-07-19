@@ -260,3 +260,24 @@ Defaults (the *recommended* option) apply where not answered.
 
 No code until this spec is approved. On approval, implementation begins at §10 step 1 (models),
 one small commit per step, with a per-step report.
+
+---
+
+## 13. Addendum — Full-Day / Split-Day periods (2026-07-19)
+
+A report header now carries `report_mode` (`full_day` | `split_day`) and owns
+one or two `work_report_periods` child rows (`full_day`, or `first_half` +
+`second_half`) — still exactly ONE header per (employee, report_date). Each
+period has its own status/location/remarks and a SERVER-derived
+`work_fraction` (1.0 / 0.5) that scales NUMERIC benchmark targets
+(`effective = base × fraction`, frozen at submit into
+`benchmark_base_value_snapshot` / `benchmark_fraction_snapshot` /
+`benchmark_value_snapshot`). Legacy full-day payloads translate into one
+Full-Day period; historical `half_day` reports are backfilled as legacy
+Full-Day periods at fraction 0.5 without guessing the worked half. Feature
+flags: `REPORT_DAY_PARTS_ENABLED` / `NEXT_PUBLIC_REPORT_DAY_PARTS_ENABLED`
+(both default off; behaviour is byte-identical while off).
+
+Full design + file-by-file plan:
+`docs/superpowers/plans/2026-07-19-split-day-work-reports.md`
+(migration `0060_work_report_periods`).

@@ -85,6 +85,29 @@ class WorkLocation(str, enum.Enum):
     qatar = "qatar"
 
 
+class ReportMode(str, enum.Enum):
+    """How the report's day is divided (migration 0060). full_day = one
+    Full-Day period; split_day = a First-Half + a Second-Half period. Always
+    exactly ONE report header per (employee, date) either way."""
+
+    full_day = "full_day"
+    split_day = "split_day"
+
+
+class DayPart(str, enum.Enum):
+    full_day = "full_day"
+    first_half = "first_half"
+    second_half = "second_half"
+
+
+# Server-derived benchmark fraction per day part — never client-supplied.
+DAY_PART_FRACTIONS: dict[DayPart, Decimal] = {
+    DayPart.full_day: Decimal("1.0"),
+    DayPart.first_half: Decimal("0.5"),
+    DayPart.second_half: Decimal("0.5"),
+}
+
+
 class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "daily_work_reports"
 
@@ -92,6 +115,11 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="RESTRICT"), nullable=False
     )
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Full-Day vs Split-Day (migration 0060). VARCHAR + CHECK (not a PG enum),
+    # following the activity_requests.status precedent.
+    report_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=ReportMode.full_day.value
+    )
     status: Mapped[WorkReportStatus] = mapped_column(
         SAEnum(
             WorkReportStatus,
@@ -152,9 +180,75 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
         CheckConstraint(
             "total_minutes >= 0 AND total_minutes <= 1440", name="work_reports_total_minutes_range"
         ),
+        CheckConstraint(
+            "report_mode IN ('full_day', 'split_day')",
+            name="work_reports_report_mode_valid",
+        ),
         Index("work_reports_employee_idx", "employee_id", "report_date"),
         Index("work_reports_status_idx", "status"),
         Index("work_reports_date_idx", "report_date"),
+    )
+
+
+class WorkReportPeriod(UUIDMixin, TimestampMixin, Base):
+    """One reporting period of a Daily Work Report (migration 0060).
+
+    A full_day report owns exactly one 'full_day' period; a split_day report
+    owns exactly 'first_half' + 'second_half' (enforced in the service layer;
+    the (report_id, day_part) unique constraint makes duplicates impossible at
+    the DB level). period_status / location reuse the header's enum types so
+    periods and headers stay one taxonomy.
+
+    work_fraction is SERVER-DERIVED from day_part (1.0 full day, 0.5 per half)
+    and never client-supplied. is_legacy_half_day marks the one exception:
+    periods backfilled from historical day_status='half_day' reports keep
+    day_part='full_day' with work_fraction=0.5, because which half was worked
+    was never recorded and is deliberately not guessed.
+    """
+
+    __tablename__ = "work_report_periods"
+
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("daily_work_reports.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    day_part: Mapped[str] = mapped_column(String(20), nullable=False)
+    period_status: Mapped[DayStatus | None] = mapped_column(
+        SAEnum(
+            DayStatus,
+            name="day_status",
+            values_callable=lambda e: [m.value for m in e],
+            create_type=False,
+        ),
+        nullable=True,
+    )
+    location: Mapped[WorkLocation | None] = mapped_column(
+        SAEnum(
+            WorkLocation,
+            name="work_location",
+            values_callable=lambda e: [m.value for m in e],
+            create_type=False,
+        ),
+        nullable=True,
+    )
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    work_fraction: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False)
+    is_legacy_half_day: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "day_part IN ('full_day', 'first_half', 'second_half')",
+            name="work_report_periods_day_part_valid",
+        ),
+        CheckConstraint(
+            "work_fraction IN (0.5, 1.0)",
+            name="work_report_periods_fraction_valid",
+        ),
+        UniqueConstraint("report_id", "day_part", name="work_report_periods_report_part_uq"),
+        Index("work_report_periods_report_idx", "report_id"),
     )
 
 
@@ -237,6 +331,14 @@ class WorkReportTask(UUIDMixin, Base):
         ForeignKey("daily_work_reports.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # The reporting period this row belongs to (migration 0060). NULL only for
+    # rows written by pre-period code in the deploy gap — read paths fall back
+    # to treating such rows as full-day (legacy half_day rule applies).
+    period_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("work_report_periods.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False
     )
@@ -266,7 +368,17 @@ class WorkReportTask(UUIDMixin, Base):
     activity_name: Mapped[str | None] = mapped_column(Text, nullable=True)  # snapshot (parent)
     # Frozen at submit time (submit_work_report -> _apply_benchmarks). Never
     # recomputed on draft save — only when the report is (re)submitted.
+    # benchmark_value_snapshot = the EFFECTIVE target after applying the
+    # period fraction (base x fraction); the two columns below record the
+    # derivation (migration 0060). Historical rows: base = effective / fraction
+    # backfilled, effective preserved bit-for-bit.
     benchmark_value_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    benchmark_base_value_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    benchmark_fraction_snapshot: Mapped[Decimal | None] = mapped_column(
+        Numeric(3, 2), nullable=True
+    )
     benchmark_period_days_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     benchmark_type_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Which of tags_count/docs_count/bom_count/spares_count fed the benchmark
@@ -331,6 +443,7 @@ class WorkReportTask(UUIDMixin, Base):
             name="work_report_tasks_minutes_range",
         ),
         Index("work_report_tasks_report_idx", "report_id"),
+        Index("work_report_tasks_period_idx", "period_id"),
         Index("work_report_tasks_project_idx", "project_id"),
         Index("work_report_tasks_sub_activity_idx", "sub_activity_id"),
         Index("work_report_tasks_maintenance_plant_idx", "maintenance_plant_id"),

@@ -23,7 +23,13 @@ from sqlalchemy.orm import Session
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.employees.service import _current_employee
 from app.modules.users.models import User
-from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus
+from app.modules.work_reports.models import (
+    NO_ACTIVITY_DAY_STATUSES,
+    DailyWorkReport,
+    DayStatus,
+    WorkReportPeriod,
+    WorkReportStatus,
+)
 
 # Attendance statuses that imply the employee worked and therefore owes a report.
 WORKED_STATUSES = (AttendanceStatus.present, AttendanceStatus.half_day)
@@ -68,6 +74,60 @@ def _submitted_report_dates(
     return set(rows)
 
 
+def _reported_work_fraction(
+    db: Session, employee_id: uuid.UUID, day: date
+) -> float | None:
+    """Summed working-period fractions of the employee's SUBMITTED report for
+    `day` (split-day, migration 0060). Working = the period's status is a
+    working one. A report without period rows (pre-period data) falls back to
+    the header: leave-type day statuses 0.0, half_day 0.5, else 1.0. None when
+    no submitted report exists."""
+    report = db.execute(
+        select(DailyWorkReport).where(
+            DailyWorkReport.employee_id == employee_id,
+            DailyWorkReport.report_date == day,
+            DailyWorkReport.status == WorkReportStatus.submitted,
+        )
+    ).scalar_one_or_none()
+    if report is None:
+        return None
+    periods = db.execute(
+        select(WorkReportPeriod).where(WorkReportPeriod.report_id == report.id)
+    ).scalars().all()
+    if not periods:
+        if report.day_status in NO_ACTIVITY_DAY_STATUSES:
+            return 0.0
+        return 0.5 if report.day_status == DayStatus.half_day else 1.0
+    total = 0.0
+    for p in periods:
+        working = (
+            p.period_status is not None
+            and p.period_status not in NO_ACTIVITY_DAY_STATUSES
+        )
+        if working:
+            total += float(p.work_fraction)
+    return total
+
+
+def _attendance_work_fraction(
+    db: Session, employee_id: uuid.UUID, day: date
+) -> float | None:
+    """Work fraction the attendance record implies: present 1.0, half_day 0.5,
+    anything else (or no record) None. Attendance does not record WHICH half
+    was worked — callers may only compare magnitudes, never halves."""
+    status = db.execute(
+        select(AttendanceRecord.status).where(
+            AttendanceRecord.employee_id == employee_id,
+            AttendanceRecord.attendance_date == day,
+        )
+    ).scalar_one_or_none()
+    if status == AttendanceStatus.present:
+        return 1.0
+    if status == AttendanceStatus.half_day:
+        return 0.5
+    return None
+
+
 def employee_compliance(db: Session, actor: User) -> dict:
     """Own compliance snapshot. Users without an employee profile (or who never
     have attendance) simply see an all-clear result."""
@@ -79,6 +139,9 @@ def employee_compliance(db: Session, actor: User) -> dict:
             "has_report_today": False,
             "pending_count": 0,
             "pending_dates": [],
+            "reported_work_fraction_today": None,
+            "attendance_work_fraction_today": None,
+            "fraction_mismatch_today": False,
         }
 
     window_start = _first_of_previous_month(today)
@@ -88,9 +151,23 @@ def employee_compliance(db: Session, actor: User) -> dict:
     # Previous working days (strictly before today) with attendance but no
     # submitted report — these are the "pending" reports the banner counts.
     pending = sorted(d for d in worked if d < today and d not in submitted)
+
+    # Split-day awareness (warn-only): one submitted header still satisfies the
+    # date-level requirement above, but a report whose working fraction doesn't
+    # match what attendance implies is flagged as possibly incomplete.
+    reported_fraction = _reported_work_fraction(db, me.id, today)
+    attendance_fraction = _attendance_work_fraction(db, me.id, today)
+    mismatch = (
+        reported_fraction is not None
+        and attendance_fraction is not None
+        and reported_fraction != attendance_fraction
+    )
     return {
         "has_attendance_today": today in worked,
         "has_report_today": today in submitted,
         "pending_count": len(pending),
         "pending_dates": pending,
+        "reported_work_fraction_today": reported_fraction,
+        "attendance_work_fraction_today": attendance_fraction,
+        "fraction_mismatch_today": mismatch,
     }

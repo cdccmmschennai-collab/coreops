@@ -19,7 +19,12 @@ from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.projects.models import Project, ProjectManager
 from app.modules.users.models import User, UserRole
-from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+from app.modules.work_reports.models import (
+    NO_ACTIVITY_DAY_STATUSES,
+    DailyWorkReport,
+    WorkReportPeriod,
+    WorkReportTask,
+)
 from app.shared.errors import AppError
 
 
@@ -105,6 +110,17 @@ def _attach_names(db: Session, requests: list[ActivityRequest]) -> None:
         .scalars().all()
     } if am_ids else {}
 
+    # The requested period's day part ("first_half"/"second_half"/"full_day")
+    # so the PM view can tag which half a split-day request targets.
+    period_ids = {r.period_id for r in requests if r.period_id}
+    day_part_by_period: dict[uuid.UUID, str] = {}
+    if period_ids:
+        day_part_by_period = dict(db.execute(
+            select(WorkReportPeriod.id, WorkReportPeriod.day_part).where(
+                WorkReportPeriod.id.in_(period_ids)
+            )
+        ).all())
+
     # The employee's current (first) activity in each request's report, so the
     # PM can compare "already logged" vs "requested". Take the earliest task row.
     report_ids = {r.report_id for r in requests if r.report_id}
@@ -133,6 +149,9 @@ def _attach_names(db: Session, requests: list[ActivityRequest]) -> None:
         r.activity_name = act.name if act else None  # type: ignore[attr-defined]
         r.sub_activity_name = sub.name if sub else ""  # type: ignore[attr-defined]
         r.task_title = None  # type: ignore[attr-defined]  # Task module removed; kept null for API back-compat
+        r.day_part = (  # type: ignore[attr-defined]
+            day_part_by_period.get(r.period_id) if r.period_id else None
+        )
 
         current = first_task_by_report.get(r.report_id) if r.report_id else None
         r.current_project_name = current.project_name if current else None  # type: ignore[attr-defined]
@@ -206,9 +225,25 @@ def create_request(
             422,
         )
 
+    # Split-day reports: the request may target a specific reporting period so
+    # the approved activity lands in the right half. Must be one of THIS
+    # report's periods and a working one — a leave/off half never takes
+    # project activities.
+    if data.period_id is not None:
+        period = db.get(WorkReportPeriod, data.period_id)
+        if period is None or period.report_id != report.id:
+            raise AppError(
+                "validation_error", "The selected period does not belong to this report.", 422
+            )
+        if period.period_status is None or period.period_status in NO_ACTIVITY_DAY_STATUSES:
+            raise AppError(
+                "validation_error", "Activities cannot be added to a non-working period.", 422
+            )
+
     req = ActivityRequest(
         employee_id=employee.id,
         report_id=data.report_id,
+        period_id=data.period_id,
         project_id=data.project_id,
         activity_id=data.activity_id,
         sub_activity_id=data.sub_activity_id,
@@ -374,6 +409,29 @@ def _create_task_from_request(
     # TASK_BASED dates exactly as the normal add path does.
     from app.modules.work_reports.service import _task_based_dates, _validate_tasks
 
+    # Which period the approved row lands in: the request's own period when it
+    # is still valid, else the report's first WORKING period (split reports),
+    # else the report's only period (full-day / legacy). None only for a
+    # pre-period report — the row then stays unlinked like its siblings.
+    target_period_id = None
+    periods = db.execute(
+        select(WorkReportPeriod)
+        .where(WorkReportPeriod.report_id == report.id)
+        .order_by(WorkReportPeriod.created_at)
+    ).scalars().all()
+    if req.period_id is not None and any(p.id == req.period_id for p in periods):
+        target_period_id = req.period_id
+    else:
+        working = [
+            p for p in periods
+            if p.period_status is not None
+            and p.period_status not in NO_ACTIVITY_DAY_STATUSES
+        ]
+        if working:
+            target_period_id = working[0].id
+        elif periods:
+            target_period_id = periods[0].id
+
     row = SimpleNamespace(
         project_id=req.project_id,
         description="",
@@ -401,6 +459,7 @@ def _create_task_from_request(
     db.add(
         WorkReportTask(
             report_id=report.id,
+            period_id=target_period_id,
             project_id=row.project_id,
             description=row.description,
             minutes_spent=None,

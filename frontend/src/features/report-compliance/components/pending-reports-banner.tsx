@@ -26,7 +26,10 @@ export function PendingReportsBanner() {
   }, []);
 
   const count = data?.pending_count ?? 0;
-  if (dismissed || count < 1) return null;
+  // Warn-only: today's submitted report covers a different working fraction
+  // than attendance implies (e.g. half-day report on a full present day).
+  const mismatch = data?.fraction_mismatch_today === true;
+  if (dismissed || (count < 1 && !mismatch)) return null;
 
   function dismiss() {
     sessionStorage.setItem(DISMISS_KEY, "1");
@@ -38,7 +41,11 @@ export function PendingReportsBanner() {
       <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-2.5 md:px-8">
         <AlertTriangle className="h-4 w-4 shrink-0 text-warning" aria-hidden />
         <p className="min-w-0 flex-1 text-sm text-foreground">
-          You have {count} pending work report{count === 1 ? "" : "s"}.
+          {count >= 1 &&
+            `You have ${count} pending work report${count === 1 ? "" : "s"}.`}
+          {count >= 1 && mismatch && " "}
+          {mismatch &&
+            `Today's report covers ${Math.round((data?.reported_work_fraction_today ?? 0) * 100)}% of the day but attendance shows ${Math.round((data?.attendance_work_fraction_today ?? 0) * 100)}% worked — it may be incomplete.`}
         </p>
         <Button size="sm" asChild>
           <Link href="/work-reports">Submit Pending Reports</Link>

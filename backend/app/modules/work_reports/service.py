@@ -17,6 +17,7 @@ Manager "team" = employees whose manager_id == the manager's employee id.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from itertools import groupby
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -44,9 +45,13 @@ from app.modules.projects.models import (
 )
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
+    DAY_PART_FRACTIONS,
     NO_ACTIVITY_DAY_STATUSES,
     DailyWorkReport,
+    DayPart,
     DayStatus,
+    ReportMode,
+    WorkReportPeriod,
     WorkReportStatus,
     WorkReportTask,
 )
@@ -54,6 +59,7 @@ from app.modules.work_reports.schemas import (
     TaskCompletionUpdate,
     WorkReportCreate,
     WorkReportEditRequest,
+    WorkReportPeriodIn,
     WorkReportStatusFilter,
     WorkReportUpdate,
 )
@@ -193,6 +199,9 @@ def _decorate(
     # rows the viewer isn't allowed to see.
     if actor.role != UserRole.project_manager and me is not None:
         _restrict_to_led_rows(db, actor, me.id, reviewable, reports)
+    # Periods are attached AFTER the Lead row-trim so a Lead-scoped report's
+    # periods expose only the led rows (period metadata itself is not secret).
+    _attach_periods(db, reports)
     for r in reports:
         r.can_review = (
             me is not None
@@ -481,6 +490,15 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
     by_report: dict[uuid.UUID, list[WorkReportTask]] = {r.id: [] for r in reports}
     report_by_id = {r.id: r for r in reports}
     today = _today()
+    # day_part per row (display): resolved from the row's period link.
+    period_parts: dict[uuid.UUID, str] = {}
+    pids = {row.period_id for row in rows if row.period_id is not None}
+    if pids:
+        period_parts = dict(db.execute(
+            select(WorkReportPeriod.id, WorkReportPeriod.day_part).where(
+                WorkReportPeriod.id.in_(pids)
+            )
+        ).all())
     # Batched reads for the work-item-linked rows: the items themselves, the
     # latest linked entry date per item (completion is only offered on the most
     # recent report), and the report where each completed item was completed.
@@ -506,6 +524,7 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
     for row in rows:
         # Transient, computed fresh on every read (never stored) — same
         # pattern as report.can_review below.
+        row.day_part = period_parts.get(row.period_id)
         row.is_overdue, row.days_overdue = compute_overdue(row.due_date, row.is_completed, today)
         row.work_item_lifecycle = None
         # Explicit daily vs overall completion fields (default: legacy / non-item).
@@ -1009,6 +1028,345 @@ def get_report_scope(db: Session, actor: User) -> dict:
     }
 
 
+# ---------- periods (Full-Day / Split-Day, migration 0060) -----------------
+_DAY_PART_ORDER = {
+    DayPart.full_day.value: 0,
+    DayPart.first_half.value: 1,
+    DayPart.second_half.value: 2,
+}
+_HALF_PARTS = {DayPart.first_half, DayPart.second_half}
+
+_DAY_PART_LABELS = {
+    DayPart.full_day.value: "Full Day",
+    DayPart.first_half.value: "First Half",
+    DayPart.second_half.value: "Second Half",
+}
+
+
+def _is_working_status(status: DayStatus | None) -> bool:
+    """A period with a leave-type status (or none yet) carries no project work."""
+    return status is not None and status not in NO_ACTIVITY_DAY_STATUSES
+
+
+def _full_day_fraction(status: DayStatus | None) -> tuple[Decimal, bool]:
+    """(work_fraction, is_legacy_half_day) for a Full-Day period.
+
+    day_status='half_day' is the LEGACY way of reporting a half-worked day —
+    a Full-Day period at fraction 0.5 whose worked half is unknown. Split-day
+    reports express the same thing precisely and never use it."""
+    if status == DayStatus.half_day:
+        return Decimal("0.5"), True
+    return Decimal("1.0"), False
+
+
+def _normalize_periods(
+    report_mode: ReportMode | None,
+    periods: list[WorkReportPeriodIn] | None,
+    *,
+    day_status: DayStatus | None,
+    location,
+    tasks,
+) -> dict:
+    """Translate either payload shape into one normalized structure.
+
+    Legacy payload (periods is None): one Full-Day period built from the
+    header fields — the pre-split behaviour, byte-identical, regardless of the
+    feature flag. Periods payload: validated against the split-day invariants;
+    split_day additionally requires REPORT_DAY_PARTS_ENABLED.
+
+    Returns {"report_mode", "day_status", "location", "periods": [spec]} where
+    each spec is {"day_part", "period_status", "location", "remarks",
+    "work_fraction", "is_legacy_half_day", "tasks"} with the fraction always
+    SERVER-derived (clients cannot supply one — the schema has no such field).
+    Header day_status/location are derived so every legacy reader (exports,
+    compliance, reminders, ledger fallback) stays coherent:
+      - full-day mode: the period's own status/location;
+      - split, one half working: day_status = half_day + the working half's
+        location;
+      - split, both halves working: the first half's status/location.
+    """
+    if periods is None:
+        # Legacy full-day payload. Leave-type day statuses drop any task lines
+        # (existing leniency, unchanged).
+        no_activity = day_status in NO_ACTIVITY_DAY_STATUSES
+        period_tasks = [] if no_activity else list(tasks or [])
+        fraction, legacy_half = _full_day_fraction(day_status)
+        if report_mode == ReportMode.split_day:
+            raise AppError(
+                "validation_error",
+                "A split-day report must supply its First-Half and Second-Half periods.",
+                422,
+            )
+        # Header AND period keep the location exactly as sent (legacy parity —
+        # the old code never nulled it, even on leave-type days).
+        return {
+            "report_mode": ReportMode.full_day,
+            "day_status": day_status,
+            "location": location,
+            "periods": [{
+                "day_part": DayPart.full_day,
+                "period_status": day_status,
+                "location": location,
+                "remarks": None,
+                "work_fraction": fraction,
+                "is_legacy_half_day": legacy_half,
+                "tasks": period_tasks,
+            }],
+        }
+
+    parts = [p.day_part for p in periods]
+    if len(set(parts)) != len(parts):
+        raise AppError("validation_error", "Duplicate reporting periods.", 422)
+    part_set = set(parts)
+    if part_set == {DayPart.full_day}:
+        mode = ReportMode.full_day
+    elif part_set == _HALF_PARTS:
+        mode = ReportMode.split_day
+    else:
+        raise AppError(
+            "validation_error",
+            "A report is either one Full-Day period or exactly a First-Half "
+            "and a Second-Half period.",
+            422,
+        )
+    if report_mode is not None and report_mode != mode:
+        raise AppError(
+            "validation_error", "report_mode does not match the supplied periods.", 422
+        )
+    if mode == ReportMode.split_day and not settings.REPORT_DAY_PARTS_ENABLED:
+        raise AppError("validation_error", "Split-day reports are not enabled.", 422)
+
+    specs: list[dict] = []
+    for p in sorted(periods, key=lambda x: _DAY_PART_ORDER[x.day_part.value]):
+        if p.day_part in _HALF_PARTS and p.period_status == DayStatus.half_day:
+            raise AppError(
+                "validation_error",
+                "'Half Day' is not a valid status for a half period — pick the "
+                "half's own working or leave status.",
+                422,
+            )
+        working = _is_working_status(p.period_status)
+        if p.day_part == DayPart.full_day:
+            fraction, legacy_half = _full_day_fraction(p.period_status)
+        else:
+            fraction, legacy_half = DAY_PART_FRACTIONS[p.day_part], False
+        specs.append({
+            "day_part": p.day_part,
+            "period_status": p.period_status,
+            "location": p.location if working else None,
+            "remarks": p.remarks,
+            "work_fraction": fraction,
+            "is_legacy_half_day": legacy_half,
+            # A non-working period carries no project activity rows — any sent
+            # anyway are dropped (same leniency as the legacy leave-type path).
+            "tasks": list(p.tasks) if working else [],
+        })
+
+    working_specs = [s for s in specs if _is_working_status(s["period_status"])]
+    if mode == ReportMode.split_day:
+        if not working_specs:
+            raise AppError(
+                "validation_error",
+                "Both halves are non-working — file a Full Day report with the "
+                "matching day status instead.",
+                422,
+            )
+        if len(working_specs) == 1:
+            header_status = DayStatus.half_day
+        else:
+            header_status = specs[0]["period_status"]
+        header_location = working_specs[0]["location"]
+    else:
+        header_status = specs[0]["period_status"]
+        header_location = specs[0]["location"]
+
+    return {
+        "report_mode": mode,
+        "day_status": header_status,
+        "location": header_location,
+        "periods": specs,
+    }
+
+
+def _insert_period_tasks(
+    db: Session,
+    report: DailyWorkReport,
+    period_specs: list[dict],
+    snapshots: list[dict],
+    *,
+    seen_work_items: set,
+    legacy_completed_dates: dict | None = None,
+    existing_links: set | None = None,
+) -> None:
+    """Create the period rows + their task rows for a report whose old rows (if
+    any) have already been removed. `snapshots` is _validate_tasks output for
+    the flattened task list, in period order."""
+    snap_iter = iter(snapshots)
+    for spec in period_specs:
+        period = WorkReportPeriod(
+            report_id=report.id,
+            day_part=spec["day_part"].value,
+            period_status=spec["period_status"],
+            location=spec["location"],
+            remarks=spec["remarks"],
+            work_fraction=spec["work_fraction"],
+            is_legacy_half_day=spec["is_legacy_half_day"],
+        )
+        db.add(period)
+        db.flush()
+        for task in spec["tasks"]:
+            snap = next(snap_iter)
+            life = _lifecycle_row_kwargs(
+                db, report, task, snap,
+                seen=seen_work_items,
+                legacy_completed_dates=legacy_completed_dates,
+                existing_links=existing_links,
+            )
+            _add_task_row(db, report, period.id, task, snap, life)
+
+
+def _add_task_row(
+    db: Session,
+    report: DailyWorkReport,
+    period_id: uuid.UUID | None,
+    task,
+    snap: dict,
+    life: dict,
+) -> None:
+    """Insert one work_report_tasks row from its validated input + snapshots."""
+    db.add(
+        WorkReportTask(
+            report_id=report.id,
+            period_id=period_id,
+            project_id=task.project_id,
+            description=task.description,
+            minutes_spent=task.minutes_spent,
+            task_minutes_spent=task.task_minutes_spent,
+            activity_type=snap["activity_type"],
+            tags_count=task.tags_count,
+            docs_count=task.docs_count,
+            bom_count=task.bom_count,
+            spares_count=task.spares_count,
+            pages_count=task.pages_count,
+            records_count=task.records_count,
+            sub_activity_id=task.sub_activity_id,
+            sub_activity_name=snap["sub_activity_name"],
+            activity_name=snap["activity_name"],
+            started_date=life["started_date"],
+            due_date=life["due_date"],
+            is_completed=life["is_completed"],
+            completed_date=life["completed_date"],
+            work_item_id=life["work_item_id"],
+            maintenance_plant_id=task.maintenance_plant_id,
+            maintenance_plant_code=snap["maintenance_plant_code"],
+            maintenance_plant_description=snap["maintenance_plant_description"],
+            planning_plant_code=snap["planning_plant_code"],
+            planning_plant_description=snap["planning_plant_description"],
+            project_name=snap["project_name"],
+            project_code=snap["project_code"],
+            project_job_code_code=snap["project_job_code_code"],
+        )
+    )
+
+
+def _sync_legacy_full_day_period(
+    db: Session, report: DailyWorkReport
+) -> WorkReportPeriod:
+    """Bring the single Full-Day period of a legacy (header+tasks) write in
+    line with the header. Upserts the period; a report that was split_day and
+    is edited through the legacy payload collapses back to one Full-Day period
+    (the caller has already deleted the old task rows). Pre-period reports get
+    their period created here on first edit."""
+    period = db.execute(
+        select(WorkReportPeriod).where(
+            WorkReportPeriod.report_id == report.id,
+            WorkReportPeriod.day_part == DayPart.full_day.value,
+        )
+    ).scalar_one_or_none()
+    if period is None:
+        _replace_periods(db, report)
+        period = WorkReportPeriod(
+            report_id=report.id, day_part=DayPart.full_day.value
+        )
+    fraction, legacy_half = _full_day_fraction(report.day_status)
+    period.period_status = report.day_status
+    period.location = report.location
+    period.work_fraction = fraction
+    period.is_legacy_half_day = legacy_half
+    db.add(period)
+    db.flush()
+    report.report_mode = ReportMode.full_day.value
+    return period
+
+
+def _replace_periods(db: Session, report: DailyWorkReport) -> None:
+    """Drop the report's period rows. Task rows must already be gone (deleting
+    a period CASCADEs its tasks, so callers always clear tasks first to run the
+    work-item reconciliation before anything cascades)."""
+    db.execute(
+        delete(WorkReportPeriod).where(WorkReportPeriod.report_id == report.id)
+    )
+    db.flush()
+
+
+def _attach_periods(db: Session, reports: list[DailyWorkReport]) -> None:
+    """Attach each report's periods (with their — possibly Lead-trimmed — task
+    rows) as a transient `.periods` attribute, and stamp `day_part` on every
+    task row. Requires `.tasks` to be attached (and trimmed) first. A report
+    with no period rows (written by pre-period code in the deploy gap) simply
+    gets an empty list — readers fall back to the flat task list."""
+    if not reports:
+        return
+    ids = [r.id for r in reports]
+    rows = db.execute(
+        select(WorkReportPeriod).where(WorkReportPeriod.report_id.in_(ids))
+    ).scalars().all()
+    by_report: dict[uuid.UUID, list[WorkReportPeriod]] = {r.id: [] for r in reports}
+    part_by_period: dict[uuid.UUID, str] = {}
+    for p in rows:
+        by_report[p.report_id].append(p)
+        part_by_period[p.id] = p.day_part
+    for report in reports:
+        periods = sorted(
+            by_report[report.id], key=lambda p: _DAY_PART_ORDER.get(p.day_part, 9)
+        )
+        tasks_by_period: dict[uuid.UUID | None, list] = {}
+        for t in getattr(report, "tasks", []):
+            t.day_part = part_by_period.get(t.period_id)
+            tasks_by_period.setdefault(t.period_id, []).append(t)
+        for p in periods:
+            p.tasks = tasks_by_period.get(p.id, [])
+        report.periods = periods
+
+
+def _assert_periods_submittable(db: Session, report: DailyWorkReport) -> None:
+    """Every WORKING period must carry at least one activity row before the
+    report can be submitted. (Non-working periods can never carry tasks — the
+    write paths drop them.) Reports without period rows are covered by the
+    legacy day-level check in submit_work_report."""
+    periods = db.execute(
+        select(WorkReportPeriod).where(WorkReportPeriod.report_id == report.id)
+    ).scalars().all()
+    if not periods:
+        return
+    with_tasks = {
+        pid for (pid,) in db.execute(
+            select(WorkReportTask.period_id).where(
+                WorkReportTask.report_id == report.id,
+                WorkReportTask.period_id.is_not(None),
+            ).distinct()
+        ).all()
+    }
+    for p in periods:
+        if _is_working_status(p.period_status) and p.id not in with_tasks:
+            label = _DAY_PART_LABELS.get(p.day_part, p.day_part)
+            raise AppError(
+                "validation_error",
+                f"Add at least one activity to the {label} period before submitting.",
+                422,
+            )
+
+
 # ---------- author writes --------------------------------------------------
 def create_work_report(
     db: Session, actor: User, data: WorkReportCreate
@@ -1026,27 +1384,41 @@ def create_work_report(
             "conflict", "A work report for this date already exists.", 409
         )
 
-    # Leave-type day statuses (week off / leave / company holiday / comp-off)
-    # mean no project work was done — the report carries no task lines and is
-    # exempt from benchmark/overdue tracking. Any tasks the client sent are
-    # ignored; a working-day status still requires at least one activity.
-    no_activity = data.day_status in NO_ACTIVITY_DAY_STATUSES
-    tasks = [] if no_activity else list(data.tasks)
-    if not no_activity and not tasks:
+    # Normalize either payload shape (legacy full-day header+tasks, or the
+    # explicit periods list) into period specs; leave-type periods carry no
+    # task lines and are exempt from benchmark/overdue tracking. A working
+    # day/period still requires at least one activity.
+    norm = _normalize_periods(
+        data.report_mode,
+        data.periods,
+        day_status=data.day_status,
+        location=data.location,
+        tasks=data.tasks,
+    )
+    all_tasks = [t for spec in norm["periods"] for t in spec["tasks"]]
+    # Legacy parity: a period with NO status yet still owes activities (only an
+    # explicit leave-type status exempts it), so None counts as task-requiring.
+    requires_tasks = any(
+        spec["period_status"] not in NO_ACTIVITY_DAY_STATUSES
+        for spec in norm["periods"]
+    )
+    if requires_tasks and not all_tasks:
         raise AppError(
             "validation_error",
             "Add at least one activity, or choose a leave-type day status.",
             422,
         )
-    total, snapshots = _validate_tasks(db, me.id, tasks)
+    total, snapshots = _validate_tasks(db, me.id, all_tasks)
 
     report = DailyWorkReport(
         employee_id=me.id,
         report_date=data.report_date,
         status=WorkReportStatus.draft,
-        day_status=data.day_status,
-        location=data.location,
-        remarks=data.remarks,
+        report_mode=norm["report_mode"].value,
+        day_status=norm["day_status"],
+        location=norm["location"],
+        # Split-day remarks live on the periods; the header never mirrors them.
+        remarks=None if norm["report_mode"] == ReportMode.split_day else data.remarks,
         query_text=data.query_text,
         well_head_no=data.well_head_no,
         pm_plant=data.pm_plant,
@@ -1062,40 +1434,9 @@ def create_work_report(
     db.add(report)
     db.flush()
     seen_work_items: set = set()
-    for task, snap in zip(tasks, snapshots):
-        life = _lifecycle_row_kwargs(db, report, task, snap, seen=seen_work_items)
-        db.add(
-            WorkReportTask(
-                report_id=report.id,
-                project_id=task.project_id,
-                description=task.description,
-                minutes_spent=task.minutes_spent,
-                task_minutes_spent=task.task_minutes_spent,
-                activity_type=snap["activity_type"],
-                tags_count=task.tags_count,
-                docs_count=task.docs_count,
-                bom_count=task.bom_count,
-                spares_count=task.spares_count,
-                pages_count=task.pages_count,
-                records_count=task.records_count,
-                sub_activity_id=task.sub_activity_id,
-                sub_activity_name=snap["sub_activity_name"],
-                activity_name=snap["activity_name"],
-                started_date=life["started_date"],
-                due_date=life["due_date"],
-                is_completed=life["is_completed"],
-                completed_date=life["completed_date"],
-                work_item_id=life["work_item_id"],
-                maintenance_plant_id=task.maintenance_plant_id,
-                maintenance_plant_code=snap["maintenance_plant_code"],
-                maintenance_plant_description=snap["maintenance_plant_description"],
-                planning_plant_code=snap["planning_plant_code"],
-                planning_plant_description=snap["planning_plant_description"],
-                project_name=snap["project_name"],
-                project_code=snap["project_code"],
-                project_job_code_code=snap["project_job_code_code"],
-            )
-        )
+    _insert_period_tasks(
+        db, report, norm["periods"], snapshots, seen_work_items=seen_work_items
+    )
     try:
         db.commit()
     except IntegrityError:
@@ -1131,14 +1472,73 @@ def update_work_report(
         )
 
     fields = data.model_dump(exclude_unset=True)
+    periods_update = "periods" in fields and data.periods is not None
+
+    # Scalar header fields: update if explicitly provided. Applied BEFORE the
+    # task/period rewrite so the synced period reads the new values; a periods
+    # payload overwrites day_status/location again from its own derivation.
+    _HEADER_FIELDS = (
+        "summary", "day_status", "location", "remarks", "query_text",
+        "well_head_no", "pm_plant", "task_list_count", "task_list_op_count",
+        "maintenance_item_count", "maintenance_plan_count",
+    )
+    for field_name in _HEADER_FIELDS:
+        if field_name in fields:
+            setattr(report, field_name, getattr(data, field_name))
 
     # A leave-type day status (current or being set in this update) means the
     # report carries no project work: drop any task lines and zero the total,
     # regardless of what tasks the client sent.
-    effective_day_status = data.day_status if "day_status" in fields else report.day_status
-    no_activity = effective_day_status in NO_ACTIVITY_DAY_STATUSES
+    no_activity = report.day_status in NO_ACTIVITY_DAY_STATUSES
 
-    if no_activity:
+    if periods_update:
+        # Periods payload (new clients): wholesale rewrite of the report's
+        # periods + task rows, mirroring the legacy tasks-replace semantics.
+        norm = _normalize_periods(
+            data.report_mode,
+            data.periods,
+            day_status=None,
+            location=None,
+            tasks=None,
+        )
+        all_tasks = [t for spec in norm["periods"] for t in spec["tasks"]]
+        total, snapshots = _validate_tasks(db, me.id, all_tasks)
+        old_completed_dates: dict[uuid.UUID, date] = {
+            row.sub_activity_id: row.completed_date
+            for row in db.execute(
+                select(WorkReportTask).where(
+                    WorkReportTask.report_id == report.id,
+                    WorkReportTask.is_completed.is_(True),
+                    WorkReportTask.sub_activity_id.is_not(None),
+                )
+            ).scalars()
+        }
+        old_item_ids = wi.linked_item_ids_for_report(db, report.id)
+        db.execute(delete(WorkReportTask).where(WorkReportTask.report_id == report.id))
+        db.flush()
+        _replace_periods(db, report)
+        seen_work_items: set = set()
+        _insert_period_tasks(
+            db, report, norm["periods"], snapshots,
+            seen_work_items=seen_work_items,
+            legacy_completed_dates=old_completed_dates,
+            existing_links=old_item_ids,
+        )
+        db.flush()
+        removed = old_item_ids - wi.linked_item_ids_for_report(db, report.id)
+        if removed:
+            wi.reconcile_removed_links(
+                db, report_date=report.report_date, removed_item_ids=removed
+            )
+        report.total_minutes = total
+        report.report_mode = norm["report_mode"].value
+        report.day_status = norm["day_status"]
+        report.location = norm["location"]
+        if norm["report_mode"] == ReportMode.split_day:
+            # Split-day remarks live on the periods; the header never mirrors
+            # them — clear any value this or an earlier save left behind.
+            report.remarks = None
+    elif no_activity:
         # Switching to a leave-type day drops the task lines; reconcile any work
         # items they linked (block beheading a started-here continued task).
         old_item_ids = wi.linked_item_ids_for_report(db, report.id)
@@ -1149,6 +1549,9 @@ def update_work_report(
                 db, report_date=report.report_date, removed_item_ids=old_item_ids
             )
         report.total_minutes = 0
+        # Legacy leave-type day: the report collapses to one (empty) Full-Day
+        # period mirroring the header.
+        _sync_legacy_full_day_period(db, report)
     elif "tasks" in fields and data.tasks is not None:
         total, snapshots = _validate_tasks(db, me.id, data.tasks)
         # Preserve completed_date across a full task-row replace: re-saving a
@@ -1171,6 +1574,10 @@ def update_work_report(
         old_item_ids = wi.linked_item_ids_for_report(db, report.id)
         db.execute(delete(WorkReportTask).where(WorkReportTask.report_id == report.id))
         db.flush()
+        # Legacy tasks payload is inherently full-day: upsert the Full-Day
+        # period (collapsing a split report edited by a legacy client) and
+        # link the replacement rows to it.
+        period = _sync_legacy_full_day_period(db, report)
         seen_work_items: set = set()
         for task, snap in zip(data.tasks, snapshots):
             life = _lifecycle_row_kwargs(
@@ -1178,38 +1585,7 @@ def update_work_report(
                 seen=seen_work_items, legacy_completed_dates=old_completed_dates,
                 existing_links=old_item_ids,
             )
-            db.add(
-                WorkReportTask(
-                    report_id=report.id,
-                    project_id=task.project_id,
-                    description=task.description,
-                    minutes_spent=task.minutes_spent,
-                    task_minutes_spent=task.task_minutes_spent,
-                    activity_type=snap["activity_type"],
-                    tags_count=task.tags_count,
-                    docs_count=task.docs_count,
-                    bom_count=task.bom_count,
-                    spares_count=task.spares_count,
-                    pages_count=task.pages_count,
-                    records_count=task.records_count,
-                    sub_activity_id=task.sub_activity_id,
-                    sub_activity_name=snap["sub_activity_name"],
-                    activity_name=snap["activity_name"],
-                    started_date=life["started_date"],
-                    due_date=life["due_date"],
-                    is_completed=life["is_completed"],
-                    completed_date=life["completed_date"],
-                    work_item_id=life["work_item_id"],
-                    maintenance_plant_id=task.maintenance_plant_id,
-                    maintenance_plant_code=snap["maintenance_plant_code"],
-                    maintenance_plant_description=snap["maintenance_plant_description"],
-                    planning_plant_code=snap["planning_plant_code"],
-                    planning_plant_description=snap["planning_plant_description"],
-                    project_name=snap["project_name"],
-                    project_code=snap["project_code"],
-                    project_job_code_code=snap["project_job_code_code"],
-                )
-            )
+            _add_task_row(db, report, period.id, task, snap, life)
         db.flush()
         # Work items no longer referenced by this report: block beheading a
         # started-here task that others continue, else drop the orphan.
@@ -1219,16 +1595,14 @@ def update_work_report(
                 db, report_date=report.report_date, removed_item_ids=removed
             )
         report.total_minutes = total
-
-    # Scalar header fields: update if explicitly provided
-    _HEADER_FIELDS = (
-        "summary", "day_status", "location", "remarks", "query_text",
-        "well_head_no", "pm_plant", "task_list_count", "task_list_op_count",
-        "maintenance_item_count", "maintenance_plan_count",
-    )
-    for field_name in _HEADER_FIELDS:
-        if field_name in fields:
-            setattr(report, field_name, getattr(data, field_name))
+    elif (
+        ("day_status" in fields or "location" in fields)
+        and report.report_mode == ReportMode.full_day.value
+    ):
+        # Header-only legacy edit of a full-day report: keep its single period
+        # in step (period_status/location/fraction). A split report's periods
+        # are only rewritten through the periods payload or a tasks replace.
+        _sync_legacy_full_day_period(db, report)
 
     # Editing a reopened report (rejected / granted) returns it to draft and
     # clears the prior review. A Project Head editing their own submitted report
@@ -1332,9 +1706,19 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
     / get_overdue_activities (see the dashboard + login-alert endpoints).
     Persisting a notification at submit time would create a second, staler
     source of truth alongside those live queries."""
-    # On a half day the employee worked half the time, so every NUMERIC target
-    # is halved (benchmark 100 -> 50) before the deficit/productivity math.
-    half_day = report.day_status == DayStatus.half_day
+    # Period-level scaling (migration 0060): each row's NUMERIC target is
+    # base x its period's work_fraction (full day 1.0, half 0.5) — the frozen
+    # benchmark_value_snapshot stays the EFFECTIVE target, with the base and
+    # fraction recorded beside it. Rows without a period (pre-period code)
+    # fall back to the legacy report-wide half_day rule, bit-identical to the
+    # old behaviour.
+    legacy_half = report.day_status == DayStatus.half_day
+    fraction_by_period: dict[uuid.UUID, Decimal] = {
+        p.id: Decimal(p.work_fraction)
+        for p in db.execute(
+            select(WorkReportPeriod).where(WorkReportPeriod.report_id == report.id)
+        ).scalars()
+    }
     rows = db.execute(
         select(WorkReportTask).where(WorkReportTask.report_id == report.id)
     ).scalars().all()
@@ -1344,11 +1728,17 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         sub = db.get(ActivityMaster, row.sub_activity_id)
         if sub is None:
             continue
-        benchmark_value = sub.benchmark_value
-        if half_day and benchmark_value is not None:
-            benchmark_value = benchmark_value / 2
+        fraction = fraction_by_period.get(row.period_id)
+        if fraction is None:
+            fraction = Decimal("0.5") if legacy_half else Decimal("1.0")
+        base_value = sub.benchmark_value
+        benchmark_value = (
+            Decimal(base_value) * fraction if base_value is not None else None
+        )
         row.benchmark_type_snapshot = sub.benchmark_type
         row.benchmark_value_snapshot = benchmark_value
+        row.benchmark_base_value_snapshot = base_value
+        row.benchmark_fraction_snapshot = fraction
         row.benchmark_period_days_snapshot = sub.benchmark_period_days
         row.relevant_count_field_snapshot = sub.relevant_count_field
         actual_value = None
@@ -1380,6 +1770,9 @@ def submit_work_report(
         ).scalar_one_or_none()
         if has_task is None:
             raise AppError("validation_error", "Add at least one task before submitting.", 422)
+    # Split-day: every WORKING period needs its own activity row (a report
+    # with only the first half filled in cannot be submitted).
+    _assert_periods_submittable(db, report)
 
     _apply_benchmarks(db, report)
     report.status = WorkReportStatus.submitted

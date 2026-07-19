@@ -113,6 +113,31 @@ def _apply_0059_columns(operations, conn) -> None:
             )
 
 
+def _apply_0060_period_id(operations, conn) -> None:
+    """Apply 0060's activity_requests step on this connection.
+
+    Same rationale as _apply_0059_columns: production runs 0057 -> 0059 -> 0060
+    (which adds the nullable ``period_id`` -> work_report_periods link), and the
+    current ORM maps it — so the legacy-shape simulation must complete the
+    chain before reading through the ORM. Guarded so it is a no-op on a table
+    that already has the column."""
+    cols = {c["name"] for c in sa.inspect(conn).get_columns("activity_requests")}
+    if "period_id" not in cols:
+        operations.add_column(
+            "activity_requests",
+            sa.Column(
+                "period_id",
+                sa.dialects.postgresql.UUID(as_uuid=True),
+                sa.ForeignKey(
+                    "work_report_periods.id",
+                    name="activity_requests_period_id_fkey",
+                    ondelete="SET NULL",
+                ),
+                nullable=True,
+            ),
+        )
+
+
 def _cols(conn) -> dict:
     return {c["name"]: c for c in sa.inspect(conn).get_columns("activity_requests")}
 
@@ -219,9 +244,11 @@ def test_reconcile_from_production_shape():
         assert ("employee_id",) in fk_cols
 
         # Existing data survived the rename and is readable through the ORM,
-        # counts defaulting to zero. The ORM maps six units, so complete the
-        # chain (0057 -> 0059) exactly as production does before reading.
+        # counts defaulting to zero. The ORM maps six units + period_id, so
+        # complete the chain (0057 -> 0059 -> 0060) exactly as production does
+        # before reading.
         _apply_0059_columns(ops, conn)
+        _apply_0060_period_id(ops, conn)
         sess = SASession(bind=conn)
         r = sess.get(ActivityRequest, legacy_id)
         assert r is not None

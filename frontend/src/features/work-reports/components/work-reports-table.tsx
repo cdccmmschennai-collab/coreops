@@ -14,6 +14,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+
 import { StatusBadge } from "./status-badge";
 import { projectSummary } from "../project-summary";
 import type { WorkReport, WorkReportPage } from "../types";
@@ -77,7 +79,12 @@ export function WorkReportsTable({
                     {proj.label}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={r.status} editRequested={!!r.edit_requested_at} />
+                    <span className="inline-flex items-center gap-1.5">
+                      <StatusBadge status={r.status} editRequested={!!r.edit_requested_at} />
+                      {r.report_mode === "split_day" && (
+                        <Badge variant="neutral">Split</Badge>
+                      )}
+                    </span>
                   </TableCell>
                 </TableRow>
               );

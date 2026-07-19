@@ -146,6 +146,7 @@ def get_daily_benchmark_ledger(
     from app.modules.work_reports.models import (
         DailyWorkReport,
         DayStatus,
+        WorkReportPeriod,
         WorkReportStatus,
         WorkReportTask,
     )
@@ -163,6 +164,8 @@ def get_daily_benchmark_ledger(
             DailyWorkReport.employee_id,
             DailyWorkReport.report_date,
             DailyWorkReport.day_status,
+            WorkReportTask.period_id,
+            WorkReportPeriod.work_fraction,
             # The employee's own DAY remark for this report date. Distinct from
             # ActivityMaster.benchmark_remarks (guidance TO the employee) — the
             # export's DAY REMARKS column carries only this one.
@@ -179,6 +182,10 @@ def get_daily_benchmark_ledger(
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        # Period fraction (split-day, migration 0060). Outer join: rows written
+        # by pre-period code have no period and fall back to the legacy
+        # report-wide half_day rule below.
+        .outerjoin(WorkReportPeriod, WorkReportTask.period_id == WorkReportPeriod.id)
         .where(
             DailyWorkReport.status == WorkReportStatus.submitted,
             DailyWorkReport.report_date >= week_start,
@@ -221,8 +228,14 @@ def get_daily_benchmark_ledger(
                 "projects": [],
                 "project_codes": [],
                 # Same for every row of a given (employee, date) report; used to
-                # halve the day's target on a half day.
+                # halve the day's target on a legacy (period-less) half day.
                 "day_status": r.day_status,
+                # Distinct period fractions this sub-activity spans that day —
+                # the target scales by their sum (capped at a full day), so the
+                # same activity in both halves reads ONE full-day target while
+                # a single half reads half of it. Keyed per period so two rows
+                # in the same period never double the target.
+                "fractions": {},
                 # Also per-report, not per-task: every detail row of this date
                 # repeats it, so a filtered row still reads on its own.
                 "day_remarks": r.day_remarks,
@@ -230,6 +243,12 @@ def get_daily_benchmark_ledger(
         )
         bucket["actual"] += Decimal(r.actual or 0)
         bucket["hours_minutes"] += int(r.hours_minutes or 0)
+        if r.period_id is not None and r.work_fraction is not None:
+            bucket["fractions"][r.period_id] = Decimal(r.work_fraction)
+        else:
+            bucket["fractions"]["legacy"] = (
+                Decimal("0.5") if r.day_status == DayStatus.half_day else Decimal("1.0")
+            )
         if r.project_name and r.project_name not in bucket["projects"]:
             bucket["projects"].append(r.project_name)
         if r.project_code and r.project_code not in bucket["project_codes"]:
@@ -249,10 +268,16 @@ def get_daily_benchmark_ledger(
     out = []
     for (employee_id, d, sub_activity_id), bucket in day_by_key.items():
         m = meta[(employee_id, sub_activity_id)]
-        target = Decimal(str(m["benchmark_value"] or 0))
-        # Half day -> the day's target (and therefore its pending) is halved.
-        if bucket.get("day_status") == DayStatus.half_day:
-            target = target / 2
+        base = Decimal(str(m["benchmark_value"] or 0))
+        # Period-fraction scaling (split-day): target = base x the summed
+        # distinct period fractions, capped at a full day. A legacy half_day
+        # report contributes a single 0.5 "legacy" fraction — identical to the
+        # old report-wide halving.
+        fraction = min(
+            Decimal("1.0"),
+            sum(bucket["fractions"].values(), Decimal("0")) or Decimal("1.0"),
+        )
+        target = base * fraction
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
         project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None

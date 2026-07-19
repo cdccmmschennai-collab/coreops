@@ -17,10 +17,17 @@ export const env = {
  * reports as one work item with a fixed deadline (open-task suggestions +
  * Continue/Start-new choice). Mirror of the backend TASK_CONTINUATION_ENABLED;
  * keep the two in step per environment. Default OFF.
+ *
+ * `reportDayParts` — the Full-Day / Split-Day work report selector (First-Half
+ * + Second-Half period cards). Mirror of the backend REPORT_DAY_PARTS_ENABLED;
+ * keep the two in step per environment. With the flag off the form stays the
+ * classic full-day experience and only legacy payloads are sent. Default OFF.
  */
 export const features = {
   attendanceCorrections:
     process.env.NEXT_PUBLIC_FEATURE_ATTENDANCE_CORRECTIONS === "true",
   taskContinuation:
     process.env.NEXT_PUBLIC_FEATURE_TASK_CONTINUATION === "true",
+  reportDayParts:
+    process.env.NEXT_PUBLIC_REPORT_DAY_PARTS_ENABLED === "true",
 } as const;

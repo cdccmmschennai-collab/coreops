@@ -3,16 +3,23 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm, type Control } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { ArrowRight, Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Combobox } from "@/components/ui/combobox";
-import { CountInput } from "@/components/ui/count-input";
 import {
   Form,
   FormControl,
@@ -30,13 +37,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useActivities, useSubActivityOptions } from "@/features/activity-master/hooks";
 import {
-  COUNT_FIELD_KEY,
-  COUNT_FIELD_LABEL,
   isQuantityBenchmark,
-  isTaskBenchmark,
   type RelevantCountField,
 } from "@/features/activity-master/types";
 import {
@@ -46,7 +51,6 @@ import {
 } from "@/features/activity-requests/hooks";
 import type { ActivityRequest } from "@/features/activity-requests/types";
 import { useAuth } from "@/features/auth/auth-provider";
-import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 import { features } from "@/lib/env";
@@ -61,39 +65,36 @@ import {
 } from "../hooks";
 import { useProjectOptions } from "../project-options";
 import {
+  DAY_PART_FRACTION,
+  DAY_PART_LABEL,
   DAY_STATUS_LABEL,
   DAY_STATUSES,
+  EMPTY_HALF_PERIOD,
   EMPTY_TASK_ROW,
   WORK_LOCATION_LABEL,
   WORK_LOCATIONS,
+  hoursToMinutes,
   isNoActivityDayStatus,
   toCreateBody,
   toUpdateBody,
   workReportFormSchema,
+  type DayPart,
   type WorkReportFormValues,
 } from "../schemas";
+import {
+  LIFECYCLE_LABEL,
+  LIFECYCLE_VARIANT,
+  PeriodActivityEditor,
+  countFieldName,
+  type ActivityEditorContext,
+} from "./period-activity-editor";
+import { ReportPeriodCard, type HalfKey } from "./report-period-card";
 
 interface WorkReportFormProps {
   mode: "create" | "edit";
   defaultValues: WorkReportFormValues;
   reportId?: string;
 }
-
-// COUNT_FIELD_KEY / COUNT_FIELD_LABEL are imported from activity-master/types:
-// one declaration of the six units, mirroring the backend's COUNT_FIELD_BY_UNIT.
-
-/** The form field name for a unit, typed against the task row's count fields. */
-type CountFieldName =
-  | "tags_count" | "docs_count" | "bom_count"
-  | "spares_count" | "pages_count" | "records_count";
-
-const countFieldName = (u: RelevantCountField): CountFieldName =>
-  COUNT_FIELD_KEY[u] as CountFieldName;
-
-const ALL_COUNT_FIELDS: CountFieldName[] = [
-  "tags_count", "docs_count", "bom_count",
-  "spares_count", "pages_count", "records_count",
-];
 
 // Second activities under these parent Activities are routine (meetings /
 // training) rather than extra project work, so they don't need PM approval —
@@ -105,254 +106,6 @@ const NO_APPROVAL_ACTIVITIES = new Set([
   "TRAINING",
   "TRAINER",
 ]);
-
-// Human labels + badge tone for a work item's derived lifecycle.
-const LIFECYCLE_LABEL: Record<string, string> = {
-  IN_PROGRESS: "In progress",
-  DUE_TODAY: "Due today",
-  OVERDUE: "Overdue",
-  COMPLETED_ON_TIME: "Completed",
-  COMPLETED_LATE: "Completed late",
-};
-const LIFECYCLE_VARIANT: Record<string, "neutral" | "warning" | "danger" | "success"> = {
-  IN_PROGRESS: "neutral",
-  DUE_TODAY: "warning",
-  OVERDUE: "danger",
-  COMPLETED_ON_TIME: "success",
-  COMPLETED_LATE: "warning",
-};
-
-/** "2026-06-16" + 2 -> "2026-06-18". Client-side preview only, for a
- * TASK_BASED row that hasn't been saved yet — the server is authoritative
- * once the row exists (it computes due_date the same way, on save). */
-function addDays(isoDate: string, days: number): string | null {
-  const d = new Date(`${isoDate}T00:00:00`);
-  if (Number.isNaN(d.getTime())) return null;
-  d.setDate(d.getDate() + days);
-  // Format from local parts (not toISOString, which would shift the day by the
-  // UTC offset and land a day early in IST).
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-const MONTH_ABBR = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/** "2026-07-18" -> "18 Jul 2026". Parsed from the string's own parts rather
- *  than via Date, which would shift the day by the UTC offset in IST. */
-function formatDueDate(isoDate: string | null | undefined): string | null {
-  if (!isoDate) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
-  if (!m) return null;
-  const month = MONTH_ABBR[Number(m[2]) - 1];
-  if (!month) return null;
-  return `${Number(m[3])} ${month} ${m[1]}`;
-}
-
-/** Words that carry no instruction of their own — they only glue a period or a
- *  target together ("COMPLETE IN 1 DAY", "500 REQUIRED PAGES/DAY"). */
-const FILLER_REMARK_WORDS = new Set([
-  "COMPLETE", "COMPLETED", "COMPLETION", "FINISH", "WITHIN", "IN", "PER", "A",
-  "AN", "OF", "TARGET", "REQUIRED", "REQUIREMENT", "MINIMUM", "MIN", "DAY",
-  "DAYS", "DAILY", "EVERY", "AND", "THE", "IS", "TO", "BE",
-]);
-
-/**
- * True when benchmark_remarks says nothing the structured fields do not already
- * say - "1DAY" beside a 1-day period, or "500 REQUIRED PAGES/DAY" beside a
- * target of 500 PAGES. Such remarks are dropped rather than repeated under a
- * "Note:" line.
- *
- * Case and whitespace are normalised for the COMPARISON ONLY; the stored
- * Activity Master value is never touched, and a remark with any leftover
- * meaningful word is always shown verbatim.
- */
-function isDuplicateRemark(
-  remarks: string,
-  periodDays: number | null | undefined,
-  benchmarkValue: number | null | undefined,
-  unit: RelevantCountField | null | undefined,
-): boolean {
-  const tokens = remarks
-    .toUpperCase()
-    // "1DAY" carries no separator, so split digit/letter runs apart first.
-    .replace(/(\d)([A-Z])/g, "$1 $2")
-    .replace(/([A-Z])(\d)/g, "$1 $2")
-    .split(/[^A-Z0-9.]+/)
-    .filter(Boolean);
-  if (!tokens.length) return true;
-
-  const unitWords = unit
-    ? new Set([
-        COUNT_FIELD_LABEL[unit].toUpperCase(),
-        // "PAGES" configured, "PAGE" written (or the reverse).
-        COUNT_FIELD_LABEL[unit].toUpperCase().replace(/S$/, ""),
-        `${COUNT_FIELD_LABEL[unit].toUpperCase()}S`,
-      ])
-    : new Set<string>();
-
-  return tokens.every((raw) => {
-    const token = raw.replace(/\.$/, "");
-    if (!token) return true;
-    if (FILLER_REMARK_WORDS.has(token)) return true;
-    if (unitWords.has(token)) return true;
-    const num = Number(token);
-    if (!Number.isNaN(num)) {
-      return num === periodDays || num === benchmarkValue;
-    }
-    return false;
-  });
-}
-
-/**
- * Maintenance Plant picker for one task row. The options are scoped to the
- * selected project's Planning Plant — the dropdown reloads (a fresh,
- * planning-plant-filtered fetch) whenever that code changes, so a user never
- * sees Maintenance Plants from other Planning Plants. Planning Plant +
- * Description (PP) are determined by the project and shown read-only.
- */
-function MaintenancePlantField({
-  control,
-  index,
-  planningPlantCode,
-  planningPlantDescription,
-}: {
-  control: Control<WorkReportFormValues>;
-  index: number;
-  planningPlantCode?: string;
-  planningPlantDescription?: string;
-}) {
-  const hasPlanningPlant = !!planningPlantCode;
-  const { options, isLoading } = useMaintenancePlantOptions(
-    true,
-    planningPlantCode,
-    hasPlanningPlant,
-  );
-
-  return (
-    <>
-      <FormField
-        control={control}
-        name={`tasks.${index}.maintenance_plant_id`}
-        render={({ field: f }) => (
-          <FormItem className="min-w-0">
-            <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
-              Maintenance Plant
-            </FormLabel>
-            <FormControl>
-              <Combobox
-                value={f.value || ""}
-                onValueChange={f.onChange}
-                options={options}
-                placeholder={
-                  hasPlanningPlant
-                    ? isLoading
-                      ? "Loading plants…"
-                      : "Select plant…"
-                    : "Select a project first"
-                }
-                searchPlaceholder="Search maintenance plants…"
-                emptyMessage="No plants for this Planning Plant."
-                disabled={!hasPlanningPlant}
-              />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
-      <div className="space-y-2">
-        <span className="block text-xs font-medium leading-none text-muted-foreground">
-          Planning Plant
-        </span>
-        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-          {planningPlantCode ?? "—"}
-        </div>
-      </div>
-      <div className="space-y-2">
-        <span className="block text-xs font-medium leading-none text-muted-foreground">
-          Description (PP)
-        </span>
-        <div className="flex h-9 items-center truncate rounded-md border border-input bg-muted/40 px-3 text-sm text-muted-foreground">
-          {planningPlantDescription ?? "—"}
-        </div>
-      </div>
-    </>
-  );
-}
-
-/**
- * Read-only card standing in for a second activity that is waiting on the PM.
- * `Pending PM Approval` while the request is pending; `Rejected` (with a Dismiss
- * button) once the PM declines, after which the employee can request again.
- */
-function RequestStatusCard({
-  request,
-  activityNo,
-  onDismiss,
-  dismissing,
-}: {
-  request: ActivityRequest;
-  activityNo: number;
-  onDismiss?: () => void;
-  dismissing?: boolean;
-}) {
-  const isRejected = request.status === "rejected";
-  return (
-    <div className="space-y-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
-      <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium">Activity {activityNo}</h4>
-        <Badge variant={isRejected ? "danger" : "warning"}>
-          {isRejected ? "Rejected" : "Pending PM Approval"}
-        </Badge>
-      </div>
-      <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
-        <div>
-          <dt className="text-xs text-muted-foreground">Project</dt>
-          <dd className="font-medium">
-            {request.project_name || request.project_code || "—"}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Activity</dt>
-          <dd className="font-medium">{request.activity_name ?? "—"}</dd>
-        </div>
-        <div>
-          <dt className="text-xs text-muted-foreground">Sub Activity</dt>
-          <dd className="font-medium">{request.sub_activity_name || "—"}</dd>
-        </div>
-      </dl>
-      {isRejected ? (
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            Your Project Manager declined this activity. Dismiss it to request a
-            different one.
-          </p>
-          {onDismiss && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              loading={dismissing}
-              onClick={onDismiss}
-            >
-              <Trash2 className="h-4 w-4" />
-              Dismiss
-            </Button>
-          )}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Waiting for your Project Manager to approve this activity. No further
-          activities can be added until it&apos;s decided.
-        </p>
-      )}
-    </div>
-  );
-}
 
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
@@ -424,13 +177,103 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     name: "tasks",
   });
 
+  // ── Day format (Full Day / Split Day, feature-flagged) ─────────────────────
+  const dayFormat = form.watch("day_format");
+  const splitEnabled = features.reportDayParts;
+  const isSplit = splitEnabled && dayFormat === "split_day";
+
+  const watchedTasks = form.watch("tasks");
+  const reportDate = form.watch("report_date");
+
+  /** Task-row indices belonging to one day part. */
+  const indicesOf = React.useCallback(
+    (part: DayPart) =>
+      (watchedTasks ?? [])
+        .map((t, i) => (t.day_part === part ? i : -1))
+        .filter((i) => i >= 0),
+    [watchedTasks],
+  );
+
+  // Full Day and Split Day are INDEPENDENT formats — never two synchronized
+  // views over one task array. A switch converts nothing: the current
+  // format's mode-specific state (status(es), activity rows, remarks,
+  // continuation/draft bookkeeping) is cleared and the destination starts
+  // blank. Only the report-level Date, Office Location and Query / Issues
+  // survive. requestDayFormat below asks for confirmation first whenever the
+  // current format holds meaningful entered data.
+  function switchDayFormat(next: "full_day" | "split_day") {
+    if (next === dayFormat) return;
+    form.setValue("day_status", undefined);
+    form.setValue("remarks", "");
+    form.setValue("first_half", { ...EMPTY_HALF_PERIOD });
+    form.setValue("second_half", { ...EMPTY_HALF_PERIOD });
+    // Replace the rows wholesale: no hidden rows, no continuation/WorkItem
+    // state and no PM-approval draft can ride into the other format. Split
+    // starts with no rows (each half adds its own); Full Day with one blank.
+    replace(next === "split_day" ? [] : [{ ...EMPTY_TASK_ROW }]);
+    setDraftPart(null);
+    setStartNewRows(new Set());
+    form.setValue("day_format", next, { shouldValidate: false });
+  }
+
+  // A format switch that would discard entered data is held here until the
+  // user confirms it in the dialog below.
+  const [pendingFormat, setPendingFormat] =
+    React.useState<"full_day" | "split_day" | null>(null);
+
+  /** Whether one task row holds anything the user actually entered. */
+  function rowHasData(t: WorkReportFormValues["tasks"][number]): boolean {
+    return !!(
+      t.project_id || t.activity_id || t.sub_activity_id ||
+      t.description.trim() || t.activity_type.trim() ||
+      t.work_item_id || t.is_completed ||
+      t.task_hours.trim() || t.duration_hours.trim() ||
+      Number(t.tags_count) > 0 || Number(t.docs_count) > 0 ||
+      Number(t.bom_count) > 0 || Number(t.spares_count) > 0 ||
+      Number(t.pages_count) > 0 || Number(t.records_count) > 0
+    );
+  }
+
+  /** Whether the CURRENT format holds meaningful entered data — a selected
+   *  status, a filled activity row, counts, remarks or a continuation — that
+   *  a format switch would clear. Empty forms switch without ceremony. */
+  function currentModeHasData(): boolean {
+    const v = form.getValues();
+    if (dayFormat === "split_day") {
+      return (
+        v.first_half.status !== undefined ||
+        v.second_half.status !== undefined ||
+        !!v.first_half.remarks.trim() ||
+        !!v.second_half.remarks.trim() ||
+        v.tasks.some((t) => t.day_part !== "full_day" && rowHasData(t))
+      );
+    }
+    return (
+      v.day_status !== undefined ||
+      !!v.remarks.trim() ||
+      v.tasks.some((t) => t.day_part === "full_day" && rowHasData(t))
+    );
+  }
+
+  /** Tab handler: an empty format switches immediately; entered data asks
+   *  for confirmation first (nothing is ever auto-converted). */
+  function requestDayFormat(next: "full_day" | "split_day") {
+    if (next === dayFormat) return;
+    if (currentModeHasData()) {
+      setPendingFormat(next);
+    } else {
+      switchDayFormat(next);
+    }
+  }
+
   // ── Second-activity approval flow ──────────────────────────────────────────
-  // The report normally holds one activity. To add a second, the employee fills
-  // an extra activity section (revealed by "Add Activity", exactly as today) and
-  // sends it to the project's PM as a request; it only becomes a real row once
-  // the PM approves. `secondDraft` marks that the last field-array row is that
-  // pending-to-be-requested draft, not a row that gets saved with the report.
-  const [secondDraft, setSecondDraft] = React.useState(false);
+  // A period normally holds one activity. To add another, the employee fills an
+  // extra activity section (revealed by "Add Activity") and sends it to the
+  // project's PM as a request; it only becomes a real row once the PM approves.
+  // `draftPart` marks that the LAST field-array row is that pending-to-be-
+  // requested draft (and which period it belongs to), not a row that gets
+  // saved with the report.
+  const [draftPart, setDraftPart] = React.useState<DayPart | null>(null);
 
   const createActivityRequest = useCreateActivityRequest();
   const deleteActivityRequest = useDeleteActivityRequest();
@@ -447,10 +290,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   }
 
   // Whether an activity row belongs to a routine parent Activity that doesn't
-  // need PM approval (see NO_APPROVAL_ACTIVITIES). Keyed off the parent Activity
-  // selection (activity_id) so it applies the moment the Activity is chosen -
-  // before a sub-activity is picked, and to any new sub-activities added later -
-  // with a fallback to the sub-activity's own parent (edit-mode rows).
+  // need PM approval (see NO_APPROVAL_ACTIVITIES).
   function rowIsNoApproval(row?: {
     activity_id?: string | null;
     sub_activity_id?: string | null;
@@ -468,15 +308,24 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return false;
   }
 
-  // A second activity needs PM approval only when BOTH it and the day's first
-  // activity are outside NO_APPROVAL_ACTIVITIES. If either the first activity
-  // OR the second one is a routine activity (meeting / training / trainer), the
-  // second saves straight onto the report with no approval.
+  // An additional activity needs PM approval only when BOTH it and the
+  // period's first activity are outside NO_APPROVAL_ACTIVITIES.
   function secondActivityNeedsApproval(
     first?: { activity_id?: string | null; sub_activity_id?: string | null },
     second?: { activity_id?: string | null; sub_activity_id?: string | null },
   ): boolean {
     return !rowIsNoApproval(first) && !rowIsNoApproval(second);
+  }
+
+  /** The period's own primary activity — what the draft is compared against
+   *  for the approval bypass. */
+  function primaryRowOfDraftPeriod(
+    values: WorkReportFormValues,
+  ): WorkReportFormValues["tasks"][number] | undefined {
+    const part = draftPart ?? "full_day";
+    return values.tasks.find(
+      (t, i) => t.day_part === part && i !== values.tasks.length - 1,
+    );
   }
 
   // A quantity sub-activity (NUMERIC / NUMERIC_DAILY / TASK_WITH_QUANTITY) must
@@ -487,7 +336,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     rows.forEach((t, i) => {
       const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
       const countField = isQuantityBenchmark(sub?.benchmark_type)
-        ? sub!.relevant_count_field
+        ? (sub!.relevant_count_field as RelevantCountField)
         : null;
       const key = countField ? countFieldName(countField) : null;
       if (key && Number(t[key] || 0) <= 0) {
@@ -501,10 +350,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return ok;
   }
 
-  // "Request PM to Add This Activity" — the second-activity draft (the last row)
-  // is NOT saved to the report. The report is first persisted with its first
-  // activity, then the draft is sent to the PM as an activity request. On
-  // approval the PM's action turns it into a real row (see activity_requests).
+  // "Request PM to Add This Activity" — the additional-activity draft (the
+  // last row) is NOT saved to the report. The report is first persisted
+  // without it, then the draft is sent to the PM as an activity request tagged
+  // with its reporting period; on approval the PM's action turns it into a
+  // real row in that period (see activity_requests).
   async function requestSecondActivity() {
     setFormError(null);
     const valid = await form.trigger();
@@ -514,25 +364,32 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     const draft = values.tasks[values.tasks.length - 1];
     const realRows = values.tasks.slice(0, -1);
     if (!draft?.project_id || !draft?.sub_activity_id) {
-      toast.error("Select a project, activity and sub-activity for the second activity.");
+      toast.error("Select a project, activity and sub-activity for the additional activity.");
       return;
     }
-    // Validate benchmark counts on every row INCLUDING the draft being requested,
-    // so a request can't be sent with the requested activity's required fields
-    // (e.g. benchmark count) left blank.
+    // Validate benchmark counts on every row INCLUDING the draft being
+    // requested, so a request can't be sent half-filled.
     if (!validateBenchmarks(values.tasks)) return;
 
     try {
-      // Persist the report (first activity only) so the request can link to it.
+      // Persist the report (without the draft) so the request can link to it.
       const persistValues = { ...values, tasks: realRows };
       const reportRow =
         mode === "create"
           ? await createMutation.mutateAsync(toCreateBody(persistValues))
           : await updateMutation.mutateAsync(toUpdateBody(persistValues));
       const savedReportId = mode === "create" ? reportRow.id : (reportId as string);
+      // Split day: tag the request with the target period so the approved
+      // activity lands in the right half. Period ids come from the save
+      // response (they only exist server-side).
+      const targetPeriodId =
+        draft.day_part !== "full_day"
+          ? reportRow.periods?.find((p) => p.day_part === draft.day_part)?.id ?? null
+          : null;
 
       await createActivityRequest.mutateAsync({
         report_id: savedReportId,
+        period_id: targetPeriodId,
         project_id: draft.project_id,
         activity_id: draft.activity_id || null,
         sub_activity_id: draft.sub_activity_id,
@@ -553,7 +410,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         // Re-open the now-saved report so the Pending card renders in edit mode.
         router.push(`/work-reports/${savedReportId}/edit`);
       } else {
-        setSecondDraft(false);
+        setDraftPart(null);
         remove(values.tasks.length - 1);
       }
     } catch (err) {
@@ -574,22 +431,34 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     }
   }
 
-  // Reveal an empty second-activity section (same UI as today's append), marked
-  // as the draft that must go through PM approval rather than a normal save.
-  function addSecondActivityDraft() {
-    append({ ...EMPTY_TASK_ROW });
-    setSecondDraft(true);
+  // Reveal an empty additional-activity section for a period, marked as the
+  // draft that must go through PM approval rather than a normal save.
+  function addActivityDraft(part: DayPart) {
+    append({ ...EMPTY_TASK_ROW, day_part: part });
+    setDraftPart(part);
   }
 
-  // Leave-type day statuses (week off / leave / company holiday / comp-off):
-  // the employee did no project work, so the activity editor is frozen out —
-  // no rows, no benchmark, no pending — and only Remarks + Query stay active.
+  /** Split Day "Add Activity": the period's first activity adds freely; any
+   *  additional one becomes the approval draft. */
+  function addActivityToHalf(part: HalfKey) {
+    if (indicesOf(part).length === 0) {
+      append({ ...EMPTY_TASK_ROW, day_part: part });
+    } else {
+      addActivityDraft(part);
+    }
+  }
+
+  // Leave-type day statuses (week off / leave / company holiday / comp-off) in
+  // FULL-DAY mode: the employee did no project work, so the activity editor is
+  // frozen out — no rows, no benchmark, no pending — and only Remarks + Query
+  // stay active. (Split mode handles this per half in ReportPeriodCard.)
   const dayStatus = form.watch("day_status");
-  const noActivity = isNoActivityDayStatus(dayStatus);
+  const noActivity = !isSplit && isNoActivityDayStatus(dayStatus);
   const prevNoActivity = React.useRef(noActivity);
   React.useEffect(() => {
     if (noActivity === prevNoActivity.current) return;
     prevNoActivity.current = noActivity;
+    if (isSplit) return;
     if (noActivity) {
       // Drop activity rows + clear Office Location — none of it applies on leave.
       replace([]);
@@ -598,7 +467,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       // Switched back to a working day with no rows — restore one empty row.
       replace([{ ...EMPTY_TASK_ROW }]);
     }
-  }, [noActivity, replace, form]);
+  }, [noActivity, isSplit, replace, form]);
 
   // Backfill the UI-only `activity_id` filter for rows loaded from the API
   // with a sub_activity_id already set (edit mode) — once the flat
@@ -623,12 +492,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   const updateMutation = useUpdateWorkReport(reportId ?? "");
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const watchedTasks = form.watch("tasks");
-  const reportDate = form.watch("report_date");
-
-  // ── Task continuation (feature-flagged) ────────────────────────────────────
+  // ── Task continuation (feature-flagged, Full-Day only) ─────────────────────
   // Open work items the employee can continue in a report dated `reportDate`.
-  const continuationEnabled = features.taskContinuation && !noActivity;
+  // Split Day never continues tasks: no suggestions, no per-row Continue
+  // prompts, and the open-tasks API is not called at all.
+  const continuationEnabled = features.taskContinuation && !noActivity && !isSplit;
   const openTasksQuery = useOpenTasks(reportDate, {
     enabled: continuationEnabled && !!reportDate,
   });
@@ -713,6 +581,30 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     [form],
   );
 
+  /** Row removal owns the draft bookkeeping (see addActivityDraft). */
+  const removeRow = React.useCallback(
+    (index: number) => {
+      remove(index);
+      // Removing the draft row (always the last) — or shrinking back to a
+      // single activity — clears the pending-draft marker so the Add
+      // Activity control comes back without a page refresh.
+      if (draftPart !== null && index === fields.length - 1) {
+        setDraftPart(null);
+      } else if (fields.length - 1 <= 1) {
+        setDraftPart(null);
+      }
+    },
+    [remove, draftPart, fields.length],
+  );
+
+  const canRemove = React.useCallback(
+    (index: number) => {
+      if (isSplit) return true;
+      return fields.length > 1 && index < fields.length;
+    },
+    [isSplit, fields.length],
+  );
+
   // One report per employee per day: in create mode, look up whether the
   // selected date already has a report (backend also enforces this with a
   // unique constraint / 409). When one exists we surface a notice with a link
@@ -751,18 +643,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   async function onSubmit(values: WorkReportFormValues) {
     setFormError(null);
 
-    // Decide what to do with a second-activity draft (the last row) on save:
-    //  - empty (no sub-activity picked)  -> drop it, save the rest;
-    //  - no-approval activity (meeting / training) -> keep it as a normal row;
-    //  - any other activity -> it needs PM approval, so route through the
-    //    request flow (which preserves it as Pending) instead of discarding it.
+    // Decide what to do with an additional-activity draft (the last row) on
+    // save: empty -> drop it; routine (no-approval) activity -> keep as a
+    // normal row; anything else -> route through the PM request flow.
     let persist = values;
-    if (secondDraft) {
+    if (draftPart !== null) {
       const draft = values.tasks[values.tasks.length - 1];
       if (!draft?.sub_activity_id) {
         persist = { ...values, tasks: values.tasks.slice(0, -1) };
       } else if (
-        secondActivityNeedsApproval(values.tasks[0], draft)
+        secondActivityNeedsApproval(primaryRowOfDraftPeriod(values), draft)
       ) {
         await requestSecondActivity();
         return;
@@ -771,9 +661,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     }
 
     // A NUMERIC sub-activity's relevant_count_field is the benchmark's
-    // actual-value source — it must be filled in (not left at the default
-    // 0) whenever that benchmark applies, so the deficit/productivity calc
-    // at submit time reflects real production, not an unfilled field.
+    // actual-value source — it must be filled in whenever that benchmark
+    // applies, so the deficit/productivity calc at submit time reflects real
+    // production, not an unfilled field.
     if (!validateBenchmarks(persist.tasks)) return;
 
     try {
@@ -798,6 +688,116 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         error instanceof AppError ? error.message : "Something went wrong. Please try again.",
       );
     }
+  }
+
+  // Shared context for the reusable activity editor (Full Day + both halves).
+  const editorCtx: ActivityEditorContext = {
+    form,
+    fields,
+    watchedTasks,
+    reportDate,
+    projectOptions,
+    projById,
+    activityOptions,
+    subActivityById,
+    subActivityOptionsByActivity,
+    continuationEnabled,
+    openBySubProject,
+    startNewRows,
+    setStartNewRows,
+    attachToRow,
+    clearRowPlant,
+    removeRow,
+    canRemove,
+  };
+
+  // ── Split Day derived bits ─────────────────────────────────────────────────
+  const firstHalf = form.watch("first_half");
+  const secondHalf = form.watch("second_half");
+
+  /** Daily summary for Split Day: fractions, activities, targets vs actuals. */
+  const splitSummary = React.useMemo(() => {
+    if (!isSplit) return null;
+    const halves: Array<[HalfKey, typeof firstHalf]> = [
+      ["first_half", firstHalf],
+      ["second_half", secondHalf],
+    ];
+    let workingFraction = 0;
+    let leaveFraction = 0;
+    for (const [key, half] of halves) {
+      if (half?.status === undefined) continue;
+      if (isNoActivityDayStatus(half.status)) leaveFraction += DAY_PART_FRACTION[key];
+      else workingFraction += DAY_PART_FRACTION[key];
+    }
+    let effectiveTarget = 0;
+    let actualTotal = 0;
+    let activityCount = 0;
+    for (const t of watchedTasks ?? []) {
+      if (t.day_part === "full_day") continue;
+      if (!t.sub_activity_id) continue;
+      activityCount += 1;
+      const sub = subActivityById.get(t.sub_activity_id);
+      const unit = isQuantityBenchmark(sub?.benchmark_type)
+        ? (sub!.relevant_count_field as RelevantCountField)
+        : null;
+      if (unit && sub?.benchmark_value != null) {
+        effectiveTarget += sub.benchmark_value * DAY_PART_FRACTION[t.day_part];
+        actualTotal += Number(t[countFieldName(unit)] || 0);
+      }
+    }
+    return { workingFraction, leaveFraction, activityCount, effectiveTarget, actualTotal };
+  }, [isSplit, firstHalf, secondHalf, watchedTasks, subActivityById]);
+
+  /** Approval-state slot (pending / rejected / draft request button) for a
+   *  given period — rendered inside its half card, or under the Full-Day rows. */
+  function approvalSlot(part: DayPart): React.ReactNode {
+    const requestForPart = (r: ActivityRequest) =>
+      part === "full_day"
+        ? !r.day_part || r.day_part === "full_day"
+        : r.day_part === part;
+    if (pendingRequest && requestForPart(pendingRequest)) {
+      return (
+        <RequestStatusCard
+          request={pendingRequest}
+          activityNo={indicesOf(part).length + 1}
+        />
+      );
+    }
+    if (rejectedRequest && requestForPart(rejectedRequest)) {
+      return (
+        <RequestStatusCard
+          request={rejectedRequest}
+          activityNo={indicesOf(part).length + 1}
+          onDismiss={() => void dismissRejectedRequest()}
+          dismissing={deleteActivityRequest.isPending}
+        />
+      );
+    }
+    if (draftPart === part) {
+      const values = form.getValues();
+      const draft = values.tasks[values.tasks.length - 1];
+      return secondActivityNeedsApproval(primaryRowOfDraftPeriod(values), draft) ? (
+        <Button
+          type="button"
+          variant="secondary"
+          loading={
+            createActivityRequest.isPending ||
+            createMutation.isPending ||
+            updateMutation.isPending
+          }
+          onClick={() => void requestSecondActivity()}
+        >
+          <Send className="h-4 w-4" />
+          Request Approval
+        </Button>
+      ) : (
+        <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          This activity does not need PM approval - it will be saved with
+          the report when you save.
+        </p>
+      );
+    }
+    return null;
   }
 
   return (
@@ -837,8 +837,31 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               <span className="font-medium">{employeeName}</span>
             </div>
 
-            {/* ── Row 1: Date, Day Status, Location ── */}
-            <div className="grid gap-4 sm:grid-cols-3">
+            {/* ── Day Format selector (feature-flagged) ── */}
+            {splitEnabled && (
+              <FormField
+                control={form.control}
+                name="day_format"
+                render={() => (
+                  <FormItem>
+                    <FormLabel>Day Format</FormLabel>
+                    <Tabs
+                      items={[
+                        { value: "full_day", label: "Full Day" },
+                        { value: "split_day", label: "Split Day" },
+                      ]}
+                      value={dayFormat}
+                      onChange={(v) => requestDayFormat(v as "full_day" | "split_day")}
+                    />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+
+            {/* ── Row 1: Date | Location (both modes — one Location for the
+                whole day), plus Day Status in Full-Day mode. ── */}
+            <div className={isSplit ? "grid gap-4 sm:grid-cols-2" : "grid gap-4 sm:grid-cols-3"}>
               <FormField
                 control={form.control}
                 name="report_date"
@@ -850,35 +873,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     <FormControl>
                       <Input type="date" {...field} disabled={mode === "edit"} />
                     </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="day_status"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Day Status <span className="text-destructive">*</span>
-                    </FormLabel>
-                    <Select
-                      value={field.value ?? undefined}
-                      onValueChange={(v) => field.onChange(v)}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select status" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {DAY_STATUSES.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {DAY_STATUS_LABEL[s]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -918,12 +912,43 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                   </FormItem>
                 )}
               />
+              {!isSplit && (
+                <FormField
+                  control={form.control}
+                  name="day_status"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Day Status <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <Select
+                        value={field.value ?? undefined}
+                        onValueChange={(v) => field.onChange(v)}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select status" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {DAY_STATUSES.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {DAY_STATUS_LABEL[s]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
             </div>
 
             <Separator />
 
             {/* ── Open tasks from previous reports (task continuation) ── */}
-            {continuationEnabled && openTasks.length > 0 && (
+            {continuationEnabled && openTasks.length > 0 && !isSplit && (
               <div className="space-y-3">
                 <div>
                   <h3 className="text-sm font-medium">Open tasks from previous reports</h3>
@@ -975,688 +1000,151 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               </div>
             )}
 
-            {/* ── Project Task Rows ── */}
-            <div className="space-y-3">
-              <h3 className="text-sm font-medium">Project activities</h3>
-
-              {noActivity ? (
-                <div className="rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-                  <p className="font-medium text-foreground">
-                    No project activities for this day
-                  </p>
-                  <p className="mt-1">
-                    You selected{" "}
-                    <span className="font-medium">
-                      {dayStatus ? DAY_STATUS_LABEL[dayStatus] : ""}
-                    </span>{" "}
-                    - you&apos;re off, so activities, benchmarks and pending tracking
-                    don&apos;t apply. Add any Remarks or a Query below if needed.
-                  </p>
+            {isSplit ? (
+              /* ── Split Day: two reusable period cards, stacked vertically —
+                  First Half is one full-width row, Second Half the next, on
+                  every breakpoint (never two columns: long project /
+                  activity / sub-activity names need the full content width). ── */
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-6">
+                  <ReportPeriodCard
+                    partKey="first_half"
+                    ctx={editorCtx}
+                    indices={indicesOf("first_half")}
+                    onAddActivity={() => addActivityToHalf("first_half")}
+                    onClearActivities={() => clearHalfRows("first_half")}
+                    approvalSlot={approvalSlot("first_half")}
+                    addDisabled={!!pendingRequest || draftPart !== null}
+                  />
+                  <ReportPeriodCard
+                    partKey="second_half"
+                    ctx={editorCtx}
+                    indices={indicesOf("second_half")}
+                    onAddActivity={() => addActivityToHalf("second_half")}
+                    onClearActivities={() => clearHalfRows("second_half")}
+                    approvalSlot={approvalSlot("second_half")}
+                    addDisabled={!!pendingRequest || draftPart !== null}
+                  />
                 </div>
-              ) : (
-                <>
-              {fields.map((field, index) => {
-                const selectedProjectId = watchedTasks?.[index]?.project_id;
-                const selectedProject = selectedProjectId
-                  ? projById.get(selectedProjectId)
-                  : undefined;
-                // Prefer the live RBAC-scoped project; fall back to the task snapshot
-                // (edit mode where the project is archived / no longer accessible).
-                const projectCodeLabel =
-                  selectedProject?.code ?? watchedTasks?.[index]?.project_code ?? "—";
-                const jobCodeLabel = selectedProject?.job_code_code ?? "—";
 
-                // Task continuation, per row.
-                const rowSubId = watchedTasks?.[index]?.sub_activity_id;
-                const rowWorkItemId = watchedTasks?.[index]?.work_item_id;
-                const rowLifecycle = watchedTasks?.[index]?.work_item_lifecycle;
-                const rowStarted = watchedTasks?.[index]?.started_date;
-                const isContinuation = continuationEnabled && !!rowWorkItemId;
-                // A manual sub-activity pick that matches an open work item ->
-                // offer an explicit Continue existing / Start a new task choice
-                // (unless already linked or the user chose Start-new for this row).
-                const rowOpenMatch =
-                  continuationEnabled && !rowWorkItemId && selectedProjectId && rowSubId
-                    ? openBySubProject.get(`${selectedProjectId}|${rowSubId}`)
-                    : undefined;
+                {tasksError && (
+                  <p className="text-xs font-medium text-destructive">{tasksError}</p>
+                )}
 
-                return (
-                  <div
-                    key={field.id}
-                    className="space-y-5 rounded-lg border border-border p-4"
-                  >
-                    {/* Row remove control. */}
-                    <div className="flex items-end justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          remove(index);
-                          // "Add Activity" only shows when there's no pending
-                          // second-activity draft. Once a delete leaves a single
-                          // row (whichever row was removed), that row is just the
-                          // first activity again — clear the draft flag so the
-                          // button comes back without needing a page refresh.
-                          if (fields.length - 1 <= 1) {
-                            setSecondDraft(false);
-                          }
-                        }}
-                        disabled={fields.length === 1}
-                        aria-label="Remove activity"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    {/* Continuation banner: this row continues an existing work
-                        item. Project/Activity/Sub are locked (the backend forbids
-                        changing them on a continuation). */}
-                    {isContinuation && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
-                        <span>
-                          Continuing task started on{" "}
-                          <span className="font-medium">{rowStarted ?? "—"}</span>
-                          {watchedTasks?.[index]?.due_date && (
-                            <> · due {watchedTasks[index].due_date}</>
-                          )}
-                        </span>
-                        {rowLifecycle && (
-                          <Badge variant={LIFECYCLE_VARIANT[rowLifecycle] ?? "neutral"}>
-                            {LIFECYCLE_LABEL[rowLifecycle] ?? rowLifecycle}
-                          </Badge>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Manual pick matched an open work item: explicit choice. */}
-                    {rowOpenMatch && !startNewRows.has(index) && (
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm">
-                        <span className="text-muted-foreground">
-                          You have an open task for this activity (started{" "}
-                          {rowOpenMatch.started_on}, due {rowOpenMatch.due_date}).
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => attachToRow(index, rowOpenMatch)}
-                          >
-                            Continue existing task
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() =>
-                              setStartNewRows((prev) => new Set(prev).add(index))
-                            }
-                          >
-                            Start a new task
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Row A — Project Name | Project Code | Job Code.
-                        Project Code / Job Code are read-only, auto-filled from the
-                        selected project. */}
-                    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1.4fr)_120px_120px]">
-
-                      {/* Project Name — searchable combobox (name + code) */}
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.project_id`}
-                        render={({ field: f }) => (
-                          <FormItem className="min-w-0">
-                            <FormLabel className="block text-xs leading-none text-muted-foreground">
-                              Project Name <span className="text-destructive">*</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Combobox
-                                value={f.value}
-                                onValueChange={(v) => {
-                                  const changed = v !== f.value;
-                                  f.onChange(v);
-                                  // Maintenance Plant options depend on the project's
-                                  // Planning Plant — clear any prior selection so a
-                                  // plant from the old Planning Plant can't linger.
-                                  if (changed) clearRowPlant(index);
-                                }}
-                                options={projectOptions}
-                                placeholder="Select project…"
-                                searchPlaceholder="Search by name or code…"
-                                emptyMessage="No matching projects."
-                                allowClear={false}
-                                disabled={isContinuation}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-
-                      {/* Project Code — read-only metadata, auto-filled from selection */}
-                      <div className="space-y-2">
-                        <span className="block text-xs font-medium leading-none text-muted-foreground">
-                          Project Code
-                        </span>
-                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-                          {projectCodeLabel}
-                        </div>
-                      </div>
-
-                      {/* Job Code — read-only metadata, auto-filled from selection */}
-                      <div className="space-y-2">
-                        <span className="block text-xs font-medium leading-none text-muted-foreground">
-                          Job Code
-                        </span>
-                        <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-                          {jobCodeLabel}
-                        </div>
-                      </div>
-
-                    </div>
-
-                    {/* Row A2: Maintenance Plant — scoped to the selected project's
-                        Planning Plant (the dropdown refetches when the project's
-                        Planning Plant changes; a user never sees plants from other
-                        Planning Plants). Planning Plant + Description (PP) are
-                        determined by the project and shown read-only. Maintenance
-                        Plant lines up under Project Name, Planning Plant under
-                        Project Code, Description (PP) spans the remaining width. */}
-                    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1.4fr)_120px_minmax(0,1fr)]">
-                      <MaintenancePlantField
-                        control={form.control}
-                        index={index}
-                        planningPlantCode={
-                          selectedProject?.planning_plant_code
-                          ?? watchedTasks?.[index]?.planning_plant_code
-                          ?? undefined
-                        }
-                        planningPlantDescription={
-                          selectedProject?.planning_plant_description
-                          ?? watchedTasks?.[index]?.planning_plant_description
-                          ?? undefined
-                        }
-                      />
-                    </div>
-
-                    {/* Row B: Activity (25%) | Sub-Activity (75%) — own full-width row
-                        so long sub-activity names show in full, uncramped. Selections
-                        come from the Activity Master (Settings → Activity Master),
-                        never hardcoded here. */}
-                    <div className="grid grid-cols-[1fr_3fr] gap-4">
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.activity_id`}
-                        render={({ field: f }) => (
-                          <FormItem className="min-w-0">
-                            <FormLabel className="block text-xs leading-none text-muted-foreground">
-                              Activity <span className="text-destructive">*</span>
-                            </FormLabel>
-                            <FormControl>
-                              <Combobox
-                                value={f.value || ""}
-                                onValueChange={(v) => {
-                                  f.onChange(v);
-                                  // Changing the Activity invalidates any previously
-                                  // chosen Sub-Activity from a different Activity.
-                                  const currentSub = form.getValues(`tasks.${index}.sub_activity_id`);
-                                  if (currentSub && subActivityById.get(currentSub)?.activity_id !== v) {
-                                    form.setValue(`tasks.${index}.sub_activity_id`, "");
-                                    form.setValue(`tasks.${index}.sub_activity_name`, undefined);
-                                    form.setValue(`tasks.${index}.activity_name`, undefined);
-                                  }
-                                }}
-                                options={activityOptions}
-                                placeholder="Select activity…"
-                                searchPlaceholder="Search activities…"
-                                emptyMessage="No matching activities."
-                                disabled={isContinuation}
-                              />
-                            </FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name={`tasks.${index}.sub_activity_id`}
-                        render={({ field: f }) => {
-                          const selectedActivityId = watchedTasks?.[index]?.activity_id;
-                          const options = selectedActivityId
-                            ? subActivityOptionsByActivity.get(selectedActivityId) ?? []
-                            : [];
-                          return (
-                            <FormItem className="min-w-0">
-                              <FormLabel className="block text-xs leading-none text-muted-foreground">
-                                Sub-Activity <span className="text-destructive">*</span>
-                              </FormLabel>
-                              <FormControl>
-                                <Combobox
-                                  value={f.value || ""}
-                                  onValueChange={(v) => {
-                                    const prev = form.getValues(
-                                      `tasks.${index}.sub_activity_id`,
-                                    );
-                                    f.onChange(v);
-                                    const sub = v ? subActivityById.get(v) : undefined;
-                                    form.setValue(`tasks.${index}.sub_activity_name`, sub?.name);
-                                    form.setValue(`tasks.${index}.activity_name`, sub?.activity_name);
-                                    // Server derives activity_type from the new selection.
-                                    form.setValue(`tasks.${index}.activity_type`, "");
-                                    // Clear the OLD sub-activity's benchmarked count
-                                    // when the selection actually changes: 200 typed
-                                    // against a DOCS activity must not silently
-                                    // survive as docs_count once the row is switched
-                                    // to a PAGES one. Only the previous unit's field
-                                    // is reset — counts the employee entered for
-                                    // other units are left alone, and the new unit's
-                                    // own field is never wiped (it may be being
-                                    // re-selected on an edit).
-                                    if (prev && prev !== v) {
-                                      const prevSub = subActivityById.get(prev);
-                                      const prevUnit = isQuantityBenchmark(
-                                        prevSub?.benchmark_type,
-                                      )
-                                        ? prevSub!.relevant_count_field
-                                        : null;
-                                      const newUnit = isQuantityBenchmark(sub?.benchmark_type)
-                                        ? sub!.relevant_count_field
-                                        : null;
-                                      if (prevUnit && prevUnit !== newUnit) {
-                                        form.setValue(
-                                          `tasks.${index}.${countFieldName(prevUnit)}`,
-                                          "0",
-                                        );
-                                      }
-                                    }
-                                  }}
-                                  options={options}
-                                  placeholder={selectedActivityId ? "Select sub-activity…" : "Pick an Activity first"}
-                                  searchPlaceholder="Search sub-activities…"
-                                  emptyMessage="No matching sub-activities."
-                                  disabled={!selectedActivityId || isContinuation}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          );
-                        }}
-                      />
-                    </div>
-
-                    {/* Activity Master guidance for a quantity-only mode
-                        (NUMERIC / NUMERIC_DAILY). Task modes render their note
-                        inside the Task benchmark card instead, so the same
-                        remark is never printed twice on one row.
-
-                        Read-only: this is guidance TO the employee, deliberately
-                        kept distinct from their own Remarks input below. A
-                        remark that merely restates the configured target or
-                        period is dropped - see isDuplicateRemark. */}
-                    {(() => {
-                      const subId = watchedTasks?.[index]?.sub_activity_id;
-                      const sub = subId ? subActivityById.get(subId) : undefined;
-                      if (!sub || isTaskBenchmark(sub.benchmark_type)) return null;
-                      const remarks = sub.benchmark_remarks?.trim();
-                      if (!remarks) return null;
-                      const unit = isQuantityBenchmark(sub.benchmark_type)
-                        ? sub.relevant_count_field
-                        : null;
-                      if (
-                        isDuplicateRemark(
-                          remarks,
-                          sub.benchmark_period_days,
-                          sub.benchmark_value,
-                          unit,
-                        )
-                      ) {
-                        return null;
-                      }
-                      return (
-                        // whitespace-pre-line: multi-line remarks keep their line
-                        // breaks and stored wording verbatim.
-                        <p className="whitespace-pre-line text-xs text-muted-foreground">
-                          <span className="font-medium text-foreground">Note:</span>{" "}
-                          {remarks}
-                        </p>
-                      );
-                    })()}
-
-                    {/* Row B2: quantity counts. The sub-activity's configured unit
-                        is shown prominently with its read-only target; the other
-                        five stay collapsed so six equal inputs are never presented.
-                        A status-only task has no quantity of its own, so nothing is
-                        promoted for it. */}
-                    {(() => {
-                      const subId = watchedTasks?.[index]?.sub_activity_id;
-                      const sub = subId ? subActivityById.get(subId) : undefined;
-                      const row = watchedTasks?.[index];
-                      // The configured unit — the ONLY field the benchmark reads.
-                      const unit = isQuantityBenchmark(sub?.benchmark_type)
-                        ? sub!.relevant_count_field
-                        : null;
-                      const targetName = unit ? countFieldName(unit) : null;
-                      // A half day halves every benchmark target (100 -> 50),
-                      // matching the deficit/productivity the backend freezes
-                      // at submit time.
-                      const isHalfDay = dayStatus === "half_day";
-                      const targetValue =
-                        sub?.benchmark_value != null
-                          ? isHalfDay
-                            ? sub.benchmark_value / 2
-                            : sub.benchmark_value
-                          : null;
-
-                      const others = ALL_COUNT_FIELDS.filter((n) => n !== targetName);
-                      // Never hide a stored value: if any collapsed unit already
-                      // carries a number (a legacy row, or an edit after the
-                      // master's unit changed), the panel opens so it stays
-                      // visible and editable rather than silently invisible.
-                      const othersHaveValues = others.some(
-                        (n) => Number(row?.[n] ?? 0) > 0,
-                      );
-
-                      const renderCount = (
-                        name: CountFieldName,
-                        label: string,
-                        prominent: boolean,
-                      ) => (
-                        <FormField
-                          key={name}
-                          control={form.control}
-                          name={`tasks.${index}.${name}`}
-                          render={({ field: f }) => (
-                            <FormItem>
-                              <FormLabel
-                                className={
-                                  prominent
-                                    ? "block text-sm font-semibold leading-none text-foreground"
-                                    : "block text-xs leading-none text-muted-foreground"
-                                }
-                              >
-                                {label}
-                                {prominent && <span className="text-destructive"> *</span>}
-                              </FormLabel>
-                              <FormControl>
-                                {/* CountInput (text + numeric keypad), NOT a native
-                                    number input: scrolling toward Save must never
-                                    change a focused count (the 81→83→81 bug). */}
-                                <CountInput
-                                  placeholder="0"
-                                  className={prominent ? "border-primary" : undefined}
-                                  {...f}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      );
-
-                      return (
-                        <div className="space-y-3">
-                          {targetName && unit && (
-                            <div className="rounded-md border border-primary/40 p-3">
-                              <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
-                                <span className="text-sm font-medium text-foreground">
-                                  {COUNT_FIELD_LABEL[unit]}
-                                </span>
-                              </div>
-                              <div className="sm:max-w-xs">
-                                {/* The target IS the input's label: the employee
-                                    reads what is expected of them on the same line
-                                    they type into. It comes from Activity Master
-                                    and is never re-entered here. */}
-                                {renderCount(
-                                  targetName,
-                                  `Target: ${formatInt(targetValue)} ${COUNT_FIELD_LABEL[
-                                    unit
-                                  ].toUpperCase()} / ${sub!.benchmark_period_days ?? 1}d`,
-                                  true,
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          <details open={othersHaveValues} className="group">
-                            <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">
-                              <span className="group-open:hidden">
-                                + Other counts (optional)
-                              </span>
-                              <span className="hidden group-open:inline">
-                                - Other counts (optional)
-                              </span>
-                            </summary>
-                            <div className="mt-3 grid gap-4 sm:grid-cols-3">
-                              {others.map((name) =>
-                                renderCount(
-                                  name,
-                                  COUNT_FIELD_LABEL[
-                                    (Object.keys(COUNT_FIELD_KEY) as RelevantCountField[]).find(
-                                      (u) => COUNT_FIELD_KEY[u] === name,
-                                    )!
-                                  ],
-                                  false,
-                                ),
-                              )}
-                            </div>
-                          </details>
-                        </div>
-                      );
-                    })()}
-
-                    {/* Row C: every TASK mode (TASK_BASED / TASK_STATUS_ONLY /
-                        TASK_WITH_QUANTITY) — one compact benchmark + completion
-                        card. The headline is generated from the structured
-                        fields (benchmark_value / benchmark_period_days /
-                        relevant_count_field / due_date), so the rule is stated
-                        once and Activity Master remarks only appear when they add
-                        something the structured fields do not already say.
-
-                        No status dropdown, no manual date entry:
-                        started_date/due_date/completed_date are all system-managed
-                        (see schemas.ts).
-
-                        Quantity-only modes (NUMERIC / NUMERIC_DAILY) get NO card:
-                        they are pure daily production with nothing to complete. */}
-                    {(() => {
-                      const subId = watchedTasks?.[index]?.sub_activity_id;
-                      const sub = subId ? subActivityById.get(subId) : undefined;
-                      if (!isTaskBenchmark(sub?.benchmark_type)) return null;
-
-                      const row = watchedTasks?.[index];
-                      // Prefer the server-computed due_date (existing row);
-                      // for a brand-new row not yet saved, preview it
-                      // client-side from the report date + allocated duration.
-                      // due_date = started_on + (target_days - 1): a 1-day task
-                      // is due the day it starts, a 2-day task the next day, etc.
-                      // target_days is clamped to >= 1 (a 0/blank benchmark period
-                      // must never push the due date before the start date).
-                      const periodDays = Math.max(1, sub!.benchmark_period_days ?? 1);
-                      const previewDue = row?.due_date
-                        ? row.due_date
-                        : reportDate
-                          ? addDays(reportDate, periodDays - 1)
-                          : null;
-                      const dueLabel = formatDueDate(previewDue);
-
-                      const unit = isQuantityBenchmark(sub!.benchmark_type)
-                        ? sub!.relevant_count_field
-                        : null;
-                      // Same half-day rule as the quantity input above: a half
-                      // day halves the target the employee is measured against.
-                      const target =
-                        sub!.benchmark_value != null
-                          ? dayStatus === "half_day"
-                            ? sub!.benchmark_value / 2
-                            : sub!.benchmark_value
-                          : null;
-
-                      const remarks = sub!.benchmark_remarks?.trim();
-                      const showNote =
-                        remarks &&
-                        !isDuplicateRemark(
-                          remarks,
-                          sub!.benchmark_period_days,
-                          sub!.benchmark_value,
-                          unit,
-                        );
-
-                      return (
-                        <div className="rounded-md border border-border p-3">
-                          <p className="text-xs font-medium text-foreground">
-                            Task benchmark
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {/* A quantity task states its target on the input's
-                                own label, which is authoritative - the card adds
-                                only the deadline, never a second copy of the
-                                target. A status-only task has no quantity input,
-                                so it states the whole rule here. */}
-                            {unit && target != null && dueLabel ? (
-                              <>Due: {dueLabel}</>
-                            ) : (
-                              <>
-                                Complete within {periodDays}{" "}
-                                {periodDays === 1 ? "day" : "days"}.
-                                {dueLabel ? ` Due: ${dueLabel}` : ""}
-                              </>
-                            )}
-                          </p>
-                          {showNote && (
-                            // whitespace-pre-line: multi-line remarks keep their
-                            // line breaks and stored wording verbatim.
-                            <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">
-                              <span className="font-medium text-foreground">Note:</span>{" "}
-                              {remarks}
-                            </p>
-                          )}
-                          <FormField
-                            control={form.control}
-                            name={`tasks.${index}.is_completed`}
-                            render={({ field: f }) => (
-                              <FormItem className="mt-3">
-                                {/* Stated once, above the box - the checked state
-                                    replaces it rather than adding a second copy. */}
-                                {!f.value && (
-                                  <p className="mb-2 text-xs text-muted-foreground">
-                                    Leave unchecked if unfinished; the task will
-                                    continue in your next report.
-                                  </p>
-                                )}
-                                <label className="flex items-center gap-2 text-sm">
-                                  <FormControl>
-                                    <Checkbox
-                                      checked={f.value}
-                                      onChange={(e) => f.onChange(e.target.checked)}
-                                    />
-                                  </FormControl>
-                                  <span className="font-medium text-foreground">
-                                    Mark task fully completed
-                                  </span>
-                                </label>
-                                {f.value && (
-                                  <p className="mt-2 text-xs font-medium text-foreground">
-                                    Task completed - it will no longer carry forward.
-                                  </p>
-                                )}
-                                <FormMessage />
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      );
-                    })()}
+                {/* Daily summary: fractions + activities + target vs actual. */}
+                {splitSummary && (
+                  <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-md border border-border bg-muted/30 px-4 py-3 text-sm">
+                    <span>
+                      Working:{" "}
+                      <span className="font-medium">
+                        {Math.round(splitSummary.workingFraction * 100)}%
+                      </span>
+                    </span>
+                    <span>
+                      Leave/Off:{" "}
+                      <span className="font-medium">
+                        {Math.round(splitSummary.leaveFraction * 100)}%
+                      </span>
+                    </span>
+                    <span>
+                      Activities:{" "}
+                      <span className="font-medium">{splitSummary.activityCount}</span>
+                    </span>
+                    <span>
+                      Effective target:{" "}
+                      <span className="font-medium">
+                        {formatInt(splitSummary.effectiveTarget)}
+                      </span>
+                    </span>
+                    <span>
+                      Actual total:{" "}
+                      <span className="font-medium">
+                        {formatInt(splitSummary.actualTotal)}
+                      </span>
+                    </span>
                   </div>
-                );
-              })}
+                )}
+              </div>
+            ) : (
+              /* ── Full Day: the classic experience, unchanged ── */
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium">Project activities</h3>
 
-              {tasksError && (
-                <p className="text-xs font-medium text-destructive">{tasksError}</p>
-              )}
-
-              {/* Second-activity flow. The first activity is added freely with
-                  "Add Activity" (unchanged). A second activity is filled the
-                  same way; routine ones (meeting / training - see
-                  NO_APPROVAL_ACTIVITIES) save straight onto the report, while
-                  any other activity must be approved by the PM: the draft is
-                  sent as a request and shown as Pending until decided. */}
-              {pendingRequest ? (
-                <RequestStatusCard
-                  request={pendingRequest}
-                  activityNo={fields.length + 1}
-                />
-              ) : rejectedRequest ? (
-                <RequestStatusCard
-                  request={rejectedRequest}
-                  activityNo={fields.length + 1}
-                  onDismiss={() => void dismissRejectedRequest()}
-                  dismissing={deleteActivityRequest.isPending}
-                />
-              ) : secondDraft ? (
-                secondActivityNeedsApproval(
-                  watchedTasks?.[0],
-                  watchedTasks?.[fields.length - 1],
-                ) ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    loading={
-                      createActivityRequest.isPending ||
-                      createMutation.isPending ||
-                      updateMutation.isPending
-                    }
-                    onClick={() => void requestSecondActivity()}
-                  >
-                    <Send className="h-4 w-4" />
-                    Request Approval
-                  </Button>
+                {noActivity ? (
+                  <div className="rounded-lg border border-dashed border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      No project activities for this day
+                    </p>
+                    <p className="mt-1">
+                      You selected{" "}
+                      <span className="font-medium">
+                        {dayStatus ? DAY_STATUS_LABEL[dayStatus] : ""}
+                      </span>{" "}
+                      - you&apos;re off, so activities, benchmarks and pending tracking
+                      don&apos;t apply. Add any Remarks or a Query below if needed.
+                    </p>
+                  </div>
                 ) : (
-                  // No approval needed — either this activity or the day's first
-                  // activity is a routine one; it saves with the report.
-                  <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                    This activity does not need PM approval - it will be saved with
-                    the report when you save.
-                  </p>
-                )
-              ) : fields.length >= 1 ? (
-                <Button type="button" variant="secondary" onClick={addSecondActivityDraft}>
-                  <Plus className="h-4 w-4" />
-                  Add Activity
-                </Button>
-              ) : null}
-                </>
-              )}
-            </div>
-
-            <Separator />
-
-            {/* ── Day Remarks — one remark for the whole day (not per activity) ── */}
-            <FormField
-              control={form.control}
-              name="remarks"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    Day Remarks{" "}
-                    <span className="font-normal text-muted-foreground">(optional)</span>
-                  </FormLabel>
-                  <FormControl>
-                    <Textarea
-                      rows={3}
-                      placeholder="What did you work on today?"
-                      {...field}
+                  <>
+                    <PeriodActivityEditor
+                      ctx={editorCtx}
+                      indices={fields.map((_, i) => i)}
+                      fraction={dayStatus === "half_day" ? 0.5 : 1}
                     />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+
+                    {tasksError && (
+                      <p className="text-xs font-medium text-destructive">{tasksError}</p>
+                    )}
+
+                    {/* Additional-activity flow: routine ones save directly;
+                        any other second activity goes through PM approval. */}
+                    {approvalSlot("full_day") ??
+                      (fields.length >= 1 ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => addActivityDraft("full_day")}
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add Activity
+                        </Button>
+                      ) : null)}
+                  </>
+                )}
+              </div>
+            )}
 
             <Separator />
+
+            {/* ── Day Remarks — one remark for the whole day (not per activity).
+                Full Day only: a Split Day report keeps its remarks per half
+                (inside each period card), never a third overall field. ── */}
+            {!isSplit && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="remarks"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        Day Remarks{" "}
+                        <span className="font-normal text-muted-foreground">(optional)</span>
+                      </FormLabel>
+                      <FormControl>
+                        <Textarea
+                          rows={3}
+                          placeholder="What did you work on today?"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <Separator />
+              </>
+            )}
 
             {/* ── Query / Issues (end) ── */}
             <FormField
@@ -1695,7 +1183,130 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
             </div>
           </form>
         </Form>
+
+        {/* Day-format switch confirmation — shown whenever the current format
+            holds entered data. Cancel keeps the current format with
+            everything intact; confirming clears the current format's state
+            and starts the other format blank (nothing is auto-converted). */}
+        <AlertDialog
+          open={pendingFormat !== null}
+          onOpenChange={(open) => {
+            if (!open) setPendingFormat(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Change Day Format?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Changing the format will clear the activities, statuses and
+                remarks entered for the current format. The system will not
+                automatically assign them to another half or combine them.
+                Your Date, Office Location and Query / Issues are kept.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel onClick={() => setPendingFormat(null)}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  if (pendingFormat) switchDayFormat(pendingFormat);
+                  setPendingFormat(null);
+                }}
+              >
+                Change format
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </CardContent>
     </Card>
+  );
+
+  /** Remove every task row of a half (Working -> Leave/Off confirmation
+   *  already happened inside the period card). */
+  function clearHalfRows(part: HalfKey) {
+    const rows = form.getValues("tasks");
+    const keep = rows.filter((t) => t.day_part !== part);
+    replace(keep);
+    if (draftPart === part) setDraftPart(null);
+  }
+}
+
+/**
+ * Read-only card standing in for an additional activity that is waiting on the
+ * PM. `Pending PM Approval` while the request is pending; `Rejected` (with a
+ * Dismiss button) once the PM declines, after which the employee can request
+ * again.
+ */
+function RequestStatusCard({
+  request,
+  activityNo,
+  onDismiss,
+  dismissing,
+}: {
+  request: ActivityRequest;
+  activityNo: number;
+  onDismiss?: () => void;
+  dismissing?: boolean;
+}) {
+  const isRejected = request.status === "rejected";
+  return (
+    <div className="space-y-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-medium">
+          Activity {activityNo}
+          {request.day_part && request.day_part !== "full_day" && (
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              ({DAY_PART_LABEL[request.day_part as DayPart]})
+            </span>
+          )}
+        </h4>
+        <Badge variant={isRejected ? "danger" : "warning"}>
+          {isRejected ? "Rejected" : "Pending PM Approval"}
+        </Badge>
+      </div>
+      <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-xs text-muted-foreground">Project</dt>
+          <dd className="font-medium">
+            {request.project_name || request.project_code || "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Activity</dt>
+          <dd className="font-medium">{request.activity_name ?? "—"}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Sub Activity</dt>
+          <dd className="font-medium">{request.sub_activity_name || "—"}</dd>
+        </div>
+      </dl>
+      {isRejected ? (
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">
+            Your Project Manager declined this activity. Dismiss it to request a
+            different one.
+          </p>
+          {onDismiss && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              loading={dismissing}
+              onClick={onDismiss}
+            >
+              <Trash2 className="h-4 w-4" />
+              Dismiss
+            </Button>
+          )}
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Waiting for your Project Manager to approve this activity. No further
+          activities can be added until it&apos;s decided.
+        </p>
+      )}
+    </div>
   );
 }
