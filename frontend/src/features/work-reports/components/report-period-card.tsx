@@ -97,7 +97,9 @@ export function ReportPeriodCard({
   };
 
   return (
-    <div className="space-y-4 rounded-lg border border-border p-4">
+    // border-2 (not the usual 1px hairline): each half reads as its own
+    // clearly-bounded section — subtle emphasis only, same border color.
+    <div className="space-y-4 rounded-lg border-2 border-border p-4">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">{DAY_PART_LABEL[partKey]}</h3>
         <Badge variant={working ? "success" : "neutral"}>

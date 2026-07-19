@@ -859,8 +859,9 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
               />
             )}
 
-            {/* ── Row 1: Date | Location (both modes — one Location for the
-                whole day), plus Day Status in Full-Day mode. ── */}
+            {/* ── Row 1 — one Location for the whole day, both modes.
+                Full Day: Date | Day Status | Office Location.
+                Split Day: Date | Office Location. ── */}
             <div className={isSplit ? "grid gap-4 sm:grid-cols-2" : "grid gap-4 sm:grid-cols-3"}>
               <FormField
                 control={form.control}
@@ -873,41 +874,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     <FormControl>
                       <Input type="date" {...field} disabled={mode === "edit"} />
                     </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="location"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      Office Location{" "}
-                      {noActivity ? (
-                        <span className="font-normal text-muted-foreground">(n/a)</span>
-                      ) : (
-                        <span className="text-destructive">*</span>
-                      )}
-                    </FormLabel>
-                    <Select
-                      value={field.value ?? undefined}
-                      onValueChange={(v) => field.onChange(v)}
-                      disabled={noActivity}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select location" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {WORK_LOCATIONS.map((l) => (
-                          <SelectItem key={l} value={l}>
-                            {WORK_LOCATION_LABEL[l]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -943,6 +909,41 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                   )}
                 />
               )}
+              <FormField
+                control={form.control}
+                name="location"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      Office Location{" "}
+                      {noActivity ? (
+                        <span className="font-normal text-muted-foreground">(n/a)</span>
+                      ) : (
+                        <span className="text-destructive">*</span>
+                      )}
+                    </FormLabel>
+                    <Select
+                      value={field.value ?? undefined}
+                      onValueChange={(v) => field.onChange(v)}
+                      disabled={noActivity}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select location" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {WORK_LOCATIONS.map((l) => (
+                          <SelectItem key={l} value={l}>
+                            {WORK_LOCATION_LABEL[l]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
 
             <Separator />
