@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { complianceKeys } from "@/features/report-compliance/hooks";
 
 import { workReportsApi } from "./api";
+import { applyWorkReportToCache } from "./cache";
 import { workReportKeys } from "./keys";
 import type {
   WorkReportCreateBody,
@@ -42,12 +43,24 @@ export function useOpenTasks(reportDate: string, options?: { enabled?: boolean }
   });
 }
 
+/** Report-filter scope for Heads / Activity Leads. Callers pass enabled=false
+ * for managers, who use the org-wide employee filter instead. */
+export function useReportScope(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: workReportKeys.scope(),
+    queryFn: () => workReportsApi.scope(),
+    enabled: options?.enabled ?? true,
+  });
+}
+
 export function useCreateWorkReport() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkReportCreateBody) => workReportsApi.create(body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: workReportKeys.all });
+    onSuccess: (created) => {
+      // Seed the detail cache with the response before invalidating, so the
+      // detail page the form navigates to shows the saved values immediately.
+      applyWorkReportToCache(qc, created);
       // A create may submit today's report — refresh the compliance snapshot so
       // the 5:15 reminder and logout guard see it immediately.
       qc.invalidateQueries({ queryKey: complianceKeys.me() });
@@ -59,9 +72,10 @@ export function useUpdateWorkReport(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: WorkReportUpdateBody) => workReportsApi.update(id, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: workReportKeys.all });
-      qc.invalidateQueries({ queryKey: workReportKeys.detail(id) });
+    onSuccess: (updated) => {
+      // Write the PATCH response into the detail cache first (never let the
+      // post-save navigation render a stale count), then invalidate.
+      applyWorkReportToCache(qc, updated);
       qc.invalidateQueries({ queryKey: complianceKeys.me() });
     },
   });

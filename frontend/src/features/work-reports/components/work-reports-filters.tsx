@@ -26,20 +26,32 @@ export interface EmployeeFilterOption {
   label: string;
 }
 
+export interface ProjectFilterOption {
+  id: string;
+  label: string;
+}
+
 const ALL = "all";
 
 export function WorkReportsFilters({
   values,
   showEmployee,
   employeeOptions,
+  projectOptions,
   onChange,
 }: {
   values: WorkReportFilterValues;
   showEmployee: boolean;
   employeeOptions: EmployeeFilterOption[];
+  /** When set (Heads / Activity Leads), replaces the default RBAC-scoped
+   * project list so the filter only offers the viewer's report scope. */
+  projectOptions?: ProjectFilterOption[];
   onChange: (patch: Partial<WorkReportFilterValues>) => void;
 }) {
-  const { items: projects } = useProjectOptions();
+  const { items: defaultProjects } = useProjectOptions();
+  const projects: ProjectFilterOption[] =
+    projectOptions ??
+    defaultProjects.map((p) => ({ id: p.id, label: `${p.name} · ${p.code}` }));
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
@@ -73,7 +85,7 @@ export function WorkReportsFilters({
           <SelectItem value={ALL}>All projects</SelectItem>
           {projects.map((p) => (
             <SelectItem key={p.id} value={p.id}>
-              {p.name} · {p.code}
+              {p.label}
             </SelectItem>
           ))}
         </SelectContent>
