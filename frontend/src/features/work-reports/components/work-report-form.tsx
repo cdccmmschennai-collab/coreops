@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox } from "@/components/ui/combobox";
+import { CountInput } from "@/components/ui/count-input";
 import {
   Form,
   FormControl,
@@ -1381,9 +1382,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                 {prominent && <span className="text-destructive"> *</span>}
                               </FormLabel>
                               <FormControl>
-                                <Input
-                                  type="number"
-                                  min={0}
+                                {/* CountInput (text + numeric keypad), NOT a native
+                                    number input: scrolling toward Save must never
+                                    change a focused count (the 81→83→81 bug). */}
+                                <CountInput
                                   placeholder="0"
                                   className={prominent ? "border-primary" : undefined}
                                   {...f}
