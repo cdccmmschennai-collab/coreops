@@ -4,6 +4,33 @@ import cdcLogo from "@/assets/cdc-logo.png";
 import { env } from "@/lib/env";
 import { cn } from "@/lib/utils";
 
+interface LogoMarkProps {
+  className?: string;
+  /** Rendered logo height in px; width scales to preserve the source aspect ratio. */
+  height?: number;
+}
+
+/**
+ * Just the CDC mark, aspect ratio preserved. Extracted so the collapsed-rail
+ * expand-toggle (sidebar.tsx) can reuse the exact same asset and sizing math
+ * as `Brand` without duplicating it.
+ */
+export function LogoMark({ className, height = 28 }: LogoMarkProps) {
+  const width = Math.round((height * cdcLogo.width) / cdcLogo.height);
+  return (
+    <Image
+      src={cdcLogo}
+      alt="CDC"
+      width={width}
+      height={height}
+      priority
+      unoptimized
+      className={cn("shrink-0 object-contain", className)}
+      style={{ width, height }}
+    />
+  );
+}
+
 interface BrandProps {
   className?: string;
   /** Rendered logo height in px; width scales to preserve the source aspect ratio. */
@@ -22,7 +49,6 @@ interface BrandProps {
  * widths, so it never reflows mid-transition.
  */
 export function Brand({ className, logoHeight = 28, markOnly = false }: BrandProps) {
-  const width = Math.round((logoHeight * cdcLogo.width) / cdcLogo.height);
   return (
     <div
       className={cn(
@@ -31,16 +57,7 @@ export function Brand({ className, logoHeight = 28, markOnly = false }: BrandPro
         className,
       )}
     >
-      <Image
-        src={cdcLogo}
-        alt="CDC"
-        width={width}
-        height={logoHeight}
-        priority
-        unoptimized
-        className="shrink-0 object-contain"
-        style={{ width, height: logoHeight }}
-      />
+      <LogoMark height={logoHeight} />
       {!markOnly && (
         <span className="whitespace-nowrap font-semibold tracking-tight text-foreground">
           {env.productName}
