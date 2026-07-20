@@ -19,6 +19,11 @@ export type TaskCompletionUpdateBody = components["schemas"]["TaskCompletionUpda
 // employee can continue in the report being written.
 export type OpenTask = components["schemas"]["OpenTaskOut"];
 export type OpenTasks = components["schemas"]["OpenTasksOut"];
+// Report-filter scope for Heads / Activity Leads (GET /work-reports/scope):
+// accessible projects, led activities per project, and active members.
+// Informational only — the backend enforces the same scope on every endpoint.
+export type ReportScope = components["schemas"]["ReportScopeOut"];
+export type ReportScopeProject = components["schemas"]["ReportScopeProject"];
 
 export interface WorkReportListParams {
   employee_id: string;

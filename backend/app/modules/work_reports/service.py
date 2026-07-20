@@ -33,7 +33,7 @@ from app.modules.activity_master.models import (
 )
 from app.modules.activity_master.service import compute_benchmark, compute_overdue
 from app.modules.work_reports import work_items as wi
-from app.modules.employees.models import Employee
+from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
 from app.modules.plants.models import MaintenancePlant, PlanningPlant
@@ -114,6 +114,41 @@ _EDITABLE = {
 }
 
 
+def _led_rows_filter(pairs: set[tuple[uuid.UUID, uuid.UUID]]):
+    """Row-level SQL condition: the task row belongs to an exact
+    (project_id, parent activity_id) combination the actor Leads. The row's
+    sub_activity_id resolves to its Activity Master parent for the comparison;
+    rows with no sub_activity_id (or a dangling one) never match — a row
+    without a reliable Activity Master mapping is never exposed through Lead
+    scope, and text-name columns are never consulted."""
+    return or_(*(
+        and_(
+            WorkReportTask.project_id == project_id,
+            WorkReportTask.sub_activity_id.in_(
+                select(ActivityMaster.id).where(ActivityMaster.parent_id == activity_id)
+            ),
+        )
+        for project_id, activity_id in pairs
+    ))
+
+
+def _led_report_ids(pairs: set[tuple[uuid.UUID, uuid.UUID]]):
+    """Subquery: ids of reports carrying at least one led-activity task row."""
+    return select(WorkReportTask.report_id).where(_led_rows_filter(pairs))
+
+
+def _report_has_led_task(db: Session, actor: User, report_id: uuid.UUID) -> bool:
+    pairs = authz.led_activity_pairs(db, actor)
+    if not pairs:
+        return False
+    return db.execute(
+        select(WorkReportTask.id).where(
+            WorkReportTask.report_id == report_id,
+            _led_rows_filter(pairs),
+        ).limit(1)
+    ).scalar_one_or_none() is not None
+
+
 def _report_in_projects(
     db: Session, report_id: uuid.UUID, project_ids: set[uuid.UUID]
 ) -> bool:
@@ -151,6 +186,14 @@ def _decorate(
     me = _current_employee(db, actor)
     reviewable = authz.reviewable_project_ids(db, actor)
     for r in reports:
+        r.scoped_to_led_activities = False
+    # Activity-Lead row scoping: a foreign report visible only through a Lead
+    # assignment is trimmed to its led rows BEFORE the flags below, so
+    # can_review (Head-only, and False for such reports anyway) never reads
+    # rows the viewer isn't allowed to see.
+    if actor.role != UserRole.project_manager and me is not None:
+        _restrict_to_led_rows(db, actor, me.id, reviewable, reports)
+    for r in reports:
         r.can_review = (
             me is not None
             and r.employee_id != me.id
@@ -169,6 +212,51 @@ def _decorate(
             and any(t.project_id in reviewable for t in r.tasks)
         )
     return reports
+
+
+def _restrict_to_led_rows(
+    db: Session,
+    actor: User,
+    me_id: uuid.UUID,
+    reviewable: set[uuid.UUID],
+    reports: list[DailyWorkReport],
+) -> None:
+    """Trim Activity-Lead-scoped reports to just their led task rows.
+
+    A report the viewer reaches ONLY through a Lead assignment (not their own,
+    not from a project they Head) must expose only the task rows whose exact
+    (project, parent activity) pair the viewer Leads — never the rest of a
+    mixed-activity report. Own and Head-scoped reports keep every row. Reports
+    that lose rows get `scoped_to_led_activities = True` so the UI can say the
+    view is partial. Requires `.tasks` to be attached."""
+    foreign = [
+        r for r in reports
+        if r.employee_id != me_id
+        and not any(t.project_id in reviewable for t in r.tasks)
+    ]
+    if not foreign:
+        return
+    pairs = authz.led_activity_pairs(db, actor)
+    sub_ids = {
+        t.sub_activity_id for r in foreign for t in r.tasks
+        if t.sub_activity_id is not None
+    }
+    parent_of: dict[uuid.UUID, uuid.UUID | None] = {}
+    if pairs and sub_ids:
+        parent_of = dict(db.execute(
+            select(ActivityMaster.id, ActivityMaster.parent_id).where(
+                ActivityMaster.id.in_(sub_ids)
+            )
+        ).all())
+    for r in foreign:
+        kept = [
+            t for t in r.tasks
+            if t.sub_activity_id is not None
+            and (t.project_id, parent_of.get(t.sub_activity_id)) in pairs
+        ]
+        if len(kept) != len(r.tasks):
+            r.scoped_to_led_activities = True
+        r.tasks = kept
 
 
 # ---------- helpers --------------------------------------------------------
@@ -478,30 +566,39 @@ def _apply_scope(db: Session, actor: User, stmt):
     A Head sees own reports (all statuses) + submitted/rejected/granted reports
     from projects they head, so they can still track a report they sent
     back or granted edit access to, not just the moment it's re-submitted.
-    Everyone else (team leads and contributors alike) sees only their own
-    reports (all statuses).
+    An Activity Lead additionally sees submitted/rejected/granted reports that
+    carry at least one task row on an activity they Lead (never drafts); the
+    row-level trim to just those led rows happens in _decorate /
+    build_activity_rows — this report-level scope only decides which report
+    headers are visible at all. Permissions are additive (own OR Head OR Lead).
+    Everyone else (contributors/QC) sees only their own reports (all statuses).
     """
     if actor.role == UserRole.project_manager:
         return stmt.where(DailyWorkReport.status != WorkReportStatus.draft), True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
+    conds = [DailyWorkReport.employee_id == me.id]
     # Head sees reviewable reports from projects they head.
     scoped_ids = authz.reviewable_project_ids(db, actor)
     if scoped_ids:
         scoped_reports = select(WorkReportTask.report_id).where(
             WorkReportTask.project_id.in_(scoped_ids)
         )
-        return stmt.where(
-            or_(
-                DailyWorkReport.employee_id == me.id,
-                and_(
-                    DailyWorkReport.id.in_(scoped_reports),
-                    DailyWorkReport.status.in_(_REVIEWABLE),
-                ),
-            )
-        ), True
-    return stmt.where(DailyWorkReport.employee_id == me.id), True
+        conds.append(and_(
+            DailyWorkReport.id.in_(scoped_reports),
+            DailyWorkReport.status.in_(_REVIEWABLE),
+        ))
+    # Activity Lead sees non-draft reports containing a led-activity row.
+    led_pairs = authz.led_activity_pairs(db, actor)
+    if led_pairs:
+        conds.append(and_(
+            DailyWorkReport.id.in_(_led_report_ids(led_pairs)),
+            DailyWorkReport.status.in_(_REVIEWABLE),
+        ))
+    if len(conds) == 1:
+        return stmt.where(conds[0]), True
+    return stmt.where(or_(*conds)), True
 
 
 def list_work_reports(
@@ -613,6 +710,28 @@ def build_activity_rows(
         .join(Employee, Employee.id == DailyWorkReport.employee_id)
         .where(WorkReportTask.report_id.in_(scoped))
     )
+    # Row-level trim mirroring _restrict_to_led_rows: within the scoped
+    # reports, a non-PM sees a task row only when the report is their own, the
+    # report touches a project they Head (Head keeps the full report), or the
+    # row itself is on a led (project, activity) pair. Applied in SQL so the
+    # preview and the Excel export share the exact same scoped data, and no
+    # supplied filter parameter can widen it (filters below only AND-narrow).
+    if actor.role != UserRole.project_manager:
+        me = _current_employee(db, actor)
+        row_conds = [DailyWorkReport.employee_id == me.id]
+        head_ids = authz.reviewable_project_ids(db, actor)
+        if head_ids:
+            row_conds.append(
+                DailyWorkReport.id.in_(
+                    select(WorkReportTask.report_id).where(
+                        WorkReportTask.project_id.in_(head_ids)
+                    )
+                )
+            )
+        led_pairs = authz.led_activity_pairs(db, actor)
+        if led_pairs:
+            row_conds.append(_led_rows_filter(led_pairs))
+        q = q.where(or_(*row_conds))
     if employee_id is not None:
         q = q.where(DailyWorkReport.employee_id == employee_id)
     if project_id is not None:
@@ -778,6 +897,11 @@ def _assert_can_read(db: Session, actor: User, report: DailyWorkReport) -> None:
         return
     if _report_in_projects(db, report.id, authz.reviewable_project_ids(db, actor)):
         return
+    # Activity Lead: non-draft reports carrying a led-activity row. The
+    # response is trimmed to just those rows in _decorate — direct detail
+    # access can never reveal the unrelated rows of a mixed report.
+    if report.status in _REVIEWABLE and _report_has_led_task(db, actor, report.id):
+        return
     raise AppError(
         "forbidden",
         "You can only view your own reports or reports on projects you lead.",
@@ -809,6 +933,80 @@ def get_open_tasks(db: Session, actor: User, report_date: date) -> list[dict]:
     if me is None:
         return []
     return wi.get_open_work_items(db, employee_id=me.id, report_date=report_date)
+
+
+def get_report_scope(db: Session, actor: User) -> dict:
+    """Filter metadata for the reports view — the minimum the employee filter
+    needs, NOT a widening of /employees (which stays RBAC-limited).
+
+    Head/Lead employees get their accessible projects, the activities they Lead
+    per project (empty list = whole project, i.e. Head access), and each
+    project's active members. PMs get empty scope — they already have the
+    org-wide employee filter client-side. Purely informational for the UI: the
+    report list / export queries enforce the same scope server-side regardless
+    of what the client sends."""
+    empty = {"is_project_head": False, "is_activity_lead": False, "projects": []}
+    if actor.role == UserRole.project_manager:
+        return empty
+    me = _current_employee(db, actor)
+    if me is None:
+        return empty
+    head_ids = authz.reviewable_project_ids(db, actor)
+    led_pairs = authz.led_activity_pairs(db, actor)
+    if not head_ids and not led_pairs:
+        return empty
+    led_by_project: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for project_id, activity_id in led_pairs:
+        led_by_project.setdefault(project_id, set()).add(activity_id)
+    projects = db.execute(
+        select(Project).where(
+            Project.id.in_(set(head_ids) | set(led_by_project)),
+            Project.deleted_at.is_(None),
+            Project.status != ProjectStatus.archived,
+        ).order_by(Project.name)
+    ).scalars().all()
+    activity_ids = {a for ids in led_by_project.values() for a in ids}
+    activity_names: dict[uuid.UUID, str] = {}
+    if activity_ids:
+        activity_names = dict(db.execute(
+            select(ActivityMaster.id, ActivityMaster.name).where(
+                ActivityMaster.id.in_(activity_ids)
+            )
+        ).all())
+    out_projects = []
+    for project in projects:
+        members = db.execute(
+            select(Employee)
+            .join(ProjectMember, ProjectMember.employee_id == Employee.id)
+            .where(
+                ProjectMember.project_id == project.id,
+                Employee.status == EmployeeStatus.active,
+                Employee.deleted_at.is_(None),
+            ).order_by(Employee.first_name, Employee.last_name)
+        ).scalars().all()
+        is_head = project.id in head_ids
+        led_here = [] if is_head else sorted(
+            led_by_project.get(project.id, set()),
+            key=lambda a: activity_names.get(a, ""),
+        )
+        out_projects.append({
+            "project_id": project.id,
+            "code": project.code,
+            "name": project.name,
+            "access": "head" if is_head else "lead",
+            "activities": [
+                {"activity_id": a, "name": activity_names.get(a)} for a in led_here
+            ],
+            "members": [
+                {"employee_id": e.id, "employee_code": e.employee_code, "name": e.full_name}
+                for e in members
+            ],
+        })
+    return {
+        "is_project_head": bool(head_ids),
+        "is_activity_lead": bool(led_pairs),
+        "projects": out_projects,
+    }
 
 
 # ---------- author writes --------------------------------------------------
