@@ -51,3 +51,4 @@ verify_rbac.js
 *.tmp
 .env
 .env.local
+backend/celerybeat-schedule*
