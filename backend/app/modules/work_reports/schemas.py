@@ -15,7 +15,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.work_reports.models import DayStatus, WorkLocation, WorkReportStatus
+from app.modules.work_reports.models import (
+    DayPart,
+    DayStatus,
+    ReportMode,
+    WorkLocation,
+    WorkReportStatus,
+)
 
 
 class WorkReportStatusFilter(str, enum.Enum):
@@ -85,6 +91,11 @@ class WorkReportTaskOut(BaseModel):
 
     id: uuid.UUID
     project_id: uuid.UUID
+    # Reporting-period link (migration 0060). day_part is resolved by the
+    # service for display ("full_day" / "first_half" / "second_half"); both are
+    # None only for rows written by pre-period code.
+    period_id: uuid.UUID | None = None
+    day_part: str | None = None
     # Snapshot fields (populated at save time; null for records predating migration 0017).
     project_name: str | None = None
     project_code: str | None = None
@@ -105,7 +116,11 @@ class WorkReportTaskOut(BaseModel):
     sub_activity_name: str | None = None
     activity_name: str | None = None
     # Frozen at submit time — see work_reports/service.py `_apply_benchmarks`.
+    # benchmark_value_snapshot is the EFFECTIVE target (base x period fraction);
+    # base/fraction record the derivation (migration 0060).
     benchmark_value_snapshot: Decimal | None = None
+    benchmark_base_value_snapshot: Decimal | None = None
+    benchmark_fraction_snapshot: Decimal | None = None
     benchmark_period_days_snapshot: int | None = None
     benchmark_type_snapshot: str | None = None
     # Which count field (tags/docs/bom/spares/pages/records) fed the calc above.
@@ -161,8 +176,44 @@ class WorkReportTaskOut(BaseModel):
     planning_plant_description: str | None = None
 
 
+class WorkReportPeriodIn(BaseModel):
+    """One reporting period of a split-day (or explicit full-day) payload.
+
+    There is deliberately NO work_fraction field: fractions are server-derived
+    from day_part (full_day 1.0, halves 0.5) and can never be client-supplied.
+    """
+
+    day_part: DayPart
+    period_status: DayStatus
+    location: WorkLocation | None = None
+    remarks: str | None = Field(default=None, max_length=_REMARKS_MAX)
+    # Empty for a non-working period; a working period needs >= 1 activity
+    # before the report can be SUBMITTED (drafts may be sparse, as today).
+    tasks: list[WorkReportTaskIn] = Field(default_factory=list)
+
+
+class WorkReportPeriodOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    day_part: str
+    period_status: DayStatus | None = None
+    location: WorkLocation | None = None
+    remarks: str | None = None
+    work_fraction: Decimal
+    # Backfilled from a historical half_day report: rendered as a legacy
+    # Full-Day period whose worked half is unknown (fraction 0.5).
+    is_legacy_half_day: bool = False
+    tasks: list[WorkReportTaskOut] = []
+
+
 class WorkReportCreate(BaseModel):
     report_date: date
+    # Split-day (migration 0060). Omitted / None = legacy full-day payload —
+    # the service builds one Full-Day period from the header fields + `tasks`.
+    # report_mode='split_day' (with `periods`) requires REPORT_DAY_PARTS_ENABLED.
+    report_mode: ReportMode | None = None
+    periods: list[WorkReportPeriodIn] | None = None
     # Google Form fields
     day_status: DayStatus | None = None
     location: WorkLocation | None = None
@@ -182,6 +233,11 @@ class WorkReportCreate(BaseModel):
 
 
 class WorkReportUpdate(BaseModel):
+    # Same convention as WorkReportCreate: None = "not part of this update"
+    # (legacy header/tasks update); supplying periods rewrites the report's
+    # periods + tasks wholesale, mirroring the existing tasks semantics.
+    report_mode: ReportMode | None = None
+    periods: list[WorkReportPeriodIn] | None = None
     day_status: DayStatus | None = None
     location: WorkLocation | None = None
     remarks: str | None = Field(default=None, max_length=_REMARKS_MAX)
@@ -220,6 +276,11 @@ class WorkReportOut(BaseModel):
     employee_name: str | None = None
     report_date: date
     status: WorkReportStatus
+    # Full-Day vs Split-Day (migration 0060). `periods` carries each period's
+    # metadata + its own task rows; the flat `tasks` list below is preserved
+    # unchanged for existing clients (every period task also appears there).
+    report_mode: str = "full_day"
+    periods: list[WorkReportPeriodOut] = []
     # Google Form fields
     day_status: DayStatus | None = None
     location: WorkLocation | None = None

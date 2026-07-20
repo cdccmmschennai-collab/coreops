@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     # the two in step per environment.
     TASK_CONTINUATION_ENABLED: bool = False
 
+    # Split-day work reports (work_report_periods, migration 0060). Off by
+    # default. Periods are ALWAYS maintained internally (every report gets a
+    # Full-Day period; legacy payloads are translated) — this flag only gates
+    # whether report_mode='split_day' payloads are accepted, so old full-day
+    # behaviour is byte-identical while disabled. The frontend reads the mirror
+    # flag NEXT_PUBLIC_REPORT_DAY_PARTS_ENABLED; keep the two in step per
+    # environment.
+    REPORT_DAY_PARTS_ENABLED: bool = False
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

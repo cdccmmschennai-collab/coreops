@@ -4,6 +4,11 @@ export interface ActivityRequest {
   id: string;
   employee_id: string;
   report_id: string | null;
+  // Split-day: the reporting period the approved activity lands in, and its
+  // display day part ("full_day" / "first_half" / "second_half"). Null for
+  // full-day / legacy requests.
+  period_id: string | null;
+  day_part: string | null;
   project_id: string;
   activity_id: string | null;
   sub_activity_id: string;
@@ -38,6 +43,8 @@ export interface ActivityRequest {
 
 export interface ActivityRequestCreateBody {
   report_id: string;
+  // Split-day: which period the requested activity targets (null = full day).
+  period_id?: string | null;
   project_id: string;
   activity_id?: string | null;
   sub_activity_id: string;

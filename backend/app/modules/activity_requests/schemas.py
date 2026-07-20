@@ -14,6 +14,10 @@ class ActivityRequestCreate(BaseModel):
     fields, no reason/remarks.
     """
     report_id: uuid.UUID
+    # Split-day reports: which reporting period the approved activity should be
+    # inserted into. None = full-day / legacy client — approval falls back to
+    # the report's first working period.
+    period_id: uuid.UUID | None = None
     project_id: uuid.UUID
     activity_id: uuid.UUID | None = None
     sub_activity_id: uuid.UUID
@@ -34,6 +38,7 @@ class ActivityRequestOut(BaseModel):
     id: uuid.UUID
     employee_id: uuid.UUID
     report_id: uuid.UUID | None
+    period_id: uuid.UUID | None = None
     project_id: uuid.UUID
     activity_id: uuid.UUID | None
     sub_activity_id: uuid.UUID
@@ -63,3 +68,8 @@ class ActivityRequestOut(BaseModel):
     current_project_code: str | None = None
     current_activity_name: str | None = None
     current_sub_activity_name: str | None = None
+
+    # Display-only: the requested period's day part ("first_half" /
+    # "second_half" / "full_day"), resolved by the service so the PM view can
+    # tag which half a split-day request targets. None for legacy requests.
+    day_part: str | None = None

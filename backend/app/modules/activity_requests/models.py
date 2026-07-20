@@ -45,6 +45,15 @@ class ActivityRequest(UUIDMixin, Base):
         ForeignKey("daily_work_reports.id", ondelete="CASCADE"),
         nullable=True,
     )
+    # The reporting period (migration 0060) the requested activity should land
+    # in on approval. NULL for legacy rows and full-day requests predating the
+    # split-day feature; approval then falls back to the report's first working
+    # period. SET NULL: losing the period never orphans the request itself.
+    period_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("work_report_periods.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )

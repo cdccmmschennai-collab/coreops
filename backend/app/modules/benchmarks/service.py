@@ -12,10 +12,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.service import (
+    DAY_PART_HALF_LABELS,
+    DAY_PART_SORT_RANK,
     compute_week_bounds,
     get_cycle_task_activities,
     get_daily_benchmark_ledger,
     get_overdue_activities,
+    get_period_benchmark_ledger,
     get_task_status_activities,
 )
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
@@ -543,8 +546,10 @@ def get_pending_benchmark_export(
     cycle_start, cycle_end = _cycle_window(cycle, today or date.today())
 
     # The ledger derives its own bounds from `today`, so any date inside the
-    # wanted cycle selects it; use its end day.
-    daily = get_daily_benchmark_ledger(db, employee_ids=None, today=cycle_end)
+    # wanted cycle selects it; use its end day. The export reads the PER-PERIOD
+    # ledger (frozen snapshots, one row per DAY PART) — the merged
+    # get_daily_benchmark_ledger stays serving the live alert/performance views.
+    daily = get_period_benchmark_ledger(db, employee_ids=None, today=cycle_end)
     cycle_tasks = get_cycle_task_activities(db, employee_ids=None, today=cycle_end)
 
     # Inclusion set: everyone with any benchmark activity this cycle, achievers
@@ -565,6 +570,7 @@ def get_pending_benchmark_export(
         {
             "employee_label": labels.get(r["employee_id"], "-"),
             "date": r["date"],
+            "day_part": r["day_part"],
             "project": _project_label(r["project_code"], r["project_name"]),
             "activity": r["activity_name"] or "",
             "sub_activity": r["sub_activity_name"],
@@ -572,9 +578,12 @@ def get_pending_benchmark_export(
             "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
             "unit": r["benchmark_unit"],
             "target": r["target"],
+            # Already mapped per the row's own period by the period ledger:
+            # half rows carry that half's remarks, full-day/legacy rows the
+            # report-header remark.
             "day_remarks": _day_remarks(r.get("day_remarks")),
             "actual": r["actual"],
-            "pending": r["pending"],  # daily shortage; the subtotal nets the cycle
+            "pending": r["pending"],  # per-period shortage; the subtotal nets the cycle
             "target_total": r["target"],
             "actual_total": r["actual"],
             "pending_total": r["pending"],
@@ -582,17 +591,24 @@ def get_pending_benchmark_export(
         for r in daily
         if r["employee_id"] in included
     ]
-    # Every lumpsum (completed / overdue / open) for an included employee.
+    # Every lumpsum (completed / overdue / open) for an included employee. The
+    # REMARKS mapping matches the numeric rows: a task in a half shows that
+    # half's period remarks, a full-day/legacy task the report-header remark.
     rows += [
         {
             "employee_label": labels.get(r["employee_id"], "-"),
             "date": r["report_date"],
+            "day_part": r["day_part"],
             "project": _project_label(r["project_code"], r["project_name"]),
             "activity": r["activity_name"] or "",
             "sub_activity": r["sub_activity_name"],
             "sub_activity_id": r["sub_activity_id"],
             "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
-            "day_remarks": _day_remarks(r.get("day_remarks")),
+            "day_remarks": _day_remarks(
+                r.get("period_remarks")
+                if r["day_part"] in DAY_PART_HALF_LABELS
+                else r.get("day_remarks")
+            ),
             **_task_export_cells(r),
         }
         for r in cycle_tasks
@@ -602,9 +618,10 @@ def get_pending_benchmark_export(
     # Sort so every row of one sub-activity stays contiguous before its SUB
     # ACTIVITY TOTAL: employee, then activity, then sub-activity name (the
     # required display order), then group_key (keeps two same-named-but-distinct
-    # sub-activities apart), then date, then project. ACHIEVEMENT % / DIFFERENCE
-    # % are derived per SUB ACTIVITY TOTAL by the workbook builder from the
-    # *_total twins, so they are not precomputed per employee here.
+    # sub-activities apart), then date, then DAY PART (FIRST HALF always before
+    # SECOND HALF — never DB insertion order), then project. ACHIEVEMENT % /
+    # DIFFERENCE % are derived per SUB ACTIVITY TOTAL by the workbook builder
+    # from the *_total twins, so they are not precomputed per employee here.
     rows.sort(
         key=lambda r: (
             r["employee_label"],
@@ -612,6 +629,7 @@ def get_pending_benchmark_export(
             r["sub_activity"] or "",
             r["group_key"],
             r["date"],
+            DAY_PART_SORT_RANK.get(r["day_part"], 0),
             r["project"],
         )
     )

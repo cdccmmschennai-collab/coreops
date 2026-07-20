@@ -141,7 +141,13 @@ export function ActivityRequestsView() {
                   muted
                 />
                 <ActivityBlock
-                  label="Requested Activity"
+                  label={
+                    r.day_part === "first_half"
+                      ? "Requested Activity (First Half)"
+                      : r.day_part === "second_half"
+                        ? "Requested Activity (Second Half)"
+                        : "Requested Activity"
+                  }
                   projectCode={r.project_code}
                   activity={r.activity_name}
                   subActivity={r.sub_activity_name}

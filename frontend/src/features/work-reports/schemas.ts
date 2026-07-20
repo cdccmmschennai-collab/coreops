@@ -89,6 +89,31 @@ export const NO_ACTIVITY_DAY_STATUSES = new Set<DayStatus>([
 export const isNoActivityDayStatus = (s: DayStatus | undefined): boolean =>
   s !== undefined && NO_ACTIVITY_DAY_STATUSES.has(s);
 
+// ── day parts (Full-Day / Split-Day) ─────────────────────────────────────────
+
+export const DAY_PARTS = ["full_day", "first_half", "second_half"] as const;
+export type DayPart = (typeof DAY_PARTS)[number];
+
+export const DAY_PART_LABEL: Record<DayPart, string> = {
+  full_day: "Full Day",
+  first_half: "First Half",
+  second_half: "Second Half",
+};
+
+// Statuses offered by a split-day period card. Everything except `half_day` —
+// a half period states its own working/leave status precisely, so the legacy
+// ambiguous "Half Day" value is never valid inside a split report.
+export const PERIOD_STATUSES = DAY_STATUSES.filter(
+  (s) => s !== "half_day",
+) as DayStatus[];
+
+/** Server-mirrored fraction per day part — display only, never sent. */
+export const DAY_PART_FRACTION: Record<DayPart, number> = {
+  full_day: 1,
+  first_half: 0.5,
+  second_half: 0.5,
+};
+
 // ── location ──────────────────────────────────────────────────────────────────
 
 export const WORK_LOCATIONS = ["hyderabad", "chennai", "qatar"] as const;
@@ -155,6 +180,9 @@ const countSchema = z
 
 const taskSchema = z
   .object({
+    // Which reporting period the row belongs to. Always "full_day" in the
+    // classic form; the Split Day editor stamps first_half / second_half.
+    day_part: z.enum(DAY_PARTS).default("full_day"),
     project_id: z.string().min(1, "Project is required"),
     task_title: z.string().optional(),
     // Task-based hours (separate from the project-activity duration below).
@@ -236,9 +264,24 @@ const taskSchema = z
 
 // ── report form schema ────────────────────────────────────────────────────────
 
+// Per-half period state for Split Day mode. Kept as flat optional fields so
+// the classic full-day form is untouched when day_format = "full_day".
+// Location is NOT per-half: the report has one Location (beside Date) that
+// applies to the whole day — toPeriods stamps it onto every working half.
+const halfPeriodSchema = z.object({
+  status:   z.enum(DAY_STATUSES).optional(),
+  remarks:  z.string().max(REMARKS_MAX, `Keep under ${REMARKS_MAX} characters`).default(""),
+});
+
+export type HalfPeriodValues = z.infer<typeof halfPeriodSchema>;
+
 export const workReportFormSchema = z
   .object({
     report_date: z.string().min(1, "Date is required"),
+    // Full Day (classic, default) vs Split Day (two period cards).
+    day_format: z.enum(["full_day", "split_day"]).default("full_day"),
+    first_half:  halfPeriodSchema.default({ status: undefined, remarks: "" }),
+    second_half: halfPeriodSchema.default({ status: undefined, remarks: "" }),
     day_status: z.enum(DAY_STATUSES).optional(),
     location:   z.enum(WORK_LOCATIONS).optional(),
     well_head_no: z.string().max(500).optional().default(""),
@@ -254,32 +297,83 @@ export const workReportFormSchema = z
     tasks: z.array(taskSchema),
   })
   .superRefine((v, ctx) => {
-    // Leave-type days (week off / leave / company holiday / comp-off): the
-    // employee did no project work, so Office Location and activities are not
-    // required — only Day Status, Remarks and Query apply.
-    const noActivity = isNoActivityDayStatus(v.day_status);
+    if (v.day_format === "split_day") {
+      // Split Day: each half validates on its own; the legacy day_status /
+      // location / flat-tasks requirements do not apply (the server derives
+      // the header from the halves).
+      const halves: Array<["first_half" | "second_half", HalfPeriodValues]> = [
+        ["first_half", v.first_half],
+        ["second_half", v.second_half],
+      ];
+      let workingHalves = 0;
+      for (const [key, half] of halves) {
+        if (half.status === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Status is required",
+            path: [key, "status"],
+          });
+          continue;
+        }
+        const working = !isNoActivityDayStatus(half.status);
+        if (!working) continue;
+        workingHalves += 1;
+        if (!v.tasks.some((t) => t.day_part === key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Add at least one activity to the ${DAY_PART_LABEL[key]} period`,
+            path: ["tasks"],
+          });
+        }
+      }
+      // One Location for the whole day — required as soon as any half works.
+      if (workingHalves > 0 && v.location === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Office Location is required",
+          path: ["location"],
+        });
+      }
+      if (
+        workingHalves === 0 &&
+        v.first_half.status !== undefined &&
+        v.second_half.status !== undefined
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "Both halves are non-working — switch to Full Day and pick the matching day status",
+          path: ["day_format"],
+        });
+      }
+    } else {
+      // Leave-type days (week off / leave / company holiday / comp-off): the
+      // employee did no project work, so Office Location and activities are not
+      // required — only Day Status, Remarks and Query apply.
+      const noActivity = isNoActivityDayStatus(v.day_status);
 
-    // Required: Day Status (always). Office Location only on working days.
-    if (v.day_status === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Day Status is required",
-        path: ["day_status"],
-      });
-    }
-    if (!noActivity && v.location === undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Office Location is required",
-        path: ["location"],
-      });
-    }
-    if (!noActivity && v.tasks.length === 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Add at least one activity",
-        path: ["tasks"],
-      });
+      // Required: Day Status (always). Office Location only on working days.
+      if (v.day_status === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Day Status is required",
+          path: ["day_status"],
+        });
+      }
+      if (!noActivity && v.location === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Office Location is required",
+          path: ["location"],
+        });
+      }
+      if (!noActivity && v.tasks.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Add at least one activity",
+          path: ["tasks"],
+        });
+      }
     }
     const totalMin = v.tasks.reduce(
       (sum, t) =>
@@ -300,6 +394,7 @@ export type WorkReportFormValues = z.infer<typeof workReportFormSchema>;
 // ── empty defaults ────────────────────────────────────────────────────────────
 
 export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
+  day_part:       "full_day",
   project_id:     "",
   task_title:     undefined,
   task_hours:     "",
@@ -342,8 +437,16 @@ export const editRequestSchema = z.object({
 
 export type EditRequestValues = z.infer<typeof editRequestSchema>;
 
+export const EMPTY_HALF_PERIOD: HalfPeriodValues = {
+  status: undefined,
+  remarks: "",
+};
+
 export const EMPTY_WORK_REPORT_FORM: WorkReportFormValues = {
   report_date:  "",
+  day_format:   "full_day",
+  first_half:   { ...EMPTY_HALF_PERIOD },
+  second_half:  { ...EMPTY_HALF_PERIOD },
   day_status:   undefined,
   location:     undefined,
   well_head_no: "",
@@ -365,8 +468,8 @@ const orNull = (v: string | undefined): string | null =>
 const toCount = (v: string | undefined): number =>
   Number.isFinite(Number(v)) ? Math.max(0, Math.trunc(Number(v))) : 0;
 
-function toTasks(v: WorkReportFormValues) {
-  return v.tasks.map((t) => ({
+function toTaskBody(t: WorkReportFormValues["tasks"][number]) {
+  return {
     project_id:    t.project_id,
     description:   t.description.trim(),
     minutes_spent: hoursToMinutes(t.duration_hours),
@@ -382,14 +485,36 @@ function toTasks(v: WorkReportFormValues) {
     is_completed:  t.is_completed,
     work_item_id:  orNull(t.work_item_id),
     maintenance_plant_id: orNull(t.maintenance_plant_id),
-  }));
+  };
 }
 
-export function toCreateBody(v: WorkReportFormValues): WorkReportCreateBody {
+function toTasks(v: WorkReportFormValues) {
+  // Full-Day bodies carry ONLY full_day rows — a stray half row (from a mode
+  // switch or stale state) must never be re-labelled as Full-Day work.
+  return v.tasks.filter((t) => t.day_part === "full_day").map(toTaskBody);
+}
+
+/** Split Day: the periods payload — each half with its own status / remarks
+ *  and the task rows stamped for it. The report's ONE Location is stamped
+ *  onto every working half (the two periods can never carry different
+ *  locations). Fractions are never sent (the server derives them). */
+function toPeriods(v: WorkReportFormValues) {
+  return (["first_half", "second_half"] as const).map((key) => {
+    const half = v[key];
+    const working = !isNoActivityDayStatus(half.status);
+    return {
+      day_part: key,
+      period_status: half.status ?? null,
+      location: working ? v.location ?? null : null,
+      remarks: orNull(half.remarks),
+      tasks: v.tasks.filter((t) => t.day_part === key).map(toTaskBody),
+    };
+  });
+}
+
+/** Shared header fields (both payload shapes carry them verbatim). */
+function toHeader(v: WorkReportFormValues) {
   return {
-    report_date:   v.report_date,
-    day_status:    v.day_status ?? null,
-    location:      v.location ?? null,
     remarks:       orNull(v.remarks),
     query_text:    orNull(v.query_text),
     well_head_no:  orNull(v.well_head_no),
@@ -398,30 +523,70 @@ export function toCreateBody(v: WorkReportFormValues): WorkReportCreateBody {
     task_list_op_count:     toCount(v.task_list_op_count) || null,
     maintenance_item_count: toCount(v.maintenance_item_count) || null,
     maintenance_plan_count: toCount(v.maintenance_plan_count) || null,
+  };
+}
+
+export function toCreateBody(v: WorkReportFormValues): WorkReportCreateBody {
+  if (v.day_format === "split_day") {
+    return {
+      report_date: v.report_date,
+      report_mode: "split_day",
+      periods: toPeriods(v),
+      ...toHeader(v),
+      // Split Day carries remarks per period only — a stale Day Remark must
+      // never ride along on the header.
+      remarks: null,
+    } as WorkReportCreateBody;
+  }
+  return {
+    report_date:   v.report_date,
+    day_status:    v.day_status ?? null,
+    location:      v.location ?? null,
+    ...toHeader(v),
     tasks: toTasks(v),
   };
 }
 
 export function toUpdateBody(v: WorkReportFormValues): WorkReportUpdateBody {
+  if (v.day_format === "split_day") {
+    return {
+      report_mode: "split_day",
+      periods: toPeriods(v),
+      ...toHeader(v),
+      // Same rule as toCreateBody: split remarks live on the periods.
+      remarks: null,
+    } as WorkReportUpdateBody;
+  }
   return {
     day_status:    v.day_status ?? null,
     location:      v.location ?? null,
-    remarks:       orNull(v.remarks),
-    query_text:    orNull(v.query_text),
-    well_head_no:  orNull(v.well_head_no),
-    pm_plant:      orNull(v.pm_plant),
-    task_list_count:        toCount(v.task_list_count) || null,
-    task_list_op_count:     toCount(v.task_list_op_count) || null,
-    maintenance_item_count: toCount(v.maintenance_item_count) || null,
-    maintenance_plan_count: toCount(v.maintenance_plan_count) || null,
+    ...toHeader(v),
     tasks: toTasks(v),
   };
 }
 
 export function toFormValues(report: WorkReport): WorkReportFormValues {
+  const isSplit = report.report_mode === "split_day";
+  // The single report Location restores from the header (`report.location`,
+  // which the server derives from the working halves on a split report).
+  const halfValues = (part: DayPart): HalfPeriodValues => {
+    const p = report.periods?.find((x) => x.day_part === part);
+    return {
+      status:   (p?.period_status as DayStatus | undefined) ?? undefined,
+      remarks:  p?.remarks ?? "",
+    };
+  };
   return {
     report_date:   report.report_date,
-    day_status:    (report.day_status as DayStatus | undefined) ?? undefined,
+    day_format:    isSplit ? "split_day" : "full_day",
+    first_half:    isSplit ? halfValues("first_half") : { ...EMPTY_HALF_PERIOD },
+    second_half:   isSplit ? halfValues("second_half") : { ...EMPTY_HALF_PERIOD },
+    // Full Day and Split Day are independent modes: a split report populates
+    // ONLY its periods — the server-derived header day_status (e.g.
+    // "half_day") and any legacy header remark are not Full-Day input and
+    // must not pre-fill the Full-Day fields. Location is the one shared,
+    // report-level field and restores in both modes.
+    day_status:    isSplit ? undefined : (report.day_status as DayStatus | undefined) ?? undefined,
     location:      (report.location as WorkLocation | undefined) ?? undefined,
     well_head_no:  report.well_head_no ?? "",
     pm_plant:      report.pm_plant ?? "",
@@ -429,11 +594,12 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
     task_list_op_count:     String(report.task_list_op_count ?? 0),
     maintenance_item_count: String(report.maintenance_item_count ?? 0),
     maintenance_plan_count: String(report.maintenance_plan_count ?? 0),
-    remarks:    report.remarks ?? "",
+    remarks:    isSplit ? "" : report.remarks ?? "",
     query_text: report.query_text ?? "",
     tasks:
       report.tasks.length > 0
         ? report.tasks.map((t) => ({
+            day_part:       ((t.day_part as DayPart | null) ?? "full_day") as DayPart,
             project_id:     t.project_id,
             task_hours:     t.task_minutes_spent != null ? minutesToHours(t.task_minutes_spent) : "",
             project_name:   t.project_name ?? undefined,

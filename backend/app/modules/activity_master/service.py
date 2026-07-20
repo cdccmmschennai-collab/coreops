@@ -146,6 +146,7 @@ def get_daily_benchmark_ledger(
     from app.modules.work_reports.models import (
         DailyWorkReport,
         DayStatus,
+        WorkReportPeriod,
         WorkReportStatus,
         WorkReportTask,
     )
@@ -163,6 +164,8 @@ def get_daily_benchmark_ledger(
             DailyWorkReport.employee_id,
             DailyWorkReport.report_date,
             DailyWorkReport.day_status,
+            WorkReportTask.period_id,
+            WorkReportPeriod.work_fraction,
             # The employee's own DAY remark for this report date. Distinct from
             # ActivityMaster.benchmark_remarks (guidance TO the employee) — the
             # export's DAY REMARKS column carries only this one.
@@ -179,6 +182,10 @@ def get_daily_benchmark_ledger(
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        # Period fraction (split-day, migration 0060). Outer join: rows written
+        # by pre-period code have no period and fall back to the legacy
+        # report-wide half_day rule below.
+        .outerjoin(WorkReportPeriod, WorkReportTask.period_id == WorkReportPeriod.id)
         .where(
             DailyWorkReport.status == WorkReportStatus.submitted,
             DailyWorkReport.report_date >= week_start,
@@ -221,8 +228,14 @@ def get_daily_benchmark_ledger(
                 "projects": [],
                 "project_codes": [],
                 # Same for every row of a given (employee, date) report; used to
-                # halve the day's target on a half day.
+                # halve the day's target on a legacy (period-less) half day.
                 "day_status": r.day_status,
+                # Distinct period fractions this sub-activity spans that day —
+                # the target scales by their sum (capped at a full day), so the
+                # same activity in both halves reads ONE full-day target while
+                # a single half reads half of it. Keyed per period so two rows
+                # in the same period never double the target.
+                "fractions": {},
                 # Also per-report, not per-task: every detail row of this date
                 # repeats it, so a filtered row still reads on its own.
                 "day_remarks": r.day_remarks,
@@ -230,6 +243,12 @@ def get_daily_benchmark_ledger(
         )
         bucket["actual"] += Decimal(r.actual or 0)
         bucket["hours_minutes"] += int(r.hours_minutes or 0)
+        if r.period_id is not None and r.work_fraction is not None:
+            bucket["fractions"][r.period_id] = Decimal(r.work_fraction)
+        else:
+            bucket["fractions"]["legacy"] = (
+                Decimal("0.5") if r.day_status == DayStatus.half_day else Decimal("1.0")
+            )
         if r.project_name and r.project_name not in bucket["projects"]:
             bucket["projects"].append(r.project_name)
         if r.project_code and r.project_code not in bucket["project_codes"]:
@@ -249,10 +268,16 @@ def get_daily_benchmark_ledger(
     out = []
     for (employee_id, d, sub_activity_id), bucket in day_by_key.items():
         m = meta[(employee_id, sub_activity_id)]
-        target = Decimal(str(m["benchmark_value"] or 0))
-        # Half day -> the day's target (and therefore its pending) is halved.
-        if bucket.get("day_status") == DayStatus.half_day:
-            target = target / 2
+        base = Decimal(str(m["benchmark_value"] or 0))
+        # Period-fraction scaling (split-day): target = base x the summed
+        # distinct period fractions, capped at a full day. A legacy half_day
+        # report contributes a single 0.5 "legacy" fraction — identical to the
+        # old report-wide halving.
+        fraction = min(
+            Decimal("1.0"),
+            sum(bucket["fractions"].values(), Decimal("0")) or Decimal("1.0"),
+        )
+        target = base * fraction
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
         project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None
@@ -274,6 +299,236 @@ def get_daily_benchmark_ledger(
             "pending": pending,
         })
     out.sort(key=lambda r: (r["date"], r["sub_activity_name"]))
+    return out
+
+
+# Export display labels for a task row's reporting period. HALF DAY (LEGACY)
+# covers every half-worked day whose worked half was never recorded — the
+# backfilled/new legacy half_day reports — and is deliberately never resolved
+# to FIRST/SECOND HALF by guessing.
+DAY_PART_LABEL_FULL_DAY = "FULL DAY"
+DAY_PART_LABEL_FIRST_HALF = "FIRST HALF"
+DAY_PART_LABEL_SECOND_HALF = "SECOND HALF"
+DAY_PART_LABEL_LEGACY_HALF_DAY = "HALF DAY (LEGACY)"
+# Fixed display order of the parts within one date. FIRST HALF always precedes
+# SECOND HALF; the full-day forms sort ahead of both.
+DAY_PART_SORT_RANK = {
+    DAY_PART_LABEL_FULL_DAY: 0,
+    DAY_PART_LABEL_LEGACY_HALF_DAY: 1,
+    DAY_PART_LABEL_FIRST_HALF: 2,
+    DAY_PART_LABEL_SECOND_HALF: 3,
+}
+DAY_PART_HALF_LABELS = frozenset(
+    {DAY_PART_LABEL_FIRST_HALF, DAY_PART_LABEL_SECOND_HALF}
+)
+
+
+def export_day_part_label(day_part, is_legacy_half_day, day_status) -> str:
+    """DAY PART cell for one work-report-task row of the benchmark export.
+
+    Derived ONLY from the task's linked period (day_part + is_legacy_half_day)
+    — never from row order, activity order, or position in the report. A
+    period-less deploy-gap row falls back to the report-wide legacy rule the
+    read paths already use: a half_day header is a half-worked day whose
+    worked half is unknown, anything else reads as a full day."""
+    from app.modules.work_reports.models import DayPart, DayStatus
+
+    if day_part is None:
+        if day_status == DayStatus.half_day:
+            return DAY_PART_LABEL_LEGACY_HALF_DAY
+        return DAY_PART_LABEL_FULL_DAY
+    if is_legacy_half_day:
+        return DAY_PART_LABEL_LEGACY_HALF_DAY
+    if day_part == DayPart.first_half.value:
+        return DAY_PART_LABEL_FIRST_HALF
+    if day_part == DayPart.second_half.value:
+        return DAY_PART_LABEL_SECOND_HALF
+    return DAY_PART_LABEL_FULL_DAY
+
+
+def get_period_benchmark_ledger(
+    db: Session,
+    *,
+    employee_ids: set[uuid.UUID] | None = None,
+    today: date | None = None,
+) -> list[dict]:
+    """Per-PERIOD daily benchmark rows for the Pending Benchmark export: one
+    row per (employee, date, DAY PART, sub_activity) actually submitted this
+    cycle. Same row universe as get_daily_benchmark_ledger (which stays as-is
+    for the live alert/performance views), with three deliberate differences:
+
+    - A Split-Day date yields separate FIRST HALF / SECOND HALF rows instead
+      of one merged row, each labelled via export_day_part_label.
+    - target is the FROZEN submit-time benchmark_value_snapshot — the
+      effective per-period target the submission already computed (base x
+      fraction). No fraction is ever applied on top of it, and a later
+      Activity Master edit never rewrites it. Only a pre-snapshot row falls
+      back to the live value scaled by its period fraction (the old rule).
+    - day_remarks carries the value the REMARKS column must show for the row:
+      the row's own period remarks for a half, the report-header remark for
+      Full-Day and legacy half-day rows. Never both, never the other half's.
+
+    actual reads the count field named by relevant_count_field_snapshot
+    (fallback: the live relevant_count_field), summed exactly as entered —
+    never divided for half-day rows. Multiple task rows of one sub-activity
+    inside ONE period (e.g. split across projects) still collapse to a single
+    row: actuals sum, the effective target counts once, project labels join."""
+    from app.modules.work_reports.models import (
+        DailyWorkReport,
+        DayStatus,
+        WorkReportPeriod,
+        WorkReportStatus,
+        WorkReportTask,
+    )
+
+    today = today or date.today()
+    week_start, week_end = compute_week_bounds(today)
+
+    stmt = (
+        select(
+            DailyWorkReport.employee_id,
+            DailyWorkReport.report_date,
+            DailyWorkReport.day_status,
+            DailyWorkReport.remarks.label("header_remarks"),
+            WorkReportTask.period_id,
+            WorkReportPeriod.day_part,
+            WorkReportPeriod.is_legacy_half_day,
+            WorkReportPeriod.remarks.label("period_remarks"),
+            WorkReportPeriod.work_fraction,
+            ActivityMaster.parent_id.label("activity_id"),
+            ActivityMaster.id.label("sub_activity_id"),
+            ActivityMaster.name.label("sub_activity_name"),
+            ActivityMaster.benchmark_value,
+            ActivityMaster.relevant_count_field,
+            WorkReportTask.benchmark_value_snapshot,
+            WorkReportTask.relevant_count_field_snapshot,
+            WorkReportTask.tags_count,
+            WorkReportTask.docs_count,
+            WorkReportTask.bom_count,
+            WorkReportTask.spares_count,
+            WorkReportTask.pages_count,
+            WorkReportTask.records_count,
+            WorkReportTask.project_name,
+            WorkReportTask.project_code,
+        )
+        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
+        .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        .outerjoin(WorkReportPeriod, WorkReportTask.period_id == WorkReportPeriod.id)
+        .where(
+            DailyWorkReport.status == WorkReportStatus.submitted,
+            DailyWorkReport.report_date >= week_start,
+            DailyWorkReport.report_date <= week_end,
+            # Same disjoint split as the daily ledger: TASK_WITH_QUANTITY is
+            # exported through get_cycle_task_activities only.
+            ActivityMaster.benchmark_type.in_(DAILY_QUANTITY_BENCHMARK_TYPES),
+        )
+    )
+    if employee_ids is not None:
+        if not employee_ids:
+            return []
+        stmt = stmt.where(DailyWorkReport.employee_id.in_(employee_ids))
+
+    rows = db.execute(stmt).all()
+    if not rows:
+        return []
+
+    # One bucket per (employee, date, sub_activity, period). Period-less
+    # deploy-gap rows of one report share a single "legacy" bucket, exactly as
+    # the read-path fallback treats them (one full-day/legacy-half period).
+    buckets: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r.employee_id, r.report_date, r.sub_activity_id, r.period_id or "legacy")
+        label = export_day_part_label(r.day_part, r.is_legacy_half_day, r.day_status)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "employee_id": r.employee_id,
+                "date": r.report_date,
+                "activity_id": r.activity_id,
+                "sub_activity_id": r.sub_activity_id,
+                "sub_activity_name": r.sub_activity_name,
+                "day_part": label,
+                # The approved remarks mapping: a half shows its own period
+                # remarks; FULL DAY / HALF DAY (LEGACY) show the header remark.
+                "day_remarks": (
+                    r.period_remarks
+                    if label in DAY_PART_HALF_LABELS
+                    else r.header_remarks
+                ),
+                "unit": None,
+                "target_snapshot": None,
+                # Fallback derivation for pre-snapshot rows only.
+                "live_value": r.benchmark_value,
+                "fraction": (
+                    Decimal(str(r.work_fraction))
+                    if r.work_fraction is not None
+                    else (
+                        Decimal("0.5")
+                        if r.day_status == DayStatus.half_day
+                        else Decimal("1.0")
+                    )
+                ),
+                "actual": Decimal("0"),
+                "projects": [],
+                "project_codes": [],
+            },
+        )
+        unit = r.relevant_count_field_snapshot or r.relevant_count_field
+        if bucket["unit"] is None:
+            bucket["unit"] = unit
+        # The effective per-period target is frozen identically on every task
+        # row of this period + sub-activity; take the first one, never sum.
+        if bucket["target_snapshot"] is None and r.benchmark_value_snapshot is not None:
+            bucket["target_snapshot"] = Decimal(str(r.benchmark_value_snapshot))
+        count_column = COUNT_FIELD_BY_UNIT.get(unit)
+        if count_column is not None:
+            bucket["actual"] += Decimal(getattr(r, count_column) or 0)
+        if r.project_name and r.project_name not in bucket["projects"]:
+            bucket["projects"].append(r.project_name)
+        if r.project_code and r.project_code not in bucket["project_codes"]:
+            bucket["project_codes"].append(r.project_code)
+
+    activity_ids = {b["activity_id"] for b in buckets.values() if b["activity_id"]}
+    activity_names: dict[uuid.UUID, str] = {}
+    if activity_ids:
+        activity_names = dict(
+            db.execute(
+                select(ActivityMaster.id, ActivityMaster.name).where(
+                    ActivityMaster.id.in_(activity_ids)
+                )
+            ).all()
+        )
+
+    out = []
+    for bucket in buckets.values():
+        if bucket["target_snapshot"] is not None:
+            target = bucket["target_snapshot"]
+        else:
+            target = Decimal(str(bucket["live_value"] or 0)) * bucket["fraction"]
+        actual = bucket["actual"]
+        out.append({
+            "employee_id": bucket["employee_id"],
+            "date": bucket["date"],
+            "activity_id": bucket["activity_id"],
+            "activity_name": activity_names.get(bucket["activity_id"]),
+            "sub_activity_id": bucket["sub_activity_id"],
+            "sub_activity_name": bucket["sub_activity_name"],
+            "benchmark_unit": bucket["unit"],
+            "day_part": bucket["day_part"],
+            "day_remarks": bucket["day_remarks"],
+            "project_name": ", ".join(bucket["projects"]) or None,
+            "project_code": ", ".join(bucket["project_codes"]) or None,
+            "target": target,
+            "actual": actual,
+            "pending": max(Decimal("0"), target - actual),
+        })
+    out.sort(
+        key=lambda r: (
+            r["date"],
+            r["sub_activity_name"] or "",
+            DAY_PART_SORT_RANK.get(r["day_part"], 0),
+        )
+    )
     return out
 
 
@@ -398,8 +653,16 @@ def get_cycle_task_activities(
     Each row carries the same benchmark metadata + counted `actual` as
     get_overdue_activities, plus `is_completed` and `days_overdue` (0 when
     completed or not yet past due), so the export can render a Completed /
-    Overdue / Pending cell trio without a second query."""
-    from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
+    Overdue / Pending cell trio without a second query. `day_part` labels the
+    row's reporting period (export_day_part_label — Day Part only attaches to
+    the row, deadlines are never scaled by it) and `period_remarks` carries
+    that period's own remark for the export's REMARKS mapping."""
+    from app.modules.work_reports.models import (
+        DailyWorkReport,
+        WorkItem,
+        WorkReportPeriod,
+        WorkReportTask,
+    )
 
     today = today or date.today()
     week_start, week_end = compute_week_bounds(today)
@@ -422,9 +685,13 @@ def get_cycle_task_activities(
             WorkReportTask.project_code,
             WorkReportTask.project_name,
             DailyWorkReport.report_date,
+            DailyWorkReport.day_status,
             # See the ledger query: the employee's DAY remark, never the
             # Activity Master benchmark guidance.
             DailyWorkReport.remarks.label("day_remarks"),
+            WorkReportPeriod.day_part.label("period_day_part"),
+            WorkReportPeriod.is_legacy_half_day,
+            WorkReportPeriod.remarks.label("period_remarks"),
             WorkReportTask.due_date,
             completed_flag.label("is_completed"),
             ActivityMaster.benchmark_value,
@@ -435,6 +702,7 @@ def get_cycle_task_activities(
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
         .outerjoin(WorkItem, WorkReportTask.work_item_id == WorkItem.id)
+        .outerjoin(WorkReportPeriod, WorkReportTask.period_id == WorkReportPeriod.id)
         .where(
             ActivityMaster.benchmark_type.in_(TASK_BENCHMARK_TYPES),
             WorkReportTask.due_date.is_not(None),
@@ -471,6 +739,10 @@ def get_cycle_task_activities(
             "project_name": r.project_name,
             "report_date": r.report_date,
             "day_remarks": r.day_remarks,
+            "day_part": export_day_part_label(
+                r.period_day_part, r.is_legacy_half_day, r.day_status
+            ),
+            "period_remarks": r.period_remarks,
             "due_date": r.due_date,
             "is_completed": r.is_completed,
             "days_overdue": days_overdue,

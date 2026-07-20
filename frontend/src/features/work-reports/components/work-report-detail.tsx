@@ -375,6 +375,9 @@ export function WorkReportDetail({ id }: { id: string }) {
             <Row label="Employee" value={employeeName} />
             <Row label="Date" value={report.report_date} />
             <Row label="Status" value={<StatusBadge status={report.status} editRequested={editRequested} />} />
+            {report.report_mode === "split_day" && (
+              <Row label="Day Format" value="Split Day" />
+            )}
             {dayStatusLabel && <Row label="Day Status" value={dayStatusLabel} />}
             {locationLabel && <Row label="Location" value={locationLabel} />}
             {report.well_head_no && <Row label="Well Head No." value={report.well_head_no} />}
@@ -395,6 +398,58 @@ export function WorkReportDetail({ id }: { id: string }) {
               <CardTitle>Project activities</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* Split Day: the review view leads with each half's status /
+                  location / fraction / remarks; the activity cards below are
+                  tagged with their half. A legacy half-day report (fraction
+                  0.5 on a Full-Day period) is called out explicitly. */}
+              {report.periods.length > 0 &&
+                (report.report_mode === "split_day" ||
+                  report.periods.some((p) => p.is_legacy_half_day)) && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {report.periods.map((p) => (
+                    <div
+                      key={p.id}
+                      className="rounded-lg border border-border bg-muted/30 p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">
+                          {p.day_part === "first_half"
+                            ? "First Half"
+                            : p.day_part === "second_half"
+                              ? "Second Half"
+                              : p.is_legacy_half_day
+                                ? "Half Day (legacy)"
+                                : "Full Day"}
+                        </span>
+                        {p.period_status && (
+                          <Badge variant="neutral">
+                            {(DAY_STATUS_LABEL as Record<string, string>)[p.period_status] ??
+                              p.period_status}
+                          </Badge>
+                        )}
+                        <span className="text-xs text-muted-foreground">
+                          {Math.round(Number(p.work_fraction) * 100)}% of daily benchmark
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {p.location
+                          ? (WORK_LOCATION_LABEL as Record<string, string>)[p.location] ??
+                            p.location
+                          : "No location"}
+                        {" · "}
+                        {p.tasks.length}{" "}
+                        {p.tasks.length === 1 ? "activity" : "activities"}
+                      </p>
+                      {p.remarks && (
+                        <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Remarks:</span>{" "}
+                          {p.remarks}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {report.tasks.length === 0 && activityRequests.length === 0 && (
                 <p className="text-sm text-muted-foreground">No activities recorded.</p>
               )}
@@ -407,14 +462,21 @@ export function WorkReportDetail({ id }: { id: string }) {
                 const jobCodeCode = t.project_job_code_code ?? fallback?.job_code_code ?? "—";
                 return (
                   <div key={t.id} className="rounded-lg border border-border p-4">
-                    {/* Header: project */}
-                    <div className="min-w-0">
-                      <p className="font-medium leading-snug">{projectName}</p>
-                      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
-                        <span>{projectCode}</span>
-                        <span aria-hidden>·</span>
-                        <span>{jobCodeCode}</span>
-                      </p>
+                    {/* Header: project (+ the half it belongs to on a split report) */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-medium leading-snug">{projectName}</p>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-xs text-muted-foreground">
+                          <span>{projectCode}</span>
+                          <span aria-hidden>·</span>
+                          <span>{jobCodeCode}</span>
+                        </p>
+                      </div>
+                      {report.report_mode === "split_day" && t.day_part && (
+                        <Badge variant="neutral">
+                          {t.day_part === "first_half" ? "First Half" : "Second Half"}
+                        </Badge>
+                      )}
                     </div>
 
                     {/* Activity / Sub-Activity — new rows use the Activity Master;
