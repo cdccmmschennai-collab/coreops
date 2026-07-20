@@ -59,6 +59,14 @@ const COUNT_UNITS = [
   ["spares", "Spares"], ["pages", "Pages"], ["records", "Records"],
 ] as const;
 
+/** The benchmark modes that carry a numeric target/actual/deficit/productivity
+ *  — the read-side mirror of the backend's QUANTITY_BENCHMARK_TYPES
+ *  (activity_master/models.py). Legacy "NUMERIC" behaves identically to the
+ *  current "NUMERIC_DAILY", so both must render the benchmark block. */
+const QUANTITY_BENCHMARK_TYPES = new Set([
+  "NUMERIC", "NUMERIC_DAILY", "TASK_WITH_QUANTITY",
+]);
+
 const countFor = (t: WorkReportTask, unit: string): number => {
   switch (unit) {
     case "tags":    return t.tags_count ?? 0;
@@ -436,7 +444,8 @@ export function WorkReportDetail({ id }: { id: string }) {
                     {/* Benchmark — shape depends on the sub-activity's benchmark
                         type, frozen at submit time. Nothing renders for legacy
                         rows or sub-activities with no benchmark tracked. */}
-                    {t.benchmark_type_snapshot === "NUMERIC" && (
+                    {t.benchmark_type_snapshot &&
+                      QUANTITY_BENCHMARK_TYPES.has(t.benchmark_type_snapshot) && (
                       <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3 border-t border-border pt-3">
                         <Stat label="Target" value={formatInt(t.benchmark_value_snapshot)} />
                         <Stat
@@ -447,7 +456,7 @@ export function WorkReportDetail({ id }: { id: string }) {
                           }
                           value={benchmarkActualCount(t)}
                         />
-                        <Stat label="Deficit" value={t.deficit ?? "—"} />
+                        <Stat label="Deficit" value={formatInt(t.deficit)} />
                         <Stat
                           label="Productivity %"
                           value={t.productivity_pct != null ? `${t.productivity_pct}%` : "—"}
@@ -575,23 +584,25 @@ export function WorkReportDetail({ id }: { id: string }) {
                         benchmark above. Only units that carry a value are shown,
                         plus the row's own benchmarked unit (even at zero, since
                         "0 pages today" is itself the reportable fact). Six
-                        zero-valued units are never listed. */}
+                        zero-valued units are never listed.
+
+                        When the row has a quantity benchmark, its benchmarked
+                        unit is already shown above as "Actual (…)", so it is
+                        dropped here to avoid printing the same number twice. */}
                     {(() => {
                       const benchmarked = t.relevant_count_field_snapshot;
-                      const shown = COUNT_UNITS.filter(
-                        ([unit]) => countFor(t, unit) > 0 || unit === benchmarked,
-                      );
+                      const hasQuantityBenchmark =
+                        !!t.benchmark_type_snapshot &&
+                        QUANTITY_BENCHMARK_TYPES.has(t.benchmark_type_snapshot);
+                      const shown = COUNT_UNITS.filter(([unit]) => {
+                        if (unit === benchmarked && hasQuantityBenchmark) return false;
+                        return countFor(t, unit) > 0 || unit === benchmarked;
+                      });
                       if (shown.length === 0) return null;
                       return (
                         <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3">
                           {shown.map(([unit, label]) => (
-                            <Stat
-                              key={unit}
-                              label={
-                                unit === benchmarked ? `${label} (benchmarked)` : label
-                              }
-                              value={countFor(t, unit)}
-                            />
+                            <Stat key={unit} label={label} value={countFor(t, unit)} />
                           ))}
                         </div>
                       );

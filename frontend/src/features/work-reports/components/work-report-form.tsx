@@ -1387,6 +1387,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                                   placeholder="0"
                                   className={prominent ? "border-primary" : undefined}
                                   {...f}
+                                  // Select the existing value (usually the
+                                  // default "0") on focus so the employee can
+                                  // type the count straight away instead of
+                                  // first deleting the zero.
+                                  onFocus={(e) => e.currentTarget.select()}
                                 />
                               </FormControl>
                               <FormMessage />
