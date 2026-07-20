@@ -269,74 +269,60 @@ def test_same_activity_both_halves_two_rows_summing_to_one_base(
     assert sum(float(r["target_total"]) for r in rows) == 120.0
 
 
-def test_multiple_activities_in_first_half_repeat_part_and_remarks(
+def test_each_half_row_carries_its_own_part_and_remarks(
     client, db, setup_author, pm_header, day_parts_on
 ):
+    """Every detail row inherits the day_part and remarks of the period it came
+    from. A split half holds exactly one activity, so the two halves carry
+    DIFFERENT activities — the inheritance must not bleed across them."""
     a = setup_author()
     _, s1 = _make_numeric_sub(client, pm_header, value=120, name="BOM-IDB", count_field="bom")
-    _, s2 = _make_numeric_sub(client, pm_header, value=60, name="FMTL-X")
+    _, s2 = _make_numeric_sub(client, pm_header, value=100, name="PM-A", count_field="pages")
     _submit_split(
         client, a["header"],
         {**WORK, "remarks": "shared AM remark",
-         "tasks": [
-             _task(a["project"].id, s1["id"], bom_count=30),
-             _task(a["project"].id, s2["id"], tags_count=20),
-         ]},
-        {"period_status": "leave"},
-    )
-
-    for name in ("BOM-IDB", "FMTL-X"):
-        (r,) = _sub_rows(db, name)
-        assert r["day_part"] == FIRST, name
-        assert r["day_remarks"] == "shared AM remark", name
-
-
-def test_multiple_activities_in_second_half_repeat_part_and_remarks(
-    client, db, setup_author, pm_header, day_parts_on
-):
-    a = setup_author()
-    _, s1 = _make_numeric_sub(client, pm_header, value=100, name="PM-A", count_field="pages")
-    _, s2 = _make_numeric_sub(client, pm_header, value=40, name="PM-B", count_field="records")
-    _submit_split(
-        client, a["header"],
-        {"period_status": "comp_off"},
+         "tasks": [_task(a["project"].id, s1["id"], bom_count=30)]},
         {**WORK, "remarks": "shared PM remark",
-         "tasks": [
-             _task(a["project"].id, s1["id"], pages_count=45),
-             _task(a["project"].id, s2["id"], records_count=40),
-         ]},
+         "tasks": [_task(a["project"].id, s2["id"], pages_count=45)]},
     )
 
-    for name in ("PM-A", "PM-B"):
-        (r,) = _sub_rows(db, name)
-        assert r["day_part"] == SECOND, name
-        assert r["day_remarks"] == "shared PM remark", name
+    (first,) = _sub_rows(db, "BOM-IDB")
+    assert first["day_part"] == FIRST
+    assert first["day_remarks"] == "shared AM remark"
+
+    (second,) = _sub_rows(db, "PM-A")
+    assert second["day_part"] == SECOND
+    assert second["day_remarks"] == "shared PM remark"
 
 
-def test_two_projects_in_one_half_stay_one_row(
-    client, db, setup_author, pm_header, day_parts_on,
+def test_two_projects_in_one_period_stay_one_row(
+    client, db, setup_author, pm_header,
     make_project, make_project_member,
 ):
     """Two task rows of the same sub-activity in ONE period (different
-    projects) collapse into one detail row — actual summed, target once."""
+    projects) collapse into one detail row — actual summed, target once.
+
+    Exercised on a FULL DAY: Split Day allows only one activity per half, so a
+    multi-row period can no longer be produced there. The join-collapse logic
+    under test is shared by both modes."""
     a = setup_author()
     p2 = make_project(code="P-2", status=ProjectStatus.active)
     make_project_member(project_id=p2.id, employee_id=a["emp"].id)
     _, sub = _make_numeric_sub(client, pm_header, value=120, name="TWO-PROJ")
-    _submit_split(
-        client, a["header"],
-        {**WORK, "remarks": "AM",
-         "tasks": [
-             _task(a["project"].id, sub["id"], tags_count=30),
-             _task(str(p2.id), sub["id"], tags_count=20),
-         ]},
-        {"period_status": "leave"},
-    )
+    _create_submit(client, a["header"], {
+        "report_date": TODAY.isoformat(),
+        "day_status": "work_at_office", "location": "chennai",
+        "remarks": "AM",
+        "tasks": [
+            _task(a["project"].id, sub["id"], tags_count=30),
+            _task(str(p2.id), sub["id"], tags_count=20),
+        ],
+    })
 
     rows = _sub_rows(db, "TWO-PROJ")
     assert len(rows) == 1                     # no duplicate rows from the join
     r = rows[0]
-    assert float(r["target"]) == 60.0         # target counted ONCE per period
+    assert float(r["target"]) == 120.0        # target counted ONCE per period
     assert float(r["actual"]) == 50.0
     assert "P-1" in r["project"] and "P-2" in r["project"]
 

@@ -1150,6 +1150,38 @@ def _normalize_periods(
             fraction, legacy_half = _full_day_fraction(p.period_status)
         else:
             fraction, legacy_half = DAY_PART_FRACTIONS[p.day_part], False
+        period_tasks = list(p.tasks)
+        if mode == ReportMode.split_day:
+            # A split-day half holds EXACTLY ONE activity while it is working
+            # and none while it is not. This is the authoritative guard: the UI
+            # offers no way to add a second row, so anything else here is a
+            # hand-made or stale payload and is REJECTED rather than trimmed —
+            # silently discarding a row would lose work the caller believed it
+            # had saved.
+            label = _DAY_PART_LABELS.get(p.day_part.value, p.day_part.value)
+            if not working and period_tasks:
+                raise AppError(
+                    "validation_error",
+                    f"{label} is not a working half and cannot contain any activity.",
+                    422,
+                )
+            if working and len(period_tasks) > 1:
+                raise AppError(
+                    "validation_error",
+                    f"{label} cannot contain more than one activity — "
+                    "Split Day allows exactly one activity per half.",
+                    422,
+                )
+            if working and not period_tasks:
+                raise AppError(
+                    "validation_error",
+                    f"{label} must contain exactly one activity.",
+                    422,
+                )
+        elif not working:
+            # Full-Day leave-type period: task lines are dropped, unchanged
+            # legacy leniency.
+            period_tasks = []
         specs.append({
             "day_part": p.day_part,
             "period_status": p.period_status,
@@ -1157,9 +1189,7 @@ def _normalize_periods(
             "remarks": p.remarks,
             "work_fraction": fraction,
             "is_legacy_half_day": legacy_half,
-            # A non-working period carries no project activity rows — any sent
-            # anyway are dropped (same leniency as the legacy leave-type path).
-            "tasks": list(p.tasks) if working else [],
+            "tasks": period_tasks,
         })
 
     working_specs = [s for s in specs if _is_working_status(s["period_status"])]

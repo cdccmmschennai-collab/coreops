@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { validateHalfRowCounts } from "./split-period-rows.ts";
 import type {
   WorkReport,
   WorkReportCreateBody,
@@ -306,6 +307,7 @@ export const workReportFormSchema = z
         ["second_half", v.second_half],
       ];
       let workingHalves = 0;
+      const workingByHalf = { first_half: false, second_half: false };
       for (const [key, half] of halves) {
         if (half.status === undefined) {
           ctx.addIssue({
@@ -316,15 +318,19 @@ export const workReportFormSchema = z
           continue;
         }
         const working = !isNoActivityDayStatus(half.status);
-        if (!working) continue;
-        workingHalves += 1;
-        if (!v.tasks.some((t) => t.day_part === key)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: `Add at least one activity to the ${DAY_PART_LABEL[key]} period`,
-            path: ["tasks"],
-          });
-        }
+        workingByHalf[key] = working;
+        if (working) workingHalves += 1;
+      }
+      // The strict Split-Day rule: a working half holds EXACTLY one activity,
+      // a non-working half holds none. A malformed period (>1 row, only
+      // reachable from a hand-made payload) is reported and blocks the save —
+      // the rows are never silently trimmed here or filtered out of the body.
+      for (const issue of validateHalfRowCounts(v.tasks, workingByHalf)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: issue.message,
+          path: ["tasks"],
+        });
       }
       // One Location for the whole day — required as soon as any half works.
       if (workingHalves > 0 && v.location === undefined) {

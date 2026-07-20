@@ -89,6 +89,7 @@ import {
   type ActivityEditorContext,
 } from "./period-activity-editor";
 import { ReportPeriodCard, type HalfKey } from "./report-period-card";
+import { clearHalf, reconcileHalves } from "../split-period-rows";
 
 interface WorkReportFormProps {
   mode: "create" | "edit";
@@ -259,6 +260,16 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
    *  for confirmation first (nothing is ever auto-converted). */
   function requestDayFormat(next: "full_day" | "split_day") {
     if (next === dayFormat) return;
+    // Split Day has no additional-activity workflow, so a pending Full-Day
+    // request would be stranded (unresolvable, and its approval would try to
+    // add a second row the split rules forbid). Make the user resolve it first
+    // rather than silently deleting their request.
+    if (next === "split_day" && pendingRequest) {
+      setFormError(
+        "Resolve or dismiss the pending additional-activity request before switching to Split Day.",
+      );
+      return;
+    }
     if (currentModeHasData()) {
       setPendingFormat(next);
     } else {
@@ -379,17 +390,13 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
           ? await createMutation.mutateAsync(toCreateBody(persistValues))
           : await updateMutation.mutateAsync(toUpdateBody(persistValues));
       const savedReportId = mode === "create" ? reportRow.id : (reportId as string);
-      // Split day: tag the request with the target period so the approved
-      // activity lands in the right half. Period ids come from the save
-      // response (they only exist server-side).
-      const targetPeriodId =
-        draft.day_part !== "full_day"
-          ? reportRow.periods?.find((p) => p.day_part === draft.day_part)?.id ?? null
-          : null;
 
       await createActivityRequest.mutateAsync({
         report_id: savedReportId,
-        period_id: targetPeriodId,
+        // Activity requests are a FULL-DAY workflow only: this path is
+        // unreachable in Split Day, so no period is ever targeted (the backend
+        // rejects split-day requests outright).
+        period_id: null,
         project_id: draft.project_id,
         activity_id: draft.activity_id || null,
         sub_activity_id: draft.sub_activity_id,
@@ -438,16 +445,6 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     setDraftPart(part);
   }
 
-  /** Split Day "Add Activity": the period's first activity adds freely; any
-   *  additional one becomes the approval draft. */
-  function addActivityToHalf(part: HalfKey) {
-    if (indicesOf(part).length === 0) {
-      append({ ...EMPTY_TASK_ROW, day_part: part });
-    } else {
-      addActivityDraft(part);
-    }
-  }
-
   // Leave-type day statuses (week off / leave / company holiday / comp-off) in
   // FULL-DAY mode: the employee did no project work, so the activity editor is
   // frozen out — no rows, no benchmark, no pending — and only Remarks + Query
@@ -468,6 +465,29 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       replace([{ ...EMPTY_TASK_ROW }]);
     }
   }, [noActivity, isSplit, replace, form]);
+
+  // Split Day: a working half always shows exactly ONE activity editor, so the
+  // row is created here rather than by an "Add Activity" button (there is
+  // none). reconcileHalves only ever APPENDS into a working half that has no
+  // row — it never deletes, never trims a malformed half back to one row and
+  // never re-stamps a row's day_part — and returns the same array reference
+  // when there is nothing to do, which is what keeps this idempotent across
+  // re-renders. Clearing stays manual (Working -> Leave/Off confirmation).
+  const firstHalfStatus = form.watch("first_half.status");
+  const secondHalfStatus = form.watch("second_half.status");
+  React.useEffect(() => {
+    if (!isSplit) return;
+    const rows = form.getValues("tasks");
+    const next = reconcileHalves(
+      rows,
+      {
+        first_half: firstHalfStatus !== undefined && !isNoActivityDayStatus(firstHalfStatus),
+        second_half: secondHalfStatus !== undefined && !isNoActivityDayStatus(secondHalfStatus),
+      },
+      () => ({ ...EMPTY_TASK_ROW }),
+    );
+    if (next !== rows) replace(next as WorkReportFormValues["tasks"]);
+  }, [isSplit, firstHalfStatus, secondHalfStatus, form, replace]);
 
   // Backfill the UI-only `activity_id` filter for rows loaded from the API
   // with a sub_activity_id already set (edit mode) — once the flat
@@ -748,9 +768,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return { workingFraction, leaveFraction, activityCount, effectiveTarget, actualTotal };
   }, [isSplit, firstHalf, secondHalf, watchedTasks, subActivityById]);
 
-  /** Approval-state slot (pending / rejected / draft request button) for a
-   *  given period — rendered inside its half card, or under the Full-Day rows. */
+  /** Approval-state slot (pending / rejected / draft request button) under the
+   *  Full-Day rows. FULL DAY ONLY — Split Day has no additional-activity
+   *  workflow, so its half cards never render this. */
   function approvalSlot(part: DayPart): React.ReactNode {
+    if (isSplit) return null;
     const requestForPart = (r: ActivityRequest) =>
       part === "full_day"
         ? !r.day_part || r.day_part === "full_day"
@@ -1012,19 +1034,13 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     partKey="first_half"
                     ctx={editorCtx}
                     indices={indicesOf("first_half")}
-                    onAddActivity={() => addActivityToHalf("first_half")}
                     onClearActivities={() => clearHalfRows("first_half")}
-                    approvalSlot={approvalSlot("first_half")}
-                    addDisabled={!!pendingRequest || draftPart !== null}
                   />
                   <ReportPeriodCard
                     partKey="second_half"
                     ctx={editorCtx}
                     indices={indicesOf("second_half")}
-                    onAddActivity={() => addActivityToHalf("second_half")}
                     onClearActivities={() => clearHalfRows("second_half")}
-                    approvalSlot={approvalSlot("second_half")}
-                    addDisabled={!!pendingRequest || draftPart !== null}
                   />
                 </div>
 
@@ -1225,12 +1241,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
   );
 
   /** Remove every task row of a half (Working -> Leave/Off confirmation
-   *  already happened inside the period card). */
+   *  already happened inside the period card). The other half and any
+   *  full_day rows are left untouched. */
   function clearHalfRows(part: HalfKey) {
     const rows = form.getValues("tasks");
-    const keep = rows.filter((t) => t.day_part !== part);
-    replace(keep);
-    if (draftPart === part) setDraftPart(null);
+    const kept = clearHalf(rows, part);
+    if (kept !== rows) replace(kept as WorkReportFormValues["tasks"]);
   }
 }
 
