@@ -8,12 +8,16 @@
  * same PeriodActivityEditor the Full-Day form renders, so no activity-row
  * logic is duplicated.
  *
+ * A working half holds EXACTLY ONE activity. The form creates that row
+ * automatically when the half starts working, so this card renders no "Add
+ * Activity" control and no PM-approval flow — neither exists in Split Day
+ * (both remain Full-Day only).
+ *
  * Switching a half from Working to a leave/off status while it still has
  * activity rows asks for confirmation before clearing them (the rows are real
  * user input; a mis-click must not silently destroy them).
  */
 import * as React from "react";
-import { Plus } from "lucide-react";
 
 import {
   AlertDialog,
@@ -26,7 +30,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   FormControl,
   FormField,
@@ -62,22 +65,14 @@ export function ReportPeriodCard({
   partKey,
   ctx,
   indices,
-  onAddActivity,
   onClearActivities,
-  approvalSlot,
-  addDisabled,
 }: {
   partKey: HalfKey;
   ctx: ActivityEditorContext;
   /** Task-row indices (into the flat `tasks` array) belonging to this half. */
   indices: number[];
-  onAddActivity: () => void;
   /** Clear this half's activity rows (Working -> Leave/Off confirmation). */
   onClearActivities: () => void;
-  /** Pending / rejected additional-activity approval state for this half. */
-  approvalSlot?: React.ReactNode;
-  /** Disable "Add Activity" (e.g. a request is already pending). */
-  addDisabled?: boolean;
 }) {
   const { form } = ctx;
   const fraction = DAY_PART_FRACTION[partKey];
@@ -158,22 +153,29 @@ export function ReportPeriodCard({
       </div>
 
       {working ? (
+        // Exactly ONE activity per working half: the row is created
+        // automatically by the form and carries no delete control, so there is
+        // no Add Activity button and no PM-approval flow here at all.
         <div className="space-y-3">
-          <PeriodActivityEditor ctx={ctx} indices={indices} fraction={fraction} />
-          {approvalSlot}
-          <div className="flex flex-wrap gap-2">
-            {!addDisabled && (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={onAddActivity}
-              >
-                <Plus className="h-4 w-4" />
-                Add Activity
-              </Button>
-            )}
-          </div>
+          <PeriodActivityEditor
+            ctx={ctx}
+            indices={indices}
+            fraction={fraction}
+            // The single primary row is mandatory, so it has no delete control.
+            // A malformed half (>1 row, only from a hand-made payload) re-enables
+            // them so the user can trim it back down to one and save.
+            hideRemoveControls={indices.length <= 1}
+          />
+          {indices.length > 1 && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              {DAY_PART_LABEL[partKey]} contains {indices.length} activities.
+              Split Day allows only one activity per half - remove the extra
+              rows before saving.
+            </p>
+          )}
         </div>
       ) : (
         status && (

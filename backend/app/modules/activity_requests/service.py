@@ -22,6 +22,8 @@ from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
     NO_ACTIVITY_DAY_STATUSES,
     DailyWorkReport,
+    DayPart,
+    ReportMode,
     WorkReportPeriod,
     WorkReportTask,
 )
@@ -225,9 +227,19 @@ def create_request(
             422,
         )
 
-    # Split-day reports: the request may target a specific reporting period so
-    # the approved activity lands in the right half. Must be one of THIS
-    # report's periods and a working one — a leave/off half never takes
+    # Additional-activity requests are a FULL-DAY workflow. A split-day half
+    # holds exactly one activity by rule, so there is nothing a request could
+    # legitimately add — reject at the source rather than letting a request sit
+    # pending forever and fail at approval.
+    if report.report_mode == ReportMode.split_day.value:
+        raise AppError(
+            "validation_error",
+            "Additional activity requests are not allowed for Split-Day reports.",
+            422,
+        )
+
+    # Full-day reports may still tag a specific reporting period. Must be one of
+    # THIS report's periods and a working one — a leave/off period never takes
     # project activities.
     if data.period_id is not None:
         period = db.get(WorkReportPeriod, data.period_id)
@@ -409,16 +421,34 @@ def _create_task_from_request(
     # TASK_BASED dates exactly as the normal add path does.
     from app.modules.work_reports.service import _task_based_dates, _validate_tasks
 
-    # Which period the approved row lands in: the request's own period when it
-    # is still valid, else the report's first WORKING period (split reports),
-    # else the report's only period (full-day / legacy). None only for a
-    # pre-period report — the row then stays unlinked like its siblings.
-    target_period_id = None
     periods = db.execute(
         select(WorkReportPeriod)
         .where(WorkReportPeriod.report_id == report.id)
         .order_by(WorkReportPeriod.created_at)
     ).scalars().all()
+
+    # Split Day allows exactly one activity per half and has no additional-
+    # activity workflow, so an approval can never land a row in one. This
+    # covers a legacy request created before that rule, and a request whose
+    # report was converted to split day afterwards — both are refused here
+    # rather than falling back to the first working period, which would have
+    # silently produced a forbidden second row in First Half.
+    if report.report_mode == ReportMode.split_day.value or any(
+        p.day_part in (DayPart.first_half.value, DayPart.second_half.value)
+        for p in periods
+    ):
+        raise AppError(
+            "validation_error",
+            "Additional activity requests cannot be approved for Split-Day "
+            "reports — each half allows exactly one activity.",
+            422,
+        )
+
+    # Which period the approved row lands in: the request's own period when it
+    # is still valid, else the report's only working period, else its only
+    # period. None only for a pre-period report — the row then stays unlinked
+    # like its siblings.
+    target_period_id = None
     if req.period_id is not None and any(p.id == req.period_id for p in periods):
         target_period_id = req.period_id
     else:

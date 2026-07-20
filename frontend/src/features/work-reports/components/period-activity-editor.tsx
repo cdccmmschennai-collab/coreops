@@ -272,12 +272,18 @@ export function PeriodActivityEditor({
   ctx,
   indices,
   fraction,
+  hideRemoveControls = false,
 }: {
   ctx: ActivityEditorContext;
   indices: number[];
   /** Benchmark scaling for this period: 1 full day, 0.5 half day. Applied to
    *  every displayed target exactly as the backend freezes it at submit. */
   fraction: number;
+  /** Split Day: the half's single activity is mandatory while it is working,
+   *  so the row carries no delete control — the only way to remove it is to
+   *  switch the half to a leave/off status and confirm. Full Day is unaffected
+   *  and keeps its per-row delete. */
+  hideRemoveControls?: boolean;
 }) {
   const {
     form, fields, watchedTasks, reportDate, projectOptions, projById,
@@ -318,19 +324,21 @@ export function PeriodActivityEditor({
             key={fields[index]?.id ?? index}
             className="space-y-5 rounded-lg border border-border p-4"
           >
-            {/* Row remove control. */}
-            <div className="flex items-end justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => removeRow(index)}
-                disabled={!canRemove(index)}
-                aria-label="Remove activity"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
+            {/* Row remove control (Full Day only — see hideRemoveControls). */}
+            {!hideRemoveControls && (
+              <div className="flex items-end justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeRow(index)}
+                  disabled={!canRemove(index)}
+                  aria-label="Remove activity"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
 
             {/* Continuation banner: this row continues an existing work
                 item. Project/Activity/Sub are locked (the backend forbids

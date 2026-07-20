@@ -368,31 +368,32 @@ def test_half_day_status_invalid_for_half_period(client, setup_author, day_parts
     assert res.status_code == 422
 
 
-def test_nonworking_period_drops_tasks(client, setup_author, day_parts_on):
+def test_nonworking_period_with_task_is_rejected(client, setup_author, day_parts_on):
+    """Previously a non-working half's tasks were silently dropped. They are now
+    REJECTED: discarding a row the caller believed it saved loses real work."""
     a = setup_author()
     payload = _split_payload(
         {"period_status": "leave", "tasks": [_task(a["project"].id)]},
         {"period_status": "work_at_office", "location": "chennai",
          "tasks": [_task(a["project"].id)]},
     )
-    created = client.post(BASE, headers=a["header"], json=payload).json()
-    parts = {p["day_part"]: p for p in created["periods"]}
-    assert parts["first_half"]["tasks"] == []
-    assert len(created["tasks"]) == 1
+    res = client.post(BASE, headers=a["header"], json=payload)
+    assert res.status_code == 422, res.text
+    assert "First Half" in res.json()["error"]["message"]
 
 
-def test_submit_requires_activity_in_every_working_period(
-    client, setup_author, day_parts_on
-):
+def test_working_period_with_zero_tasks_is_rejected(client, setup_author, day_parts_on):
+    """A working half must carry exactly one activity at WRITE time — the rule
+    is no longer deferred to submit. (`_assert_periods_submittable` remains as
+    defence in depth for reports written by pre-rule code.)"""
     a = setup_author()
     payload = _split_payload(
         {"period_status": "work_at_office", "location": "chennai",
          "tasks": [_task(a["project"].id)]},
         {"period_status": "work_at_office", "location": "chennai", "tasks": []},
     )
-    created = client.post(BASE, headers=a["header"], json=payload).json()
-    res = client.post(f"{BASE}/{created['id']}/submit", headers=a["header"])
-    assert res.status_code == 422
+    res = client.post(BASE, headers=a["header"], json=payload)
+    assert res.status_code == 422, res.text
     assert "Second Half" in res.json()["error"]["message"]
 
 
@@ -467,9 +468,14 @@ def test_update_with_periods_rewrites_report(client, setup_author, day_parts_on)
 
 # ── activity request routing ────────────────────────────────────────────────
 
-def test_activity_request_routes_to_requested_period(
-    client, setup_author, pm_header, day_parts_on
+@pytest.mark.parametrize("part", ["first_half", "second_half"])
+def test_activity_request_creation_rejected_for_split_report(
+    client, setup_author, pm_header, day_parts_on, part
 ):
+    """Split Day holds exactly one activity per half and has NO additional-
+    activity workflow, so a request is refused at creation — whichever half it
+    targets. (This replaces the old routing behaviour, which let an approved
+    request add a second row to a half.)"""
     a = setup_author()
     _, sub1 = _make_sub_activity(client, pm_header, name="FIRST-SUB")
     _, sub2 = _make_sub_activity(client, pm_header, name="EXTRA-SUB")
@@ -479,27 +485,74 @@ def test_activity_request_routes_to_requested_period(
         {"period_status": "work_at_office", "location": "chennai",
          "tasks": [_task(a["project"].id, sub1["id"])]},
     )).json()
-    second_half = next(
-        p for p in created["periods"] if p["day_part"] == "second_half"
-    )
-    req = client.post("/api/v1/activity-requests", headers=a["header"], json={
+    target = next(p for p in created["periods"] if p["day_part"] == part)
+    res = client.post("/api/v1/activity-requests", headers=a["header"], json={
         "report_id": created["id"],
-        "period_id": second_half["id"],
+        "period_id": target["id"],
+        "project_id": str(a["project"].id),
+        "sub_activity_id": sub2["id"],
+    })
+    assert res.status_code == 422, res.text
+    assert "Split-Day" in res.json()["error"]["message"]
+
+    # The report still holds exactly one activity per half.
+    detail = client.get(f"{BASE}/{created['id']}", headers=a["header"]).json()
+    parts = {p["day_part"]: p for p in detail["periods"]}
+    assert len(parts["first_half"]["tasks"]) == 1
+    assert len(parts["second_half"]["tasks"]) == 1
+
+
+def test_legacy_request_cannot_be_approved_into_split_half(
+    client, db, setup_author, pm_header, day_parts_on
+):
+    """A request made while the report was Full Day, whose report is LATER
+    converted to Split Day. Approval must refuse rather than fall back to the
+    first working period — the old fallback silently created a forbidden
+    second First-Half row."""
+    a = setup_author()
+    _, sub1 = _make_sub_activity(client, pm_header, name="LEG-SUB")
+    _, sub2 = _make_sub_activity(client, pm_header, name="LEG-EXTRA")
+    full = client.post(BASE, headers=a["header"], json={
+        "report_date": TODAY,
+        "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [_task(a["project"].id, sub1["id"])],
+    }).json()
+    req = client.post("/api/v1/activity-requests", headers=a["header"], json={
+        "report_id": full["id"],
         "project_id": str(a["project"].id),
         "sub_activity_id": sub2["id"],
     })
     assert req.status_code == 201, req.text
-    assert req.json()["day_part"] == "second_half"
+
+    # Convert the report to Split Day (the request is now orphaned).
+    conv = client.patch(f"{BASE}/{full['id']}", headers=a["header"], json={
+        "report_mode": "split_day",
+        "periods": [
+            {"day_part": "first_half", "period_status": "work_at_office",
+             "location": "chennai", "tasks": [_task(a["project"].id, sub1["id"])]},
+            {"day_part": "second_half", "period_status": "leave"},
+        ],
+    })
+    assert conv.status_code == 200, conv.text
 
     approved = client.post(
         f"/api/v1/activity-requests/{req.json()['id']}/approve", headers=pm_header
     )
-    assert approved.status_code == 200, approved.text
-    detail = client.get(f"{BASE}/{created['id']}", headers=a["header"]).json()
+    assert approved.status_code == 422, approved.text
+
+    # No row was created and the request stays pending (never half-approved).
+    detail = client.get(f"{BASE}/{full['id']}", headers=a["header"]).json()
     parts = {p["day_part"]: p for p in detail["periods"]}
-    subs_in_second = [t["sub_activity_id"] for t in parts["second_half"]["tasks"]]
-    assert sub2["id"] in subs_in_second
     assert len(parts["first_half"]["tasks"]) == 1
+    assert sub2["id"] not in [t["sub_activity_id"] for t in detail["tasks"]]
+    import uuid as _uuid
+
+    from app.modules.activity_requests.models import ActivityRequest
+
+    stored = db.get(ActivityRequest, _uuid.UUID(req.json()["id"]))
+    db.refresh(stored)
+    assert stored.status == "pending"
 
 
 def test_activity_request_rejects_nonworking_period(

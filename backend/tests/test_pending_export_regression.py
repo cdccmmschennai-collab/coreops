@@ -40,7 +40,10 @@ TODAY = date.today()
 def mixed_dataset(client, setup_author, pm_header, day_parts_on):
     """Two employees, five numeric sub-activities + one lumpsum, exercising:
     full day, both halves (same activity), single halves, legacy half-day,
-    multiple activities in one half, over- and under-achievement."""
+    multiple activities on a FULL DAY, over- and under-achievement.
+
+    A split half carries exactly one activity (the Split-Day rule), so the
+    multi-activity case lives on the full-day report."""
     e1 = setup_author(email="r1@x.com", code="R-1", proj_code="RP-1")
     e2 = setup_author(email="r2@x.com", code="R-2", proj_code="RP-2")
 
@@ -59,6 +62,7 @@ def mixed_dataset(client, setup_author, pm_header, day_parts_on):
         "location": "chennai", "remarks": "e1 full day",
         "tasks": [
             _task(e1["project"].id, full["id"], tags_count=85),
+            _task(e1["project"].id, am["id"], docs_count=90),
             _task(e1["project"].id, lump["id"]),
         ],
     })
@@ -66,10 +70,7 @@ def mixed_dataset(client, setup_author, pm_header, day_parts_on):
         _submit_split(
             client, e1["header"],
             {**WORK, "remarks": "e1 am",
-             "tasks": [
-                 _task(e1["project"].id, both["id"], bom_count=40),
-                 _task(e1["project"].id, am["id"], docs_count=90),
-             ]},
+             "tasks": [_task(e1["project"].id, both["id"], bom_count=40)]},
             {**WORK, "remarks": "e1 pm",
              "tasks": [_task(e1["project"].id, both["id"], bom_count=70)]},
             report_date=d[1],
