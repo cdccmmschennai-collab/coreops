@@ -3,9 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { LogOut, Menu, Settings, User as UserIcon } from "lucide-react";
+import { LogOut, Settings, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { MobileNavDrawer } from "@/components/shell/mobile-nav-drawer";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -30,7 +31,7 @@ import { NotificationBell } from "@/features/notifications/components/notificati
 import { useMyCompliance } from "@/features/report-compliance/hooks";
 import { emailInitials, nameInitials } from "@/lib/initials";
 
-export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+export function TopNav() {
   const { user, employee, role, logout } = useAuth();
   const router = useRouter();
   const { data: compliance } = useMyCompliance();
@@ -54,15 +55,7 @@ export function TopNav({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-card/80 px-4 backdrop-blur md:px-6">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="md:hidden"
-        onClick={onToggleSidebar}
-        aria-label="Toggle navigation"
-      >
-        <Menu className="h-5 w-5" />
-      </Button>
+      <MobileNavDrawer />
 
       <div className="ml-auto flex items-center gap-2">
         {user && <NotificationBell />}

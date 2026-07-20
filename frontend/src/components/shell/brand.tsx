@@ -8,6 +8,8 @@ interface BrandProps {
   className?: string;
   /** Rendered logo height in px; width scales to preserve the source aspect ratio. */
   logoHeight?: number;
+  /** Mark only, no wordmark — used by the collapsed sidebar rail. */
+  markOnly?: boolean;
 }
 
 /**
@@ -15,11 +17,20 @@ interface BrandProps {
  * company logo; the name comes from one token only (D-001). next/image keeps the
  * source aspect ratio intact and the original asset (242px wide) stays crisp on
  * high-DPI displays when downscaled in CSS.
+ *
+ * The wordmark is clipped rather than wrapped while the sidebar animates between
+ * widths, so it never reflows mid-transition.
  */
-export function Brand({ className, logoHeight = 28 }: BrandProps) {
+export function Brand({ className, logoHeight = 28, markOnly = false }: BrandProps) {
   const width = Math.round((logoHeight * cdcLogo.width) / cdcLogo.height);
   return (
-    <div className={cn("flex flex-row items-center gap-2", className)}>
+    <div
+      className={cn(
+        "flex flex-row items-center gap-2",
+        markOnly && "justify-center",
+        className,
+      )}
+    >
       <Image
         src={cdcLogo}
         alt="CDC"
@@ -27,12 +38,14 @@ export function Brand({ className, logoHeight = 28 }: BrandProps) {
         height={logoHeight}
         priority
         unoptimized
-        className="shrink-0"
+        className="shrink-0 object-contain"
         style={{ width, height: logoHeight }}
       />
-      <span className="font-semibold tracking-tight text-foreground">
-        {env.productName}
-      </span>
+      {!markOnly && (
+        <span className="whitespace-nowrap font-semibold tracking-tight text-foreground">
+          {env.productName}
+        </span>
+      )}
     </div>
   );
 }
