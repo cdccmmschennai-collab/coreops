@@ -7,6 +7,7 @@ import { Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
+import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benchmark-guide-button";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
 import { can, isManagerial } from "@/lib/rbac";
@@ -140,7 +141,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const countLabel = count !== undefined ? `${count} ${count === 1 ? "report" : "reports"}` : undefined;
   const subtitle = [scopeLabel, countLabel].filter(Boolean).join(" · ") || undefined;
 
-  const addButton = canCreate ? (
+  const newReportButton = canCreate ? (
     <Button asChild>
       <Link href="/work-reports/new">
         <Plus className="h-4 w-4" />
@@ -149,12 +150,21 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
     </Button>
   ) : null;
 
+  // Order: [ Benchmark Guide ] [ + New report ] — New report stays the primary
+  // action; the guide sits to its left as a secondary button.
+  const headerActions = (
+    <div className="flex items-center gap-2">
+      <BenchmarkGuideButton />
+      {newReportButton}
+    </div>
+  );
+
   return (
     <>
       <PageHeader
         title={title}
         subtitle={subtitle}
-        actions={addButton}
+        actions={headerActions}
       />
       <div className="mb-4">
         <WorkReportsFilters
@@ -184,7 +194,7 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
         onRetry={() => void query.refetch()}
         onPageChange={onPageChange}
         showEmployee={showEmployeeColumn}
-        emptyAction={addButton}
+        emptyAction={newReportButton}
       />
     </>
   );

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
+import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benchmark-guide-button";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { PerformanceTable } from "@/features/employee-performance/components/performance-table";
 import { useActivityRequestPendingCount } from "@/features/activity-requests/hooks";
@@ -69,6 +70,7 @@ export function ProjectManagerDashboard() {
       <PageHeader
         title={`${greeting()}, ${displayName}`}
         subtitle={`${new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })} · Team overview`}
+        actions={<BenchmarkGuideButton />}
       />
 
       {/* Employee Performance — the primary dashboard section.

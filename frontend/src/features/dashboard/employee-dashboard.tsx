@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/features/auth/auth-provider";
+import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benchmark-guide-button";
 import { BenchmarkActivities } from "@/features/benchmarks/components/benchmark-activities";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
@@ -81,12 +82,15 @@ export function EmployeeDashboard() {
         title={`${greeting()}, ${displayName}`}
         subtitle={`${new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })} · ${weekStart === today ? "No reports due" : "Track your work below"}`}
         actions={
-          <Button asChild>
-            <Link href="/work-reports/new">
-              <Plus className="h-4 w-4" />
-              New report
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            <BenchmarkGuideButton />
+            <Button asChild>
+              <Link href="/work-reports/new">
+                <Plus className="h-4 w-4" />
+                New report
+              </Link>
+            </Button>
+          </div>
         }
       />
 
