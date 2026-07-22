@@ -20,7 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from itertools import groupby
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -735,6 +735,10 @@ def build_activity_rows(
         select(WorkReportTask, DailyWorkReport, Employee)
         .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
         .join(Employee, Employee.id == DailyWorkReport.employee_id)
+        # Left join to the task's period so the split-day activity blocks can be
+        # ordered First Half then Second Half deterministically, independent of
+        # task creation order (see the order_by below). Nullable for legacy rows.
+        .outerjoin(WorkReportPeriod, WorkReportPeriod.id == WorkReportTask.period_id)
         .where(WorkReportTask.report_id.in_(scoped))
     )
     # Row-level trim mirroring _restrict_to_led_rows: within the scoped
@@ -773,10 +777,25 @@ def build_activity_rows(
         q = q.where(DailyWorkReport.report_date >= date_from)
     if date_to is not None:
         q = q.where(DailyWorkReport.report_date <= date_to)
-    q = q.order_by(Employee.employee_code, DailyWorkReport.report_date, WorkReportTask.id)
+    # First Half before Second Half (Full-Day / legacy NULL period rank as 0 and
+    # keep their existing task-id order). Task id breaks ties within a part.
+    part_rank = case(
+        (WorkReportPeriod.day_part == DayPart.first_half.value, 1),
+        (WorkReportPeriod.day_part == DayPart.second_half.value, 2),
+        else_=0,
+    )
+    q = q.order_by(
+        Employee.employee_code, DailyWorkReport.report_date, part_rank, WorkReportTask.id
+    )
+
+    task_result = db.execute(q).all()
+    # One combined Day Remarks per report (split-day halves labelled + ordered);
+    # dedupe reports so the period lookup runs once per report, not once per task.
+    task_reports = {report.id: report for _t, report, _e in task_result}
+    remarks_by_report = _combined_remarks_by_report(db, list(task_reports.values()))
 
     rows: list[dict] = []
-    for task, report, emp in db.execute(q).all():
+    for task, report, emp in task_result:
         rows.append({
             "employee_label": f"{emp.employee_code} - {emp.full_name}",
             "report_date": report.report_date,
@@ -794,7 +813,7 @@ def build_activity_rows(
             "spares": task.spares_count,
             "pages": task.pages_count,
             "records": task.records_count,
-            "remarks": report.remarks,
+            "remarks": remarks_by_report[report.id],
         })
 
     # Leave-type reports (week off / leave / company holiday / comp-off) carry no
@@ -821,7 +840,11 @@ def build_activity_rows(
             nq = nq.where(DailyWorkReport.report_date >= date_from)
         if date_to is not None:
             nq = nq.where(DailyWorkReport.report_date <= date_to)
-        for report, emp in db.execute(nq).all():
+        leave_result = db.execute(nq).all()
+        leave_remarks = _combined_remarks_by_report(
+            db, [report for report, _emp in leave_result]
+        )
+        for report, emp in leave_result:
             rows.append({
                 "employee_label": f"{emp.employee_code} - {emp.full_name}",
                 "report_date": report.report_date,
@@ -839,7 +862,7 @@ def build_activity_rows(
                 "spares": None,
                 "pages": None,
                 "records": None,
-                "remarks": report.remarks,
+                "remarks": leave_remarks[report.id],
             })
 
     # Keep employee+date rows contiguous so the groupby in build_activity_groups
@@ -1049,6 +1072,62 @@ _DAY_PART_LABELS = {
     DayPart.first_half.value: "First Half",
     DayPart.second_half.value: "Second Half",
 }
+
+
+def format_report_remarks(
+    report_mode: str,
+    header_remarks: str | None,
+    period_remarks: dict[str, str | None],
+) -> str:
+    """Combined Day Remarks for the PM Weekly Activity Report preview + Excel
+    export, from the report's AUTHORITATIVE remark source(s).
+
+    Full-day: the header remark verbatim (whitespace-trimmed), no prefix.
+    Split-day: each half owns its OWN period remark (work_report_periods.remarks).
+    Both are labelled and ordered First Half then Second Half regardless of task
+    or DB return order, one per line, joined by a single newline. A blank half
+    contributes no line (no empty label); both blank -> "". Internal text is
+    preserved, and identical first/second remarks are NOT deduplicated — they
+    belong to separate halves.
+
+    `period_remarks` maps day_part -> that period's stored remark; it is empty for
+    a full-day report (which never reads it)."""
+    if report_mode != ReportMode.split_day.value:
+        return (header_remarks or "").strip()
+    lines: list[str] = []
+    first = (period_remarks.get(DayPart.first_half.value) or "").strip()
+    second = (period_remarks.get(DayPart.second_half.value) or "").strip()
+    if first:
+        lines.append(f"First Half: {first}")
+    if second:
+        lines.append(f"Second Half: {second}")
+    return "\n".join(lines)
+
+
+def _combined_remarks_by_report(
+    db: Session, reports: list[DailyWorkReport]
+) -> dict[uuid.UUID, str]:
+    """Map report_id -> combined Day Remarks (see format_report_remarks).
+
+    Period remarks are loaded once for the split-day reports only; full-day
+    reports use their header remark and need no period query."""
+    split_ids = [
+        r.id for r in reports if r.report_mode == ReportMode.split_day.value
+    ]
+    parts: dict[uuid.UUID, dict[str, str | None]] = {}
+    if split_ids:
+        for rid, day_part, remarks in db.execute(
+            select(
+                WorkReportPeriod.report_id,
+                WorkReportPeriod.day_part,
+                WorkReportPeriod.remarks,
+            ).where(WorkReportPeriod.report_id.in_(split_ids))
+        ).all():
+            parts.setdefault(rid, {})[day_part] = remarks
+    return {
+        r.id: format_report_remarks(r.report_mode, r.remarks, parts.get(r.id, {}))
+        for r in reports
+    }
 
 
 def _is_working_status(status: DayStatus | None) -> bool:

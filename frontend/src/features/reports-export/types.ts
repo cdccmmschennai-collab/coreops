@@ -9,6 +9,8 @@ export interface ActivityCell {
   docs: number;
   bom: number;
   spares: number;
+  pages: number;
+  records: number;
 }
 
 export interface ActivityRow {

@@ -8266,6 +8266,14 @@
           "spares": {
             "type": "integer",
             "title": "Spares"
+          },
+          "pages": {
+            "type": "integer",
+            "title": "Pages"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
           }
         },
         "type": "object",
@@ -8276,7 +8284,9 @@
           "tags",
           "docs",
           "bom",
-          "spares"
+          "spares",
+          "pages",
+          "records"
         ],
         "title": "ActivityCell"
       },

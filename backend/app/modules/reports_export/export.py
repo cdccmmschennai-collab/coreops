@@ -39,6 +39,8 @@ _BLOCK = [
     ("No. of Docs", 11.0, True),
     ("No. of BOM HEADER", 16.0, True),
     ("No. of Spares", 12.0, True),
+    ("No. of Pages", 11.0, True),
+    ("No. of Records", 12.0, True),
 ]
 _FIXED_LEFT = [
     ("Employee ID & Name", 24.0, False),
@@ -425,6 +427,10 @@ def build_workbook(rows: list[dict], max_activities: int) -> BytesIO:
             ws.cell(r, base + 5, act["docs"])
             ws.cell(r, base + 6, act["bom"])
             ws.cell(r, base + 7, act["spares"])
+            # Legacy rows without the new counts fall back to 0, matching the
+            # NOT NULL DEFAULT 0 the other four count columns carry.
+            ws.cell(r, base + 8, act.get("pages") or 0)
+            ws.cell(r, base + 9, act.get("records") or 0)
         ws.cell(r, remarks_col, row["remarks"])
         for col in range(1, total_cols + 1):
             _style_data_cell(ws.cell(r, col), col in centers, col == remarks_col, col == 2)

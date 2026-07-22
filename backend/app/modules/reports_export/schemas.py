@@ -16,6 +16,8 @@ class ActivityCell(BaseModel):
     docs: int
     bom: int
     spares: int
+    pages: int
+    records: int
 
 
 class ActivityRow(BaseModel):

@@ -1853,6 +1853,10 @@ export interface components {
             bom: number;
             /** Spares */
             spares: number;
+            /** Pages */
+            pages: number;
+            /** Records */
+            records: number;
         };
         /**
          * ActivityCreate

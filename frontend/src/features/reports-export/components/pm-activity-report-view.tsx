@@ -21,29 +21,15 @@ import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useProjectOptions } from "@/features/work-reports/project-options";
 
 import { downloadActivityXlsx } from "../api";
+import { COUNT_COLUMNS, sumCount } from "../columns";
+import { remarkLines } from "../remarks";
 import { useActivityOptions, useActivityRows, useSubActivityOptions } from "../hooks";
-import {
-  type ActivityCell,
-  type ActivityReportFilters,
-} from "../types";
+import { type ActivityReportFilters } from "../types";
 
 const ALL = "all";
 
-// Daily count columns — summed across the day's activities (the per-activity
-// breakdown lives only in the Excel export's dynamic columns).
-const COUNTS = [
-  { label: "Tags", key: "tags" },
-  { label: "Docs", key: "docs" },
-  { label: "BOM", key: "bom" },
-  { label: "Spares", key: "spares" },
-] as const;
-
 const TH = "whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-muted-foreground";
 const TD = "px-3 py-2.5 align-top text-sm";
-
-function sumKey(acts: ActivityCell[], key: (typeof COUNTS)[number]["key"]) {
-  return acts.reduce((s, a) => s + (a[key] ?? 0), 0);
-}
 
 export function PmActivityReportView() {
   // Filters live in the URL so they survive navigating away and back.
@@ -172,7 +158,7 @@ export function PmActivityReportView() {
                 <th className={TH}>Employee</th>
                 <th className={cn(TH, "text-center")}>Activities</th>
                 <th className={TH}>Activity Summary</th>
-                {COUNTS.map((c) => (
+                {COUNT_COLUMNS.map((c) => (
                   <th key={c.key} className={cn(TH, "text-right")}>{c.label}</th>
                 ))}
                 <th className={TH}>Remarks</th>
@@ -208,16 +194,18 @@ export function PmActivityReportView() {
                       ))}
                     </ul>
                   </td>
-                  {COUNTS.map((c) => {
-                    const total = sumKey(row.activities, c.key);
+                  {COUNT_COLUMNS.map((c) => {
+                    const total = sumCount(row.activities, c.key);
                     return (
                       <td key={c.key} className={cn(TD, "tabular text-right", total === 0 && "text-muted-foreground/50")}>
                         {total}
                       </td>
                     );
                   })}
-                  <td className={cn(TD, "min-w-[16rem] whitespace-pre-wrap text-muted-foreground")}>
-                    {row.remarks ?? ""}
+                  <td className={cn(TD, "min-w-[16rem] whitespace-pre-line text-muted-foreground")}>
+                    {remarkLines(row.remarks).map((line, li) => (
+                      <span key={li} className="block">{line}</span>
+                    ))}
                   </td>
                 </tr>
               ))}
