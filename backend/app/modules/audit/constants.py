@@ -12,6 +12,7 @@ class EntityType:
     PROJECT_MEMBER = "project_member"
     DELIVERABLE = "deliverable"
     TASK = "task"
+    ACTIVITY = "activity"
 
 
 class AuditAction:
@@ -54,6 +55,11 @@ class AuditAction:
     TASK_COMPLETE = "task.complete"
     TASK_STATUS_CHANGE = "task.status.change"
     TASK_CANCEL = "task.cancel"
+
+    # --- activity access control (Tier B, migration 0061) ---
+    ACTIVITY_ACCESS_TYPE_CHANGED = "activity.access.type_change"
+    ACTIVITY_ACCESS_GRANTED = "activity.access.grant"
+    ACTIVITY_ACCESS_REVOKED = "activity.access.revoke"
 
 
 # Statuses

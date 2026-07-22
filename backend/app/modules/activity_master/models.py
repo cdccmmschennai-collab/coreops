@@ -61,6 +61,18 @@ LEVEL_ACTIVITY = "activity"
 LEVEL_SUB_ACTIVITY = "sub_activity"
 VALID_LEVELS = {LEVEL_ACTIVITY, LEVEL_SUB_ACTIVITY}
 
+# Activity access mode (migration 0061). Who may select an Activity (and, by
+# inheritance, its sub-activities) when recording a report:
+#   COMMON     -> every active employee may use it (the pre-0061 behaviour;
+#                 the migration backfills every existing activity to this).
+#   RESTRICTED -> only employees with an active employee_activity_access row.
+# VARCHAR(20) + CHECK, following the benchmark_type / activity_requests.status
+# precedent — no native Postgres enum type to manage. access_type is only ever
+# meaningful on a level='activity' row; sub-activities inherit their parent's.
+ACCESS_TYPE_COMMON = "COMMON"
+ACCESS_TYPE_RESTRICTED = "RESTRICTED"
+VALID_ACCESS_TYPES = {ACCESS_TYPE_COMMON, ACCESS_TYPE_RESTRICTED}
+
 # Legacy values — still stored on historical rows, never rewritten in place.
 BENCHMARK_TYPE_NUMERIC = "NUMERIC"
 BENCHMARK_TYPE_TASK_BASED = "TASK_BASED"
@@ -162,6 +174,11 @@ class ActivityMaster(UUIDMixin, TimestampMixin, Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # COMMON (default) / RESTRICTED — see the ACCESS_TYPE_* constants above.
+    # Only meaningful on level='activity' rows; sub-activities inherit the parent.
+    access_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'COMMON'")
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
@@ -190,6 +207,10 @@ class ActivityMaster(UUIDMixin, TimestampMixin, Base):
             "benchmark_type NOT IN ('NUMERIC', 'NUMERIC_DAILY', 'TASK_WITH_QUANTITY') "
             "OR relevant_count_field IS NOT NULL",
             name="activity_master_numeric_requires_count_field",
+        ),
+        CheckConstraint(
+            "access_type IN ('COMMON', 'RESTRICTED')",
+            name="activity_master_access_type_valid",
         ),
         Index("activity_master_parent_idx", "parent_id"),
         Index("activity_master_active_idx", "is_active"),

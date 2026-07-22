@@ -34,9 +34,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
 import { formatInt } from "@/lib/format";
+import { ActivityAccessBadge } from "@/features/activity-access/components/activity-access-badge";
+import { ActivityAccessTab } from "@/features/activity-access/components/activity-access-tab";
 
 import {
   useActivities,
@@ -530,7 +533,7 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
   }
 
   return (
-    <div className="space-y-3 border-t border-border bg-muted/30 p-4">
+    <div className="space-y-3 p-4">
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium text-muted-foreground">
           Sub-Activities of &ldquo;{activity.name}&rdquo;
@@ -643,6 +646,33 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
   );
 }
 
+// ── Expanded activity row: Sub-Activities / Access tabs ─────────────────────
+
+function ExpandedActivityPanel({ activity }: { activity: ActivityMaster }) {
+  // Sub-Activities stays the default so existing behaviour is preserved; the
+  // Access tab (and its network request) only mounts when the PM opens it.
+  const [tab, setTab] = React.useState<"sub" | "access">("sub");
+  return (
+    <div className="border-t border-border bg-muted/30">
+      <div className="px-4 pt-3">
+        <Tabs
+          value={tab}
+          onChange={(v) => setTab(v as "sub" | "access")}
+          items={[
+            { value: "sub", label: "Sub-Activities" },
+            { value: "access", label: "Access" },
+          ]}
+        />
+      </div>
+      {tab === "sub" ? (
+        <SubActivitiesPanel activity={activity} />
+      ) : (
+        <ActivityAccessTab activity={activity} />
+      )}
+    </div>
+  );
+}
+
 // ── Top-level manager ────────────────────────────────────────────────────────
 
 export function ActivityMasterManager() {
@@ -707,6 +737,7 @@ export function ActivityMasterManager() {
               <TableHead className="w-8" />
               <TableHead className="w-28">Code</TableHead>
               <TableHead>Activity Name</TableHead>
+              <TableHead className="w-32 text-center">Access</TableHead>
               <TableHead className="w-24 text-center">Status</TableHead>
               <TableHead className="w-24" />
             </TableRow>
@@ -714,14 +745,14 @@ export function ActivityMasterManager() {
           <TableBody>
             {query.isLoading && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
             )}
             {!query.isLoading && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
                   No activities found.
                 </TableCell>
               </TableRow>
@@ -748,6 +779,9 @@ export function ActivityMasterManager() {
                     </TableCell>
                     <TableCell className="font-mono text-sm">{a.code ?? "—"}</TableCell>
                     <TableCell className="font-medium">{a.name}</TableCell>
+                    <TableCell className="text-center">
+                      <ActivityAccessBadge accessType={a.access_type} />
+                    </TableCell>
                     <TableCell className="text-center">
                       <Badge variant={a.is_active ? "success" : "neutral"} dot>
                         {a.is_active ? "Active" : "Inactive"}
@@ -792,8 +826,8 @@ export function ActivityMasterManager() {
                   </TableRow>
                   {isExpanded && (
                     <TableRow>
-                      <TableCell colSpan={5} className="p-0">
-                        <SubActivitiesPanel activity={a} />
+                      <TableCell colSpan={6} className="p-0">
+                        <ExpandedActivityPanel activity={a} />
                       </TableCell>
                     </TableRow>
                   )}

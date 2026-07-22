@@ -150,11 +150,32 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return [...base, ...ghosts];
   }, [projects, mode, defaultValues.tasks]);
 
-  // Activity Master combobox options (Activity → Sub-Activity cascade).
-  const activityOptions = React.useMemo(
-    () => (activities ?? []).map((a) => ({ value: a.id, label: a.name })),
-    [activities],
-  );
+  // Activity Master combobox options (Activity -> Sub-Activity cascade).
+  //
+  // Derived from the per-employee FILTERED sub-activity list, not the raw
+  // activities endpoint: a RESTRICTED activity the employee has no access to has
+  // no visible sub-activities, so it must not appear as a selectable Activity
+  // either (otherwise it shows with an empty sub-activity list). Only activities
+  // that actually have a usable sub-activity are offered.
+  const activityOptions = React.useMemo(() => {
+    const byId = new Map<string, string>(); // activity_id -> activity_name
+    for (const s of subActivities) {
+      if (!byId.has(s.activity_id)) byId.set(s.activity_id, s.activity_name);
+    }
+    const base = Array.from(byId, ([value, label]) => ({ value, label }));
+    if (mode !== "edit") return base;
+    // Edit mode: keep an existing row's Activity visible even if access was
+    // since revoked (mirrors the project-combobox ghost pattern), so editing a
+    // saved report never blanks out its own activity selection.
+    const seen = new Set(byId.keys());
+    for (const t of defaultValues.tasks) {
+      if (t.activity_id && t.activity_name && !seen.has(t.activity_id)) {
+        seen.add(t.activity_id);
+        base.push({ value: t.activity_id, label: t.activity_name });
+      }
+    }
+    return base;
+  }, [subActivities, mode, defaultValues.tasks]);
   const activityById = React.useMemo(
     () => new Map((activities ?? []).map((a) => [a.id, a])),
     [activities],

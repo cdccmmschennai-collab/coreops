@@ -45,6 +45,7 @@ def list_employees(
     status: EmployeeStatus | None = Query(default=None),
     department: str | None = Query(default=None),
     manager_id: uuid.UUID | None = Query(default=None),
+    exclude_activity_id: uuid.UUID | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     current: User = Depends(get_current_user),
@@ -59,6 +60,7 @@ def list_employees(
         manager_id=manager_id,
         limit=limit,
         offset=offset,
+        exclude_activity_id=exclude_activity_id,
     )
     return EmployeePage(
         items=[EmployeeOut.model_validate(e) for e in rows],

@@ -252,6 +252,18 @@ def create_request(
                 "validation_error", "Activities cannot be added to a non-working period.", 422
             )
 
+    # Restricted-activity enforcement (migration 0061): an employee cannot
+    # request a restricted activity they aren't authorized for — it would only
+    # fail again at approval. Reject at the source. No work-item continuation is
+    # possible on a fresh request, so a plain duck-typed row is enough.
+    from app.modules.activity_master import access_service
+
+    access_service.validate_report_activity_access(
+        db,
+        employee_id=employee.id,
+        tasks=[SimpleNamespace(sub_activity_id=data.sub_activity_id, work_item_id=None)],
+    )
+
     req = ActivityRequest(
         employee_id=employee.id,
         report_id=data.report_id,

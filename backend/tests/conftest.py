@@ -66,6 +66,7 @@ def _clean_state():
                 "work_report_periods, work_items, daily_work_reports, "
                 "attendance_records, leave_requests, "
                 "project_managers, project_members, projects, company_calendar_events, "
+                "employee_activity_access, "
                 "activity_types, activity_master, maintenance_plants, planning_plants, "
                 "job_codes, employees, offices, users "
                 "RESTART IDENTITY CASCADE"

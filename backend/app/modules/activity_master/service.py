@@ -888,15 +888,31 @@ def list_sub_activities(
     return list(db.execute(stmt).scalars().all())
 
 
-def list_all_sub_activities_flat(db: Session, *, active_only: bool = True) -> list[dict]:
+def list_all_sub_activities_flat(
+    db: Session,
+    *,
+    active_only: bool = True,
+    employee_id: uuid.UUID | None = None,
+) -> list[dict]:
     """Every leaf row across every Activity, joined to the parent's name — the
-    shape the work-report cascading select ultimately needs."""
+    shape the work-report cascading select ultimately needs.
+
+    When `employee_id` is given (the report-dropdown case), RESTRICTED activities
+    are filtered in-DB: a sub-activity only appears if its parent Activity is
+    COMMON, or the employee has an active grant on it. Passing None (the admin
+    reference case) returns every sub-activity regardless of access."""
+    from app.modules.activity_master.access_service import usable_activity_clause
+
     Parent = aliased(ActivityMaster)
     stmt = (
         select(ActivityMaster, Parent.name)
         .join(Parent, ActivityMaster.parent_id == Parent.id)
         .where(ActivityMaster.level == LEVEL_SUB_ACTIVITY)
     )
+    if employee_id is not None:
+        # EXISTS-based restricted filter (indexed, no N+1). Applied only for the
+        # employee-scoped dropdown; the admin list keeps every row.
+        stmt = stmt.where(usable_activity_clause(Parent, employee_id))
     if active_only:
         stmt = stmt.where(ActivityMaster.is_active.is_(True), Parent.is_active.is_(True))
     stmt = stmt.order_by(Parent.sort_order, Parent.name, ActivityMaster.sort_order, ActivityMaster.name)

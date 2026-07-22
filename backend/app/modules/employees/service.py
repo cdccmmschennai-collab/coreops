@@ -83,12 +83,31 @@ def list_employees(
     manager_id: uuid.UUID | None,
     limit: int,
     offset: int,
+    exclude_activity_id: uuid.UUID | None = None,
 ) -> tuple[list[Employee], int]:
     stmt = _alive()
 
     if actor.role == UserRole.employee:
         stmt = stmt.where(Employee.user_id == actor.id)
     # project_manager: no extra scope — full access
+
+    if exclude_activity_id is not None:
+        # Grant-picker helper (activity access control): drop employees who
+        # already hold an active grant on this activity, so the search only
+        # offers new candidates. NOT EXISTS keeps it a single indexed query.
+        from sqlalchemy import exists
+
+        from app.modules.activity_master.access_models import EmployeeActivityAccess
+
+        stmt = stmt.where(
+            ~exists(
+                select(EmployeeActivityAccess.id).where(
+                    EmployeeActivityAccess.activity_id == exclude_activity_id,
+                    EmployeeActivityAccess.employee_id == Employee.id,
+                    EmployeeActivityAccess.is_active.is_(True),
+                )
+            )
+        )
 
     if q:
         like = f"%{q}%"

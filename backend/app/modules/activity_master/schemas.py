@@ -35,6 +35,9 @@ class ActivityMasterOut(BaseModel):
     relevant_count_field: RelevantCountField | None
     is_active: bool
     sort_order: int
+    # COMMON / RESTRICTED — the access mode. Only meaningful on level='activity'
+    # rows; sub-activities inherit and always echo their own stored default.
+    access_type: Literal["COMMON", "RESTRICTED"]
     created_at: datetime
 
 

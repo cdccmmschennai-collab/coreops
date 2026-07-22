@@ -112,8 +112,13 @@ export interface ActivityMaster {
   relevant_count_field: RelevantCountField | null;
   is_active: boolean;
   sort_order: number;
+  /** COMMON (default) / RESTRICTED — the access mode. Meaningful on top-level
+   *  activities; sub-activities inherit their parent's. */
+  access_type: AccessType;
   created_at: string;
 }
+
+export type AccessType = "COMMON" | "RESTRICTED";
 
 /** Leaf rows flattened with the parent Activity's name — used for the
  * Daily Work Report's cascading Activity / Sub-Activity selects.

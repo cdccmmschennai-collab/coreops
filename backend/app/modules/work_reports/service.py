@@ -32,6 +32,7 @@ from app.modules.activity_master.models import (
     TASK_BENCHMARK_TYPES,
     ActivityMaster,
 )
+from app.modules.activity_master import access_service
 from app.modules.activity_master.service import compute_benchmark, compute_overdue
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee, EmployeeStatus
@@ -383,6 +384,13 @@ def _validate_tasks(
     project_job_code_code frozen at validation time so they can be written
     directly into the task row for historical accuracy.
     """
+    # Restricted-activity enforcement (migration 0061): reject any row selecting
+    # a RESTRICTED activity this employee is not authorized for, in a bulk check
+    # (never one query per row). Dropdown filtering is not security — this is the
+    # server-side gate shared by every write path (create/update/approve). The
+    # continuation exception for open work items lives inside this helper.
+    access_service.validate_report_activity_access(db, employee_id=author_id, tasks=tasks)
+
     total = 0
     snapshots: list[dict] = []
     for task in tasks:
@@ -1803,6 +1811,18 @@ def submit_work_report(
     # Split-day: every WORKING period needs its own activity row (a report
     # with only the first half filled in cannot be submitted).
     _assert_periods_submittable(db, report)
+
+    # Re-check activity access at submit (migration 0061): a draft saved while an
+    # activity was COMMON/granted must not be submitted after it was restricted /
+    # the grant revoked. Existing task rows duck-type as the tasks the access
+    # validator expects (sub_activity_id / work_item_id); an open work-item
+    # continuation is still allowed by the exception inside the validator.
+    submit_rows = db.execute(
+        select(WorkReportTask).where(WorkReportTask.report_id == report.id)
+    ).scalars().all()
+    access_service.validate_report_activity_access(
+        db, employee_id=report.employee_id, tasks=submit_rows
+    )
 
     _apply_benchmarks(db, report)
     report.status = WorkReportStatus.submitted

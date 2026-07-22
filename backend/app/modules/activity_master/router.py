@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
-from app.modules.activity_master import service
+from app.modules.activity_master import access_service, service
+from app.modules.activity_master.access_schemas import (
+    ActivityAccessConfigOut,
+    ChangeAccessTypeIn,
+    GrantAccessIn,
+    GrantResultOut,
+)
 from app.modules.activity_master.schemas import (
     ActivityCreate,
     ActivityMasterOut,
@@ -27,6 +33,7 @@ from app.modules.activity_master.schemas import (
     SubActivityCreate,
     SubActivityFlatOut,
 )
+from app.modules.employees.service import _current_employee
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/activity-master", tags=["activity-master"])
@@ -86,11 +93,79 @@ def create_sub_activity(
 @router.get("/sub-activities", response_model=list[SubActivityFlatOut])
 def list_all_sub_activities_flat(
     active_only: bool = Query(default=True),
-    _user: User = AuthUser,
+    user: User = AuthUser,
     db: Session = Depends(get_db),
 ) -> list[SubActivityFlatOut]:
-    rows = service.list_all_sub_activities_flat(db, active_only=active_only)
+    # Restricted-activity filtering: an employee (including a PM filing their own
+    # report) only sees COMMON sub-activities plus RESTRICTED ones they've been
+    # granted. The employee is derived from the authenticated identity — never
+    # client-supplied. A user with no employee profile sees only COMMON.
+    employee = _current_employee(db, user)
+    rows = service.list_all_sub_activities_flat(
+        db, active_only=active_only, employee_id=employee.id if employee else None
+    )
     return [SubActivityFlatOut.model_validate(r) for r in rows]
+
+
+# ── activity access control (PM-only, migration 0061) ────────────────────────
+
+@router.get("/activities/{activity_id}/access", response_model=ActivityAccessConfigOut)
+def get_activity_access(
+    activity_id: uuid.UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _admin: User = AdminUser,
+    db: Session = Depends(get_db),
+) -> ActivityAccessConfigOut:
+    return ActivityAccessConfigOut.model_validate(
+        access_service.list_activity_access(
+            db, activity_id=activity_id, limit=limit, offset=offset
+        )
+    )
+
+
+@router.patch("/activities/{activity_id}/access-type", response_model=GrantResultOut)
+def change_activity_access_type(
+    activity_id: uuid.UUID,
+    body: ChangeAccessTypeIn,
+    admin: User = AdminUser,
+    db: Session = Depends(get_db),
+) -> GrantResultOut:
+    return GrantResultOut.model_validate(
+        access_service.change_activity_access_type(
+            db,
+            actor=admin,
+            activity_id=activity_id,
+            new_type=body.access_type,
+            employee_ids=body.employee_ids,
+        )
+    )
+
+
+@router.post("/activities/{activity_id}/access", response_model=GrantResultOut)
+def grant_activity_access(
+    activity_id: uuid.UUID,
+    body: GrantAccessIn,
+    admin: User = AdminUser,
+    db: Session = Depends(get_db),
+) -> GrantResultOut:
+    return GrantResultOut.model_validate(
+        access_service.grant_activity_access(
+            db, actor=admin, activity_id=activity_id, employee_ids=body.employee_ids
+        )
+    )
+
+
+@router.delete("/activities/{activity_id}/access/{employee_id}")
+def revoke_activity_access(
+    activity_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    admin: User = AdminUser,
+    db: Session = Depends(get_db),
+) -> dict:
+    return access_service.revoke_activity_access(
+        db, actor=admin, activity_id=activity_id, employee_id=employee_id
+    )
 
 
 @router.patch("/activities/{activity_master_id}", response_model=ActivityMasterOut)
