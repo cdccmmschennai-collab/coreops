@@ -688,6 +688,16 @@ export function ActivityMasterManager() {
   const items = query.data ?? [];
   const filtered = items.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()));
 
+  // The activity form always renders at the top of this panel. Editing a row far
+  // down the table would otherwise open the form off-screen; bring it into view
+  // whenever the form opens (or the edit target changes) so the PM sees it.
+  const topRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (showForm) {
+      topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [showForm, editing]);
+
   function closeForm() {
     setEditing(null);
     setShowForm(false);
@@ -713,7 +723,7 @@ export function ActivityMasterManager() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
+      <div ref={topRef} className="flex items-center justify-between gap-3">
         <Input
           placeholder="Search activities…"
           value={search}
