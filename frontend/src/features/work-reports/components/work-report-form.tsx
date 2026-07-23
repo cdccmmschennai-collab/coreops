@@ -859,7 +859,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
             <span>
               You already have a{" "}
               {existingReportForDate.status === "draft" ? "draft report" : "report"} for{" "}
-              <span className="font-medium">{reportDate}</span>. Only one report per day is allowed —
+              <span className="font-medium">{reportDate}</span>. Only one report per day is allowed -
               open it to add or edit activities.
             </span>
             <Button

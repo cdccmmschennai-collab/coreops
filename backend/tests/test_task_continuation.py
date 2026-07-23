@@ -320,6 +320,106 @@ def test_failed_create_rolls_back_work_item(flag_on, client, author, pm_header, 
 
 
 # --------------------------------------------------------------------------
+# cycle confinement — a task may be continued only within its own Fri-Thu cycle
+# --------------------------------------------------------------------------
+def _open_task_ids(client, header, report_date):
+    ot = client.get(OPEN_TASKS, headers=header,
+                    params={"report_date": report_date.isoformat()}).json()
+    return [t["work_item_id"] for t in ot["items"]]
+
+
+def test_cycle_boundary_is_friday_to_thursday():
+    """Fri-Thu cycle math the confinement rule relies on (pure)."""
+    fri = date(2026, 7, 10)
+    thu = date(2026, 7, 16)
+    assert fri.weekday() == 4 and thu.weekday() == 3
+    # Every day Fri..Thu maps to the same (Fri, Thu) bounds.
+    for offset in range(7):
+        assert compute_week_bounds(fri + timedelta(days=offset)) == (fri, thu)
+    # The next Friday opens a new cycle.
+    assert compute_week_bounds(date(2026, 7, 17)) == (date(2026, 7, 17),
+                                                      date(2026, 7, 23))
+
+
+def test_incomplete_task_same_cycle_is_suggested(flag_on, client, author, pm_header):
+    """1. An unfinished task is suggested for a report inside its own cycle."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=3)
+    cur_fri, cur_thu = compute_week_bounds(TODAY)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=cur_fri).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    # A later day in the SAME cycle still lists it.
+    assert _open_task_ids(client, a["header"], cur_fri) == [wid]
+
+
+def test_incomplete_task_on_cycle_end_date_is_suggested(flag_on, client, author, pm_header):
+    """2. Started on the cycle's Friday, still suggested on that cycle's Thursday."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=1)  # due == start (overdue by Thu)
+    cur_fri, cur_thu = compute_week_bounds(TODAY)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=cur_fri).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    # Thursday is the last day of the cycle -> still eligible.
+    assert _open_task_ids(client, a["header"], cur_thu) == [wid]
+
+
+def test_previous_cycle_task_not_suggested_next_cycle(flag_on, client, author, pm_header):
+    """3. An unfinished task from the previous cycle disappears from the new one,
+    while still remaining incomplete in the DB (positive control: it IS suggested
+    within its own cycle)."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=1)
+    cur_fri, _ = compute_week_bounds(TODAY)
+    prev_fri = cur_fri - timedelta(days=7)
+    prev_thu = prev_fri + timedelta(days=6)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=prev_fri).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    # In its own cycle (prev Thursday) it is still suggested.
+    assert _open_task_ids(client, a["header"], prev_thu) == [wid]
+    # From the next cycle's Friday onward it is gone.
+    assert wid not in _open_task_ids(client, a["header"], cur_fri)
+
+
+def test_completed_task_current_cycle_not_suggested(flag_on, client, author, pm_header):
+    """4. A completed task never appears, even within its own cycle."""
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=3)
+    cur_fri, _ = compute_week_bounds(TODAY)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=cur_fri, is_completed=True).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    assert wid not in _open_task_ids(client, a["header"], cur_fri)
+
+
+def test_same_activity_new_cycle_creates_separate_item(flag_on, client, author, pm_header, db):
+    """5. Selecting the same activity in a later cycle (no work_item_id, because
+    the old task is no longer suggested) creates a fresh work item rather than
+    reusing the previous-cycle one, which stays incomplete."""
+    import uuid as _uuid
+
+    a = author()
+    _, sub = _task_sub(client, pm_header, period=1)
+    cur_fri, _ = compute_week_bounds(TODAY)
+    prev_fri = cur_fri - timedelta(days=7)
+    r_prev = _post_report(client, a["header"], project_id=a["project"].id,
+                          sub_id=sub["id"], on_date=prev_fri).json()
+    old_wid = r_prev["tasks"][0]["work_item_id"]
+    # New cycle, same project + sub-activity, started fresh (no work_item_id).
+    r_new = _post_report(client, a["header"], project_id=a["project"].id,
+                         sub_id=sub["id"], on_date=cur_fri).json()
+    new_wid = r_new["tasks"][0]["work_item_id"]
+    assert new_wid != old_wid
+    assert db.query(WorkItem).count() == 2
+    # The previous-cycle item is untouched: still incomplete, original start date.
+    old = db.get(WorkItem, _uuid.UUID(old_wid))
+    assert old.completed_on is None
+    assert old.started_on == prev_fri
+
+
+# --------------------------------------------------------------------------
 # completion
 # --------------------------------------------------------------------------
 def _complete_via_endpoint(client, header, task_id, is_completed=True, expect=200):

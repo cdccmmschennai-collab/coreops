@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.models import ActivityMaster
+from app.modules.activity_master.service import compute_week_bounds
 from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
 from app.shared.errors import AppError
 
@@ -421,7 +422,18 @@ def get_open_work_items(
     `report_date`. Lifecycle/overdue are evaluated relative to report_date (the
     report being written), not wall-clock today. Legacy NULL-linked rows are not
     represented here — only real work items. Ordered OVERDUE, DUE_TODAY, then
-    IN_PROGRESS by nearest due date."""
+    IN_PROGRESS by nearest due date.
+
+    Continuation is confined to a SINGLE Friday-Thursday benchmark cycle: an item
+    may be continued only within the cycle that contains its originating
+    started_on. Once report_date crosses into a later cycle the item drops out of
+    the suggestions (it stays incomplete in the DB and keeps appearing as
+    Not-Completed/Overdue in historical benchmark exports — see project rule).
+    Re-selecting the same activity in the new cycle starts a fresh work item."""
+    # The cycle of the report being written; only items whose own start cycle
+    # matches this may be continued (compute_week_bounds is the shared Fri-Thu
+    # calc used everywhere else, so continuation and benchmarks never diverge).
+    report_cycle = compute_week_bounds(report_date)
     stmt = (
         select(WorkItem, ActivityMaster.parent_id.label("activity_id"))
         .join(ActivityMaster, ActivityMaster.id == WorkItem.sub_activity_id)
@@ -435,6 +447,12 @@ def get_open_work_items(
 
     out: list[dict] = []
     for item, activity_id in rows:
+        # Confine to the item's own benchmark cycle. started_on is the frozen
+        # originating date (never the latest continuation), so a task started
+        # last Friday stops being suggested the moment report_date rolls into the
+        # next Friday-Thursday window.
+        if compute_week_bounds(item.started_on) != report_cycle:
+            continue
         lc = lifecycle_of(item.due_date, item.completed_on, today=report_date)
         out.append({
             "work_item_id": item.id,
