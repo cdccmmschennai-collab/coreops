@@ -427,6 +427,153 @@ def test_pm_with_only_pm_reports_gets_no_email(db):
     assert DailyReportReminderService().collect(db, today=date(2026, 7, 6)) == []
 
 
+# --- Recorded-status rule: submitted OR granted satisfies a day; drafts and
+# --- task-completion state never do (against the real DB) ------------------
+
+
+def _make_report(db, *, employee_id, report_date, status):
+    from app.modules.work_reports.models import DailyWorkReport
+
+    report = DailyWorkReport(
+        employee_id=employee_id, report_date=report_date, status=status
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+def _make_two_day_task_item(db, *, employee_id, started_on, target_days=2, completed_on=None):
+    """An open (or completed) TASK_BASED WorkItem spanning `target_days`.
+
+    The reminder must never consult this: it exists only to prove that an
+    in-flight multi-day task neither auto-satisfies a later day nor is required
+    for an earlier submitted day to count.
+    """
+    from app.modules.activity_master.models import ActivityMaster
+    from app.modules.projects.models import Project, ProjectStatus
+    from app.modules.work_reports.models import WorkItem
+    from app.modules.work_reports.work_items import compute_due_date
+
+    project = Project(
+        code=f"PRJ-{uuid.uuid4().hex[:8]}", name="Task Project", status=ProjectStatus.planning
+    )
+    sub_activity = ActivityMaster(
+        name="Two-day task", level="sub_activity", benchmark_type="TASK_BASED"
+    )
+    db.add_all([project, sub_activity])
+    db.commit()
+    db.refresh(project)
+    db.refresh(sub_activity)
+
+    item = WorkItem(
+        employee_id=employee_id,
+        project_id=project.id,
+        sub_activity_id=sub_activity.id,
+        started_on=started_on,
+        target_days=target_days,
+        due_date=compute_due_date(started_on, target_days),
+        completed_on=completed_on,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def _missing_dates_for(reminders, employee_id) -> set:
+    return {
+        day.report_date
+        for r in reminders
+        for day in r.days
+        for e in day.employees
+        if e.employee_id == employee_id
+    }
+
+
+# Monday reference -> window is Fri 03 / Thu 02 / Wed 01 Jul 2026.
+_TODAY = date(2026, 7, 6)
+_DAY1 = date(2026, 7, 1)   # task start
+_DAY2 = date(2026, 7, 2)   # task due date
+_DAY3 = date(2026, 7, 3)   # unrelated working day
+
+
+def _collect(db):
+    return DailyReportReminderService().collect(db, today=_TODAY)
+
+
+def test_submitted_day1_of_open_two_day_task_is_not_missing_for_day1(db):
+    """Day 1 submitted, task not marked complete (WorkItem open, completed_on
+    NULL): Day 1 is recorded. Day 2, with no continuation report, is missing."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_two_day_task_item(db, employee_id=emp.id, started_on=_DAY1)
+    _make_report(db, employee_id=emp.id, report_date=_DAY1, status=WorkReportStatus.submitted)
+
+    missing = _missing_dates_for(_collect(db), emp.id)
+    assert _DAY1 not in missing            # submitted, despite the open task
+    assert _DAY2 in missing                # no continuation report yet
+    assert _DAY3 in missing                # unrelated day, never reported
+
+
+def test_any_submitted_report_on_day2_records_day2_regardless_of_activity(db):
+    """Day 2 is recorded by ANY submitted report, whether it continues the open
+    two-day task or logs a completely different activity. The reminder never
+    inspects the activity, the WorkItem, or the completion checkbox — a Day 2
+    report is not mandatory to be a continuation of Day 1's task."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    # Day 1's two-day task stays open (completed_on NULL) the whole time.
+    _make_two_day_task_item(db, employee_id=emp.id, started_on=_DAY1)
+    _make_report(db, employee_id=emp.id, report_date=_DAY1, status=WorkReportStatus.submitted)
+    # Day 2: a submitted report for a *different* activity — still records Day 2.
+    _make_report(db, employee_id=emp.id, report_date=_DAY2, status=WorkReportStatus.submitted)
+
+    missing = _missing_dates_for(_collect(db), emp.id)
+    assert _DAY1 not in missing
+    assert _DAY2 not in missing            # any submitted report records the day
+    assert _DAY3 in missing
+
+
+def test_granted_report_satisfies_its_date(db):
+    """A report reopened for editing (status granted) is still recorded."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_report(db, employee_id=emp.id, report_date=_DAY2, status=WorkReportStatus.granted)
+
+    missing = _missing_dates_for(_collect(db), emp.id)
+    assert _DAY2 not in missing
+    assert missing == {_DAY1, _DAY3}
+
+
+def test_draft_report_does_not_satisfy_its_date(db):
+    """A draft is not a recorded report; the day stays missing."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_report(db, employee_id=emp.id, report_date=_DAY2, status=WorkReportStatus.draft)
+
+    missing = _missing_dates_for(_collect(db), emp.id)
+    assert _DAY2 in missing
+    assert missing == {_DAY1, _DAY2, _DAY3}
+
+
+def test_unreported_working_days_all_remain_missing(db):
+    """Baseline: with no reports at all, every window day is chased."""
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+
+    missing = _missing_dates_for(_collect(db), emp.id)
+    assert missing == {_DAY1, _DAY2, _DAY3}
+
+
 def test_celery_task_returns_summary_even_when_a_recipient_fails(monkeypatch):
     """The thin Celery task returns its summary dict (i.e. succeeds) when one
     recipient fails, because run_daily_report_reminders never re-raises."""

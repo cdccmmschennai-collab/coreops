@@ -8,7 +8,9 @@ Business rules:
   * A day "requires a report" for an employee if it is a working day (Mon-Fri)
     in the lookback window, on or after the employee's ``date_of_joining``. This
     does *not* depend on attendance being recorded.
-  * A report "satisfies" a day only once it is **submitted** (drafts do not).
+  * A report "satisfies" a day once it is **submitted** or **granted** (a report
+    reopened for editing is still a recorded report; drafts never satisfy a day).
+    Task/benchmark completion state is irrelevant — only that a report exists.
   * The lookback is the previous N working days (Mon-Fri), strictly before today,
     default 3.
 
@@ -108,14 +110,14 @@ class DailyReportReminderService:
         if not all_employee_ids:
             return []
 
-        submitted = self._submitted_dates(db, all_employee_ids, window_start, window_end)
+        recorded = self._recorded_dates(db, all_employee_ids, window_start, window_end)
         pm_names = self._pm_display_names(db, pms)
 
         reminders: list[PMReminder] = []
         for pm in pms:
             pm_employees = employees_by_pm.get(pm.id, [])
             days = self._missing_days_for_pm(
-                pm_employees, submitted, window_set
+                pm_employees, recorded, window_set
             )
             if not days:
                 continue
@@ -167,17 +169,26 @@ class DailyReportReminderService:
             grouped.setdefault(emp.reporting_pm_id, []).append(emp)
         return grouped
 
-    def _submitted_dates(
+    def _recorded_dates(
         self,
         db: Session,
         employee_ids: list[uuid.UUID],
         date_from: date,
         date_to: date,
     ) -> dict[uuid.UUID, set[date]]:
+        """Dates each employee has a recorded report for, in the window.
+
+        A report counts as recorded once it is ``submitted`` or ``granted`` (a
+        report the Project Head reopened for editing is still a recorded report).
+        Drafts do not count. Task/benchmark completion is never consulted — only
+        that a report row exists for the date.
+        """
         rows = db.execute(
             select(DailyWorkReport.employee_id, DailyWorkReport.report_date).where(
                 DailyWorkReport.employee_id.in_(employee_ids),
-                DailyWorkReport.status == WorkReportStatus.submitted,
+                DailyWorkReport.status.in_(
+                    [WorkReportStatus.submitted, WorkReportStatus.granted]
+                ),
                 DailyWorkReport.report_date >= date_from,
                 DailyWorkReport.report_date <= date_to,
             )
@@ -225,12 +236,12 @@ class DailyReportReminderService:
     def _missing_days_for_pm(
         self,
         employees: list[Employee],
-        submitted: dict[uuid.UUID, set[date]],
+        recorded: dict[uuid.UUID, set[date]],
         window: set[date],
     ) -> list[MissingReportDay]:
         by_date: dict[date, list[MissingEmployee]] = {}
         for emp in employees:
-            missing = self._owed_days(emp, window) - submitted.get(emp.id, set())
+            missing = self._owed_days(emp, window) - recorded.get(emp.id, set())
             for d in missing:
                 by_date.setdefault(d, []).append(
                     MissingEmployee(
