@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # only for verifying the email/reminder pipeline. Guarded by PM role too.
     ENABLE_DEBUG_ENDPOINTS: bool = False
 
+    # Interactive API docs (Swagger UI, ReDoc and the openapi.json schema).
+    # Fail-closed default: production publishes no schema surface unless this is
+    # explicitly turned on. When false, app.main passes None for all three URLs,
+    # so the routes are never mounted and requests to them 404. Turning it on
+    # does NOT change any router prefix or endpoint URL.
+    ENABLE_API_DOCS: bool = False
+
     # Task continuation (work_items). Off by default. When false, TASK_BASED
     # report rows keep the legacy standalone behaviour: no work items are
     # created, no continuation suggestions are served, and existing APIs/exports

@@ -39,11 +39,18 @@ from app.shared.errors import register_error_handlers
 
 
 def create_app() -> FastAPI:
+    # Interactive docs are opt-in via ENABLE_API_DOCS (default false, so
+    # production exposes no schema). When enabled the URLs are exactly the ones
+    # this app has always served: Swagger at {prefix}/docs, ReDoc at FastAPI's
+    # default /redoc, schema at {prefix}/openapi.json. When disabled all three
+    # are None, so FastAPI never mounts the routes and they return 404.
+    docs_enabled = settings.ENABLE_API_DOCS
     app = FastAPI(
         title="Coreops API",
         version="1.0.0",
-        docs_url=f"{settings.API_V1_PREFIX}/docs",
-        openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
+        docs_url=f"{settings.API_V1_PREFIX}/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url=f"{settings.API_V1_PREFIX}/openapi.json" if docs_enabled else None,
     )
 
     app.add_middleware(
