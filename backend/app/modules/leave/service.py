@@ -6,13 +6,24 @@ RBAC:
   employee list own requests; create/update/cancel own pending
 
 Workflow:
-  pending → approved   (manager/admin)
-  pending → rejected   (manager/admin, comment optional)
-  pending → cancelled  (employee, own pending only)
+  pending  → approved   (manager/admin)
+  pending  → rejected   (manager/admin, comment optional)
+  pending  → cancelled  (employee, own pending only)
+  approved → cancellation_requested  (employee, own leave that hasn't ended)
+  cancellation_requested → cancelled (manager approves the withdrawal)
+  cancellation_requested → approved  (manager keeps the leave)
   rejected → (re-open by editing → back to pending? No: employee must create new)
+
+Every status change re-reads its row under `SELECT ... FOR UPDATE` before
+checking the status, so a concurrent approve/cancel pair resolves to exactly
+one winner rather than both seeing `pending`.
+
+Cancellation never touches attendance or leave balances: both are maintained by
+hand in CoreOps, so the manager reviews them separately after the decision.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -22,7 +33,9 @@ from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.leave.schemas import (
+    AttendanceSummaryRequest,
     DeliverableConflictOut,
+    LeaveAttendanceSummaryOut,
     LeaveDeliverableImpactOut,
     LeaveRequestCreate,
     LeaveRequestUpdate,
@@ -35,6 +48,11 @@ from app.shared.errors import AppError
 # leave day must fall within to count as a Deliverable Impact.
 DELIVERABLE_IMPACT_WINDOW = timedelta(days=2)
 
+# CoreOps runs on a single business calendar. "Has this leave already ended?"
+# must be judged on the Chennai business day: at 00:30 IST the server's UTC date
+# is still yesterday, which would keep a finished leave cancellable.
+BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
+
 
 # Attendance statuses that mean the employee actually worked that day — you
 # can't take (or be granted) leave for a day you've already attended.
@@ -43,6 +61,23 @@ _WORKED_ATTENDANCE = (AttendanceStatus.present, AttendanceStatus.half_day)
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _today() -> date:
+    return datetime.now(BUSINESS_TZ).date()
+
+
+def _long_date(value: date) -> str:
+    # Built from .day rather than a %-d/%#d directive, which is platform-specific.
+    return f"{value.day} {value:%B %Y}"
+
+
+def _period(req: LeaveRequest) -> str:
+    """`3 August 2026`, or `28 July 2026 - 30 July 2026` for a range."""
+    start = _long_date(req.start_date)
+    if req.start_date == req.end_date:
+        return start
+    return f"{start} - {_long_date(req.end_date)}"
 
 
 def _worked_attendance_dates(
@@ -128,13 +163,29 @@ def _assert_can_read(db: Session, actor: User, req: LeaveRequest) -> None:
     raise AppError("forbidden", "You can only view your own leave requests.", 403)
 
 
-def _assert_can_review(db: Session, actor: User, req: LeaveRequest) -> None:
+def _assert_can_review(db: Session, actor: User, req: LeaveRequest | None = None) -> None:
     if actor.role != UserRole.project_manager:
         raise AppError("forbidden", "Only project managers can review leave requests.", 403)
 
 
 def _fetch(db: Session, req_id: uuid.UUID) -> LeaveRequest:
     req = db.get(LeaveRequest, req_id)
+    if req is None:
+        raise AppError("not_found", "Leave request not found.", 404)
+    return req
+
+
+def _fetch_locked(db: Session, req_id: uuid.UUID) -> LeaveRequest:
+    """Load the request with `SELECT ... FOR UPDATE`.
+
+    The lock is held until the surrounding commit, so a second writer racing on
+    the same request blocks here and then re-reads the status the winner wrote —
+    which its own status check then rejects. Callers must therefore lock BEFORE
+    validating status, never after.
+    """
+    req = db.execute(
+        select(LeaveRequest).where(LeaveRequest.id == req_id).with_for_update()
+    ).scalar_one_or_none()
     if req is None:
         raise AppError("not_found", "Leave request not found.", 404)
     return req
@@ -241,8 +292,8 @@ def create_leave_request(
 def update_leave_request(
     db: Session, actor: User, req_id: uuid.UUID, data: LeaveRequestUpdate
 ) -> LeaveRequest:
-    req = _fetch(db, req_id)
     me = _author_employee(db, actor)
+    req = _fetch_locked(db, req_id)
     if req.employee_id != me.id:
         raise AppError("forbidden", "You can only edit your own leave requests.", 403)
     if req.status != LeaveStatus.pending:
@@ -273,12 +324,19 @@ def update_leave_request(
 
 
 def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRequest:
-    req = _fetch(db, req_id)
+    """pending -> cancelled, by the employee who filed it.
+
+    The row is kept so the request stays in the employee's history; it simply
+    stops matching the pending queries the manager's queue is built from.
+    """
     me = _author_employee(db, actor)
+    # Locked before the status check so an employee cancelling and a manager
+    # approving the same request cannot both win the race.
+    req = _fetch_locked(db, req_id)
     if req.employee_id != me.id:
         raise AppError("forbidden", "You can only cancel your own leave requests.", 403)
     if req.status != LeaveStatus.pending:
-        raise AppError("forbidden", "Only pending requests can be cancelled.", 403)
+        raise AppError("conflict", "Only pending requests can be cancelled.", 409)
 
     req.status = LeaveStatus.cancelled
     req.updated_by = actor.id
@@ -295,12 +353,196 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
     return req
 
 
+# ---------- approved-leave cancellation ------------------------------------
+
+def request_leave_cancellation(
+    db: Session, actor: User, req_id: uuid.UUID
+) -> LeaveRequest:
+    """approved -> cancellation_requested, by the employee who filed it.
+
+    The leave stays active until a manager decides — this only puts it in their
+    queue. Leave that has already finished is out of scope: there is nothing
+    left to withdraw, and correcting the record is an attendance job.
+    """
+    me = _author_employee(db, actor)
+    req = _fetch_locked(db, req_id)
+    if req.employee_id != me.id:
+        raise AppError(
+            "forbidden",
+            "You can request cancellation only for your own leave request.",
+            403,
+        )
+    if req.status == LeaveStatus.cancellation_requested:
+        raise AppError(
+            "conflict",
+            "This leave already has a cancellation request awaiting review.",
+            409,
+        )
+    if req.status != LeaveStatus.approved:
+        raise AppError(
+            "conflict",
+            "Only approved leave requests can have cancellation requested.",
+            409,
+        )
+    # end_date, not start_date: an employee who came back to work partway
+    # through an approved absence still needs to withdraw the remainder.
+    if req.end_date < _today():
+        raise AppError("validation_error", "Past leave requests cannot be cancelled.", 422)
+
+    req.status = LeaveStatus.cancellation_requested
+    req.updated_by = actor.id
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    _notify_manager(
+        db, me, "leave_cancellation_requested",
+        f"{me.full_name} requested leave cancellation",
+        f"{me.employee_code} - {me.full_name} requested cancellation of approved "
+        f"leave for {_period(req)}.",
+        req.id,
+        f"/attendance?tab=leave&queue=cancellation&id={req.id}",
+    )
+    return req
+
+
+def approve_leave_cancellation(
+    db: Session, actor: User, req_id: uuid.UUID
+) -> LeaveRequest:
+    """cancellation_requested -> cancelled. The manager's approval cancels the
+    leave outright; there is no second step for the employee.
+
+    Deliberately writes nothing to attendance or leave balances — both are
+    manually maintained, and the UI tells the manager to review attendance.
+    """
+    _assert_can_review(db, actor)
+    req = _fetch_locked(db, req_id)
+    if req.status != LeaveStatus.cancellation_requested:
+        raise AppError(
+            "conflict", "This cancellation request has already been processed.", 409
+        )
+
+    req.status = LeaveStatus.cancelled
+    req.updated_by = actor.id
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    _notify_employee(
+        db, req.employee_id, "leave_cancellation_approved",
+        "Your leave cancellation was approved",
+        f"Your leave cancellation request for {_period(req)} was approved.",
+        req.id,
+        f"/attendance?tab=leave&id={req.id}",
+    )
+    return req
+
+
+def reject_leave_cancellation(
+    db: Session, actor: User, req_id: uuid.UUID
+) -> LeaveRequest:
+    """cancellation_requested -> approved. The original approval is untouched:
+    manager_id and manager_comment still record who granted the leave."""
+    _assert_can_review(db, actor)
+    req = _fetch_locked(db, req_id)
+    if req.status != LeaveStatus.cancellation_requested:
+        raise AppError(
+            "conflict", "This cancellation request has already been processed.", 409
+        )
+
+    req.status = LeaveStatus.approved
+    req.updated_by = actor.id
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    _notify_employee(
+        db, req.employee_id, "leave_cancellation_rejected",
+        "Your leave cancellation was rejected",
+        f"Your leave cancellation request for {_period(req)} was rejected. "
+        "The approved leave remains active.",
+        req.id,
+        f"/attendance?tab=leave&id={req.id}",
+    )
+    return req
+
+
+# ---------- attendance summary (cancellation-queue decision support) -------
+
+# One word per leave request, in priority order when a range mixes statuses.
+_ATTENDANCE_SUMMARY_NONE = "none"
+
+
+def attendance_summaries(
+    db: Session, actor: User, data: AttendanceSummaryRequest
+) -> list[LeaveAttendanceSummaryOut]:
+    """Read-only: what attendance already exists across each leave request's
+    dates, summarised to a single word for the cancellation queue.
+
+    Two bulk queries for the whole displayed page (no per-row querying), and it
+    runs outside the cancellation transaction — it never writes.
+    """
+    _assert_can_review(db, actor)
+    if not data.leave_request_ids:
+        return []
+
+    reqs = (
+        db.execute(
+            select(LeaveRequest).where(LeaveRequest.id.in_(data.leave_request_ids))
+        )
+        .scalars()
+        .all()
+    )
+    if not reqs:
+        return []
+
+    # Bound the scan to the widest window across all displayed rows, then bucket
+    # in Python — one query rather than one per leave request.
+    lo = min(r.start_date for r in reqs)
+    hi = max(r.end_date for r in reqs)
+    rows = db.execute(
+        select(
+            AttendanceRecord.employee_id,
+            AttendanceRecord.attendance_date,
+            AttendanceRecord.status,
+        ).where(
+            AttendanceRecord.employee_id.in_({r.employee_id for r in reqs}),
+            AttendanceRecord.attendance_date >= lo,
+            AttendanceRecord.attendance_date <= hi,
+        )
+    ).all()
+    by_employee: dict[uuid.UUID, list] = {}
+    for row in rows:
+        by_employee.setdefault(row.employee_id, []).append(row)
+
+    items: list[LeaveAttendanceSummaryOut] = []
+    for r in reqs:
+        covered = [
+            row
+            for row in by_employee.get(r.employee_id, ())
+            if r.start_date <= row.attendance_date <= r.end_date
+        ]
+        statuses = {row.status for row in covered}
+        days = len(covered)
+        if not statuses:
+            summary = _ATTENDANCE_SUMMARY_NONE
+        elif len(statuses) > 1:
+            summary = "mixed"
+        else:
+            summary = next(iter(statuses)).value
+        items.append(
+            LeaveAttendanceSummaryOut(
+                leave_request_id=r.id, summary=summary, days_recorded=days
+            )
+        )
+    return items
+
+
 # ---------- manager / admin review ----------------------------------------
 
 def approve_leave_request(
     db: Session, actor: User, req_id: uuid.UUID, data: LeaveReviewBody
 ) -> LeaveRequest:
-    req = _fetch(db, req_id)
+    # Locked before the status check so an employee cancelling the same request
+    # concurrently cannot slip in between the read and the write.
+    req = _fetch_locked(db, req_id)
     _assert_can_review(db, actor, req)
     if req.status != LeaveStatus.pending:
         raise AppError("validation_error", "Only pending requests can be approved.", 422)
@@ -337,7 +579,7 @@ def approve_leave_request(
 def reject_leave_request(
     db: Session, actor: User, req_id: uuid.UUID, data: LeaveReviewBody
 ) -> LeaveRequest:
-    req = _fetch(db, req_id)
+    req = _fetch_locked(db, req_id)
     _assert_can_review(db, actor, req)
     if req.status != LeaveStatus.pending:
         raise AppError("validation_error", "Only pending requests can be rejected.", 422)
@@ -386,9 +628,14 @@ def deliverable_impacts(
     if not leave_request_ids:
         return []
 
+    # A cancelled request is no longer an absence, so it can no longer clash
+    # with a deliverable — drop it before any conflict work is done.
     reqs = (
         db.execute(
-            select(LeaveRequest).where(LeaveRequest.id.in_(leave_request_ids))
+            select(LeaveRequest).where(
+                LeaveRequest.id.in_(leave_request_ids),
+                LeaveRequest.status != LeaveStatus.cancelled,
+            )
         )
         .scalars()
         .all()

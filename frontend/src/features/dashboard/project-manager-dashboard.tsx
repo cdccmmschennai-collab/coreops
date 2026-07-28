@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, ClipboardList, ListPlus } from "lucide-react";
+import { ArrowRight, CalendarOff, CalendarX2, ClipboardList, ListPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +47,15 @@ export function ProjectManagerDashboard() {
   // Pending leave requests awaiting review — total drives the shortcut badge.
   const pendingLeave = useLeaveList({ status: "pending", limit: 1, offset: 0 });
   const pendingLeaveCount = pendingLeave.data?.total ?? 0;
+
+  // Withdrawals of approved leave are a separate decision from a new request,
+  // so they get their own shortcut and count rather than being merged in.
+  const leaveCancellations = useLeaveList({
+    status: "cancellation_requested",
+    limit: 1,
+    offset: 0,
+  });
+  const leaveCancellationCount = leaveCancellations.data?.total ?? 0;
 
   // Pending activity requests awaiting the PM's decision — drives the card badge.
   const activityRequestCount = useActivityRequestPendingCount();
@@ -162,11 +171,23 @@ export function ProjectManagerDashboard() {
           <CardContent className="p-4">
             <div className="flex flex-col gap-2">
               <Button asChild className="justify-start" variant="secondary">
-                <Link href="/attendance?tab=leave">
-                  <CalendarOff className="h-4 w-4" /> Leave requests
+                <Link href="/attendance?tab=leave&queue=pending">
+                  <CalendarOff className="h-4 w-4" /> Pending leave requests
                   {pendingLeaveCount > 0 && (
                     <Badge variant="warning" className="ml-auto">
                       {pendingLeaveCount}
+                    </Badge>
+                  )}
+                </Link>
+              </Button>
+              <Button asChild className="justify-start" variant="secondary">
+                <Link href="/attendance?tab=leave&queue=cancellation">
+                  {/* Calendar-with-X: withdrawing a booked date, distinct from
+                      the CalendarOff slash used for a new leave request. */}
+                  <CalendarX2 className="h-4 w-4" /> Cancellation requests
+                  {leaveCancellationCount > 0 && (
+                    <Badge variant="info" className="ml-auto">
+                      {leaveCancellationCount}
                     </Badge>
                   )}
                 </Link>

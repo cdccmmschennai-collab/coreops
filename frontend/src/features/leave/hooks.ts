@@ -52,10 +52,48 @@ export function useUpdateLeave(id: string) {
   });
 }
 
+/** Read-only attendance already recorded across the displayed cancellation
+ *  requests. One bulk call for the whole table; PM-only endpoint. */
+export function useLeaveAttendanceSummary(ids: string[]) {
+  return useQuery({
+    queryKey: leaveKeys.attendanceSummary(ids),
+    queryFn: () => leaveApi.attendanceSummary(ids),
+    enabled: ids.length > 0,
+    placeholderData: (prev) => prev,
+  });
+}
+
 export function useCancelLeave() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => leaveApi.cancel(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: leaveKeys.all }),
+  });
+}
+
+// The three cancellation mutations all invalidate the leave-key root, which
+// covers every list, detail, queue count and dashboard badge in one go.
+
+export function useRequestLeaveCancellation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => leaveApi.requestCancellation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: leaveKeys.all }),
+  });
+}
+
+export function useApproveLeaveCancellation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => leaveApi.approveCancellation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: leaveKeys.all }),
+  });
+}
+
+export function useRejectLeaveCancellation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => leaveApi.rejectCancellation(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: leaveKeys.all }),
   });
 }

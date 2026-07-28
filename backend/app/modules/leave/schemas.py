@@ -78,3 +78,26 @@ class DeliverableImpactRequest(BaseModel):
 
 class DeliverableImpactResponse(BaseModel):
     items: list[LeaveDeliverableImpactOut]
+
+
+# ---------- attendance summary (cancellation-queue decision support) -------
+
+class LeaveAttendanceSummaryOut(BaseModel):
+    """What attendance already exists across one leave request's dates.
+
+    Summary only — a single word the manager can read at a glance. CoreOps
+    attendance is maintained by hand and cancellation never writes to it; this
+    exists so the manager knows what they will need to review afterwards.
+    """
+    leave_request_id: uuid.UUID
+    # present | leave | absent | mixed | none
+    summary: str
+    days_recorded: int
+
+
+class AttendanceSummaryRequest(BaseModel):
+    leave_request_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+
+
+class AttendanceSummaryResponse(BaseModel):
+    items: list[LeaveAttendanceSummaryOut]

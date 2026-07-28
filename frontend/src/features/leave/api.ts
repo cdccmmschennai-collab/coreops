@@ -1,6 +1,7 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  AttendanceSummaryResponse,
   DeliverableImpactResponse,
   LeaveListParams,
   LeaveRequest,
@@ -29,12 +30,22 @@ export const leaveApi = {
   update: (id: string, body: LeaveRequestUpdateBody) =>
     api.patch<LeaveRequest>(`/leave-requests/${id}`, body),
   cancel: (id: string) => api.post<LeaveRequest>(`/leave-requests/${id}/cancel`, {}),
+  requestCancellation: (id: string) =>
+    api.post<LeaveRequest>(`/leave-requests/${id}/request-cancellation`, {}),
+  approveCancellation: (id: string) =>
+    api.post<LeaveRequest>(`/leave-requests/${id}/approve-cancellation`, {}),
+  rejectCancellation: (id: string) =>
+    api.post<LeaveRequest>(`/leave-requests/${id}/reject-cancellation`, {}),
   approve: (id: string, body: LeaveReviewBody) =>
     api.post<LeaveRequest>(`/leave-requests/${id}/approve`, body),
   reject: (id: string, body: LeaveReviewBody) =>
     api.post<LeaveRequest>(`/leave-requests/${id}/reject`, body),
   deliverableImpact: (ids: string[]) =>
     api.post<DeliverableImpactResponse>("/leave-requests/deliverable-impact", {
+      leave_request_ids: ids,
+    }),
+  attendanceSummary: (ids: string[]) =>
+    api.post<AttendanceSummaryResponse>("/leave-requests/attendance-summary", {
       leave_request_ids: ids,
     }),
 };

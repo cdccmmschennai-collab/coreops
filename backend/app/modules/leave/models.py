@@ -1,6 +1,9 @@
 """Leave Request ORM model.
 
-Status lifecycle: pending → approved | rejected | cancelled
+Status lifecycle:
+  pending  → approved | rejected | cancelled
+  approved → cancellation_requested → cancelled | approved
+
 manager_id is captured at decision time (denormalised audit column — the
 requesting employee's manager may change after approval).
 """
@@ -39,6 +42,9 @@ class LeaveStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     cancelled = "cancelled"
+    # Approved leave the employee has asked to withdraw. The absence still
+    # stands until a project manager decides, so this counts as active leave.
+    cancellation_requested = "cancellation_requested"
 
 
 class LeaveRequest(UUIDMixin, TimestampMixin, Base):

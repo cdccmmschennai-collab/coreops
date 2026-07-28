@@ -1,7 +1,7 @@
 "use client";
 
+import * as React from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
 import { Pagination } from "@/components/data/pagination";
@@ -15,11 +15,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { AppError } from "@/lib/api-client";
 import { useUrlState } from "@/lib/use-url-state";
 
-import { useCancelLeave, useLeaveList } from "../hooks";
-import { LEAVE_TYPE_LABEL } from "../types";
+import { useLeaveList } from "../hooks";
+import {
+  LEAVE_TYPE_LABEL,
+  canCancelLeave,
+  canRequestLeaveCancellation,
+  type LeaveRequest,
+} from "../types";
+import { LeaveCancelDialog, type CancelDialogMode } from "./leave-cancel-dialog";
 import { LeaveStatusBadge } from "./leave-status-badge";
 
 const LIMIT = 10;
@@ -40,16 +45,9 @@ export function LeaveHistory({ employeeId }: Props) {
     limit: LIMIT,
     offset,
   });
-  const cancel = useCancelLeave();
-
-  async function onCancel(id: string) {
-    try {
-      await cancel.mutateAsync(id);
-      toast.success("Leave request cancelled");
-    } catch (err) {
-      toast.error(err instanceof AppError ? err.message : "Could not cancel request.");
-    }
-  }
+  const [dialog, setDialog] = React.useState<
+    { request: LeaveRequest; mode: CancelDialogMode } | null
+  >(null);
 
   if (query.isLoading) return <TableSkeleton rows={4} cols={5} />;
 
@@ -99,17 +97,29 @@ export function LeaveHistory({ employeeId }: Props) {
                 {req.manager_comment ?? "—"}
               </TableCell>
               <TableCell onClick={(e) => e.stopPropagation()}>
-                {req.status === "pending" && (
+                {canCancelLeave(req, employeeId) ? (
                   <Button
                     variant="ghost"
                     size="sm"
                     className="text-destructive hover:text-destructive"
-                    onClick={() => void onCancel(req.id)}
-                    disabled={cancel.isPending}
+                    onClick={() => setDialog({ request: req, mode: "cancel" })}
                   >
-                    Cancel
+                    Cancel Request
                   </Button>
-                )}
+                ) : canRequestLeaveCancellation(req, employeeId) ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => setDialog({ request: req, mode: "request" })}
+                  >
+                    Request Cancellation
+                  </Button>
+                ) : req.status === "cancellation_requested" ? (
+                  <span className="text-xs text-muted-foreground">
+                    Awaiting PM review
+                  </span>
+                ) : null}
               </TableCell>
             </TableRow>
           ))}
@@ -121,6 +131,14 @@ export function LeaveHistory({ employeeId }: Props) {
           limit={LIMIT}
           offset={offset}
           onPageChange={(o) => setOffsetStr(String(o))}
+        />
+      )}
+
+      {dialog && (
+        <LeaveCancelDialog
+          request={dialog.request}
+          mode={dialog.mode}
+          onClose={() => setDialog(null)}
         />
       )}
     </div>

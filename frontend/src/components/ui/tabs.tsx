@@ -6,7 +6,15 @@ export interface TabItem {
   value: string;
   label: string;
   count?: number;
+  /** Tint for the count pill when the tab is inactive. Omit for the default
+   *  neutral pill; `warning`/`info` mark a queue that needs attention. */
+  countVariant?: "warning" | "info";
 }
+
+const COUNT_TINT: Record<NonNullable<TabItem["countVariant"]>, string> = {
+  warning: "bg-warning/15 text-warning",
+  info: "bg-info/15 text-info",
+};
 
 /**
  * Lightweight underline tabs matching the design system (app.css `.tabs/.tab`).
@@ -46,7 +54,11 @@ export function Tabs({
               <span
                 className={cn(
                   "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium tabular",
-                  active ? "bg-accent text-accent-foreground" : "bg-secondary text-muted-foreground",
+                  active
+                    ? "bg-accent text-accent-foreground"
+                    : it.countVariant
+                      ? COUNT_TINT[it.countVariant]
+                      : "bg-secondary text-muted-foreground",
                 )}
               >
                 {it.count}

@@ -131,6 +131,8 @@ def test_employee_can_cancel_pending(client, make_user, make_employee, make_leav
 
 
 def test_cannot_cancel_approved(client, make_user, make_employee, make_leave_request, login):
+    """Approved leave stays under the project manager's control — cancelling it
+    is a domain conflict, not something the employee can drive."""
     u = make_user("e@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="E1", user_id=u.id)
     req = make_leave_request(employee_id=emp.id, start_date=date.today() + timedelta(days=5),
@@ -138,7 +140,7 @@ def test_cannot_cancel_approved(client, make_user, make_employee, make_leave_req
                               status=LeaveStatus.approved)
     h = login("e@x.com")
     res = client.post(f"/api/v1/leave-requests/{req.id}/cancel", headers=h)
-    assert res.status_code == 403
+    assert res.status_code == 409
 
 
 # ---------- approve / reject ----------

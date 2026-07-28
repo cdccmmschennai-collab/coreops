@@ -6,4 +6,6 @@ export const leaveKeys = {
   detail: (id: string) => [...leaveKeys.all, "detail", id] as const,
   deliverableImpact: (ids: string[]) =>
     [...leaveKeys.all, "deliverable-impact", ids] as const,
+  attendanceSummary: (ids: string[]) =>
+    [...leaveKeys.all, "attendance-summary", ids] as const,
 };
