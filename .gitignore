@@ -52,3 +52,11 @@ verify_rbac.js
 .env
 .env.local
 backend/celerybeat-schedule*
+
+# ---- EasyTime connector (admin PC; secrets + local sync state) ----
+connectors/easytime/.env
+connectors/easytime/*.db
+connectors/easytime/logs/
+connectors/easytime/probe-output/
+connectors/easytime/.venv/
+connectors/easytime/dist/
