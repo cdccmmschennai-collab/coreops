@@ -14,6 +14,10 @@ from app.modules.activity_requests.router import router as activity_requests_rou
 from app.modules.activity_types.router import router as activity_types_router
 from app.modules.audit.router import router as audit_router
 from app.modules.benchmarks.router import router as benchmarks_router
+from app.modules.biometric.router import (
+    admin_router as biometric_admin_router,
+    router as biometric_ingestion_router,
+)
 from app.modules.calendar.router import router as calendar_router
 from app.modules.job_codes.router import router as job_codes_router
 from app.modules.notifications.router import router as notifications_router
@@ -103,6 +107,11 @@ def create_app() -> FastAPI:
     app.include_router(deliverables_router, prefix=settings.API_V1_PREFIX)
     app.include_router(submissions_router, prefix=settings.API_V1_PREFIX)
     app.include_router(plants_router, prefix=settings.API_V1_PREFIX)
+    # Biometric (Phase 2). The ingestion route is always mounted but answers 404
+    # to everyone while EASYTIME_INGESTION_ENABLED is false; the admin routes are
+    # ordinary project_manager endpoints and do not depend on that flag.
+    app.include_router(biometric_ingestion_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(biometric_admin_router, prefix=settings.API_V1_PREFIX)
 
     # Temporary notification debug endpoints — mounted only when explicitly
     # enabled (and each route still requires the project_manager role).

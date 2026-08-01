@@ -85,6 +85,32 @@ class Settings(BaseSettings):
     # environment.
     REPORT_DAY_PARTS_ENABLED: bool = False
 
+    # --- EasyTime biometric ingestion (Phase 2, migration 0063) -------------
+    # Master switch for the office-connector ingestion endpoint
+    # (POST {prefix}/integrations/easytime/punches/batch). Off by default: while
+    # false the route is mounted but answers 404 to everyone, so no biometric
+    # data can enter the system. Turning it on changes NOTHING about existing
+    # attendance, leave, reports or exports — punches land in their own tables.
+    EASYTIME_INGESTION_ENABLED: bool = False
+
+    # Shared secret the office-side connector presents in the
+    # X-CoreOps-Connector-Token header. NOT a user JWT and never a query
+    # parameter. Compared with secrets.compare_digest. Set it only in the
+    # server .env; it must never be logged, echoed or committed.
+    EASYTIME_CONNECTOR_TOKEN: str = ""
+
+    # Timezone used to interpret a NAIVE biometric timestamp. EasyTime returns
+    # naive local wall-clock values; the connector normally attaches the offset,
+    # and this is the fallback when it does not.
+    ATTENDANCE_TIMEZONE: str = "Asia/Kolkata"
+
+    # Whether an EasyTime employee code with no explicit mapping row may fall
+    # back to an EXACT, case-sensitive match on employees.employee_code. That
+    # column carries a partial unique index, so the match is deterministic (at
+    # most one row) and can never silently pick the wrong employee. Explicit
+    # mappings always win. Names are never used for matching.
+    BIOMETRIC_EXACT_CODE_MATCH_ENABLED: bool = True
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
@@ -109,6 +135,21 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"SECRET_KEY must be a strong, non-default value "
                     f"(>= {_MIN_SECRET_LENGTH} chars) when ENV is {self.ENV!r}."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_connector_token(self) -> "Settings":
+        # Fail closed: outside dev/test, biometric ingestion may not be enabled
+        # without a strong connector token. Refusing to boot is safer than
+        # serving an ingestion endpoint guarded by an empty or guessable secret.
+        if self.EASYTIME_INGESTION_ENABLED and self.ENV not in _DEV_ENVS:
+            token = self.EASYTIME_CONNECTOR_TOKEN or ""
+            if len(token) < _MIN_SECRET_LENGTH:
+                raise ValueError(
+                    f"EASYTIME_CONNECTOR_TOKEN must be a strong, non-empty value "
+                    f"(>= {_MIN_SECRET_LENGTH} chars) when "
+                    f"EASYTIME_INGESTION_ENABLED is true and ENV is {self.ENV!r}."
                 )
         return self
 

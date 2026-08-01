@@ -65,6 +65,8 @@ def _clean_state():
                 "TRUNCATE TABLE audit_logs, notifications, tasks, work_report_tasks, "
                 "work_report_periods, work_items, daily_work_reports, "
                 "attendance_records, leave_requests, "
+                "biometric_punches, biometric_sync_batches, "
+                "biometric_employee_mappings, "
                 "project_managers, project_members, projects, company_calendar_events, "
                 "employee_activity_access, "
                 "activity_types, activity_master, maintenance_plants, planning_plants, "
@@ -87,11 +89,22 @@ def _default_feature_flags():
 
     prev = settings.TASK_CONTINUATION_ENABLED
     prev_day_parts = settings.REPORT_DAY_PARTS_ENABLED
+    prev_ingestion = settings.EASYTIME_INGESTION_ENABLED
+    prev_token = settings.EASYTIME_CONNECTOR_TOKEN
+    prev_exact_match = settings.BIOMETRIC_EXACT_CODE_MATCH_ENABLED
     settings.TASK_CONTINUATION_ENABLED = False
     settings.REPORT_DAY_PARTS_ENABLED = False
+    # Biometric ingestion is off (and tokenless) unless a test opts in via the
+    # `ingestion_on` fixture, so no other suite can accidentally reach it.
+    settings.EASYTIME_INGESTION_ENABLED = False
+    settings.EASYTIME_CONNECTOR_TOKEN = ""
+    settings.BIOMETRIC_EXACT_CODE_MATCH_ENABLED = True
     try:
         yield
     finally:
+        settings.EASYTIME_INGESTION_ENABLED = prev_ingestion
+        settings.EASYTIME_CONNECTOR_TOKEN = prev_token
+        settings.BIOMETRIC_EXACT_CODE_MATCH_ENABLED = prev_exact_match
         settings.TASK_CONTINUATION_ENABLED = prev
         settings.REPORT_DAY_PARTS_ENABLED = prev_day_parts
 
