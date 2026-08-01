@@ -179,12 +179,39 @@ class NormalizedPunch:
     employee_code: str
     punch_time: str  # ISO 8601 WITH offset, e.g. 2026-07-29T09:30:00+05:30
     punch_state: str | None
-    verify_type: str | None
-    terminal_serial_number: str | None
-    terminal_alias: str | None
-    source: str | None
-    upload_time: str | None
+    # Whatever label the vendor attached, or None. The live probe returned None
+    # for every record; that None is SENT, not omitted, so the stored row says
+    # "EasyTime supplied no label" rather than "the connector did not look".
+    punch_state_display: str | None = None
+    verify_type: str | None = None
+    terminal_serial_number: str | None = None
+    terminal_alias: str | None = None
+    source: str | None = None
+    upload_time: str | None = None
     raw_payload: dict = field(repr=False, default_factory=dict)
+
+    def to_wire(self) -> dict:
+        """The exact JSON object the Phase 2 endpoint expects for one punch.
+
+        Field names are the backend's spelling (`raw_punch_state`,
+        `verify_type`). ``punch_state``/``verification_type`` are accepted as
+        aliases server-side, but writing the primary names here means the wire
+        format matches the documentation, and a future removal of the aliases
+        cannot break the connector.
+        """
+        return {
+            "external_transaction_id": self.external_transaction_id,
+            "employee_code": self.employee_code,
+            "punch_time": self.punch_time,
+            "raw_punch_state": self.punch_state,
+            "punch_state_display": self.punch_state_display,
+            "terminal_alias": self.terminal_alias,
+            "terminal_serial_number": self.terminal_serial_number,
+            "verify_type": self.verify_type,
+            "source": self.source,
+            "upload_time": self.upload_time,
+            "raw_payload": self.raw_payload,
+        }
 
 
 def _opt_str(value: Any) -> str | None:

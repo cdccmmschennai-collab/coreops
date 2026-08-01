@@ -62,7 +62,8 @@ Confirmed against the real repository layout (one folder per domain module under
 |---|---|---|
 | 1 (done) | `connectors/easytime/` | probe, client, schemas, config, offline tests |
 | 2 (done) | `backend/app/modules/biometric/` | raw punches, sync batches, mappings, ingestion endpoint |
-| 3 | `backend/app/modules/biometric/session_engine.py` | pure calculator: no FastAPI, no SQLAlchemy |
+| 3, connector (done) | `connectors/easytime/` | one-shot sync, CoreOps client, cursor, run lock, packaging - section 9 |
+| 3, backend | `backend/app/modules/biometric/session_engine.py` | pure calculator: no FastAPI, no SQLAlchemy |
 | 4 | `backend/app/modules/biometric/` | sessions, day summaries, exceptions, recalc task |
 | 6 | `backend/app/modules/permissions/` | permission requests + monthly ledger |
 | 7 | `backend/app/modules/attendance_corrections/` | regularization + official duty |
@@ -469,36 +470,503 @@ Phase 2 is storage, and only storage.
 
 ---
 
-## 9. Phase 3 handoff - connector-side work
+## 9. Connector synchronization (Phase 3, delivered)
 
-Phase 3 is **connector** work. The backend contract above is stable and needs no
-further change to support it.
+Phase 3 is entirely **connector** work. The Phase 2 backend contract above was
+sufficient as written and needed no change to support it - no new endpoint, no
+new migration, no new backend setting.
 
-1. **CoreOps API client** (`connectors/easytime/coreops_client.py`) - POST to
-   `/api/v1/integrations/easytime/punches/batch` with the
-   `X-CoreOps-Connector-Token` header, mapping `NormalizedPunch` onto the request
-   body and parsing the counters back.
-2. **One-shot sync command** - fetch a window from EasyTime, normalize, POST,
-   report the counters, exit with a meaningful code. Runnable by hand before
-   anything is scheduled.
-3. **Cursor storage** - a local file or SQLite row holding the last successfully
-   ingested `upload_time` / window end. Never the source of truth for
-   deduplication; the server's unique constraint is.
-4. **Overlap** - re-fetch `SYNC_LOOKBACK_MINUTES` before the cursor every run, so
-   a punch that arrived while the previous run was in flight is not skipped.
-   Duplicates are expected and free.
-5. **Retries** - retry transport errors and 5xx with backoff; treat `422` as a
-   payload bug to report, not to retry forever; treat `401`/`404` as
-   configuration errors and stop.
-6. **Seven-day reconciliation** - a daily pass re-fetching the last
-   `SYNC_RECONCILIATION_DAYS` days, which is what actually catches punches
-   EasyTime uploaded the following morning.
-7. **Packaging** - extend `package_probe.ps1` to ship the sync command with the
-   same whitelist and secret checks.
-8. **Task Scheduler** - a Windows scheduled task on the administrator PC running
-   every `SYNC_INTERVAL_SECONDS`, plus the daily reconciliation pass.
-9. **Connector health** - surface last-success time, last error and last counters
-   so a silently dead connector is visible rather than assumed healthy.
+The connector's job, stated in full: **move raw punch events from EasyTime Pro
+on the administrator PC to the CoreOps ingestion endpoint, and know how far it
+has got.** It does not interpret them.
 
-Phase 3 must **not** begin punch-state interpretation. That is blocked on the
-administrator sign-off in `punch-state-mapping.md`.
+### 9a. Architecture
+
+```
+EasyTime Pro (admin PC, 10.2.2)
+      | JWT, /iclock/api/transactions/, naive local wall-clock text
+      v
+client.py            authenticate, paginate, retry, RawTransaction
+      v
+mapper.py            attach +05:30, keep the vendor state verbatim, strip PII,
+                     sort deterministically, chunk, derive the batch key
+      v
+coreops_client.py    POST + X-CoreOps-Connector-Token, classify the status,
+                     parse and VALIDATE the counters
+      v
+state.py             advance the cursor - only after every batch is confirmed
+```
+
+`sync.py` is the CLI; `sync_service.py` is the orchestration; `runlock.py`
+enforces one run at a time; `logging_setup.py` and `redaction.py` make the logs
+safe to email.
+
+| File | Purpose |
+|---|---|
+| `sync.py` | one-shot CLI: modes, console summary, exit codes |
+| `sync_service.py` | window planning, fetch, normalize, batch, send, commit |
+| `coreops_client.py` | the only thing that talks to CoreOps |
+| `mapper.py` | `RawTransaction` -> `NormalizedPunch`, ordering, batch key |
+| `state.py` | SQLite cursor, counters, last error, reconciliation stamp |
+| `runlock.py` | OS-level single-instance lock |
+| `logging_setup.py` | dated structured logs with redaction on every handler |
+| `redaction.py` | the regex pass that runs over everything logged |
+| `exit_codes.py` | the numeric contract with Task Scheduler |
+
+### 9b. Commands
+
+```powershell
+python sync.py --once                                    # incremental
+python sync.py --reconcile                               # last N days
+python sync.py --reconcile-days 7                        # explicit span
+python sync.py --from-date 2026-07-29 --to-date 2026-07-30   # backfill
+python sync.py --status                                  # local health, offline
+python sync.py --check-config                            # validate .env, offline
+```
+
+Or through the wrapper, which is what the scheduled task calls:
+
+```powershell
+.\run_sync.ps1 -Mode Incremental
+.\run_sync.ps1 -Mode Reconcile -ReconcileDays 7
+.\run_sync.ps1 -Mode Backfill -FromDate 2026-07-29 -ToDate 2026-07-30
+.\run_sync.ps1 -Mode Status
+```
+
+**One shot, never a daemon.** Each invocation covers one window and exits. A
+long-lived Python process on an office PC is a thing that silently dies in March
+and is noticed in June.
+
+### 9c. What one run does
+
+1. Load and validate the configuration (fail closed on anything missing).
+2. Open the local state database.
+3. Acquire the run lock. A second invocation exits 3 immediately.
+4. Read the cursor and plan the window (9d).
+5. Authenticate to EasyTime, then fetch every page in the window.
+6. Normalize every record; count - never silently drop - the ones that fail.
+7. Sort deterministically, split into batches of `SYNC_BATCH_SIZE`, derive a
+   batch key per chunk.
+8. POST each batch in order, accumulating the backend's counters.
+9. **Only after every batch succeeds**, advance the cursor.
+10. Release the lock, print the summary, exit with a meaningful code.
+
+### 9d. Fetch windows
+
+| Mode | Window |
+|---|---|
+| incremental, with a cursor | `cursor - SYNC_LOOKBACK_MINUTES` .. now |
+| incremental, first run | `now - SYNC_FIRST_RUN_LOOKBACK_HOURS` .. now |
+| reconcile | the last N **calendar** days from local midnight .. now |
+| backfill | `--from-date 00:00:00` .. `--to-date 23:59:59` |
+
+Worked example of the overlap:
+
+```
+last successful source_to = 2026-07-30 14:00
+next incremental from     = 2026-07-30 13:45     (15-minute overlap)
+```
+
+The overlap is the point. EasyTime accepts a punch that a device uploads long
+after it happened, so a window starting exactly where the last one ended would
+step over anything that landed in between. Re-fetching fifteen minutes costs
+duplicates, and duplicates are free.
+
+Guards, all of which exist because the alternative is an unbounded request
+against a live office PC:
+
+- **No unbounded first run.** With no cursor, the window is
+  `SYNC_FIRST_RUN_LOOKBACK_HOURS` (default 24), never "all of history".
+- **Clamping.** A cursor far in the past is clamped to `SYNC_MAX_RANGE_DAYS`
+  (default 31). The run covers the oldest 31 days, moves the cursor there, and
+  later runs continue catching up in bounded steps.
+- **Backfill needs both dates**, and refuses a range over the limit without
+  `--force`.
+- **A cursor in the future** (clock moved backwards, state hand-edited)
+  re-fetches only the overlap window rather than extending into the future.
+
+### 9e. Deterministic batch keys
+
+```
+et1-<sha256 hex>   over, NUL-separated, in this order:
+    version tag | connector_id | provider | source_from | source_to
+                | batch_number | each external transaction id, in batch order
+```
+
+68 characters, inside the backend's 128-char column. Properties, all of which
+the sync loop depends on:
+
+- **Retry stability.** Re-sending the same batch produces the same key, so
+  CoreOps updates the existing `biometric_sync_batches` row rather than opening
+  a second one for work that already has a record.
+- **Chunk distinctness.** `batch_number` and the id list both change between
+  chunks.
+- **No secrets** are inputs, so the key is safe to print, log and store.
+- **No clock, no randomness.** A key derived from `time.time()` would differ on
+  every retry - precisely the property that must not exist.
+
+Ordering is fixed before chunking (punch time, then transaction id, numerically
+for numeric ids), which is what makes a replay reproduce the same chunks.
+
+### 9f. Four layers of idempotency
+
+They are not redundant; each covers what the one below cannot.
+
+| Layer | Mechanism | What it absorbs |
+|---|---|---|
+| connector overlap | re-fetch `SYNC_LOOKBACK_MINUTES` | punches that arrived mid-run |
+| batch key | deterministic SHA-256 | a retry reusing one sync-batch row |
+| backend batch resolution | `ON CONFLICT` on `(provider, connector_id, batch_key)` | two requests racing on the same key |
+| **punch uniqueness** | `UNIQUE (provider, external_transaction_id)` | **everything else** |
+
+The last row is the one that actually guarantees correctness. The other three
+are about tidiness and operational identity: **a lost, wrong or duplicated batch
+key can never cause a duplicate punch.** That is what makes replay safe, and
+replay is what makes every other design decision here affordable.
+
+### 9g. Batch sizing and partial failure
+
+`SYNC_BATCH_SIZE` (default 500) is validated at load time against the backend's
+1000-punch ceiling, so an oversized value is refused on this PC rather than as a
+422 on every POST at 03:00 on a Sunday.
+
+If batch 1 of 3 succeeds and batch 2 fails:
+
+- the cursor does **not** move;
+- the run fails with the batch's exit code;
+- the next run re-fetches the whole window and re-sends batch 1 as well.
+
+Batch 1's punches come back as `duplicates` and nothing is stored twice. The
+alternative - advancing past a window that was only partly ingested - loses
+punches permanently and silently. Duplicates are free; missing punches are not.
+
+### 9h. Local state
+
+```
+C:\ProgramData\CoreOps\EasyTimeConnector\data\state.db      (SQLite)
+```
+
+Configurable with `SYNC_STATE_PATH`; a development checkout uses
+`connectors/easytime/data/state.db`.
+
+One row per `connector_id`, holding `last_successful_sync_time`,
+`last_successful_source_to`, `last_batch_key`, `last_coreops_batch_id`, the five
+`last_records_*` counters, `last_success_at`, `last_reconciliation_at`,
+`last_error_code` and `last_error_at`. A `schema_meta` table carries
+`schema_version`; a file written by a **newer** connector is refused rather than
+downgraded.
+
+SQLite rather than a JSON file because the cursor update must be atomic against
+a process that can be killed at any instant. A JSON write is
+read-modify-write and can leave a truncated file; SQLite gives a real
+transaction, in the standard library, with no extra dependency on the admin PC.
+
+**No secret is ever stored here** - not the EasyTime password, not the JWT, not
+the connector token. Timestamps, counters and a batch id, and nothing else.
+
+Crash behaviour:
+
+| Process dies... | Result |
+|---|---|
+| between fetch and upload | nothing written; next run re-fetches the window |
+| after upload, before the cursor update | next run replays a stored window; Postgres reports duplicates |
+| mid-`record_success` | one transaction: the row is entirely the old run's or entirely the new one's |
+| holding the run lock | the kernel releases the lock; the next run takes it |
+
+A **failed** run writes `last_error_code`/`last_error_at` only. It never
+disturbs the cursor or the last-success fields, so a failure can never be
+mistaken for progress.
+
+### 9i. Retry policy
+
+| Failure | Behaviour |
+|---|---|
+| transport timeout, connection refused | bounded retry with jittered backoff |
+| `429`, `500`, `502`, `503`, `504` | bounded retry with jittered backoff |
+| `409` | bounded retry - the backend's sync-batch race is transient |
+| `401`, `403` | **stop.** The same token will be rejected forever |
+| `404` | **stop.** Wrong URL, or the backend has ingestion disabled |
+| `422` | **stop.** A contract bug; the sanitized response is kept as evidence |
+| any other 4xx | **stop** |
+| a 2xx whose body is not a valid batch result | **stop** |
+
+Backoff is roughly immediate, 2s, 5s, 10s with +/-25% jitter, capped by
+`COREOPS_RETRIES` (default 4 attempts). Bounded on purpose: a connector that
+runs every five minutes gains nothing from a backoff longer than its own
+schedule - the next run simply picks the window up again.
+
+A 200 with an unparseable body, a missing counter, or counters that do not
+satisfy `inserted + duplicates + invalid == received` is treated as a
+**failure**. Accepting it would advance the cursor over punches that may never
+have been stored.
+
+### 9j. Reconciliation - the late-punch net
+
+```powershell
+python sync.py --reconcile          # SYNC_RECONCILIATION_DAYS, default 7
+python sync.py --reconcile-days 7
+```
+
+The live probe proved that some punches reach EasyTime **the following
+morning**, after the incremental run for that evening has finished and moved on.
+Nothing in the incremental cursor can recover them, because the cursor is
+already past that time. The reconciliation pass re-sends the last N calendar
+days through the same endpoint and lets
+`UNIQUE (provider, external_transaction_id)` sort out what is new.
+
+It re-sends; it never deletes, and never alters a stored punch's timestamps -
+the connector has no code path that could. It stamps `last_reconciliation_at`
+and deliberately does **not** move the incremental cursor: its window ends at
+`now` but starts days in the past, and letting a backward-looking pass write the
+forward cursor is how a rewind happens.
+
+Safe to run repeatedly. A second identical pass reports every punch as a
+duplicate and stores nothing.
+
+### 9k. Backfill
+
+```powershell
+python sync.py --from-date 2026-07-29 --to-date 2026-07-30
+```
+
+Both dates required - there is deliberately no default and no "since the
+beginning". An unbounded backfill against a live EasyTime install is the one
+command here that can take an office PC down, and it must never be reachable by
+forgetting an argument. Ranges over `SYNC_MAX_RANGE_DAYS` need `--force`. The
+console announces the range before the run starts. It uses the same endpoint,
+the same batch keys and the same idempotency, and does **not** move the
+incremental cursor.
+
+### 9l. Logging
+
+```
+C:\ProgramData\CoreOps\EasyTimeConnector\logs\sync-YYYYMMDD.log
+```
+
+Configurable with `SYNC_LOG_DIR`. One file per **day**, not per run: 288 runs a
+day for a year would be 105,000 files. Every line carries the run id.
+
+One structured summary line per run, in the same `key=value` shape the backend's
+ingestion logger uses:
+
+```
+sync.run mode=incremental connector_id=admin-pc-01
+  source_from=... source_to=... pages=2 fetched=41 normalized=41
+  rejected_locally=0 batches_planned=1 batches_sent=1
+  received=41 inserted=38 duplicates=3 unmapped=0 invalid=0
+  duration_s=1.84 status=success exit=0
+```
+
+**Never logged:** the EasyTime password, the EasyTime JWT or refresh token, the
+CoreOps connector token, any Authorization header, face data, fingerprint
+templates or photos. Two independent layers enforce it - the code never passes
+them to a logger, and `redaction.sanitize_text` runs over every formatted record
+(including tracebacks) on its way to every handler. `run_sync.ps1` applies a
+third regex pass to the console output it captures.
+
+A log directory that cannot be created is a warning, not a failure. Losing the
+ability to write a log must never cost punches.
+
+### 9m. Exit codes
+
+| Code | Meaning | Who acts |
+|---|---|---|
+| 0 | success | nobody |
+| 2 | invalid configuration | whoever edits `.env` on this PC |
+| 3 | another run is active | nobody - expected under a 5-minute schedule |
+| 4 | EasyTime authentication failure | the EasyTime integration account owner |
+| 5 | EasyTime transport/API failure | whoever owns EasyTime Pro on this PC |
+| 6 | CoreOps authentication failure | whoever holds the connector token |
+| 7 | CoreOps payload rejection | whoever maintains the connector (a contract bug) |
+| 8 | CoreOps transport/server failure | whoever operates the CoreOps VPS |
+| 9 | local state failure | whoever administers this PC's ProgramData |
+
+1 is left unused on purpose: it is what Python returns for an unhandled
+traceback, so `exit 1` always reads as "the connector failed in a way it did not
+anticipate".
+
+### 9n. Configuration
+
+Added to `connectors/easytime/.env` (git-ignored; `.env.example` documents every
+key and holds no value for any secret):
+
+```env
+COREOPS_API_URL=https://coreops.cdccmms.com/api/v1
+COREOPS_CONNECTOR_TOKEN=            # must match EASYTIME_CONNECTOR_TOKEN on the VPS
+COREOPS_TIMEOUT_SECONDS=30
+COREOPS_RETRIES=4
+CONNECTOR_ID=admin-pc-01
+SYNC_INTERVAL_SECONDS=300           # documentation for the scheduled task
+SYNC_LOOKBACK_MINUTES=15
+SYNC_RECONCILIATION_DAYS=7
+SYNC_FIRST_RUN_LOOKBACK_HOURS=24
+SYNC_MAX_RANGE_DAYS=31
+SYNC_BATCH_SIZE=500
+# SYNC_STATE_PATH= / SYNC_LOG_DIR= / SYNC_LOCK_PATH=   blank = ProgramData
+```
+
+Every value is validated at load time and the connector **fails closed**: a
+missing URL or token stops the run before a single punch is fetched, rather than
+producing a batch with nowhere to go.
+
+### 9o. Run locking
+
+One run at a time, enforced by an OS-level exclusive lock on a file
+(`msvcrt.locking` on Windows, `fcntl.flock` elsewhere), defaulting to
+`...\data\sync.lock`.
+
+Task Scheduler's "do not start a new instance" is **not** enough on its own: it
+does not cover a manual `run_sync.ps1` typed while the scheduled run is
+in flight, it does not cover a second task someone adds later, and it is a
+checkbox that can be unticked. Both layers are used.
+
+A PID file was rejected deliberately. The usual liveness probe,
+`os.kill(pid, 0)`, does not send a signal on Windows - it calls
+`TerminateProcess`, so the "check" would kill whatever process now owns that
+PID. An OS lock is also strictly better: **the kernel releases it when the
+holder dies**, so a crashed run leaves a lock file that is not locked and the
+next run takes it immediately. There is no stale-lock recovery logic because
+there is no stale-lock state.
+
+### 9p. Windows Task Scheduler - documented, NOT activated
+
+Phase 3 ships these definitions for review. `install_connector.ps1` creates them
+only when `-CreateScheduledTask` is passed explicitly, and that switch is
+**off**. A connector that starts syncing because someone ran an installer is a
+connector nobody decided to switch on.
+
+**Task 1 - incremental sync**
+
+| Setting | Value |
+|---|---|
+| Action | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "<path>\run_sync.ps1" -Mode Incremental` |
+| Trigger | once, repeat every **5 minutes**, indefinitely |
+| Run whether the user is logged on or not | yes |
+| If the task is already running | **do not start a new instance** |
+| Run as soon as possible after a missed start | yes |
+| Restart on failure | every 5 minutes, up to 3 times |
+| Stop if it runs longer than | 30 minutes |
+| Do not stop on batteries / start on batteries | yes |
+
+**Task 2 - daily reconciliation**
+
+| Setting | Value |
+|---|---|
+| Action | `... -File "<path>\run_sync.ps1" -Mode Reconcile` |
+| Trigger | daily at **02:30** |
+| Other settings | as above |
+
+Before activating either: run `-Mode CheckConfig`, then `-Mode Status`, then at
+least one manual `-Mode Incremental`, and confirm rows appear in
+`biometric_punches` via `GET /api/v1/biometric/sync-batches`.
+
+The account that runs the tasks must be able to write
+`C:\ProgramData\CoreOps\EasyTimeConnector\{data,logs}` - `install_connector.ps1`
+tests exactly that and reports it.
+
+### 9q. Packaging and installation
+
+```powershell
+.\package_connector.ps1     # builds dist\CoreOps-EasyTime-Connector.zip
+```
+
+Whitelist-based, not exclusion-based: if a file is not named in the script it
+does not reach the archive, so a secret cannot be let through by a pattern that
+did not anticipate it. The build **fails** if `.env.example` carries a non-empty
+password, token or secret, and the finished ZIP is re-opened and verified entry
+by entry.
+
+Never shipped: `.env`, `.venv\`, `logs\`, `data\`, `probe-output\`, `dist\`,
+`tests\`, `*.db`, `*.lock`, `*.log`, `__pycache__\`, `.pytest_cache\`, any git
+metadata.
+
+On the admin PC:
+
+```powershell
+.\install_connector.ps1              # creates the ProgramData layout
+.\setup_probe.ps1                    # creates .venv, installs requirements
+copy .env.example .env ; notepad .env   # type the credentials yourself
+.\run_sync.ps1 -Mode CheckConfig
+.\run_sync.ps1 -Mode Status
+.\run_sync.ps1 -Mode Incremental
+```
+
+No installer writes a credential, on purpose.
+
+### 9r. Health
+
+```powershell
+python sync.py --status        # or  .\run_sync.ps1 -Mode Status
+```
+
+Prints the last successful sync, the last source range, the last CoreOps batch
+id, the last inserted/duplicate/unmapped counts, the last error code and time,
+and the last reconciliation - from the local state file, with **no network
+call**. That is deliberate: "is the connector alive?" has to be answerable when
+the reason it is not alive is that the network is down.
+
+No token, no password, no frontend. A Phase 5 health surface in the CoreOps UI
+is a later decision.
+
+### 9s. Security summary
+
+- Secrets live only in `connectors/easytime/.env`, on the admin PC, git-ignored.
+  Nothing is written there by any script.
+- The connector token travels **only** in `X-CoreOps-Connector-Token`. Never a
+  URL, never a query string, never `Authorization`.
+- Redaction runs on every log handler, over the fully formatted record including
+  tracebacks; `run_sync.ps1` adds a third pass over captured console output.
+- Response bodies are sanitized before they reach a log line or an exception
+  message, so a server that echoes a secret back does not get it written down.
+- Names, photos, and face/fingerprint/vein/iris templates are stripped from
+  `raw_payload` before it leaves the PC; the backend strips them again.
+- The state database holds timestamps, counters and a batch id - no credential.
+- Packaging is whitelist-based and verified after the fact.
+
+### 9t. Troubleshooting
+
+| Symptom | Exit | Look at |
+|---|---|---|
+| "Choose exactly one mode" | 2 | pass one of `--once` / `--reconcile` / dates / `--status` |
+| "COREOPS_CONNECTOR_TOKEN is required" | 2 | `.env`; also check for a UTF-8 BOM |
+| `[SKIP] Another connector run holds ...` | 3 | normal; the previous run is slow or hung. `-Mode Status` |
+| EasyTime rejected the credentials | 4 | the integration account; try `probe.py --check-config` |
+| Could not reach EasyTime | 5 | is EasyTime Pro running? `probe.py --discover` |
+| CoreOps rejected the connector token | 6 | `COREOPS_CONNECTOR_TOKEN` vs `EASYTIME_CONNECTOR_TOKEN` on the VPS |
+| CoreOps refused the batch (422) | 7 | the sanitized excerpt in the output; a contract bug - report it |
+| CoreOps returned 404 | 8 | `COREOPS_API_URL`, **or** `EASYTIME_INGESTION_ENABLED=false` on the VPS |
+| state database could not be opened | 9 | permissions on `...\data\`; move a corrupt `state.db` aside |
+| punches stored with `employee_id = NULL` | 0 | expected until mappings exist: `POST /api/v1/biometric/mappings` |
+
+A first setting in `.env` that seems to be ignored is almost always a UTF-8 BOM;
+`run_sync.ps1` warns when it sees one.
+
+### 9u. Phase 3 limitations
+
+```
+Raw automatic synchronization only.
+No IN/OUT interpretation.
+No session calculation.
+No employee frontend.
+No official attendance update.
+```
+
+In full:
+
+- **IN/OUT is unresolved.** Every live punch was state `"0"` with a null display
+  label. The connector sends `raw_punch_state: "0"` and
+  `punch_state_display: null` verbatim and infers nothing. Interpretation stays
+  blocked on the administrator sign-off in `punch-state-mapping.md`.
+- **No sessions, no pairing, no first-IN/last-OUT**, and every intermediate
+  punch is transmitted.
+- **No working hours,** breaks, outside duration, overtime, late arrival or
+  early departure.
+- **No employee frontend.** No page, no component, no `NEXT_PUBLIC_*` flag.
+- **No official attendance write-back.** `attendance_records` is neither read
+  nor written; verified in the end-to-end run.
+- **Not deployed to production**, and the scheduled tasks are **not activated**.
+- **Untested against a live EasyTime install.** The end-to-end run used
+  recorded punch payloads through the real connector into the real local
+  backend. The EasyTime side has been exercised only by Phase 1's probe.
+- Whether EasyTime employee codes match CoreOps codes remains open (O-6). Until
+  mappings exist, punches store with `employee_id = NULL` - stored, not dropped.

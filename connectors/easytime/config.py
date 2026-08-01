@@ -12,15 +12,26 @@ possible dependency surface, and it shares no code with the backend.
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from exceptions import EasyTimeConfigError
+from exceptions import ConnectorConfigError, EasyTimeConfigError
 
 CONNECTOR_DIR = Path(__file__).resolve().parent
 ENV_PATH = CONNECTOR_DIR / ".env"
+
+# Where a real installation keeps its mutable files. ProgramData, not Program
+# Files: the connector runs as a service account that must be able to write its
+# state and logs, and Program Files is read-only for exactly that reason.
+PROGRAM_DATA_DIR = Path(r"C:\ProgramData\CoreOps\EasyTimeConnector")
+
+# Development/test fallback, used whenever ProgramData does not exist (any
+# non-Windows machine, and any checkout that has not been installed).
+LOCAL_DATA_DIR = CONNECTOR_DIR / "data"
+LOCAL_LOG_DIR = CONNECTOR_DIR / "logs"
 
 # Authentication modes. Which one the installed version actually accepts is an
 # OPEN QUESTION until probe.py confirms it - do not hard-code an assumption.
@@ -209,4 +220,258 @@ def load_config(env_path: Path | None = None, *, require_credentials: bool = Tru
         retries=_env_int("EASYTIME_RETRIES", 3),
         page_size=_env_int("EASYTIME_PAGE_SIZE", 100),
         timezone=(os.getenv("TIMEZONE") or "Asia/Kolkata").strip(),
+    )
+
+
+# ===========================================================================
+# Phase 3 - the CoreOps side, the sync cadence and the local file layout.
+#
+# Kept in the SAME .env and the same dataclass style as the EasyTime settings
+# above; a second configuration mechanism on a Windows admin PC is a second
+# thing to get wrong. Nothing here is ever written back to the file, and no
+# secret is ever carried in a redacted() view.
+# ===========================================================================
+
+# The backend's own limit (backend/app/modules/biometric/constants.py
+# MAX_BATCH_SIZE). A larger SYNC_BATCH_SIZE would be rejected as a 422 by every
+# POST, so it is refused at load time instead of at 03:00 on a Sunday.
+COREOPS_MAX_BATCH_SIZE = 1000
+
+# Path of the ingestion endpoint, relative to COREOPS_API_URL.
+COREOPS_PUNCH_BATCH_PATH = "/integrations/easytime/punches/batch"
+
+# The provider slug the backend accepts. Not configurable: the endpoint is
+# provider-specific and rejects any other value with a 422.
+PROVIDER = "easytime"
+
+# Ceiling on any single fetch window. Protects against a very old cursor, a
+# typo'd --from-date, and an operator who means "last week" and types last year.
+DEFAULT_MAX_RANGE_DAYS = 31
+
+
+@dataclass(frozen=True)
+class CoreOpsConfig:
+    """How to reach the CoreOps ingestion endpoint."""
+
+    api_url: str
+    connector_token: str
+    connector_id: str
+    timeout_seconds: float = 30.0
+    retries: int = 4
+    batch_size: int = 500
+
+    @property
+    def batch_url(self) -> str:
+        """Absolute URL of the ingestion endpoint.
+
+        The token is NEVER placed in this URL, or in any query string: URLs end
+        up in access logs, proxy logs and Referer headers. It travels only in
+        the X-CoreOps-Connector-Token header.
+        """
+        return f"{self.api_url}{COREOPS_PUNCH_BATCH_PATH}"
+
+    def redacted(self) -> dict:
+        """Log-safe view. The token is not masked by length - it is absent."""
+        return {
+            "api_url": self.api_url,
+            "connector_id": self.connector_id,
+            "connector_token": "***" if self.connector_token else "(unset)",
+            "timeout_seconds": self.timeout_seconds,
+            "retries": self.retries,
+            "batch_size": self.batch_size,
+        }
+
+
+@dataclass(frozen=True)
+class SyncConfig:
+    """Cadence, window sizing and where this PC keeps its files."""
+
+    lookback_minutes: int = 15
+    reconciliation_days: int = 7
+    first_run_lookback_hours: int = 24
+    max_range_days: int = DEFAULT_MAX_RANGE_DAYS
+    state_path: Path = LOCAL_DATA_DIR / "state.db"
+    log_dir: Path = LOCAL_LOG_DIR
+    lock_path: Path = LOCAL_DATA_DIR / "sync.lock"
+
+    def redacted(self) -> dict:
+        return {
+            "lookback_minutes": self.lookback_minutes,
+            "reconciliation_days": self.reconciliation_days,
+            "first_run_lookback_hours": self.first_run_lookback_hours,
+            "max_range_days": self.max_range_days,
+            "state_path": str(self.state_path),
+            "log_dir": str(self.log_dir),
+            "lock_path": str(self.lock_path),
+        }
+
+
+@dataclass(frozen=True)
+class ConnectorConfig:
+    """Everything one sync run needs, in one object."""
+
+    easytime: EasyTimeConfig
+    coreops: CoreOpsConfig
+    sync: SyncConfig
+
+    def redacted(self) -> dict:
+        return {
+            "easytime": self.easytime.redacted(),
+            "coreops": self.coreops.redacted(),
+            "sync": self.sync.redacted(),
+        }
+
+
+def _default_data_dir() -> Path:
+    """ProgramData on an installed machine, ./data in a checkout.
+
+    Existence, not platform, is the test: an installed connector has had
+    ``install_connector.ps1`` run, and a developer machine has not.
+    """
+    return PROGRAM_DATA_DIR / "data" if PROGRAM_DATA_DIR.exists() else LOCAL_DATA_DIR
+
+
+def _default_log_dir() -> Path:
+    return PROGRAM_DATA_DIR / "logs" if PROGRAM_DATA_DIR.exists() else LOCAL_LOG_DIR
+
+
+def _env_path(name: str, default: Path) -> Path:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return Path(raw.strip()).expanduser()
+
+
+def _default_connector_id() -> str:
+    """A stable per-machine identity, used when CONNECTOR_ID is not pinned.
+
+    The hostname is a reasonable default because the connector is tied to the
+    one PC that can reach EasyTime. It is still worth pinning explicitly: the
+    id appears on every `biometric_sync_batches` row, and a PC rename would
+    otherwise silently split one connector's history into two.
+    """
+    try:
+        host = socket.gethostname().strip()
+    except OSError:  # pragma: no cover - gethostname does not realistically fail
+        host = ""
+    return (host or "easytime-connector")[:100]
+
+
+def load_coreops_config(*, require_token: bool = True) -> CoreOpsConfig:
+    """Read the CoreOps half of the connector .env.
+
+    Assumes ``load_dotenv`` has already run (``load_connector_config`` does it).
+    Fails CLOSED: a missing URL or token stops the run before any punch is
+    fetched, rather than producing a batch with nowhere to go.
+    """
+    api_url = (os.getenv("COREOPS_API_URL") or "").strip().rstrip("/")
+    token = os.getenv("COREOPS_CONNECTOR_TOKEN") or ""
+    connector_id = (os.getenv("CONNECTOR_ID") or "").strip() or _default_connector_id()
+
+    if require_token and not api_url:
+        raise ConnectorConfigError(
+            "COREOPS_API_URL is required (for example "
+            "https://coreops.cdccmms.com/api/v1)."
+        )
+    if api_url and not api_url.startswith(("http://", "https://")):
+        raise ConnectorConfigError(
+            f"COREOPS_API_URL must start with http:// or https://; got {api_url!r}."
+        )
+    if require_token and not token:
+        raise ConnectorConfigError(
+            "COREOPS_CONNECTOR_TOKEN is required. It must match "
+            "EASYTIME_CONNECTOR_TOKEN in the CoreOps VPS .env. Generate one with: "
+            'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+        )
+    if len(connector_id) > 100:
+        raise ConnectorConfigError(
+            "CONNECTOR_ID must be 100 characters or fewer (the backend column is "
+            "VARCHAR(100))."
+        )
+
+    batch_size = _env_int("SYNC_BATCH_SIZE", 500)
+    if not 1 <= batch_size <= COREOPS_MAX_BATCH_SIZE:
+        raise ConnectorConfigError(
+            f"SYNC_BATCH_SIZE must be between 1 and {COREOPS_MAX_BATCH_SIZE} "
+            f"(the backend rejects a larger batch outright); got {batch_size}."
+        )
+    retries = _env_int("COREOPS_RETRIES", 4)
+    if not 1 <= retries <= 10:
+        raise ConnectorConfigError(f"COREOPS_RETRIES must be between 1 and 10; got {retries}.")
+    timeout = _env_float("COREOPS_TIMEOUT_SECONDS", 30.0)
+    if timeout <= 0:
+        raise ConnectorConfigError(f"COREOPS_TIMEOUT_SECONDS must be positive; got {timeout}.")
+
+    return CoreOpsConfig(
+        api_url=api_url,
+        connector_token=token,
+        connector_id=connector_id,
+        timeout_seconds=timeout,
+        retries=retries,
+        batch_size=batch_size,
+    )
+
+
+def load_sync_config() -> SyncConfig:
+    """Read the cadence and file-layout half of the connector .env."""
+    lookback = _env_int("SYNC_LOOKBACK_MINUTES", 15)
+    if lookback < 0:
+        raise ConnectorConfigError(
+            f"SYNC_LOOKBACK_MINUTES must be zero or greater; got {lookback}."
+        )
+    reconciliation_days = _env_int("SYNC_RECONCILIATION_DAYS", 7)
+    if not 1 <= reconciliation_days <= 90:
+        raise ConnectorConfigError(
+            f"SYNC_RECONCILIATION_DAYS must be between 1 and 90; got {reconciliation_days}."
+        )
+    first_run_hours = _env_int("SYNC_FIRST_RUN_LOOKBACK_HOURS", 24)
+    if not 1 <= first_run_hours <= 24 * 90:
+        raise ConnectorConfigError(
+            "SYNC_FIRST_RUN_LOOKBACK_HOURS must be between 1 and 2160 (90 days); "
+            f"got {first_run_hours}."
+        )
+    max_range_days = _env_int("SYNC_MAX_RANGE_DAYS", DEFAULT_MAX_RANGE_DAYS)
+    if not 1 <= max_range_days <= 366:
+        raise ConnectorConfigError(
+            f"SYNC_MAX_RANGE_DAYS must be between 1 and 366; got {max_range_days}."
+        )
+    if reconciliation_days > max_range_days:
+        raise ConnectorConfigError(
+            f"SYNC_RECONCILIATION_DAYS ({reconciliation_days}) exceeds "
+            f"SYNC_MAX_RANGE_DAYS ({max_range_days}); the reconciliation pass could "
+            "never run."
+        )
+
+    data_dir = _default_data_dir()
+    state_path = _env_path("SYNC_STATE_PATH", data_dir / "state.db")
+    return SyncConfig(
+        lookback_minutes=lookback,
+        reconciliation_days=reconciliation_days,
+        first_run_lookback_hours=first_run_hours,
+        max_range_days=max_range_days,
+        state_path=state_path,
+        log_dir=_env_path("SYNC_LOG_DIR", _default_log_dir()),
+        # Defaults NEXT TO the state file, so relocating state with
+        # SYNC_STATE_PATH relocates the lock with it and two connectors pointed
+        # at different state files cannot block each other.
+        lock_path=_env_path("SYNC_LOCK_PATH", state_path.parent / "sync.lock"),
+    )
+
+
+def load_connector_config(
+    env_path: Path | None = None,
+    *,
+    require_credentials: bool = True,
+) -> ConnectorConfig:
+    """Load the complete Phase 3 configuration from one .env.
+
+    ``require_credentials=False`` mirrors ``load_config``: it lets
+    ``sync.py --status`` read the local state on a PC whose .env is not filled
+    in yet, without pretending the connector could actually run.
+    """
+    easytime = load_config(env_path, require_credentials=require_credentials)
+    return ConnectorConfig(
+        easytime=easytime,
+        coreops=load_coreops_config(require_token=require_credentials),
+        sync=load_sync_config(),
     )
