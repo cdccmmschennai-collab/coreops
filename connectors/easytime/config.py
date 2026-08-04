@@ -1,9 +1,25 @@
 """Connector configuration - administrator PC side only.
 
-Every value is read from ``connectors/easytime/.env`` (git-ignored). Nothing in
-this file is ever deployed to the CoreOps VPS: the EasyTime username/password
-belong on the machine that can actually reach EasyTime Pro, and the VPS only
-ever sees normalized punches over HTTPS (see docs/attendance/easytime-integration.md).
+Every value is read from one environment file. Nothing in this file is ever
+deployed to the CoreOps VPS: the EasyTime username/password belong on the
+machine that can actually reach EasyTime Pro, and the VPS only ever sees
+normalized punches over HTTPS (see docs/attendance/easytime-integration.md).
+
+**Where that file lives** is resolved by ``resolve_env_path`` in one fixed
+order, none of which is the caller's current working directory:
+
+    1. an explicit ``env_path`` argument                      (tests, tooling)
+    2. ``$COREOPS_CONNECTOR_ENV_FILE``                        (explicit override)
+    3. ``<directory of this module>/.env``                    (source checkout,
+                                                               and the Phase 1
+                                                               probe folder)
+    4. ``C:\\ProgramData\\CoreOps\\EasyTimeConnector\\config\\connector.env``
+                                                              (installed)
+
+An installed connector lands on 4: ``install_connector.ps1`` copies a whitelist
+into ``C:\\Program Files\\CoreOps\\EasyTimeConnector\\`` and that whitelist has
+no ``.env`` in it, so rule 3 cannot fire there. A source checkout and the Phase
+1 probe folder both land on 3, which is why the probe workflow is unchanged.
 
 Deliberately dependency-light: a frozen dataclass + python-dotenv, no pydantic.
 The connector must install and run on a Windows admin PC with the smallest
@@ -21,12 +37,31 @@ from dotenv import load_dotenv
 from exceptions import ConnectorConfigError, EasyTimeConfigError
 
 CONNECTOR_DIR = Path(__file__).resolve().parent
+
+# The source-checkout / Phase 1 probe location, next to the scripts themselves.
 ENV_PATH = CONNECTOR_DIR / ".env"
 
 # Where a real installation keeps its mutable files. ProgramData, not Program
 # Files: the connector runs as a service account that must be able to write its
 # state and logs, and Program Files is read-only for exactly that reason.
 PROGRAM_DATA_DIR = Path(r"C:\ProgramData\CoreOps\EasyTimeConnector")
+
+# The installed configuration file. Named connector.env rather than .env so it
+# is visible in Explorer, obviously ours, and impossible to confuse with the
+# probe's .env sitting in C:\CoreOps-EasyTime-Probe.
+INSTALLED_CONFIG_FILENAME = "connector.env"
+
+# Escape hatch: point the connector at a specific file. A PATH is not a secret,
+# so this is safe to pass on a command line or set in a scheduled task; the
+# credentials still only ever live inside the file it names.
+ENV_FILE_OVERRIDE_VAR = "COREOPS_CONNECTOR_ENV_FILE"
+
+# Relocate the whole mutable tree (config, data, logs) in one move. Exported by
+# ``run_sync.ps1 -DataRoot`` so the wrapper and the Python process cannot end up
+# reporting two different state files. It sets the DEFAULT root only:
+# SYNC_STATE_PATH / SYNC_LOG_DIR / SYNC_LOCK_PATH in the configuration file
+# still win, because those are the administrator's explicit choice.
+DATA_ROOT_OVERRIDE_VAR = "COREOPS_CONNECTOR_DATA_ROOT"
 
 # Development/test fallback, used whenever ProgramData does not exist (any
 # non-Windows machine, and any checkout that has not been installed).
@@ -163,20 +198,91 @@ def _mask(value: str) -> str:
     return f"{value[0]}{'*' * (len(value) - 2)}{value[-1]}"
 
 
+def program_data_dir() -> Path:
+    """The mutable root: ``C:\\ProgramData\\CoreOps\\EasyTimeConnector``.
+
+    Computed on every call rather than pinned at import time, so
+    ``$COREOPS_CONNECTOR_DATA_ROOT`` and a test that repoints
+    ``config.PROGRAM_DATA_DIR`` both take effect everywhere it is derived from.
+    """
+    raw = (os.getenv(DATA_ROOT_OVERRIDE_VAR) or "").strip()
+    return Path(raw).expanduser() if raw else PROGRAM_DATA_DIR
+
+
+def installed_config_dir() -> Path:
+    """``C:\\ProgramData\\CoreOps\\EasyTimeConnector\\config``."""
+    return program_data_dir() / "config"
+
+
+def installed_config_path() -> Path:
+    """The one configuration file an installed connector reads."""
+    return installed_config_dir() / INSTALLED_CONFIG_FILENAME
+
+
+def resolve_env_path(env_path: Path | None = None) -> tuple[Path, str]:
+    """Decide which environment file to read, and say why.
+
+    Returns ``(path, source)`` where ``source`` is a short label used in error
+    messages so the admin never has to guess which of the four rules fired. The
+    path returned may not exist - existence is the caller's decision, because
+    ``--status`` is allowed to run without a finished configuration.
+
+    Nothing here consults the current working directory. Every candidate is
+    either passed in, named in an environment variable, or derived from the
+    location of this module, so ``run_sync.ps1`` resolves the same file whether
+    it is started from Program Files, from Task Scheduler, or from C:\\.
+    """
+    if env_path is not None:
+        return Path(env_path), "explicit path"
+
+    override = (os.getenv(ENV_FILE_OVERRIDE_VAR) or "").strip()
+    if override:
+        return Path(override).expanduser(), f"${ENV_FILE_OVERRIDE_VAR}"
+
+    # A .env next to this module means a source checkout or the Phase 1 probe
+    # folder. Checked before ProgramData so installing the connector on the
+    # admin PC does not quietly repoint the probe at the connector's config.
+    if ENV_PATH.exists():
+        return ENV_PATH, "source checkout (.env next to the scripts)"
+
+    return installed_config_path(), "installed (ProgramData)"
+
+
+def _missing_config_message(path: Path, source: str) -> str:
+    """The one error an admin is most likely to meet. Make it actionable.
+
+    Names the file, how it was chosen, and the exact command that creates it.
+    Carries no value read from any configuration file, so it cannot leak one.
+    """
+    return (
+        f"Configuration file not found: {path}\n"
+        f"  chosen by: {source}\n"
+        "  On an installed admin PC, create it from the shipped example and "
+        "type the credentials in yourself:\n"
+        f'    copy "{installed_config_dir()}\\{INSTALLED_CONFIG_FILENAME}.example" '
+        f'"{installed_config_path()}"\n'
+        f'    notepad "{installed_config_path()}"\n'
+        "  In a source checkout, copy .env.example to .env next to the scripts "
+        "instead (never commit the result)."
+    )
+
+
 def load_config(env_path: Path | None = None, *, require_credentials: bool = True) -> EasyTimeConfig:
-    """Read the connector .env into an ``EasyTimeConfig``.
+    """Read the connector environment file into an ``EasyTimeConfig``.
 
     ``require_credentials=False`` is used by ``probe.py --check-config`` so the
     admin can validate the file layout before the integration account exists.
     """
-    path = env_path or ENV_PATH
+    path, source = resolve_env_path(env_path)
+    explicitly_named = env_path is not None or source.startswith("$")
+
     if path.exists():
         load_dotenv(path, override=False)
-    elif require_credentials:
-        raise EasyTimeConfigError(
-            f"{path} not found. Copy .env.example to .env and fill it in "
-            "(never commit the result)."
-        )
+    elif require_credentials or (explicitly_named and env_path is None):
+        # An override variable that names a file which is not there is a typo,
+        # not a half-finished install: fail even in the read-only modes rather
+        # than silently reading nothing.
+        raise EasyTimeConfigError(_missing_config_message(path, source))
 
     base_url = (os.getenv("EASYTIME_BASE_URL") or "").strip().rstrip("/")
     username = (os.getenv("EASYTIME_USERNAME") or "").strip()
@@ -328,11 +434,13 @@ def _default_data_dir() -> Path:
     Existence, not platform, is the test: an installed connector has had
     ``install_connector.ps1`` run, and a developer machine has not.
     """
-    return PROGRAM_DATA_DIR / "data" if PROGRAM_DATA_DIR.exists() else LOCAL_DATA_DIR
+    root = program_data_dir()
+    return root / "data" if root.exists() else LOCAL_DATA_DIR
 
 
 def _default_log_dir() -> Path:
-    return PROGRAM_DATA_DIR / "logs" if PROGRAM_DATA_DIR.exists() else LOCAL_LOG_DIR
+    root = program_data_dir()
+    return root / "logs" if root.exists() else LOCAL_LOG_DIR
 
 
 def _env_path(name: str, default: Path) -> Path:

@@ -1,22 +1,33 @@
 """Connector configuration loading and, above all, secret hygiene."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
+import config as config_module
 from config import (
     AUTH_PATH_CANDIDATES,
     COREOPS_MAX_BATCH_SIZE,
+    DATA_ROOT_OVERRIDE_VAR,
+    ENV_FILE_OVERRIDE_VAR,
+    INSTALLED_CONFIG_FILENAME,
     EasyTimeConfig,
+    installed_config_path,
     load_config,
     load_connector_config,
     load_coreops_config,
     load_sync_config,
+    resolve_env_path,
 )
 from exceptions import ConnectorConfigError, EasyTimeConfigError
 
 ENV_KEYS = [
+    # The explicit path overrides. Cleared first: a value left in the ambient
+    # environment would silently redirect every test below.
+    ENV_FILE_OVERRIDE_VAR,
+    DATA_ROOT_OVERRIDE_VAR,
     "EASYTIME_BASE_URL",
     "EASYTIME_USERNAME",
     "EASYTIME_PASSWORD",
@@ -391,3 +402,221 @@ class TestPhase3Secrets:
             "SYNC_LOCK_PATH",
         ):
             assert key in example, f"{key} is undocumented in .env.example"
+
+
+# ===========================================================================
+# Where the configuration file is read from
+#
+# The whole point of the installed layout is that this answer never depends on
+# the caller's current directory. These tests pin the four resolution rules and
+# their order.
+# ===========================================================================
+
+@pytest.fixture()
+def isolated_roots(tmp_path, monkeypatch):
+    """Repoint both roots at tmp_path so no test can see a real installation.
+
+    Returns (local_env, installed_env). Neither exists yet - a test creates
+    whichever one it is about.
+    """
+    local_env = tmp_path / "checkout" / ".env"
+    local_env.parent.mkdir(parents=True, exist_ok=True)
+    program_data = tmp_path / "ProgramData" / "CoreOps" / "EasyTimeConnector"
+
+    monkeypatch.setattr(config_module, "ENV_PATH", local_env)
+    monkeypatch.setattr(config_module, "PROGRAM_DATA_DIR", program_data)
+    return local_env, program_data / "config" / INSTALLED_CONFIG_FILENAME
+
+
+class TestEnvPathResolution:
+    def test_installed_layout_resolves_to_programdata_connector_env(self, isolated_roots):
+        _local, installed = isolated_roots
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_text(EASYTIME_BLOCK + COREOPS_BLOCK, encoding="utf-8")
+
+        path, source = resolve_env_path()
+
+        assert path == installed
+        assert path.name == "connector.env"
+        assert "installed" in source
+        # And the file is actually read, not merely named.
+        assert load_connector_config().coreops.connector_id == "admin-pc-01"
+
+    def test_the_installed_path_is_used_even_when_the_file_is_absent(self, isolated_roots):
+        # Nothing exists anywhere: the default must still be the ProgramData
+        # file, so the error message can name the file to create.
+        _local, installed = isolated_roots
+
+        path, source = resolve_env_path()
+
+        assert path == installed
+        assert "installed" in source
+        assert path == installed_config_path()
+
+    def test_a_source_checkout_uses_the_dot_env_next_to_the_scripts(self, isolated_roots):
+        # This is what keeps the Phase 1 probe in C:\CoreOps-EasyTime-Probe
+        # working after the connector is installed: it has its own .env.
+        local, installed = isolated_roots
+        local.write_text(EASYTIME_BLOCK + COREOPS_BLOCK, encoding="utf-8")
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_text(
+            EASYTIME_BLOCK + COREOPS_BLOCK.replace("admin-pc-01", "installed-pc"),
+            encoding="utf-8",
+        )
+
+        path, source = resolve_env_path()
+
+        assert path == local
+        assert "checkout" in source
+
+    def test_the_override_variable_wins_over_both(self, isolated_roots, tmp_path, monkeypatch):
+        local, installed = isolated_roots
+        local.write_text(EASYTIME_BLOCK + COREOPS_BLOCK, encoding="utf-8")
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_text(EASYTIME_BLOCK + COREOPS_BLOCK, encoding="utf-8")
+        chosen = write_env(
+            tmp_path, EASYTIME_BLOCK + COREOPS_BLOCK.replace("admin-pc-01", "override-pc")
+        )
+        monkeypatch.setenv(ENV_FILE_OVERRIDE_VAR, str(chosen))
+
+        path, source = resolve_env_path()
+
+        assert path == chosen
+        assert ENV_FILE_OVERRIDE_VAR in source
+        assert load_connector_config().coreops.connector_id == "override-pc"
+
+    def test_an_explicit_argument_wins_over_the_override_variable(
+        self, isolated_roots, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv(ENV_FILE_OVERRIDE_VAR, str(tmp_path / "ignored.env"))
+        argument = write_env(tmp_path, EASYTIME_BLOCK + COREOPS_BLOCK)
+
+        path, source = resolve_env_path(argument)
+
+        assert path == argument
+        assert source == "explicit path"
+
+    def test_resolution_does_not_depend_on_the_current_directory(
+        self, isolated_roots, tmp_path, monkeypatch
+    ):
+        # The scheduled task runs with whatever working directory Windows feels
+        # like giving it. The answer must not move.
+        _local, installed = isolated_roots
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        installed.write_text(EASYTIME_BLOCK + COREOPS_BLOCK, encoding="utf-8")
+        elsewhere = tmp_path / "some" / "other" / "cwd"
+        elsewhere.mkdir(parents=True)
+
+        before = resolve_env_path()
+        original = os.getcwd()
+        try:
+            os.chdir(elsewhere)
+            after = resolve_env_path()
+            loaded = load_connector_config()
+        finally:
+            os.chdir(original)
+
+        assert after == before
+        assert after[0].is_absolute()
+        assert loaded.coreops.connector_id == "admin-pc-01"
+
+    def test_local_and_installed_paths_are_not_the_same_file(self, isolated_roots):
+        local, installed = isolated_roots
+        assert local != installed
+
+
+class TestDataRootOverride:
+    """``run_sync.ps1 -DataRoot`` must move config, data AND logs together.
+
+    If the wrapper and the Python process resolved the mutable root separately
+    they could report two different state files, which is exactly the ambiguity
+    the installed layout exists to remove.
+    """
+
+    def test_it_moves_the_config_data_and_log_roots_together(
+        self, isolated_roots, tmp_path, monkeypatch
+    ):
+        elsewhere = tmp_path / "relocated"
+        (elsewhere / "config").mkdir(parents=True)
+        (elsewhere / "config" / INSTALLED_CONFIG_FILENAME).write_text(
+            EASYTIME_BLOCK + COREOPS_BLOCK, encoding="utf-8"
+        )
+        monkeypatch.setenv(DATA_ROOT_OVERRIDE_VAR, str(elsewhere))
+
+        path, _source = resolve_env_path()
+        config = load_connector_config()
+
+        assert path == elsewhere / "config" / INSTALLED_CONFIG_FILENAME
+        assert config.sync.state_path == elsewhere / "data" / "state.db"
+        assert config.sync.lock_path == elsewhere / "data" / "sync.lock"
+        assert config.sync.log_dir == elsewhere / "logs"
+
+    def test_an_explicit_path_setting_still_beats_the_data_root(
+        self, isolated_roots, tmp_path, monkeypatch
+    ):
+        # The override sets the DEFAULT root. SYNC_STATE_PATH is the admin's
+        # explicit choice and must not be silently overruled by a wrapper flag.
+        elsewhere = tmp_path / "relocated"
+        (elsewhere / "config").mkdir(parents=True)
+        (elsewhere / "config" / INSTALLED_CONFIG_FILENAME).write_text(
+            EASYTIME_BLOCK + COREOPS_BLOCK + f"SYNC_STATE_PATH={tmp_path / 'pinned.db'}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv(DATA_ROOT_OVERRIDE_VAR, str(elsewhere))
+
+        sync = load_connector_config().sync
+
+        assert sync.state_path == tmp_path / "pinned.db"
+        assert sync.lock_path == tmp_path / "sync.lock"  # follows the state file
+        assert sync.log_dir == elsewhere / "logs"  # unpinned, so it follows the root
+
+
+class TestMissingConfigErrors:
+    def test_the_error_names_the_installed_file_and_how_to_create_it(self, isolated_roots):
+        _local, installed = isolated_roots
+
+        with pytest.raises(EasyTimeConfigError) as exc:
+            load_config()
+
+        message = str(exc.value)
+        assert str(installed) in message
+        assert "connector.env.example" in message
+        assert "notepad" in message
+
+    def test_an_override_pointing_at_a_missing_file_fails_even_in_read_only_mode(
+        self, isolated_roots, tmp_path, monkeypatch
+    ):
+        # An override that names a file which is not there is a typo, not a
+        # half-finished install. --status must not quietly read nothing.
+        missing = tmp_path / "typo.env"
+        monkeypatch.setenv(ENV_FILE_OVERRIDE_VAR, str(missing))
+
+        with pytest.raises(EasyTimeConfigError) as exc:
+            load_config(require_credentials=False)
+
+        assert str(missing) in str(exc.value)
+        assert ENV_FILE_OVERRIDE_VAR in str(exc.value)
+
+    def test_a_half_finished_install_still_answers_status(self, isolated_roots):
+        # No file at all, read-only mode: tolerated, so --status can report what
+        # is wrong instead of refusing to start.
+        config = load_connector_config(require_credentials=False)
+
+        assert config.coreops.connector_token == ""
+
+    def test_no_configured_secret_can_reach_the_error_message(
+        self, isolated_roots, tmp_path, monkeypatch
+    ):
+        # The path in the message is attacker-chosen only in the sense that an
+        # admin could park a secret in a FILENAME. Assert the message carries
+        # nothing read from inside any file, by putting secrets in the ambient
+        # environment and checking they do not surface.
+        monkeypatch.setenv("EASYTIME_PASSWORD", "hunter2-should-never-appear")
+        monkeypatch.setenv("COREOPS_CONNECTOR_TOKEN", "token-should-never-appear")
+
+        with pytest.raises(EasyTimeConfigError) as exc:
+            load_config()
+
+        message = str(exc.value)
+        assert "hunter2-should-never-appear" not in message
+        assert "token-should-never-appear" not in message

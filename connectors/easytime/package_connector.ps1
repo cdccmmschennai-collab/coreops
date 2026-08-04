@@ -8,8 +8,9 @@
     accidentally let a secret through: if a file is not named below it does not
     reach the archive.
 
-    Never included: .env, .venv\, logs\, data\, probe-output\, dist\, *.db,
-    *.lock, __pycache__\, .pytest_cache\, tests\, or any git metadata.
+    Never included: .env, connector.env, .venv\, logs\, data\, probe-output\,
+    dist\, *.db, *.lock, __pycache__\, .pytest_cache\, tests\, or any git
+    metadata.
 
     The build FAILS if .env.example carries a non-empty password, token or
     secret, so a filled-in example file can never be shipped.
@@ -61,12 +62,14 @@ $Whitelist = @(
     'logging_setup.py'
     'exit_codes.py'
     'run_sync.ps1'
+    'setup_connector.ps1'
     'install_connector.ps1'
 )
 
 # Names that must never appear in the archive, checked again after zipping.
 $ForbiddenEntryPatterns = @(
     '(^|/)\.env$'
+    '(^|/)connector\.env$'
     '(^|/)\.venv/'
     '(^|/)logs/'
     '(^|/)data/'
@@ -136,7 +139,7 @@ Write-Host "  [PASS] no password, token or secret carries a value"
 # A real .env, a state database or a log directory sitting next to the script
 # is fine - none of them is whitelisted - but say so out loud so nobody assumes
 # they were packaged.
-foreach ($item in @('.env', 'data', 'logs', 'probe-output')) {
+foreach ($item in @('.env', 'connector.env', 'data', 'logs', 'probe-output', '.venv')) {
     if (Test-Path -LiteralPath (Join-Path $Root $item)) {
         Write-Host "  [note] a local '$item' exists and is NOT included in the archive"
     }
@@ -219,13 +222,21 @@ Write-Host "  Files   : $($entries.Count)"
 Write-Host "  SHA-256 : $($hash.Hash)"
 Write-Host ""
 Write-Host "  Send this ZIP to the administrator PC. It contains NO credentials:" -ForegroundColor Green
-Write-Host "  the admin copies .env.example to .env and types them in there." -ForegroundColor Green
+Write-Host "  the admin copies the installed example to connector.env and types" -ForegroundColor Green
+Write-Host "  them in there." -ForegroundColor Green
 Write-Host ""
-Write-Host "  On the admin PC:" -ForegroundColor Green
-Write-Host "    1. .\install_connector.ps1        (creates the ProgramData folders)"
-Write-Host "    2. .\setup_probe.ps1              (creates .venv, installs requirements)"
-Write-Host "    3. copy .env.example .env; notepad .env"
+Write-Host "  On the admin PC (elevated PowerShell), from the EXTRACTED folder:" -ForegroundColor Green
+Write-Host "    1. .\install_connector.ps1"
+Write-Host "         copies the application to C:\Program Files\CoreOps\EasyTimeConnector\"
+Write-Host "         creates C:\ProgramData\CoreOps\EasyTimeConnector\{config,data,logs}\"
+Write-Host ""
+Write-Host "  Then, from C:\Program Files\CoreOps\EasyTimeConnector :" -ForegroundColor Green
+Write-Host "    2. .\setup_connector.ps1          (creates .venv, installs requirements)"
+Write-Host "    3. copy `"C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env.example`" `"C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env`""
+Write-Host "       notepad `"C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env`""
 Write-Host "    4. .\run_sync.ps1 -Mode CheckConfig"
-Write-Host "    5. .\run_sync.ps1 -Mode Incremental"
+Write-Host "    5. .\run_sync.ps1 -Mode Backfill -FromDate <YYYY-MM-DD> -ToDate <YYYY-MM-DD>"
+Write-Host ""
+Write-Host "  No scheduled task is created. Task Scheduler stays disabled." -ForegroundColor Green
 Write-Host ""
 exit 0

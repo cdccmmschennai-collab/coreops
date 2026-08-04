@@ -35,7 +35,7 @@ import sys
 import uuid
 from datetime import date, datetime, timezone
 
-from config import ConnectorConfig, load_connector_config
+from config import ConnectorConfig, load_connector_config, resolve_env_path
 from exceptions import ConnectorConfigError, EasyTimeError, RunLockUnavailable
 from exit_codes import (
     EXIT_ANOTHER_RUN_ACTIVE,
@@ -180,7 +180,9 @@ def print_status(config: ConnectorConfig) -> int:
     for key, value in state.as_display().items():
         print(f"  {key:<24} {value}")
 
+    env_file, env_source = resolve_env_path()
     print()
+    print(f"  {'config file':<24} {env_file} ({env_source})")
     print(f"  {'state database':<24} {config.sync.state_path} (schema v{schema})")
     print(f"  {'log directory':<24} {config.sync.log_dir}")
     print(f"  {'lock file':<24} {config.sync.lock_path}")
@@ -192,6 +194,14 @@ def print_status(config: ConnectorConfig) -> int:
 
 def print_config(config: ConnectorConfig) -> int:
     heading("CoreOps EasyTime connector - configuration")
+    # Which file was read, and by which rule. Printed first because "the
+    # connector is reading a different file than the one I edited" is the
+    # failure this mode exists to rule out. The path is not a secret; nothing
+    # from inside the file is printed unredacted.
+    path, source = resolve_env_path()
+    print(f"\n  [source]")
+    print(f"    {'config file':<24} {path}")
+    print(f"    {'chosen by':<24} {source}")
     for section, values in config.redacted().items():
         print(f"\n  [{section}]")
         for key, value in values.items():

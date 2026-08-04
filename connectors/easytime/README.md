@@ -25,69 +25,180 @@ null display label, so IN/OUT is genuinely unknown, and guessing would produce
 attendance that looks plausible and is wrong. See
 `docs/attendance/punch-state-mapping.md`.
 
+## Windows layout
+
+One layout, three roots, and nothing that depends on where you happen to be
+standing when you type a command.
+
+| | Path |
+|---|---|
+| Application | `C:\Program Files\CoreOps\EasyTimeConnector\` |
+| Virtual environment | `C:\Program Files\CoreOps\EasyTimeConnector\.venv\` |
+| Python | `C:\Program Files\CoreOps\EasyTimeConnector\.venv\Scripts\python.exe` |
+| Configuration | `C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env` |
+| Configuration example | `C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env.example` |
+| State + lock | `C:\ProgramData\CoreOps\EasyTimeConnector\data\state.db`, `sync.lock` |
+| Logs | `C:\ProgramData\CoreOps\EasyTimeConnector\logs\` |
+| Phase 1 probe (separate) | `C:\CoreOps-EasyTime-Probe\` |
+
+ProgramData for everything mutable: the account that runs the connector has to
+be able to write its cursor, and Program Files is read-only for exactly that
+reason.
+
+The probe is a **separate installation** with its own `.env` and its own
+lifecycle. `install_connector.ps1` refuses to install into or under it, never
+removes it, and never reads it.
+
+### Which configuration file is in force
+
+`config.resolve_env_path` answers this in one fixed order. None of these rules
+looks at the current working directory:
+
+1. `run_sync.ps1 -EnvFile <path>` / an explicit `env_path` argument
+2. `%COREOPS_CONNECTOR_ENV_FILE%`
+3. `<application folder>\.env` - a source checkout, and the probe folder
+4. `C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env` - installed
+
+An installed connector lands on rule 4, because the install whitelist contains
+no `.env`. A source checkout and `C:\CoreOps-EasyTime-Probe` both land on rule
+3, which is why the Phase 1 workflow is unchanged. `run_sync.ps1` exports the
+path it resolved as `COREOPS_CONNECTOR_ENV_FILE`, so the wrapper and `sync.py`
+can never disagree.
+
+`run_sync.ps1 -DataRoot` likewise exports `COREOPS_CONNECTOR_DATA_ROOT`, which
+moves the config, data and log roots together. It sets the *default* root only -
+`SYNC_STATE_PATH`, `SYNC_LOG_DIR` and `SYNC_LOCK_PATH` in the configuration file
+are the administrator's explicit choice and still win.
+
+`-Mode CheckConfig` and `-Mode Status` both print the file in use and the rule
+that chose it.
+
 ## Install (Windows)
 
+Requires Python 3.11+. Run every step from an **elevated** PowerShell prompt -
+Program Files and ProgramData are not writable without it, and the installer
+stops with a clear message rather than installing half of itself.
+
+**1. Install the application.** From the folder the ZIP was extracted into:
+
 ```powershell
-cd C:\CoreOps\EasyTimeConnector
-.\install_connector.ps1     # creates the ProgramData folders; writes no credentials
-.\setup_probe.ps1           # creates .\.venv and installs requirements INTO IT ONLY
-copy .env.example .env
-notepad .env                # fill in EasyTime + CoreOps settings
+.\install_connector.ps1
 ```
 
-Neither script ever installs globally, and neither creates or fills in `.env` -
-you type the credentials yourself. If PowerShell blocks a script, run it as
+That copies a whitelist of application files into
+`C:\Program Files\CoreOps\EasyTimeConnector\`, creates `config\`, `data\` and
+`logs\` under `C:\ProgramData\CoreOps\EasyTimeConnector\`, installs
+`connector.env.example`, and prints every final path. It writes no credential,
+creates no scheduled task, and leaves an existing `connector.env`, `state.db` or
+log file exactly as it found them - so it is safe to re-run for an upgrade.
+
+**2. Create the virtual environment.** From the installed folder:
+
+```powershell
+cd 'C:\Program Files\CoreOps\EasyTimeConnector'
+.\setup_connector.ps1
+```
+
+**3. Create the configuration.** Copy the example and type the credentials in
+yourself - no script writes one:
+
+```powershell
+copy "C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env.example" "C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env"
+notepad "C:\ProgramData\CoreOps\EasyTimeConnector\config\connector.env"
+```
+
+Fill in `EASYTIME_BASE_URL`, `EASYTIME_USERNAME`, `EASYTIME_PASSWORD`,
+`COREOPS_API_URL`, `COREOPS_CONNECTOR_TOKEN` and `CONNECTOR_ID`. Save as
+**UTF-8 without BOM** (Notepad's default) or ANSI. A BOM makes the first setting
+in the file silently unreadable; `run_sync.ps1` warns if it sees one.
+
+If PowerShell blocks a script, run it as
 `powershell -ExecutionPolicy Bypass -File .\<script>.ps1`.
 
-Save `.env` as **UTF-8 without BOM** (Notepad's default) or ANSI. A BOM makes the
-first setting in the file silently unreadable; `run_sync.ps1` warns if it sees one.
+`setup_probe.ps1` is still shipped and still works; it is the Phase 1 entry
+point. `setup_connector.ps1` is the production one.
 
-Requires Python 3.11+.
+### First test on the admin PC
 
-Directory layout created by `install_connector.ps1`:
+In this order, from `C:\Program Files\CoreOps\EasyTimeConnector`. Nothing here
+switches on a schedule.
 
+```powershell
+.\run_sync.ps1 -Mode CheckConfig
+.\run_sync.ps1 -Mode Backfill -FromDate 2026-08-03 -ToDate 2026-08-03
+.\run_sync.ps1 -Mode Backfill -FromDate 2026-08-03 -ToDate 2026-08-03
+.\run_sync.ps1 -Mode Incremental
+.\run_sync.ps1 -Mode Reconcile
 ```
-C:\Program Files\CoreOps\EasyTimeConnector\      program files (read-only)
-C:\ProgramData\CoreOps\EasyTimeConnector\
-    config\    .env
-    data\      state.db, sync.lock
-    logs\      sync-YYYYMMDD.log
+
+The second backfill is the point: it must report the same punches as
+**duplicates** and insert nothing. If it inserts rows again, stop - idempotency
+is broken and nothing should be scheduled.
+
+### Uninstall / rollback
+
+There is no uninstaller, on purpose - the layout is two directories.
+
+```powershell
+# 1. confirm no scheduled task exists (Phase 3 never creates one)
+Get-ScheduledTask -TaskName 'CoreOps EasyTime *' -ErrorAction SilentlyContinue
+
+# 2. remove the application only. Config, cursor and logs survive.
+Remove-Item -LiteralPath 'C:\Program Files\CoreOps\EasyTimeConnector' -Recurse -Force
+
+# 3. ONLY if you mean to lose the configuration, the cursor and the logs:
+# Remove-Item -LiteralPath 'C:\ProgramData\CoreOps\EasyTimeConnector' -Recurse -Force
 ```
 
-ProgramData for everything mutable: the scheduled-task account has to be able to
-write its cursor, and Program Files is read-only for exactly that reason. A
-development checkout falls back to `./data` and `./logs`.
+To roll back to a previous build, re-run `install_connector.ps1` from that
+build's extracted package. It overwrites the application files and touches
+nothing under ProgramData. `C:\CoreOps-EasyTime-Probe` is not involved in any of
+this.
 
 ## Run
 
-`run_sync.ps1` calls `.venv\Scripts\python.exe`, mirrors output to a timestamped
-wrapper log under `.\logs\`, and **returns the connector's own exit code**.
+`run_sync.ps1` resolves everything from its own location - never from the
+caller's working directory - so it behaves identically from Program Files, from
+another prompt, and from Task Scheduler later. It calls
+`.venv\Scripts\python.exe`, mirrors output to a timestamped wrapper log under
+`C:\ProgramData\CoreOps\EasyTimeConnector\logs\` after a redaction pass, and
+**returns the connector's own exit code**.
 
 ```powershell
-.\run_sync.ps1 -Mode CheckConfig                              # validate .env, no network
+.\run_sync.ps1 -Mode CheckConfig                              # validate config, no network
 .\run_sync.ps1 -Mode Status                                   # local health, no network
 .\run_sync.ps1 -Mode Incremental                              # the scheduled run
-.\run_sync.ps1 -Mode Reconcile -ReconcileDays 7               # recover late uploads
+.\run_sync.ps1 -Mode Reconcile                                # recover late uploads
+.\run_sync.ps1 -Mode Reconcile -ReconcileDays 7               # an explicit span
 .\run_sync.ps1 -Mode Backfill -FromDate 2026-07-29 -ToDate 2026-07-30
+.\run_sync.ps1 -Mode Backfill -FromDate 2026-06-01 -ToDate 2026-07-30 -Force
+.\run_sync.ps1 -Mode Incremental -EnvFile 'D:\configs\other.env'
+.\run_sync.ps1 -Mode Status -Verbose
 ```
 
+Those are the complete parameters: `-Mode` (mandatory,
+`Incremental|Reconcile|Backfill|Status|CheckConfig`), `-ReconcileDays` (1-90),
+`-FromDate`, `-ToDate` (`YYYY-MM-DD`), `-Force`, `-EnvFile`, `-DataRoot`,
+`-Verbose`.
+
 There is deliberately no `-Username`, `-Password` or `-Token` parameter:
-credentials live only in `.env`, which the script never reads or prints.
+credentials live only in the configuration file, which the script never reads or
+prints. `-EnvFile` is a **path**, not a credential.
+
+`CheckConfig` parses the configuration and prints a redacted view. It makes **no
+network call** and does not test connectivity to EasyTime or to CoreOps -
+`Incremental` is the first mode that touches the network.
 
 The underlying CLI, if you prefer to call it directly:
 
 ```powershell
-.venv\Scripts\python sync.py --check-config
-.venv\Scripts\python sync.py --status
-.venv\Scripts\python sync.py --once
-.venv\Scripts\python sync.py --reconcile
-.venv\Scripts\python sync.py --reconcile-days 7
-.venv\Scripts\python sync.py --from-date 2026-07-29 --to-date 2026-07-30
+.\.venv\Scripts\python.exe sync.py --check-config
+.\.venv\Scripts\python.exe sync.py --status
+.\.venv\Scripts\python.exe sync.py --once
+.\.venv\Scripts\python.exe sync.py --reconcile
+.\.venv\Scripts\python.exe sync.py --reconcile-days 7
+.\.venv\Scripts\python.exe sync.py --from-date 2026-07-29 --to-date 2026-07-30
 ```
-
-Work in that order the first time. `--check-config` proves the file parses,
-`--status` proves the state directory is writable, and `--once` is the first
-thing that touches the network.
 
 **One shot, never a daemon.** Each invocation covers one window and exits. Task
 Scheduler provides the schedule; a long-lived Python process on an office PC is
@@ -271,7 +382,9 @@ photos, face/fingerprint/vein/iris templates.
 Three independent layers hold that line: the code never passes a secret to a
 logger; `redaction.sanitize_text` runs over every formatted log record (including
 tracebacks) on every handler; and `run_sync.ps1` applies a third regex pass to
-captured console output. `tests/test_coreops_client.py::TestSecrets`,
+captured console output. No installer or setup script ever reads, prints or
+writes the configuration file's contents, and the "configuration file not found"
+error carries only paths. `tests/test_coreops_client.py::TestSecrets`,
 `test_state.py::TestSecrets`, `test_cli.py::TestLogging` and
 `test_config.py::TestPhase3Secrets` assert it.
 
@@ -299,17 +412,29 @@ least one manual `-Mode Incremental`, then confirm rows via
 
 ## Packaging
 
+Built in the repository, not on the admin PC:
+
 ```powershell
 .\package_connector.ps1     # dist\CoreOps-EasyTime-Connector.zip
 ```
 
 Whitelist-based: if a file is not named in the script it does not reach the
 archive. The build fails if `.env.example` carries a non-empty password, token
-or secret, and the finished ZIP is re-opened and verified entry by entry.
+or secret, and the finished ZIP is re-opened and verified entry by entry - every
+expected file present, no unexpected file, no forbidden pattern.
 
-Never shipped: `.env`, `.venv\`, `logs\`, `data\`, `probe-output\`, `dist\`,
-`tests\`, `*.db`, `*.lock`, `*.log`, `__pycache__\`, `.pytest_cache\`, git
-metadata.
+To verify a ZIP you were handed, without installing it:
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\dist\CoreOps-EasyTime-Connector.zip
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::OpenRead((Resolve-Path .\dist\CoreOps-EasyTime-Connector.zip).Path).Entries |
+    Select-Object FullName, Length
+```
+
+Never shipped: `.env`, `connector.env`, `.venv\`, `logs\`, `data\`,
+`probe-output\`, `dist\`, `tests\`, `*.db`, `*.lock`, `*.log`, `__pycache__\`,
+`.pytest_cache\`, git metadata.
 
 `package_probe.ps1` is still there and still builds the Phase 1 probe-only
 package; `package_connector.ps1` supersedes it for Phase 3 deployments and ships
@@ -319,7 +444,13 @@ new site.
 ## The probe (Phase 1)
 
 `probe.py` is read-only and unchanged. It is still how you answer "which
-endpoints does this installed version expose?" before pinning them in `.env`.
+endpoints does this installed version expose?" before pinning them in the
+configuration file.
+
+Its own installation lives in `C:\CoreOps-EasyTime-Probe` with its own `.env`
+next to `probe.py`, and rule 3 of the resolution order is what keeps it that way
+after the connector is installed. `install_connector.ps1` refuses that directory
+as a destination and never touches it.
 
 ```powershell
 .\run_probe.ps1 -Mode CheckConfig
@@ -327,8 +458,8 @@ endpoints does this installed version expose?" before pinning them in `.env`.
 .\run_probe.ps1 -Mode Transactions -Date 2026-07-28 -SaveReport
 ```
 
-Pin the working paths in `.env` (`EASYTIME_AUTH_PATH`,
-`EASYTIME_TRANSACTIONS_PATH`) so the sync loop never guesses at runtime.
+Pin the working paths (`EASYTIME_AUTH_PATH`, `EASYTIME_TRANSACTIONS_PATH`) so
+the sync loop never guesses at runtime.
 
 ## Tests
 
@@ -338,6 +469,13 @@ CoreOps server needed.
 ```powershell
 .venv\Scripts\python -m pytest tests -q
 ```
+
+`tests/test_windows_layout.py` reads the PowerShell scripts as text and pins the
+installation contract: the application is copied into Program Files, the mutable
+roots are ProgramData, the probe directory is never a destination, nothing
+deletes a config file or a state database, scheduled-task registration stays
+opt-in, and the package whitelist ships every file the installer needs. It is
+static verification, not a substitute for a real install.
 
 `tests/test_contract.py` validates the connector's request body against the
 **real** backend Pydantic schemas. It skips in this virtualenv, which
@@ -368,9 +506,10 @@ A skip there is a gap in verification, never a pass.
 | `exit_codes.py` | the numeric contract with Task Scheduler |
 | `sync_service.py` | window planning, fetch, normalize, batch, send, commit |
 | `sync.py` | the one-shot CLI |
-| `tests/` | offline unit tests + the backend contract test |
-| `setup_probe.ps1` | creates `.venv` and installs requirements into it (never global) |
-| `install_connector.ps1` | creates the ProgramData layout; writes no credentials |
+| `tests/` | offline unit tests, the backend contract test, the Windows-layout checks |
+| `setup_probe.ps1` | Phase 1: creates `.venv` for the standalone probe (never global) |
+| `setup_connector.ps1` | production setup: creates `.venv` in the installed folder, pinned requirements only |
+| `install_connector.ps1` | copies the application to Program Files, creates the ProgramData layout; writes no credentials |
 | `run_probe.ps1` | runs the probe, sanitized log, propagates the exit code |
 | `run_sync.ps1` | runs one sync, sanitized log, propagates the exit code |
 | `package_probe.ps1` | builds the Phase 1 probe ZIP (repo side) |
