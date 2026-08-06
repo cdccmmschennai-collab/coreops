@@ -7,7 +7,7 @@ and that benchmark_* fields are never set on a level='activity' row.
 """
 import uuid
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
@@ -34,6 +34,26 @@ _BENCHMARK_FIELDS = (
     "benchmark_type", "benchmark_value", "benchmark_period_days",
     "benchmark_unit_note", "benchmark_remarks", "relevant_count_field",
 )
+
+
+def scaled_target(base_value, fraction) -> Decimal:
+    """The effective per-period benchmark target: base x fraction, ROUNDED UP to
+    a whole unit.
+
+    Targets are counts of real things — tags, documents, BOM lines. Half of a
+    35-tag benchmark is 17.5, and there is no such thing as half a tag, so a
+    half-day target of 35 is 18: the employee is asked for whole work, and the
+    rounding favours the benchmark rather than quietly discounting it. A target
+    that already divides evenly is unaffected (66 -> 33).
+
+    Rounding up (ceiling), not nearest: 17.5 -> 18 and 17.1 -> 18 alike. This is
+    the ONE place the rule lives — the submit-time snapshot, both ledgers and
+    the frontend's displayed target all resolve through it (the frontend mirrors
+    it in work-reports/benchmark-target.ts), so the number an employee is shown
+    is always the number they are measured against.
+    """
+    value = Decimal(str(base_value or 0)) * Decimal(str(fraction))
+    return value.to_integral_value(rounding=ROUND_CEILING)
 
 
 def actual_count_expr():
@@ -278,7 +298,7 @@ def get_daily_benchmark_ledger(
             Decimal("1.0"),
             sum(bucket["fractions"].values(), Decimal("0")) or Decimal("1.0"),
         )
-        target = base * fraction
+        target = scaled_target(base, fraction)
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
         project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None
@@ -516,9 +536,17 @@ def get_period_benchmark_ledger(
     out = []
     for bucket in buckets.values():
         if bucket["target_snapshot"] is not None:
-            target = bucket["target_snapshot"]
+            # The frozen effective target — but rounded up on READ as well.
+            # Snapshots written before the whole-unit rule existed can carry a
+            # half unit (a 65-tag benchmark halved is 32.5), and a benchmark
+            # report must never show half a tag. The stored snapshot is left
+            # exactly as it was; only its presentation is made whole, so an
+            # existing report needs no migration and no resubmission.
+            # `fraction=1` because the snapshot is ALREADY scaled — this call
+            # only applies the rounding.
+            target = scaled_target(bucket["target_snapshot"], 1)
         else:
-            target = Decimal(str(bucket["live_value"] or 0)) * bucket["fraction"]
+            target = scaled_target(bucket["live_value"], bucket["fraction"])
         actual = bucket["actual"]
         # Publish the exception only while it still describes the row: a
         # positive target, an eligible unit, and a summed actual genuinely below

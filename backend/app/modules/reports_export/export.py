@@ -17,6 +17,8 @@ from io import BytesIO
 from itertools import groupby
 
 import openpyxl
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -132,6 +134,20 @@ _EXC_AMBER_SIDE = Side(style="thin", color="FFBF8F00")
 _EXC_AMBER_BORDER = Border(
     top=_EXC_AMBER_SIDE, bottom=_EXC_AMBER_SIDE,
     left=_EXC_AMBER_SIDE, right=_EXC_AMBER_SIDE,
+)
+# SHORTFALL red — an ACTUAL COMPLETED cell below its target with NO accepted
+# exception: work that is genuinely outstanding. The matched pair to the amber
+# above, in Excel's own "Bad" palette (the same FFC7CE the DIFFERENCE % cell
+# already uses, with its companion dark red), so the two markers read as one
+# system: amber = accepted shortfall, red = real shortfall. Lands on the ACTUAL
+# cell alone — never the target, the pending, or the whole row — and never
+# changes the value under it.
+_SHORT_RED_FILL = PatternFill(fill_type="solid", fgColor="FFFFC7CE")
+_SHORT_RED_FONT = Font(name="Arial", size=10, bold=True, color="FF9C0006")
+_SHORT_RED_SIDE = Side(style="thin", color="FF9C0006")
+_SHORT_RED_BORDER = Border(
+    top=_SHORT_RED_SIDE, bottom=_SHORT_RED_SIDE,
+    left=_SHORT_RED_SIDE, right=_SHORT_RED_SIDE,
 )
 _PB_HEADER_ROW_HEIGHT = {1: 15.0, 2: 25.5}
 _PB_DEFAULT_ROW_HEIGHT = 15.0
@@ -249,21 +265,44 @@ def _upper(value):
     return value
 
 
+def _bold_system_remark(system: str, user: str | None):
+    """The composed REMARKS value as Excel RICH TEXT: the bracketed system
+    remark in BOLD, the employee's own remark after it in the normal body font.
+
+    The bold run is what makes an exception row findable by eye in a column of
+    free text — "[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY] | TNR TAG
+    NUMBER" reads as a system marker followed by the employee's words, rather
+    than one undifferentiated sentence.
+
+    Only the bold run carries an explicit font; the rest of the cell inherits
+    the row's Arial 10 (see style_row), so the two halves match in family and
+    size and differ only in weight. Reading the file back without
+    `rich_text=True` yields the identical plain string, so every existing
+    consumer and assertion is unaffected."""
+    marker = TextBlock(InlineFont(b=True), system)
+    if user is None:
+        return CellRichText(marker)
+    return CellRichText(marker, f" | {user}")
+
+
 def _export_remarks(day_remarks, exception_code, unit):
     """The REMARKS cell for one detail row: the system exception remark first,
     then the employee's own remark, joined by " | ". Uppercase, like every other
     text cell.
 
-    - No exception          -> the employee's remark alone (or an empty cell).
-    - Exception, no remark  -> "[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY]".
-    - Exception + remark    -> "[NO FURTHER ...] | THEIR REMARK".
+    - No exception          -> the employee's remark alone (or an empty cell),
+                               as a plain string.
+    - Exception, no remark  -> "[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY]",
+                               bold.
+    - Exception + remark    -> "[NO FURTHER ...]" bold, then " | THEIR REMARK"
+                               in the normal weight (see _bold_system_remark).
 
     The remark is composed from the STRUCTURED exception code, never from the
     text of the remark itself: an employee who types the sentence by hand gets
-    no bracketed prefix and no change to any calculation. Composition is a pure
-    function of its inputs and re-checks the prefix, so exporting the same cycle
-    twice — or feeding an already-composed value back in — can never double the
-    system remark. The stored remark is never modified.
+    no bracketed prefix, no bold, and no change to any calculation. Composition
+    is a pure function of its inputs and re-checks the prefix, so exporting the
+    same cycle twice — or feeding an already-composed value back in — can never
+    double the system remark. The stored remark is never modified.
     """
     user = _upper(day_remarks)
     system = (
@@ -274,10 +313,41 @@ def _export_remarks(day_remarks, exception_code, unit):
     if system is None:
         return user
     if user is None:
-        return system
+        return _bold_system_remark(system, None)
     if user.startswith(system):
-        return user
-    return f"{system} | {user}"
+        # Already composed (a re-export, or a value fed back in): re-split it so
+        # the marker is bolded exactly once and never duplicated.
+        rest = user[len(system):].removeprefix(" | ") or None
+        return _bold_system_remark(system, rest)
+    return _bold_system_remark(system, user)
+
+
+def _cell_number(value):
+    """A unit-column value written as a WHOLE number wherever it is one.
+
+    Every quantity in this sheet counts real things — tags, documents, BOM lines
+    — so a benchmark cell must read 33, never 33.0 and never 32.5. Targets are
+    rounded to whole units upstream (activity_master.service.scaled_target) and
+    actuals come from integer columns, so the pending derived from them is whole
+    too; this writes them as a genuine Excel integer rather than a float that
+    merely displays as one.
+
+    A value that is NOT whole is passed through as a float rather than
+    truncated: better a visible oddity than a silently altered number."""
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+def _is_short(target, actual) -> bool:
+    """True when a genuinely numeric actual falls below a positive target — the
+    condition the red shortfall marker keys off.
+
+    A missing or non-numeric value on either side is NOT a shortfall: nothing
+    was measured, so nothing is outstanding. A zero target likewise, since
+    anything is at or above it."""
+    if not (_is_numeric(target) and _is_numeric(actual)):
+        return False
+    return float(target) > 0 and float(actual) < float(target)
 
 
 def _row_exception_code(row: dict):
@@ -426,6 +496,16 @@ def build_pending_benchmark_workbook(
         cell.font = _EXC_AMBER_FONT
         cell.border = _EXC_AMBER_BORDER
 
+    def style_shortfall_cell(r: int, col: int) -> None:
+        """Mark ONE ACTUAL COMPLETED cell as a genuine shortfall: red fill, dark
+        red bold font, thin red border. Same placement rules as the amber
+        marker, and mutually exclusive with it — a row is either an accepted
+        exception or a real shortfall, never both."""
+        cell = ws.cell(row=r, column=col)
+        cell.fill = _SHORT_RED_FILL
+        cell.font = _SHORT_RED_FONT
+        cell.border = _SHORT_RED_BORDER
+
     unit_col = {u: i for i, u in enumerate(_PB_UNITS)}
 
     def write_sub_total_row(
@@ -455,17 +535,27 @@ def build_pending_benchmark_workbook(
         for gi in range(len(_PB_GROUPS)):
             for ui in range(n_units):
                 if used[ui]:
-                    ws.cell(r, group_start(gi) + ui, totals[gi][ui])
+                    # Whole numbers, same rule as the detail rows: a cycle total
+                    # of whole daily figures is itself whole.
+                    ws.cell(r, group_start(gi) + ui, _cell_number(totals[gi][ui]))
         ws.cell(r, first_right, cycle_start)
         ws.cell(r, first_right + 1, cycle_end)
         style_row(r, bold=True)
-        # Carry the accepted-exception marker up to the total: any unit whose
-        # cycle total includes at least one exception row gets the same amber
-        # treatment on its ACTUAL COMPLETED cell, so a reader sees at the total
-        # why the percentage reads higher than the raw actual would give.
-        for ui in exception_units:
-            if used[ui]:
+        # Carry the markers up to the total, per unit. Any unit whose cycle
+        # total includes at least one exception row gets the amber treatment on
+        # its ACTUAL COMPLETED cell, so a reader sees at the total why the
+        # percentage reads higher than the raw actual would give. Otherwise a
+        # unit whose cycle EVALUATED result still falls short of its target gets
+        # the red one — keyed off `effective`, the same figure that drives the
+        # PENDING cell and the percentages, so the colour can never disagree
+        # with the numbers beside it.
+        for ui in range(n_units):
+            if not used[ui]:
+                continue
+            if ui in exception_units:
                 style_exception_cell(r, group_start(1) + ui)
+            elif _is_short(totals[0][ui], effective[ui]):
+                style_shortfall_cell(r, group_start(1) + ui)
 
         total_target = sum(totals[0])
         total_effective = sum(effective)
@@ -539,7 +629,7 @@ def build_pending_benchmark_workbook(
                         ws.cell(
                             r,
                             group_start(gi) + ui,
-                            value if isinstance(value, str) else float(value),
+                            value if isinstance(value, str) else _cell_number(value),
                         )
                     if exception_code:
                         exception_units.add(ui)
@@ -567,11 +657,17 @@ def build_pending_benchmark_workbook(
                 ws.cell(r, first_right + 1, cycle_end)
                 style_row(r)
                 # After style_row, which would otherwise reset the font and
-                # border back to the plain body style: ACTUAL COMPLETED for this
-                # row's unit only. The value under the amber is the REAL actual,
-                # never the target.
-                if exception_code and ui is not None:
-                    style_exception_cell(r, group_start(1) + ui)
+                # border back to the plain body style. ACTUAL COMPLETED for this
+                # row's unit only, and one marker or the other, never both:
+                #   amber -> accepted exception (the value is the REAL actual,
+                #            never the target);
+                #   red   -> a genuine shortfall, nothing excusing it.
+                # A row that met or beat its target carries neither.
+                if ui is not None:
+                    if exception_code:
+                        style_exception_cell(r, group_start(1) + ui)
+                    elif _is_short(target_value, actual_value):
+                        style_shortfall_cell(r, group_start(1) + ui)
                 r += 1
 
             # A numeric sub-activity gets exactly one TOTAL row.

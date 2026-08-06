@@ -45,6 +45,7 @@ import {
   canShowNoFurtherWorkException,
   resolveExceptionCode,
 } from "../benchmark-exception";
+import { scaledTarget } from "../benchmark-target";
 import { type WorkReportFormValues } from "../schemas";
 
 // COUNT_FIELD_KEY / COUNT_FIELD_LABEL are imported from activity-master/types:
@@ -735,11 +736,9 @@ export function PeriodActivityEditor({
                 : null;
               const targetName = unit ? countFieldName(unit) : null;
               // The period fraction scales every displayed target exactly as
-              // the backend freezes it at submit (full day x1, half x0.5).
-              const targetValue =
-                sub?.benchmark_value != null
-                  ? sub.benchmark_value * fraction
-                  : null;
+              // the backend freezes it at submit (full day x1, half x0.5),
+              // rounded up to a whole unit — half of 35 tags is 18, never 17.5.
+              const targetValue = scaledTarget(sub?.benchmark_value, fraction);
 
               // Whether the benchmark exception applies to this row, asked of
               // the same pure rule BenchmarkExceptionField uses. Only the
@@ -909,11 +908,8 @@ export function PeriodActivityEditor({
               const unit = isQuantityBenchmark(sub!.benchmark_type)
                 ? sub!.relevant_count_field
                 : null;
-              // Same fraction rule as the quantity input above.
-              const target =
-                sub!.benchmark_value != null
-                  ? sub!.benchmark_value * fraction
-                  : null;
+              // Same fraction + whole-unit rule as the quantity input above.
+              const target = scaledTarget(sub!.benchmark_value, fraction);
 
               const remarks = sub!.benchmark_remarks?.trim();
               const showNote =

@@ -38,7 +38,11 @@ from app.modules.activity_master.benchmark_exception import (
     is_eligible_row,
     is_valid_exception,
 )
-from app.modules.activity_master.service import compute_benchmark, compute_overdue
+from app.modules.activity_master.service import (
+    compute_benchmark,
+    compute_overdue,
+    scaled_target,
+)
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
@@ -1889,8 +1893,11 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         if fraction is None:
             fraction = Decimal("0.5") if legacy_half else Decimal("1.0")
         base_value = sub.benchmark_value
+        # Whole units only: half of a 35-tag benchmark is frozen as 18, not
+        # 17.5 (see activity_master.service.scaled_target). The base and the
+        # fraction are recorded beside it, so the derivation stays inspectable.
         benchmark_value = (
-            Decimal(base_value) * fraction if base_value is not None else None
+            scaled_target(base_value, fraction) if base_value is not None else None
         )
         row.benchmark_type_snapshot = sub.benchmark_type
         row.benchmark_value_snapshot = benchmark_value

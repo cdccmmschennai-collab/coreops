@@ -213,14 +213,39 @@ def _all_total_rows(ws):
     return [r for r in range(3, ws.max_row + 1) if ws.cell(r, PROJECT).value == "TOTAL"]
 
 
+# The ACTUAL COMPLETED group carries the per-unit outcome markers: amber for an
+# accepted benchmark exception, red for a genuine shortfall. Those are the only
+# body cells besides DIFFERENCE % that may ever be filled.
+ACTUAL_COLS = set(range(ACT_TAGS, ACT_RECORDS + 1))
+AMBER = "FFFFF2CC"     # accepted exception
+SHORT_RED = "FFFFC7CE" # genuine shortfall (shares DIFFERENCE %'s red)
+
+
 def _assert_only_diff_cell_shaded(ws, row):
-    """No cell on `row` carries a fill except (possibly) DIFFERENCE %."""
+    """No cell on `row` carries a fill except DIFFERENCE % and the per-unit
+    ACTUAL COMPLETED markers.
+
+    The point this still guards: nothing spreads. The identity columns, the
+    BENCHMARK TARGET group, the PENDING group and the cycle bounds stay
+    unfilled, and no row is ever coloured end to end."""
     shaded = [
         ws.cell(row, c).coordinate
         for c in range(1, LAST_COL + 1)
-        if c != DIFF and _fill(ws.cell(row, c)) is not None
+        if c != DIFF and c not in ACTUAL_COLS and _fill(ws.cell(row, c)) is not None
     ]
-    assert shaded == [], f"row {row} must only ever shade its E cell; shaded: {shaded}"
+    assert shaded == [], (
+        f"row {row} may only shade DIFFERENCE % and ACTUAL cells; shaded: {shaded}"
+    )
+
+
+def _assert_actual_marker(ws, row, col, expected):
+    """The ACTUAL COMPLETED cell at `col` carries exactly `expected` (AMBER,
+    SHORT_RED, or None) — and the target/pending cells for that same unit stay
+    unfilled, so a marker never bleeds across its row group."""
+    assert _fill(ws.cell(row, col)) == expected, ws.cell(row, col).coordinate
+    unit_offset = col - ACT_TAGS
+    assert _fill(ws.cell(row, TGT_TAGS + unit_offset)) is None
+    assert _fill(ws.cell(row, PEN_TAGS + unit_offset)) is None
 
 
 # --- cycle bounds -----------------------------------------------------------
@@ -622,11 +647,17 @@ def test_acceptance_below_95_shades_difference_cell_red(client, setup_author, ac
     assert round(ws.cell(t, DIFF).value * 100, 2) == 7.69
     assert _fill(ws.cell(t, DIFF)) == RED
     assert _fill(ws.cell(t, ACH)) is None       # the decider is never shaded
+    # Short of target, so the ACTUAL cell wears the shortfall marker too.
+    _assert_actual_marker(ws, t, ACT_TAGS, SHORT_RED)
     _assert_only_diff_cell_shaded(ws, t)
 
 
-def test_acceptance_95_to_100_has_no_shade_anywhere(client, setup_author, activity_admin):
-    """Target 100 / actual 97 -> 97.00%, 3.00% difference and NO fill at all."""
+def test_acceptance_95_to_100_shades_only_the_actual_cell(
+    client, setup_author, activity_admin,
+):
+    """Target 100 / actual 97 -> 97.00%, 3.00% difference. Inside the accepted
+    band, so DIFFERENCE % stays unshaded — but the cycle is still 3 short, so
+    the ACTUAL cell carries the shortfall marker. Nothing else is filled."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
@@ -637,9 +668,12 @@ def test_acceptance_95_to_100_has_no_shade_anywhere(client, setup_author, activi
     assert ws.cell(t, ACH).value == 0.97
     assert ws.cell(t, DIFF).value == pytest.approx(0.03)
     assert _fill(ws.cell(t, DIFF)) is None
-    # The entire row carries no fill whatsoever.
+    _assert_actual_marker(ws, t, ACT_TAGS, SHORT_RED)
+    # Every cell other than that one ACTUAL cell is unfilled.
     for c in range(1, LAST_COL + 1):
-        assert _fill(ws.cell(t, c)) is None
+        if c == ACT_TAGS:
+            continue
+        assert _fill(ws.cell(t, c)) is None, ws.cell(t, c).coordinate
 
 
 def test_acceptance_above_100_shades_difference_cell_green(client, setup_author, activity_admin):
@@ -685,12 +719,20 @@ def test_shade_boundaries_are_strict(client, setup_author, activity_admin):
         assert ws.cell(t, ACH).value == pytest.approx(actual / 10000)
         assert _fill(ws.cell(t, DIFF)) == expected, f"{code}: {actual / 100:.2f}%"
         assert _fill(ws.cell(t, ACH)) is None
+        # The shortfall marker follows the ARITHMETIC, not the shade bands: it
+        # appears wherever the actual is below target, including inside the
+        # 95..100% band that DIFFERENCE % leaves unshaded.
+        _assert_actual_marker(
+            ws, t, ACT_TAGS, SHORT_RED if actual < 10000 else None
+        )
         _assert_only_diff_cell_shaded(ws, t)
 
 
 def test_no_full_row_is_ever_coloured(client, setup_author, activity_admin):
-    """Across a mixed sheet (red, green, unshaded and textual rows), the ONLY
-    filled body cells in the whole workbook are DIFFERENCE % cells."""
+    """Across a mixed sheet (red, green and unshaded rows), the only filled body
+    cells in the whole workbook are DIFFERENCE % cells and per-unit ACTUAL
+    COMPLETED markers. No row is coloured end to end, and no fill ever lands in
+    an identity, TARGET, PENDING or cycle column."""
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
     for code, actual in (("R", 80), ("G", 150), ("N", 97)):
@@ -701,13 +743,21 @@ def test_no_full_row_is_ever_coloured(client, setup_author, activity_admin):
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     filled = {
-        ws.cell(r, c).coordinate: _fill(ws.cell(r, c))
+        ws.cell(r, c).coordinate: (c, _fill(ws.cell(r, c)))
         for r in range(3, ws.max_row + 1)
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("F") for coord in filled), filled
-    assert set(filled.values()) <= {RED, GREEN}
+    # Only two columns may ever be filled: DIFFERENCE % and ACTUAL COMPLETED.
+    assert all(c == DIFF or c in ACTUAL_COLS for c, _f in filled.values()), filled
+    assert {f for _c, f in filled.values()} <= {RED, GREEN, SHORT_RED, AMBER}
+    # No row is filled across more than those two positions.
+    per_row: dict[int, int] = {}
+    for r in range(3, ws.max_row + 1):
+        per_row[r] = sum(
+            1 for c in range(1, LAST_COL + 1) if _fill(ws.cell(r, c)) is not None
+        )
+    assert max(per_row.values()) <= 2, per_row
 
 
 # --- sub_activity_id grouping + filter integrity ----------------------------
@@ -1065,6 +1115,11 @@ def test_detail_and_total_row_style_matches_reference(client, setup_author, acti
 
     for row, bold, font in ((d, False, _DATA_FONT), (t, True, _PB_TOTAL_FONT)):
         for c in range(1, LAST_COL + 1):
+            # ACT_TAGS carries the shortfall marker on this row (80 of 100), and
+            # a marker deliberately overrides the body font and border — its
+            # own styling is asserted below and in test_benchmark_scaled_target.
+            if c == ACT_TAGS:
+                continue
             cell = ws.cell(row, c)
             assert cell.font.name == font.name == "Arial", cell.coordinate
             assert cell.font.sz == 10
@@ -1082,8 +1137,13 @@ def test_detail_and_total_row_style_matches_reference(client, setup_author, acti
     assert ws.cell(t, ACH).number_format == "0.00%"
     assert ws.cell(t, DIFF).number_format == "0.00%"
 
-    # Detail row is entirely unfilled; the total row shades only its E cell.
+    # 80 of 100: the ACTUAL cell wears the shortfall marker on BOTH rows, and
+    # the total additionally shades its DIFFERENCE % cell. Nothing else fills.
+    _assert_actual_marker(ws, d, ACT_TAGS, SHORT_RED)
+    _assert_actual_marker(ws, t, ACT_TAGS, SHORT_RED)
     for c in range(1, LAST_COL + 1):
+        if c == ACT_TAGS:
+            continue
         assert _fill(ws.cell(d, c)) is None, ws.cell(d, c).coordinate
     assert _fill(ws.cell(t, DIFF)) == RED
     _assert_only_diff_cell_shaded(ws, t)
@@ -1166,6 +1226,9 @@ def test_pages_below_target_is_red(client, setup_author, activity_admin):
     assert ws.cell(t, ACH).number_format == "0.00%"
     assert ws.cell(t, DIFF).number_format == "0.00%"
     assert _fill(ws.cell(t, DIFF)) == RED
+    # The shortfall marker lands on the PAGES actual, not the TAGS one.
+    _assert_actual_marker(ws, t, ACT_PAGES, SHORT_RED)
+    assert _fill(ws.cell(t, ACT_TAGS)) is None
     _assert_only_diff_cell_shaded(ws, t)
 
 
@@ -1348,10 +1411,17 @@ def test_task_row_beside_pages_leaves_the_pages_total_untouched(
     assert ws.cell(t, ACT_PAGES).value == 400
 
 
-def test_only_difference_column_is_ever_filled_across_six_units(client, setup_author, activity_admin):
+def test_only_difference_and_actual_columns_are_ever_filled_across_six_units(
+    client, setup_author, activity_admin,
+):
     """Sheet-wide colour audit with PAGES and RECORDS in play: outside the yellow
-    header, the ONLY filled cells in the whole workbook are DIFFERENCE % cells (column F),
-    and they only ever carry the two approved colours."""
+    header, the only filled cells in the whole workbook are DIFFERENCE % cells
+    and per-unit ACTUAL COMPLETED markers, each carrying only an approved colour.
+
+    The dataset is deliberately mixed — PAGES over target (620 of 500, green
+    difference, unmarked actual) and RECORDS under it (850 of 1000, red
+    difference, red actual) — so the audit sees both outcomes at once and
+    proves a marker lands on the SHORT unit only."""
     a = setup_author()
     _, pages_sub = _make_daily_sub(
         client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
@@ -1366,13 +1436,25 @@ def test_only_difference_column_is_ever_filled_across_six_units(client, setup_au
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     filled = {
-        ws.cell(r, c).coordinate: _fill(ws.cell(r, c))
+        ws.cell(r, c).coordinate: (c, _fill(ws.cell(r, c)))
         for r in range(3, ws.max_row + 1)
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("F") for coord in filled), filled
-    assert set(filled.values()) <= {RED, GREEN}
+    # Two columns may be filled, and no others — never an identity column,
+    # never a BENCHMARK TARGET or PENDING cell, never a cycle bound.
+    assert all(c == DIFF or c in ACTUAL_COLS for c, _f in filled.values()), filled
+    assert {f for _c, f in filled.values()} <= {RED, GREEN, SHORT_RED, AMBER}
+
+    # The over-target PAGES row is unmarked; the short RECORDS row is red — and
+    # neither marker strays into the other unit's columns.
+    pages_total = _sub_total_row(ws, "E-1 - Test User", "MTL-PAGES")
+    rec_total = _sub_total_row(ws, "E-1 - Test User", "DOC IDB-QC")
+    _assert_actual_marker(ws, pages_total, ACT_PAGES, None)
+    assert _fill(ws.cell(pages_total, DIFF)) == GREEN
+    _assert_actual_marker(ws, rec_total, ACT_RECORDS, SHORT_RED)
+    assert _fill(ws.cell(rec_total, DIFF)) == RED
+    assert _fill(ws.cell(rec_total, ACT_PAGES)) is None
     # The header keeps its yellow across all 29 columns. Row 1's merged
     # continuation cells hold no style of their own (Excel paints the anchor's
     # fill across the span), so only the anchors are checked there.

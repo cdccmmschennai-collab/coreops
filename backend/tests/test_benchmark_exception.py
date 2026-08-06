@@ -23,6 +23,7 @@ from io import BytesIO
 
 import openpyxl
 import pytest
+from openpyxl.cell.rich_text import CellRichText, TextBlock
 
 from app.modules.activity_master.benchmark_exception import (
     BENCHMARK_EXCEPTION_NO_FURTHER_AVAILABLE_WORK,
@@ -50,6 +51,9 @@ SYSTEM_REMARK = "[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY]"
 AMBER_FILL = "FFFFF2CC"
 AMBER_FONT = "FF7F6000"
 AMBER_BORDER = "FFBF8F00"
+# The other ACTUAL COMPLETED marker: a genuine shortfall with nothing excusing
+# it. The two are mutually exclusive on any one cell.
+SHORT_RED = "FFFFC7CE"
 
 # Column map — identical to test_benchmark_pending_export.py. Repeated rather
 # than imported so a silent reorder there cannot silently pass here too.
@@ -143,12 +147,15 @@ def _create_and_submit(client, header, project_id, sub_id, on_date, qty, **kw):
     return _submit(client, header, body["id"])
 
 
-def _sheet(client, admin):
+def _sheet(client, admin, *, rich_text=False):
     res = client.get(EXPORT_URL, headers=admin)
     assert res.status_code == 200
     # Round-trips through openpyxl: a workbook Excel would flag for repair does
-    # not load cleanly here either.
-    return openpyxl.load_workbook(BytesIO(res.content)).active
+    # not load cleanly here either. `rich_text=True` preserves per-run
+    # formatting so a test can inspect the bold marker inside a REMARKS cell;
+    # the default read returns the same text as a plain string, which is what
+    # every other assertion (and every other consumer) sees.
+    return openpyxl.load_workbook(BytesIO(res.content), rich_text=rich_text).active
 
 
 def _detail(ws, sub_name, on_date):
@@ -244,37 +251,67 @@ def test_upper_only_touches_strings():
 
 
 def test_export_remarks_composition():
-    # System remark first, user remark after, " | " between.
-    assert _export_remarks("waiting on vendor", NO_FURTHER, "tags") == (
+    # System remark first, user remark after, " | " between. str() of the rich
+    # text is the plain sentence, which is what a reader without rich_text=True
+    # (and every other consumer) sees.
+    assert str(_export_remarks("waiting on vendor", NO_FURTHER, "tags")) == (
         f"{SYSTEM_REMARK} | WAITING ON VENDOR"
     )
     # No user remark -> the system remark alone.
-    assert _export_remarks(None, NO_FURTHER, "tags") == SYSTEM_REMARK
-    assert _export_remarks("   ", NO_FURTHER, "tags") == SYSTEM_REMARK
-    # No exception -> the user's remark alone, never a prefix.
-    assert _export_remarks("waiting on vendor", None, "tags") == "WAITING ON VENDOR"
+    assert str(_export_remarks(None, NO_FURTHER, "tags")) == SYSTEM_REMARK
+    assert str(_export_remarks("   ", NO_FURTHER, "tags")) == SYSTEM_REMARK
+    # No exception -> the user's remark alone, a PLAIN string, never a prefix
+    # and never rich text (nothing to mark).
+    plain = _export_remarks("waiting on vendor", None, "tags")
+    assert plain == "WAITING ON VENDOR"
+    assert isinstance(plain, str)
     assert _export_remarks(None, None, "tags") is None
     # An unknown code is not an exception.
     assert _export_remarks("x", "MADE_UP", "tags") == "X"
 
 
+def test_export_remarks_bolds_only_the_system_marker():
+    """The bracketed marker is BOLD so an exception row is identifiable at a
+    glance; the employee's own words stay in the normal body weight."""
+    rich = _export_remarks("TNR tag number", NO_FURTHER, "tags")
+    assert isinstance(rich, CellRichText)
+    # Run 1: the marker, bold. Run 2: the separator + the employee's remark,
+    # carrying no font of its own so it inherits the row's Arial 10.
+    marker, rest = list(rich)
+    assert isinstance(marker, TextBlock)
+    assert marker.font.b is True
+    assert str(marker) == SYSTEM_REMARK
+    assert not isinstance(rest, TextBlock)      # plain run -> not bold
+    assert str(rest) == " | TNR TAG NUMBER"
+    assert str(rich) == f"{SYSTEM_REMARK} | TNR TAG NUMBER"
+
+    # With no employee remark the cell is the bold marker and nothing else.
+    only = _export_remarks(None, NO_FURTHER, "tags")
+    assert [str(b) for b in only] == [SYSTEM_REMARK]
+    assert only[0].font.b is True
+
+
 def test_export_remarks_never_doubles_the_system_remark():
     """Exporting the same cycle twice, or feeding an already-composed value back
-    in, must not stack the prefix."""
+    in, must not stack the prefix — nor bold it twice."""
     once = _export_remarks("waiting", NO_FURTHER, "tags")
-    twice = _export_remarks(once, NO_FURTHER, "tags")
-    assert twice == once
-    assert twice.count(SYSTEM_REMARK) == 1
+    twice = _export_remarks(str(once), NO_FURTHER, "tags")
+    assert str(twice) == str(once)
+    assert str(twice).count(SYSTEM_REMARK) == 1
+    assert len(list(twice)) == 2                # marker + remainder, not three
+    assert twice[0].font.b is True
     bare = _export_remarks(None, NO_FURTHER, "tags")
-    assert _export_remarks(bare, NO_FURTHER, "tags") == bare
+    assert str(_export_remarks(str(bare), NO_FURTHER, "tags")) == str(bare)
 
 
 def test_typed_wording_in_a_remark_is_not_an_exception():
-    """An employee typing the sentence by hand gets no bracketed prefix — the
-    composition reads the CODE, never the text."""
+    """An employee typing the sentence by hand gets no bracketed prefix and no
+    bold — the composition reads the CODE, never the text."""
     typed = "no further tags were available for this activity"
-    assert _export_remarks(typed, None, "tags") == typed.upper()
-    assert not _export_remarks(typed, None, "tags").startswith(SYSTEM_REMARK)
+    result = _export_remarks(typed, None, "tags")
+    assert result == typed.upper()
+    assert isinstance(result, str)              # plain text, nothing emphasised
+    assert not result.startswith(SYSTEM_REMARK)
 
 
 # --- 3. API: save, submit, validate, round-trip ------------------------------
@@ -441,7 +478,9 @@ def test_typed_remark_wording_changes_no_calculation(client, setup_author, activ
     assert ws.cell(total, ACH).value == 0.4              # unchanged by the words
     assert ws.cell(total, DIFF).value == pytest.approx(0.6)
     assert ws.cell(row, PEN_TAGS).value == 60
-    assert _fill(ws.cell(row, ACT_TAGS)) is None         # no amber
+    # Red (a genuine shortfall), never amber: the typed words excuse nothing.
+    assert _fill(ws.cell(row, ACT_TAGS)) == SHORT_RED
+    assert _fill(ws.cell(row, ACT_TAGS)) != AMBER_FILL
     assert ws.cell(row, REMARKS).value == (
         "NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY"
     )
@@ -549,13 +588,31 @@ def test_total_actual_cell_is_styled_when_a_contributing_row_excepts(
     assert cell.border.top.style == "thin"
 
 
-def test_total_actual_cell_is_not_styled_without_an_exception(
+def test_total_actual_cell_is_not_amber_without_an_exception(
     client, setup_author, activity_admin,
 ):
+    """No exception on any contributing row -> no amber. 40 of 100 is a genuine
+    shortfall, so the cell wears the RED marker instead."""
     a = setup_author()
     _, sub = _make_sub(client, activity_admin, value=100, name="FMTL")
     d = _prev_cycle()[0]
     _create_and_submit(client, a["header"], a["project"].id, sub["id"], d, 40)
+
+    ws = _sheet(client, activity_admin)
+    fill = _fill(ws.cell(_total(ws, "FMTL"), ACT_TAGS))
+    assert fill != AMBER_FILL
+    assert fill == SHORT_RED
+
+
+def test_total_actual_cell_is_unmarked_when_the_target_is_met(
+    client, setup_author, activity_admin,
+):
+    """Target met with no exception: neither marker. Unfilled is a real state,
+    not merely the absence of amber."""
+    a = setup_author()
+    _, sub = _make_sub(client, activity_admin, value=100, name="FMTL")
+    d = _prev_cycle()[0]
+    _create_and_submit(client, a["header"], a["project"].id, sub["id"], d, 100)
 
     ws = _sheet(client, activity_admin)
     assert _fill(ws.cell(_total(ws, "FMTL"), ACT_TAGS)) is None
@@ -594,6 +651,46 @@ def test_exception_remark_alone_when_the_employee_wrote_none(
 
     ws = _sheet(client, activity_admin)
     assert ws.cell(_detail(ws, "FMTL", d), REMARKS).value == SYSTEM_REMARK
+
+
+def test_system_remark_is_bold_in_the_saved_workbook(client, setup_author, activity_admin):
+    """End to end through a real .xlsx: the bracketed marker is stored as a BOLD
+    run and the employee's own words as a normal one, so the exception is
+    identifiable at a glance in the REMARKS column."""
+    a = setup_author()
+    _, sub = _make_sub(client, activity_admin, value=100, name="FMTL")
+    d = _prev_cycle()[0]
+    _create_and_submit(client, a["header"], a["project"].id, sub["id"], d, 40,
+                       exception=NO_FURTHER, remarks="TNR tag number")
+
+    ws = _sheet(client, activity_admin, rich_text=True)
+    value = ws.cell(_detail(ws, "FMTL", d), REMARKS).value
+    assert isinstance(value, CellRichText)
+    marker, rest = list(value)
+    assert isinstance(marker, TextBlock) and marker.font.b is True
+    assert str(marker) == SYSTEM_REMARK
+    assert not isinstance(rest, TextBlock)          # the employee's words: not bold
+    assert str(rest) == " | TNR TAG NUMBER"
+    # Read the ordinary way, the cell is the same plain sentence as before.
+    plain = _sheet(client, activity_admin)
+    assert plain.cell(_detail(plain, "FMTL", d), REMARKS).value == (
+        f"{SYSTEM_REMARK} | TNR TAG NUMBER"
+    )
+
+
+def test_a_normal_row_remark_carries_no_bold_run(client, setup_author, activity_admin):
+    """No exception, no emphasis: an ordinary remark is written as plain text so
+    bold means exactly one thing in this column."""
+    a = setup_author()
+    _, sub = _make_sub(client, activity_admin, value=100, name="FMTL")
+    d = _prev_cycle()[0]
+    _create_and_submit(client, a["header"], a["project"].id, sub["id"], d, 40,
+                       remarks="TNR tag number")
+
+    ws = _sheet(client, activity_admin, rich_text=True)
+    value = ws.cell(_detail(ws, "FMTL", d), REMARKS).value
+    assert not isinstance(value, CellRichText)
+    assert value == "TNR TAG NUMBER"
 
 
 def test_exporting_twice_does_not_duplicate_the_system_remark(
@@ -739,7 +836,9 @@ def test_multiple_normal_rows_are_unaffected_by_the_feature(
     assert ws.cell(t, ACT_TAGS).value == 100
     assert ws.cell(t, PEN_TAGS).value == 100
     assert ws.cell(t, ACH).value == 0.5
-    assert _fill(ws.cell(t, ACT_TAGS)) is None
+    # Short of target with nothing excusing it: red, never the amber marker.
+    assert _fill(ws.cell(t, ACT_TAGS)) == SHORT_RED
+    assert _fill(ws.cell(t, ACT_TAGS)) != AMBER_FILL
 
 
 def test_exception_does_not_leak_across_sub_activities(client, setup_author, activity_admin):
@@ -759,5 +858,7 @@ def test_exception_does_not_leak_across_sub_activities(client, setup_author, act
     assert ws.cell(t_one, ACH).value == 1.0
     assert ws.cell(t_two, ACH).value == 0.4          # untouched
     assert ws.cell(t_two, PEN_TAGS).value == 60
+    # One amber (excepted), one red (a real shortfall) — the marker follows the
+    # row it belongs to and never crosses to the neighbouring sub-activity.
     assert _fill(ws.cell(t_one, ACT_TAGS)) == AMBER_FILL
-    assert _fill(ws.cell(t_two, ACT_TAGS)) is None
+    assert _fill(ws.cell(t_two, ACT_TAGS)) == SHORT_RED
