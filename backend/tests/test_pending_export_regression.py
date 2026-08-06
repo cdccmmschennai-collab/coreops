@@ -168,16 +168,22 @@ def test_row_count_grows_only_by_period_splits(db, mixed_dataset):
     assert {(d, s) for (_e, d, s) in old_keys} == {(d, s) for (d, s, _p) in new_keys}
 
 
-def test_task_based_rows_match_old_source_exactly(db, mixed_dataset):
+def test_task_based_rows_are_excluded_but_still_exist_at_their_source(db, mixed_dataset):
+    """The benchmark export is NUMERIC-only: the task-mode row this dataset
+    contains reaches no export row at all, so no textual cell can land in a
+    numeric column. The row itself is untouched — the shared cycle-task query
+    that every other view reads still returns it."""
     old_tasks = get_cycle_task_activities(db, employee_ids=None, today=TODAY)
-    new_tasks = [r for r in _new(db)["rows"] if isinstance(r["target"], str)]
-    assert len(new_tasks) == len(old_tasks) == 1
-    (nt,), (ot,) = new_tasks, old_tasks
-    # Status/deadline text derived from the same fields — unchanged by Day Part.
-    assert ot["is_completed"] is False
-    assert nt["target"] == "FINISH WITHIN A DAY"
-    assert nt["date"] == ot["report_date"]
-    assert nt["day_part"] == "FULL DAY"
+    assert len(old_tasks) == 1                      # still there at the source
+    assert old_tasks[0]["is_completed"] is False
+
+    rows = _new(db)["rows"]
+    # No export row carries a textual target/actual/pending any more.
+    assert [r for r in rows if isinstance(r["target"], str)] == []
+    assert all(not isinstance(r["actual"], str) for r in rows)
+    assert all(not isinstance(r["pending"], str) for r in rows)
+    # …and specifically not the task sub-activity from this dataset.
+    assert old_tasks[0]["sub_activity_name"] not in {r["sub_activity"] for r in rows}
 
 
 def test_cycle_dates_and_day_part_labels(db, mixed_dataset):

@@ -622,10 +622,11 @@ def test_readers_collapse_three_entries_to_one(flag_on, client, author, pm_heade
     status = get_task_status_activities(db, employee_ids=eid, today=d0)
     assert len([r for r in status if str(r["work_item_id"]) == wid]) == 1
 
-    # Evaluate the export a few days later so the due (d0) is past -> included.
+    # The benchmark export is NUMERIC-only, so this task-mode work item
+    # contributes no row there at all — the deduplication above is what the
+    # other views rely on, and it is unaffected.
     export = get_pending_benchmark_export(db, cycle="current", today=d0 + timedelta(days=3))
-    detail = [r for r in export["rows"] if r["sub_activity"] == "Count"]
-    assert len(detail) == 1                     # one export row for the work item
+    assert [r for r in export["rows"] if r["sub_activity"] == "Count"] == []
 
 
 def test_overdue_reader_dedupes(flag_on, client, author, pm_header, db):

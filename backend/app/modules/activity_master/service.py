@@ -13,6 +13,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from app.modules.activity_master.benchmark_exception import is_valid_exception
 from app.modules.activity_master.models import (
     COUNT_FIELD_BY_UNIT,
     DAILY_QUANTITY_BENCHMARK_TYPES,
@@ -399,9 +400,11 @@ def get_period_benchmark_ledger(
             ActivityMaster.id.label("sub_activity_id"),
             ActivityMaster.name.label("sub_activity_name"),
             ActivityMaster.benchmark_value,
+            ActivityMaster.benchmark_type,
             ActivityMaster.relevant_count_field,
             WorkReportTask.benchmark_value_snapshot,
             WorkReportTask.relevant_count_field_snapshot,
+            WorkReportTask.benchmark_exception_code,
             WorkReportTask.tags_count,
             WorkReportTask.docs_count,
             WorkReportTask.bom_count,
@@ -469,6 +472,15 @@ def get_period_benchmark_ledger(
                     )
                 ),
                 "actual": Decimal("0"),
+                "benchmark_type": r.benchmark_type,
+                # Structured benchmark exception (migration 0063), NULL for
+                # every ordinary row. Set below if ANY task row folded into this
+                # period bucket carries one — the rows share one effective
+                # target, so one row reporting "no further work was available"
+                # describes the whole bucket. Re-validated against the bucket's
+                # summed actual before it is published, so it cannot survive a
+                # bucket that in fact reached its target.
+                "exception_code": None,
                 "projects": [],
                 "project_codes": [],
             },
@@ -480,6 +492,8 @@ def get_period_benchmark_ledger(
         # row of this period + sub-activity; take the first one, never sum.
         if bucket["target_snapshot"] is None and r.benchmark_value_snapshot is not None:
             bucket["target_snapshot"] = Decimal(str(r.benchmark_value_snapshot))
+        if bucket["exception_code"] is None and r.benchmark_exception_code:
+            bucket["exception_code"] = r.benchmark_exception_code
         count_column = COUNT_FIELD_BY_UNIT.get(unit)
         if count_column is not None:
             bucket["actual"] += Decimal(getattr(r, count_column) or 0)
@@ -506,6 +520,19 @@ def get_period_benchmark_ledger(
         else:
             target = Decimal(str(bucket["live_value"] or 0)) * bucket["fraction"]
         actual = bucket["actual"]
+        # Publish the exception only while it still describes the row: a
+        # positive target, an eligible unit, and a summed actual genuinely below
+        # that target (see benchmark_exception.is_valid_exception). A row that
+        # met its target needs no exception and never carries one.
+        exception_code = bucket["exception_code"]
+        if exception_code is not None and not is_valid_exception(
+            exception_code,
+            benchmark_type=bucket["benchmark_type"],
+            count_field=bucket["unit"],
+            target=target,
+            actual=actual,
+        ):
+            exception_code = None
         out.append({
             "employee_id": bucket["employee_id"],
             "date": bucket["date"],
@@ -520,7 +547,10 @@ def get_period_benchmark_ledger(
             "project_code": ", ".join(bucket["project_codes"]) or None,
             "target": target,
             "actual": actual,
+            # The REAL shortage. The benchmark export decides separately whether
+            # an exception zeroes it for display — this stays the raw arithmetic.
             "pending": max(Decimal("0"), target - actual),
+            "benchmark_exception_code": exception_code,
         })
     out.sort(
         key=lambda r: (

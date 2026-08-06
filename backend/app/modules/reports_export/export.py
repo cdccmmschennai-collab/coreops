@@ -20,6 +20,11 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from app.modules.activity_master.benchmark_exception import (
+    VALID_BENCHMARK_EXCEPTION_CODES,
+    export_exception_remark,
+)
+
 SHEET_NAME = "Weekly Activity Report"
 
 _HEADER_FILL = PatternFill(fill_type="solid", fgColor="FF76A5AF")
@@ -114,6 +119,20 @@ _PB_TOTAL_FONT = Font(name="Arial", size=10, bold=True)
 # DIFFERENCE % cell shade, keyed off ACHIEVEMENT %. Nothing else is ever shaded.
 _DIFF_GREEN = PatternFill(fill_type="solid", fgColor="FFC6EFCE")  # > 100%: ahead
 _DIFF_RED = PatternFill(fill_type="solid", fgColor="FFFFC7CE")    # < 95%: needs attention
+# ACCEPTED-EXCEPTION amber — an ACTUAL COMPLETED cell whose row (or, on a TOTAL
+# row, at least one contributing row) carries a validated benchmark exception:
+# all available work was completed, there was simply less of it than the target.
+# Deliberately NOT the red "needs attention" shade — this marks an accepted
+# outcome, and it lands on the ACTUAL cell alone, never the target, the pending
+# or the whole row. The value under it stays the REAL count.
+_EXC_AMBER_FILL = PatternFill(fill_type="solid", fgColor="FFFFF2CC")
+_EXC_AMBER_FONT = Font(name="Arial", size=10, bold=True, color="FF7F6000")
+# Thin amber border in the same family as the fill/font (Excel's darker amber).
+_EXC_AMBER_SIDE = Side(style="thin", color="FFBF8F00")
+_EXC_AMBER_BORDER = Border(
+    top=_EXC_AMBER_SIDE, bottom=_EXC_AMBER_SIDE,
+    left=_EXC_AMBER_SIDE, right=_EXC_AMBER_SIDE,
+)
 _PB_HEADER_ROW_HEIGHT = {1: 15.0, 2: 25.5}
 _PB_DEFAULT_ROW_HEIGHT = 15.0
 
@@ -170,6 +189,17 @@ _PB_UNIT_WIDTHS = [
 _PB_RIGHT = [("CYCLE START", 13.0), ("CYCLE END", 13.0)]
 _PB_NUMFMT_PCT = "0.00%"
 
+# Free-text columns whose values can outrun their width. They wrap (left/top) so
+# a long value stays readable instead of being clipped by the next column. This
+# is a display property only — no width, order, name or value changes with it.
+_PB_WRAP_COLS = (
+    1,                    # EMP CODE & NAME
+    _PB_ACTIVITY_COL,
+    _PB_SUB_COL,
+    _PB_REMARKS_COL,
+    _PB_PROJECT_COL,
+)
+
 
 def _difference_fill(achievement):
     """Shade for the DIFFERENCE % cell, chosen from the ACHIEVEMENT % fraction
@@ -191,10 +221,71 @@ def _is_numeric(value) -> bool:
     """Strict numeric-value check: a genuine number, never a status string.
 
     Only genuinely numeric benchmark values feed the totals and the achievement
-    %. Textual task cells ("FINISH WITHIN A DAY", "FINISHED", "NO PENDING",
-    "N DAYS OVERDUE", "NOT COMPLETED", ...) are strings and are excluded — they
-    are never coerced to zero and never create a subtotal."""
+    %. The sheet's rows are numeric-only by construction now (task-mode
+    activities are excluded upstream), so this is a safety net rather than a
+    filter: anything non-numeric that ever reached a unit cell would be excluded
+    from the totals instead of being coerced to zero."""
     return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
+
+
+def _upper(value):
+    """Uppercase a value on its way into a cell — EXPORT-ONLY.
+
+    Every textual value this workbook writes goes through here, so the sheet
+    reads in one case throughout: employee, day part, activity, sub-activity,
+    remarks, project, headers, group labels and the TOTAL marker.
+
+    What it deliberately does NOT do:
+    - It never touches the stored value. The uppercase string exists only inside
+      the workbook; PostgreSQL keeps the employee's own casing verbatim.
+    - It passes non-strings straight through untouched, so numbers stay numeric,
+      dates stay dates, percentages keep their number format and a formula
+      string is never invented. `None` stays `None` (an empty cell), and a
+      blank/whitespace-only string collapses to `None` rather than writing "".
+    """
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped.upper() if stripped else None
+    return value
+
+
+def _export_remarks(day_remarks, exception_code, unit):
+    """The REMARKS cell for one detail row: the system exception remark first,
+    then the employee's own remark, joined by " | ". Uppercase, like every other
+    text cell.
+
+    - No exception          -> the employee's remark alone (or an empty cell).
+    - Exception, no remark  -> "[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY]".
+    - Exception + remark    -> "[NO FURTHER ...] | THEIR REMARK".
+
+    The remark is composed from the STRUCTURED exception code, never from the
+    text of the remark itself: an employee who types the sentence by hand gets
+    no bracketed prefix and no change to any calculation. Composition is a pure
+    function of its inputs and re-checks the prefix, so exporting the same cycle
+    twice — or feeding an already-composed value back in — can never double the
+    system remark. The stored remark is never modified.
+    """
+    user = _upper(day_remarks)
+    system = (
+        export_exception_remark(unit)
+        if exception_code in VALID_BENCHMARK_EXCEPTION_CODES
+        else None
+    )
+    if system is None:
+        return user
+    if user is None:
+        return system
+    if user.startswith(system):
+        return user
+    return f"{system} | {user}"
+
+
+def _row_exception_code(row: dict):
+    """The row's validated exception code, or None. An unrecognised value is
+    ignored rather than trusted — the workbook is the last consumer of the
+    field, not a second validator of it."""
+    code = row.get("benchmark_exception_code")
+    return code if code in VALID_BENCHMARK_EXCEPTION_CODES else None
 
 
 def build_pending_benchmark_workbook(
@@ -206,32 +297,57 @@ def build_pending_benchmark_workbook(
     merged header cells, freeze panes and AutoFilter are matched cell-for-cell
     to the company reference workbook. Within an employee, each sub-activity's
     date-wise detail rows are followed by ONE bold TOTAL row for that exact
-    sub-activity (never one combined per-employee total). Two distinct
-    behaviours, decided per row by whether its benchmark value is genuinely
-    numeric (see _is_numeric), NOT by benchmark_type:
+    sub-activity (never one combined per-employee total).
 
-    - A NUMERIC sub-activity (NUMERIC ledger days, or a count-based lumpsum with
-      real numbers) gets its detail rows plus one TOTAL row carrying the
-      sub-activity's per-unit target/actual/net-pending, its ACHIEVEMENT % and
-      its DIFFERENCE %.
-    - A purely TEXTUAL task sub-activity ("FINISH WITHIN A DAY" / "FINISHED" /
-      "NO PENDING", etc.) shows its detail rows ONLY — no TOTAL row, no
-      percentages, no shading, no participation in any numeric total.
+    NUMERIC ONLY. `rows` carries per-day numeric benchmark rows and nothing
+    else — task-mode activities are excluded upstream (see
+    benchmarks.service.get_pending_benchmark_export), so no textual
+    "FINISHED" / "N DAYS OVERDUE" cell can land in a numeric column and nothing
+    task-shaped contributes to a target, an actual, a pending or a percentage.
+
+    ALL TEXT IS UPPERCASED ON THE WAY IN (see _upper) — headers, group labels,
+    employee, day part, activity, sub-activity, remarks, project and the TOTAL
+    marker. Numbers stay numeric, dates stay dates, percentages keep their
+    number format, and no stored value is modified.
 
     The TOTAL row repeats the exact EMP CODE & NAME, ACTIVITY and SUB ACTIVITY
     of its detail rows (so an Excel employee filter, or a sub-activity filter,
     keeps both the detail rows and the total), writes "TOTAL" in the PROJECT
     column, and leaves DATE blank. Its PENDING columns net the whole cycle per
-    unit (MAX(0, cycle_target - cycle_actual)) rather than summing the daily
-    shortages, so a day's overachievement offsets another day's shortfall — but
-    only within the same employee + sub-activity + unit. Nothing crosses
+    unit (MAX(0, cycle_target - cycle_effective_actual)) rather than summing the
+    daily shortages, so a day's overachievement offsets another day's shortfall
+    — but only within the same employee + sub-activity + unit. Nothing crosses
     sub-activities, units, employees or cycles.
 
-    ACHIEVEMENT % = total_actual / total_target summed across the six units,
-    uncapped, formatted 0.00%; blank when total_target is 0 (no divide by zero).
-    DIFFERENCE % = ABS(achievement - 100%), formatted 0.00%, blank whenever
-    ACHIEVEMENT % is. Only the DIFFERENCE % cell is ever shaded (see
-    _difference_fill) — never the achievement cell, never a full row.
+    BENCHMARK EXCEPTIONS (migration 0063). A detail row may carry a validated
+    `benchmark_exception_code`: every available unit of work was completed, but
+    fewer were available than the target. Such a row is EVALUATED at its target
+    while still REPORTING its real actual:
+
+      effective_actual = target   on a valid exception row
+                       = actual   otherwise
+
+    - the ACTUAL COMPLETED cell keeps the real count (40 stays 40) and is the
+      only cell that changes appearance — amber fill, amber bold font, thin
+      amber border, marking an accepted exception rather than a problem;
+    - that row's PENDING cell is 0;
+    - the TOTAL row sums REAL actuals into ACTUAL COMPLETED (so the sheet still
+      adds up to what was produced) but derives ACHIEVEMENT %, DIFFERENCE % and
+      PENDING from the effective contributions, and repeats the amber styling on
+      its ACTUAL cell for any unit where at least one contributing row was an
+      exception;
+    - the REMARKS cell is prefixed with the system exception remark (see
+      _export_remarks).
+
+    No column is added, removed, renamed or reordered for any of this: the
+    effective actual is never a cell, only an intermediate.
+
+    ACHIEVEMENT % = total_effective_actual / total_target summed across the six
+    units, uncapped, formatted 0.00%; blank when total_target is 0 (no divide by
+    zero). DIFFERENCE % = ABS(achievement - 100%), formatted 0.00%, blank
+    whenever ACHIEVEMENT % is. The DIFFERENCE % cell is the only SHADED cell in
+    the body (see _difference_fill) — the amber exception styling is a font +
+    border + fill on one ACTUAL cell, never a full row.
 
     Header is two rows: row 1 carries ONLY the merged group labels, row 2 the
     real per-column header the AutoFilter anchors on. `rows` must arrive sorted
@@ -249,19 +365,23 @@ def build_pending_benchmark_workbook(
     def group_start(gi: int) -> int:
         return n_left + 1 + gi * _PB_GROUP_WIDTH
 
+    # Header labels go through _upper like every other string, so the sheet's
+    # case is guaranteed by the writer rather than by how the constants happen
+    # to be spelled. The labels themselves are unchanged: same names, same
+    # order, same merges — no column is added, dropped, renamed or moved.
     for idx, (label, width) in enumerate(_PB_LEFT, start=1):
-        ws.cell(2, idx, label)
+        ws.cell(2, idx, _upper(label))
         ws.column_dimensions[get_column_letter(idx)].width = width
     for gi, group in enumerate(_PB_GROUPS):
         start = group_start(gi)
         ws.merge_cells(start_row=1, start_column=start, end_row=1, end_column=start + n_units - 1)
-        ws.cell(1, start, group)
+        ws.cell(1, start, _upper(group))
         for ui, unit_label in enumerate(_PB_UNIT_LABELS):
-            ws.cell(2, start + ui, unit_label)
+            ws.cell(2, start + ui, _upper(unit_label))
             ws.column_dimensions[get_column_letter(start + ui)].width = _PB_UNIT_WIDTHS[gi][ui]
     for ri, (label, width) in enumerate(_PB_RIGHT):
         col = first_right + ri
-        ws.cell(2, col, label)
+        ws.cell(2, col, _upper(label))
         ws.column_dimensions[get_column_letter(col)].width = width
     # Yellow header across the FULL A1:AC2 block — the cells left blank above the
     # identity/cycle columns carry the same style as the labelled ones.
@@ -286,31 +406,52 @@ def build_pending_benchmark_workbook(
             _style_data_cell(cell, n_left < col < first_right, False, col in date_cols)
             if bold:
                 cell.font = _PB_TOTAL_FONT
-        # Free-text day remarks wrap instead of spilling across the unit columns.
-        remarks_cell = ws.cell(row=r, column=_PB_REMARKS_COL)
-        remarks_cell.alignment = Alignment(
-            horizontal="left", vertical="top", wrap_text=True
-        )
+        # Long free-text columns wrap instead of spilling across (or being
+        # clipped by) their neighbours: a 60-character sub-activity, project
+        # title or day remark stays fully readable at the column's own width.
+        # Left + top alignment is unchanged; only wrapping is added.
+        for col in _PB_WRAP_COLS:
+            ws.cell(row=r, column=col).alignment = Alignment(
+                horizontal="left", vertical="top", wrap_text=True
+            )
+
+    def style_exception_cell(r: int, col: int) -> None:
+        """Mark ONE ACTUAL COMPLETED cell as an accepted exception: amber fill,
+        amber bold font, thin amber border. Applied after style_row, so it wins;
+        the value in the cell is untouched (it stays the real actual). Never
+        applied to the target cell, the pending cell, or any other cell of the
+        row."""
+        cell = ws.cell(row=r, column=col)
+        cell.fill = _EXC_AMBER_FILL
+        cell.font = _EXC_AMBER_FONT
+        cell.border = _EXC_AMBER_BORDER
 
     unit_col = {u: i for i, u in enumerate(_PB_UNITS)}
 
     def write_sub_total_row(
-        r: int, *, emp_label: str, activity: str, sub_activity: str, totals, used,
+        r: int, *, emp_label: str, activity: str, sub_activity: str,
+        totals, used, effective, exception_units,
     ) -> None:
         """One bold TOTAL row for a numeric sub-activity. Nets each unit's cycle
-        pending in place (MAX(0, target - actual)), then writes the per-unit
-        target/actual/pending sums, the uncapped ACHIEVEMENT % and the
+        pending in place (MAX(0, target - EFFECTIVE actual)), then writes the
+        per-unit target/actual/pending sums, the uncapped ACHIEVEMENT % and the
         DIFFERENCE % — shading the DIFFERENCE % cell alone. Repeats the exact
         emp/activity/sub-activity, writes "TOTAL" in PROJECT, leaves DATE,
         DAY PART and REMARKS blank (a total spans the cycle, not one specific
-        day or period)."""
+        day or period).
+
+        `totals[1]` (ACTUAL COMPLETED) stays the sum of the REAL actuals — the
+        column must still add up to what was produced. `effective` is the
+        parallel sum where an exception row contributed its target instead, and
+        it is what PENDING and both percentages are derived from. It is never
+        written to a cell of its own."""
         for ui in range(n_units):
-            totals[2][ui] = max(0.0, totals[0][ui] - totals[1][ui])
-        ws.cell(r, 1, emp_label)                        # exact CODE - NAME (filterable)
+            totals[2][ui] = max(0.0, totals[0][ui] - effective[ui])
+        ws.cell(r, 1, _upper(emp_label))                 # exact CODE - NAME (filterable)
         # DATE (col _PB_DATE_COL) stays blank on the total row.
-        ws.cell(r, _PB_PROJECT_COL, "TOTAL")            # PROJECT column marks the total
-        ws.cell(r, _PB_ACTIVITY_COL, activity)          # exact activity name
-        ws.cell(r, _PB_SUB_COL, sub_activity)           # exact sub-activity name (filterable)
+        ws.cell(r, _PB_PROJECT_COL, _upper("TOTAL"))     # PROJECT column marks the total
+        ws.cell(r, _PB_ACTIVITY_COL, _upper(activity))   # exact activity name
+        ws.cell(r, _PB_SUB_COL, _upper(sub_activity))    # exact sub-activity (filterable)
         for gi in range(len(_PB_GROUPS)):
             for ui in range(n_units):
                 if used[ui]:
@@ -318,11 +459,20 @@ def build_pending_benchmark_workbook(
         ws.cell(r, first_right, cycle_start)
         ws.cell(r, first_right + 1, cycle_end)
         style_row(r, bold=True)
+        # Carry the accepted-exception marker up to the total: any unit whose
+        # cycle total includes at least one exception row gets the same amber
+        # treatment on its ACTUAL COMPLETED cell, so a reader sees at the total
+        # why the percentage reads higher than the raw actual would give.
+        for ui in exception_units:
+            if used[ui]:
+                style_exception_cell(r, group_start(1) + ui)
 
         total_target = sum(totals[0])
-        total_actual = sum(totals[1])
-        # Uncapped actual/target; blank when target is 0 -> N/A, never a /0.
-        achievement = (total_actual / total_target) if total_target > 0 else None
+        total_effective = sum(effective)
+        # Uncapped effective/target; blank when target is 0 -> N/A, never a /0.
+        # With no exceptions in the group this is identical to the real actual
+        # sum, so ordinary totals are bit-for-bit unchanged.
+        achievement = (total_effective / total_target) if total_target > 0 else None
         if achievement is None:
             return
         ach_cell = ws.cell(r, _PB_ACH_COL, achievement)
@@ -343,53 +493,93 @@ def build_pending_benchmark_workbook(
             sub_rows = list(sub_rows)
             totals = [[0.0] * n_units for _ in _PB_GROUPS]
             used = [False] * n_units
+            # Calculation-only twin of totals[1] (ACTUAL COMPLETED): an
+            # exception row contributes its TARGET here while still contributing
+            # its real actual to totals[1]. Drives the total row's PENDING and
+            # percentages; never a column of its own.
+            effective = [0.0] * n_units
+            # Units whose cycle total includes at least one exception row —
+            # these get the amber marker on the TOTAL row's ACTUAL cell.
+            exception_units: set[int] = set()
             # All rows in a group share one sub_activity_id -> one activity name
             # and one exact sub-activity name; take them from the first row.
             activity = sub_rows[0]["activity"]
             sub_activity = sub_rows[0]["sub_activity"]
 
             for row in sub_rows:
-                ws.cell(r, 1, row["employee_label"])
+                exception_code = _row_exception_code(row)
+                ws.cell(r, 1, _upper(row["employee_label"]))
                 ws.cell(r, _PB_DATE_COL, row["date"])
                 # Repeated (never merged) on every row of the period, so a
                 # filtered row still names its own part of the day.
-                ws.cell(r, _PB_DAY_PART_COL, row.get("day_part") or None)
-                ws.cell(r, _PB_PROJECT_COL, row["project"])
-                ws.cell(r, _PB_ACTIVITY_COL, row["activity"])
-                ws.cell(r, _PB_SUB_COL, row["sub_activity"])
+                ws.cell(r, _PB_DAY_PART_COL, _upper(row.get("day_part")))
+                ws.cell(r, _PB_PROJECT_COL, _upper(row["project"]))
+                ws.cell(r, _PB_ACTIVITY_COL, _upper(row["activity"]))
+                ws.cell(r, _PB_SUB_COL, _upper(row["sub_activity"]))
                 # Repeated on every detail row of this employee+date: the sheet
-                # is filterable, so a row must read on its own.
-                ws.cell(r, _PB_REMARKS_COL, row.get("day_remarks") or None)
+                # is filterable, so a row must read on its own. An exception row
+                # carries the system remark first, the employee's own after it.
+                ws.cell(
+                    r,
+                    _PB_REMARKS_COL,
+                    _export_remarks(row.get("day_remarks"), exception_code, row["unit"]),
+                )
                 # ACHIEVEMENT % / DIFFERENCE % stay blank on every detail row.
                 ui = unit_col.get(row["unit"])
                 if ui is not None:
-                    for gi, key in enumerate(("target", "actual", "pending")):
-                        value = row[key]
+                    target_value = row["target"]
+                    actual_value = row["actual"]
+                    # An accepted exception is evaluated at target, so this row
+                    # has nothing outstanding — its PENDING cell reads 0 while
+                    # its ACTUAL cell keeps the real count.
+                    pending_value = 0.0 if exception_code else row["pending"]
+                    for gi, value in enumerate(
+                        (target_value, actual_value, pending_value)
+                    ):
                         ws.cell(
                             r,
                             group_start(gi) + ui,
                             value if isinstance(value, str) else float(value),
                         )
+                    if exception_code:
+                        exception_units.add(ui)
                     # Accumulate cycle target/actual only, and only for genuinely
                     # numeric benchmark values; the pending is derived from them
                     # on the total row so a day's overachievement nets another
-                    # day's shortfall per unit. Textual task cells are skipped.
+                    # day's shortfall per unit.
                     for gi, key in enumerate(("target", "actual")):
                         total_value = row[f"{key}_total"]
                         if _is_numeric(total_value):
                             totals[gi][ui] += float(total_value)
                             used[ui] = True
+                    # The parallel CALCULATION-ONLY actual: the target where a
+                    # valid exception applies, the real actual everywhere else.
+                    # Never written to a cell — it feeds the total row's PENDING
+                    # and both percentages, and nothing else.
+                    actual_total = row["actual_total"]
+                    if _is_numeric(actual_total):
+                        effective[ui] += float(
+                            row["target_total"]
+                            if exception_code and _is_numeric(row["target_total"])
+                            else actual_total
+                        )
                 ws.cell(r, first_right, cycle_start)
                 ws.cell(r, first_right + 1, cycle_end)
                 style_row(r)
+                # After style_row, which would otherwise reset the font and
+                # border back to the plain body style: ACTUAL COMPLETED for this
+                # row's unit only. The value under the amber is the REAL actual,
+                # never the target.
+                if exception_code and ui is not None:
+                    style_exception_cell(r, group_start(1) + ui)
                 r += 1
 
-            # A numeric sub-activity gets exactly one TOTAL row; a purely textual
-            # task group (no genuinely numeric value in any row) gets NONE.
+            # A numeric sub-activity gets exactly one TOTAL row.
             if any(used):
                 write_sub_total_row(
                     r, emp_label=sub_rows[0]["employee_label"], activity=activity,
                     sub_activity=sub_activity, totals=totals, used=used,
+                    effective=effective, exception_units=exception_units,
                 )
                 r += 1
 

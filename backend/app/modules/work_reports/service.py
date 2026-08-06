@@ -33,6 +33,11 @@ from app.modules.activity_master.models import (
     ActivityMaster,
 )
 from app.modules.activity_master import access_service
+from app.modules.activity_master.benchmark_exception import (
+    VALID_BENCHMARK_EXCEPTION_CODES,
+    is_eligible_row,
+    is_valid_exception,
+)
 from app.modules.activity_master.service import compute_benchmark, compute_overdue
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee, EmployeeStatus
@@ -421,6 +426,20 @@ def _validate_tasks(
         activity_type = getattr(task, "activity_type", None)
         is_task_based = False
         benchmark_period_days: int | None = None
+        # Structured benchmark exception (migration 0063). An unknown code is a
+        # client error and is rejected outright; a known code on a row whose
+        # benchmark configuration cannot carry one is silently CLEARED rather
+        # than rejected — same spirit as the count fields, where an irrelevant
+        # unit is simply not read. The numbers-based half of the rule (positive
+        # target, actual below it) needs the frozen per-period target, which
+        # only exists at submit, so it is enforced authoritatively there
+        # (_apply_benchmarks). Nothing that reaches the benchmark export
+        # bypasses that check.
+        exception_code = getattr(task, "benchmark_exception_code", None) or None
+        if exception_code is not None and exception_code not in VALID_BENCHMARK_EXCEPTION_CODES:
+            raise AppError(
+                "validation_error", "Unknown benchmark exception code.", 422
+            )
         if getattr(task, "sub_activity_id", None) is not None:
             sub = db.get(ActivityMaster, task.sub_activity_id)
             if (
@@ -444,6 +463,16 @@ def _validate_tasks(
             # a quantity does not stop it being a deadline-bearing task).
             is_task_based = sub.benchmark_type in TASK_BENCHMARK_TYPES
             benchmark_period_days = sub.benchmark_period_days
+            # Clear an exception the selected sub-activity cannot carry: a task
+            # mode, or a counted unit outside the eligible set (Phase 1: TAGS).
+            if exception_code is not None and not is_eligible_row(
+                sub.benchmark_type, sub.relevant_count_field
+            ):
+                exception_code = None
+        else:
+            # No Activity Master selection at all — nothing to benchmark, so
+            # nothing to except.
+            exception_code = None
         # Optional Maintenance Plant selection — independent of the project's
         # own assigned plant; which plant the employee worked at that day.
         maintenance_plant_code: str | None = None
@@ -470,6 +499,7 @@ def _validate_tasks(
             "activity_type": activity_type,
             "is_task_based": is_task_based,
             "benchmark_period_days": benchmark_period_days,
+            "benchmark_exception_code": exception_code,
             "maintenance_plant_code": maintenance_plant_code,
             "maintenance_plant_description": maintenance_plant_description,
             "planning_plant_code": planning_plant_code,
@@ -1369,6 +1399,9 @@ def _add_task_row(
             sub_activity_id=task.sub_activity_id,
             sub_activity_name=snap["sub_activity_name"],
             activity_name=snap["activity_name"],
+            # Already validated/cleared for static eligibility by _validate_tasks;
+            # re-checked against the frozen target at submit.
+            benchmark_exception_code=snap["benchmark_exception_code"],
             started_date=life["started_date"],
             due_date=life["due_date"],
             is_completed=life["is_completed"],
@@ -1840,10 +1873,17 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         select(WorkReportTask).where(WorkReportTask.report_id == report.id)
     ).scalars().all()
     for row in rows:
-        if row.sub_activity_id is None:
-            continue
-        sub = db.get(ActivityMaster, row.sub_activity_id)
+        sub = (
+            db.get(ActivityMaster, row.sub_activity_id)
+            if row.sub_activity_id is not None
+            else None
+        )
         if sub is None:
+            # No benchmark to evaluate — and therefore nothing an exception
+            # could except (a row whose sub-activity has since been removed).
+            if row.benchmark_exception_code is not None:
+                row.benchmark_exception_code = None
+                db.add(row)
             continue
         fraction = fraction_by_period.get(row.period_id)
         if fraction is None:
@@ -1862,6 +1902,21 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         if sub.relevant_count_field:
             column = _COUNT_FIELD_COLUMNS.get(sub.relevant_count_field)
             actual_value = getattr(row, column) if column else None
+        # Authoritative exception verdict (migration 0063), taken here because
+        # this is where the effective per-period target is frozen. An exception
+        # that no longer holds — the actual reached or passed the target, the
+        # target vanished, the sub-activity was reconfigured — is CLEARED, so a
+        # stale 100% can never survive an edit-and-resubmit. deficit and
+        # productivity_pct stay the REAL figures: the exception is an evaluation
+        # rule for the benchmark report, not a rewrite of the row's own numbers.
+        if row.benchmark_exception_code is not None and not is_valid_exception(
+            row.benchmark_exception_code,
+            benchmark_type=sub.benchmark_type,
+            count_field=sub.relevant_count_field,
+            target=benchmark_value,
+            actual=actual_value,
+        ):
+            row.benchmark_exception_code = None
         deficit, productivity_pct = compute_benchmark(
             sub.benchmark_type, benchmark_value, actual_value
         )

@@ -75,6 +75,14 @@ class WorkReportTaskIn(BaseModel):
     # it is never inferred from a count above, so entering pages_count=500 on a
     # TASK_WITH_QUANTITY row leaves the task open and carrying forward.
     is_completed: bool = False
+    # Structured benchmark exception (migration 0063). NULL = none, the default
+    # for every row. Phase 1 accepts 'NO_FURTHER_AVAILABLE_WORK' on a NUMERIC
+    # TAGS row whose actual is below target — see
+    # activity_master/benchmark_exception.py. Never inferred from `description`:
+    # typing the wording into the remark changes no calculation. The server
+    # re-validates it (and clears it when it no longer holds) at save and at
+    # submit, so the client's word is never the last one.
+    benchmark_exception_code: str | None = Field(default=None, max_length=40)
     # Task continuation (feature-flagged). When set, this row continues an
     # existing WorkItem instead of starting a new one; the server validates
     # ownership/project/sub-activity/date and keeps the item's frozen deadline.
@@ -126,6 +134,10 @@ class WorkReportTaskOut(BaseModel):
     # Which count field (tags/docs/bom/spares/pages/records) fed the calc above.
     # Historical rows legitimately still read 'docs' etc.; never rewritten on read.
     relevant_count_field_snapshot: str | None = None
+    # Structured benchmark exception, as the server currently holds it (migration
+    # 0064) — so reopening/editing a report restores the checkbox exactly, and a
+    # server-cleared exception comes back as null rather than staying ticked.
+    benchmark_exception_code: str | None = None
     deficit: Decimal | None = None
     productivity_pct: Decimal | None = None
     # TASK_BASED tracking: started_date/due_date are computed server-side the

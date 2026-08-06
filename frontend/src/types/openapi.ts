@@ -4755,6 +4755,8 @@ export interface components {
              * @default false
              */
             is_completed: boolean;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
             /** Work Item Id */
             work_item_id?: string | null;
             /** Maintenance Plant Id */
@@ -4838,6 +4840,8 @@ export interface components {
             benchmark_type_snapshot?: string | null;
             /** Relevant Count Field Snapshot */
             relevant_count_field_snapshot?: string | null;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
             /** Deficit */
             deficit?: string | null;
             /** Productivity Pct */
