@@ -36,14 +36,20 @@ import { can } from "@/lib/rbac";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { Tabs } from "@/components/ui/tabs";
-import { ActivitiesTab } from "@/features/project-activities/components/activities-tab";
-import { SubmissionsTab } from "@/features/project-submissions/components/submissions-tab";
 import { ArchiveDialog } from "./archive-dialog";
 import { ProjectMembers } from "./project-members";
 import { ProjectTimeline } from "./project-timeline";
 import { StatusBadge } from "./status-badge";
+import { SummaryTab } from "./summary-tab";
+import { TagScopeTab } from "./tag-scope-tab";
 import { useProject, usePlannedDateChanges, useUpdatePlannedDate } from "../hooks";
 import { plannedDateSchema, type PlannedDateFormValues } from "../schemas";
+import {
+  buildProjectTabs,
+  resolveProjectTab,
+  PROJECT_DEFAULT_TAB,
+  PROJECT_TAB_PARAM,
+} from "../tabs";
 import type { PlannedDateChange, Project } from "../types";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -182,7 +188,7 @@ function PlannedDateChangeLog({ projectId }: { projectId: string }) {
 
 export function ProjectDetail({ id }: { id: string }) {
   const router = useRouter();
-  const { role } = useAuth();
+  const { role, employeeId } = useAuth();
   const canManage = can(role, "project.manage");
 
   const query = useProject(id);
@@ -190,7 +196,24 @@ export function ProjectDetail({ id }: { id: string }) {
   const [confirm, setConfirm] = React.useState<Project | null>(null);
   const [dateDialogOpen, setDateDialogOpen] = React.useState(false);
   // Active tab lives in the URL so leaving and returning keeps the same tab.
-  const [activeTab, setActiveTab] = useUrlState("tab", "overview");
+  const [tabParam, setTabParam] = useUrlState(PROJECT_TAB_PARAM, PROJECT_DEFAULT_TAB);
+
+  // Same Head comparison ProjectMembers uses for staffing authority.
+  const isHead =
+    !!employeeId && !!project?.head_employee_id && employeeId === project.head_employee_id;
+  const viewer = React.useMemo(() => ({ canManage, isHead }), [canManage, isHead]);
+  const tabItems = React.useMemo(() => buildProjectTabs(viewer), [viewer]);
+  // Never trust the raw query value: retired tabs (`activities`, `submissions`),
+  // typos and a hand-typed `tag-scope` from a non-PM/non-Head all fall back to
+  // Overview instead of rendering nothing.
+  const activeTab = resolveProjectTab(tabParam, viewer);
+
+  React.useEffect(() => {
+    // Rewrite the URL only once the project has loaded — until then we don't
+    // know whether the viewer is this project's Head.
+    if (!project) return;
+    if (tabParam !== activeTab) setTabParam(activeTab);
+  }, [project, tabParam, activeTab, setTabParam]);
 
   if (query.isLoading) {
     return (
@@ -247,12 +270,8 @@ export function ProjectDetail({ id }: { id: string }) {
       <Tabs
         className="mb-4"
         value={activeTab}
-        onChange={setActiveTab}
-        items={[
-          { value: "overview", label: "Overview" },
-          { value: "activities", label: "Activities" },
-          { value: "submissions", label: "Submissions" },
-        ]}
+        onChange={setTabParam}
+        items={tabItems}
       />
 
       {activeTab === "overview" && (
@@ -343,17 +362,9 @@ export function ProjectDetail({ id }: { id: string }) {
         </div>
       )}
 
-      {activeTab === "activities" && (
-        <ActivitiesTab
-          projectId={project.id}
-          canManage={canManage}
-          canEdit={canManage}
-        />
-      )}
+      {activeTab === "tag-scope" && <TagScopeTab />}
 
-      {activeTab === "submissions" && (
-        <SubmissionsTab projectId={project.id} canManage={canManage} />
-      )}
+      {activeTab === "summary" && <SummaryTab />}
 
       <PlannedDateDialog
         projectId={project.id}
