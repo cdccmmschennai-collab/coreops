@@ -1,6 +1,7 @@
 """Project pydantic schemas."""
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -9,6 +10,13 @@ from app.modules.projects.models import (
     ProjectMemberRole,
     ProjectStatus,
 )
+
+# Project scope classification. Mirrors the SCOPE_TYPE_* constants in models.py
+# and the activity_master AccessType precedent (Literal over a stored VARCHAR,
+# not a python Enum) — FastAPI renders it as a string enum in the OpenAPI
+# contract, so an unknown value such as "RANDOM" is rejected with 422 before it
+# can reach the database.
+ProjectScopeType = Literal["NONE", "TAG_BASED"]
 
 
 class ProjectOut(BaseModel):
@@ -31,6 +39,9 @@ class ProjectOut(BaseModel):
     client: str | None = None
     description: str | None = None
     status: ProjectStatus
+    # Project Tag Scope classification. Always present; pre-0064 projects read
+    # "NONE" from the column's backfill.
+    scope_type: ProjectScopeType = "NONE"
     start_date: date | None = None
     planned_completion_date: date | None = None
     actual_completion_date: date | None = None
@@ -48,6 +59,9 @@ class ProjectCreate(BaseModel):
     client: str | None = None
     description: str | None = None
     status: ProjectStatus = ProjectStatus.planning
+    # Optional: a client that predates this field (or an import) omits it and
+    # gets a normal, non-tag project.
+    scope_type: ProjectScopeType = "NONE"
     start_date: date | None = None
     planned_completion_date: date | None = None
     actual_completion_date: date | None = None
@@ -62,6 +76,9 @@ class ProjectUpdate(BaseModel):
     client: str | None = None
     description: str | None = None
     status: ProjectStatus | None = None
+    # Omitted -> unchanged. Reclassifying is allowed in both directions in this
+    # phase because no tag-scope records exist yet to be orphaned.
+    scope_type: ProjectScopeType | None = None
     start_date: date | None = None
     actual_completion_date: date | None = None
     # Allowed only for initial set (when the project has no planned date yet).

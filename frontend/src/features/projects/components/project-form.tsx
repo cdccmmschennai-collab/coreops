@@ -30,6 +30,7 @@ import { useMaintenancePlantOptions, usePlanningPlants } from "@/features/plant-
 import { AppError } from "@/lib/api-client";
 
 import { useCreateProject, useUpdateProject } from "../hooks";
+import { PROJECT_SCOPE_TYPES, PROJECT_SCOPE_TYPE_LABEL } from "../scope";
 import {
   PROJECT_STATUSES,
   PROJECT_STATUS_LABEL,
@@ -201,6 +202,37 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                     <FormControl>
                       <Input {...field} placeholder="Contractor / client name" />
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Project Scope — classification only. Tag-based projects take
+                  part in Project Tag Scope; normal projects are unaffected.
+                  No tag count is asked for here. */}
+              <FormField
+                control={form.control}
+                name="scope_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Project Scope</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {PROJECT_SCOPE_TYPES.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {PROJECT_SCOPE_TYPE_LABEL[s]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Tag-based projects use the Tag Scope tab. Other projects are unaffected.
+                    </p>
                     <FormMessage />
                   </FormItem>
                 )}

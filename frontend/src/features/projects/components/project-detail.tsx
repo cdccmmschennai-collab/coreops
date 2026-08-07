@@ -44,6 +44,7 @@ import { SummaryTab } from "./summary-tab";
 import { TagScopeTab } from "./tag-scope-tab";
 import { useProject, usePlannedDateChanges, useUpdatePlannedDate } from "../hooks";
 import { plannedDateSchema, type PlannedDateFormValues } from "../schemas";
+import { resolveScopeType } from "../scope";
 import {
   buildProjectTabs,
   resolveProjectTab,
@@ -362,7 +363,9 @@ export function ProjectDetail({ id }: { id: string }) {
         </div>
       )}
 
-      {activeTab === "tag-scope" && <TagScopeTab />}
+      {activeTab === "tag-scope" && (
+        <TagScopeTab scopeType={resolveScopeType(project.scope_type)} />
+      )}
 
       {activeTab === "summary" && <SummaryTab />}
 

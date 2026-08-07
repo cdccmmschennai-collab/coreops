@@ -9,6 +9,7 @@ import { AppError } from "@/lib/api-client";
 
 import { ProjectForm } from "./project-form";
 import { useProject } from "../hooks";
+import { resolveScopeType } from "../scope";
 import type { ProjectFormValues } from "../schemas";
 
 export function ProjectEdit({ id }: { id: string }) {
@@ -44,6 +45,7 @@ export function ProjectEdit({ id }: { id: string }) {
     client: project.client ?? "",
     description: project.description ?? "",
     status: project.status,
+    scope_type: resolveScopeType(project.scope_type),
     start_date: project.start_date ?? "",
     planned_completion_date: project.planned_completion_date ?? "",
     actual_completion_date: project.actual_completion_date ?? "",

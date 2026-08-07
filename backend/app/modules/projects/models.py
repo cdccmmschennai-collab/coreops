@@ -37,6 +37,22 @@ class ProjectStatus(str, enum.Enum):
     archived = "archived"
 
 
+# Project scope classification (migration 0064). Does this project take part in
+# Project Tag Scope functionality at all?
+#   NONE      -> not a tag-based project (TOOL DEVELOPMENT, TRAINING, INTERNAL
+#                DEVELOPMENT, ...). Behaves exactly as every project does today.
+#                Every pre-0064 project is backfilled to this.
+#   TAG_BASED -> participates in Project Tag Scope. Later phases hang estimated
+#                tags, revisions and progress off this classification; in this
+#                phase the value is purely a label and changes no behaviour.
+# VARCHAR(20) + CHECK rather than a native Postgres enum, following the
+# activity_master.access_type / benchmark_type / benchmark_exception_code
+# precedent — widening the set later is an ALTER of one constraint.
+SCOPE_TYPE_NONE = "NONE"
+SCOPE_TYPE_TAG_BASED = "TAG_BASED"
+VALID_SCOPE_TYPES = {SCOPE_TYPE_NONE, SCOPE_TYPE_TAG_BASED}
+
+
 class ProjectMemberRole(str, enum.Enum):
     # Active roles
     team_lead = "team_lead"
@@ -90,6 +106,12 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     head_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
+    # NONE (default) / TAG_BASED — see the SCOPE_TYPE_* constants above. Purely a
+    # classification in this phase: no tag counts, no validation, no calculation
+    # reads it yet.
+    scope_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'NONE'")
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -97,6 +119,10 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         CheckConstraint(
             "planned_completion_date IS NULL OR start_date IS NULL OR planned_completion_date >= start_date",
             name="projects_dates",
+        ),
+        CheckConstraint(
+            "scope_type IN ('NONE', 'TAG_BASED')",
+            name="projects_scope_type_valid",
         ),
         Index(
             "projects_code_uq",

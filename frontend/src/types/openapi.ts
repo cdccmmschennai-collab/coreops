@@ -908,6 +908,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leave-requests/attendance-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attendance Summary
+         * @description Read-only: attendance already recorded across each displayed leave
+         *     request's dates, one word per row. Never modifies attendance.
+         */
+        post: operations["attendance_summary_api_v1_leave_requests_attendance_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/leave-requests/{req_id}": {
         parameters: {
             query?: never;
@@ -937,6 +958,57 @@ export interface paths {
         put?: never;
         /** Cancel Leave Request */
         post: operations["cancel_leave_request_api_v1_leave_requests__req_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-requests/{req_id}/request-cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Leave Cancellation */
+        post: operations["request_leave_cancellation_api_v1_leave_requests__req_id__request_cancellation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-requests/{req_id}/approve-cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Leave Cancellation */
+        post: operations["approve_leave_cancellation_api_v1_leave_requests__req_id__approve_cancellation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-requests/{req_id}/reject-cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Leave Cancellation */
+        post: operations["reject_leave_cancellation_api_v1_leave_requests__req_id__reject_cancellation_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1235,6 +1307,58 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Activity Access */
+        get: operations["get_activity_access_api_v1_activity_master_activities__activity_id__access_get"];
+        put?: never;
+        /** Grant Activity Access */
+        post: operations["grant_activity_access_api_v1_activity_master_activities__activity_id__access_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/access-type": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change Activity Access Type */
+        patch: operations["change_activity_access_type_api_v1_activity_master_activities__activity_id__access_type_patch"];
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/access/{employee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Activity Access */
+        delete: operations["revoke_activity_access_api_v1_activity_master_activities__activity_id__access__employee_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1837,6 +1961,29 @@ export interface components {
             /** Is Active */
             is_active: boolean;
         };
+        /** ActivityAccessConfigOut */
+        ActivityAccessConfigOut: {
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
+            /** Authorized Count */
+            authorized_count: number;
+            /** Items */
+            items: components["schemas"]["AuthorizedEmployeeOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** ActivityCell */
         ActivityCell: {
             /** Project Code */
@@ -1909,6 +2056,11 @@ export interface components {
             is_active: boolean;
             /** Sort Order */
             sort_order: number;
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
             /**
              * Created At
              * Format: date-time
@@ -2413,6 +2565,16 @@ export interface components {
          * @enum {string}
          */
         AttendanceStatus: "present" | "absent" | "half_day" | "leave" | "holiday" | "weekend" | "comp_off";
+        /** AttendanceSummaryRequest */
+        AttendanceSummaryRequest: {
+            /** Leave Request Ids */
+            leave_request_ids?: string[];
+        };
+        /** AttendanceSummaryResponse */
+        AttendanceSummaryResponse: {
+            /** Items */
+            items: components["schemas"]["LeaveAttendanceSummaryOut"][];
+        };
         /** AttendanceUpdate */
         AttendanceUpdate: {
             status?: components["schemas"]["AttendanceStatus"] | null;
@@ -2464,6 +2626,26 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /**
+         * AuthorizedEmployeeOut
+         * @description One active grant on a RESTRICTED activity. Deliberately minimal — no
+         *     email / phone / department; the PM only needs to identify who can use it.
+         */
+        AuthorizedEmployeeOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Granted By */
+            granted_by: string | null;
+            /** Granted At */
+            granted_at: string | null;
         };
         /** CalendarEventCreate */
         CalendarEventCreate: {
@@ -2534,6 +2716,20 @@ export interface components {
             event_type?: components["schemas"]["CalendarEventType"] | null;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * ChangeAccessTypeIn
+         * @description PATCH .../access-type. COMMON->RESTRICTED must carry at least one employee
+         *     (validated in the service, atomically with the type flip).
+         */
+        ChangeAccessTypeIn: {
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
+            /** Employee Ids */
+            employee_ids?: string[];
         };
         /**
          * ChangePasswordRequest
@@ -3015,6 +3211,38 @@ export interface components {
             /** Page Size */
             page_size: number;
         };
+        /**
+         * GrantAccessIn
+         * @description POST .../access — bulk grant on an already-RESTRICTED activity.
+         */
+        GrantAccessIn: {
+            /** Employee Ids */
+            employee_ids: string[];
+        };
+        /**
+         * GrantResultOut
+         * @description Summary of a bulk grant / access-type change.
+         */
+        GrantResultOut: {
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
+            /** Granted */
+            granted: number;
+            /** Reactivated */
+            reactivated: number;
+            /** Already Active */
+            already_active: number;
+            /** Authorized Count */
+            authorized_count: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3074,6 +3302,25 @@ export interface components {
             description?: string | null;
             /** Is Active */
             is_active?: boolean | null;
+        };
+        /**
+         * LeaveAttendanceSummaryOut
+         * @description What attendance already exists across one leave request's dates.
+         *
+         *     Summary only — a single word the manager can read at a glance. CoreOps
+         *     attendance is maintained by hand and cancellation never writes to it; this
+         *     exists so the manager knows what they will need to review afterwards.
+         */
+        LeaveAttendanceSummaryOut: {
+            /**
+             * Leave Request Id
+             * Format: uuid
+             */
+            leave_request_id: string;
+            /** Summary */
+            summary: string;
+            /** Days Recorded */
+            days_recorded: number;
         };
         /** LeaveBalanceHistoryOut */
         LeaveBalanceHistoryOut: {
@@ -3248,7 +3495,7 @@ export interface components {
          * LeaveStatus
          * @enum {string}
          */
-        LeaveStatus: "pending" | "approved" | "rejected" | "cancelled";
+        LeaveStatus: "pending" | "approved" | "rejected" | "cancelled" | "cancellation_requested";
         /**
          * LeaveType
          * @enum {string}
@@ -3768,6 +4015,12 @@ export interface components {
             description?: string | null;
             /** @default planning */
             status: components["schemas"]["ProjectStatus"];
+            /**
+             * Scope Type
+             * @default NONE
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
             /** Start Date */
             start_date?: string | null;
             /** Planned Completion Date */
@@ -3863,6 +4116,12 @@ export interface components {
             /** Description */
             description?: string | null;
             status: components["schemas"]["ProjectStatus"];
+            /**
+             * Scope Type
+             * @default NONE
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
             /** Start Date */
             start_date?: string | null;
             /** Planned Completion Date */
@@ -3915,6 +4174,8 @@ export interface components {
             /** Description */
             description?: string | null;
             status?: components["schemas"]["ProjectStatus"] | null;
+            /** Scope Type */
+            scope_type?: ("NONE" | "TAG_BASED") | null;
             /** Start Date */
             start_date?: string | null;
             /** Actual Completion Date */
@@ -5288,6 +5549,7 @@ export interface operations {
                 status?: components["schemas"]["EmployeeStatus"] | null;
                 department?: string | null;
                 manager_id?: string | null;
+                exclude_activity_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -7230,6 +7492,39 @@ export interface operations {
             };
         };
     };
+    attendance_summary_api_v1_leave_requests_attendance_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttendanceSummaryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_leave_request_api_v1_leave_requests__req_id__get: {
         parameters: {
             query?: never;
@@ -7297,6 +7592,99 @@ export interface operations {
         };
     };
     cancel_leave_request_api_v1_leave_requests__req_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_leave_cancellation_api_v1_leave_requests__req_id__request_cancellation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_leave_cancellation_api_v1_leave_requests__req_id__approve_cancellation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_leave_cancellation_api_v1_leave_requests__req_id__reject_cancellation_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -8102,6 +8490,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubActivityFlatOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_activity_access_api_v1_activity_master_activities__activity_id__access_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityAccessConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_activity_access_api_v1_activity_master_activities__activity_id__access_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantAccessIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_activity_access_type_api_v1_activity_master_activities__activity_id__access_type_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeAccessTypeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_activity_access_api_v1_activity_master_activities__activity_id__access__employee_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */

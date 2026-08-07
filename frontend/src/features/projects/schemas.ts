@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+// Relative .ts value import — the node --test harness resolves it directly.
+import { DEFAULT_PROJECT_SCOPE_TYPE, PROJECT_SCOPE_TYPES } from "./scope.ts";
 import type { ProjectCreateBody, ProjectUpdateBody } from "./types";
 
 export const PROJECT_STATUSES = [
@@ -31,6 +33,8 @@ export const projectFormSchema = z
     client: z.string().trim(),
     description: z.string().trim(),
     status: z.enum(PROJECT_STATUSES),
+    // Classification only: whether this project takes part in Project Tag Scope.
+    scope_type: z.enum(PROJECT_SCOPE_TYPES),
     start_date: z.string(),
     planned_completion_date: z.string(),
     actual_completion_date: z.string(),
@@ -56,6 +60,7 @@ export const EMPTY_PROJECT_FORM: ProjectFormValues = {
   client: "",
   description: "",
   status: "planning",
+  scope_type: DEFAULT_PROJECT_SCOPE_TYPE,
   start_date: "",
   planned_completion_date: "",
   actual_completion_date: "",
@@ -71,6 +76,7 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
     planning_plant_id: orNull(v.planning_plant_id),
     maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
+    scope_type: v.scope_type,
     client: orNull(v.client),
     description: orNull(v.description),
     start_date: orNull(v.start_date),
@@ -92,6 +98,7 @@ export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
     planning_plant_id: orNull(v.planning_plant_id),
     maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
+    scope_type: v.scope_type,
     client: orNull(v.client),
     description: orNull(v.description),
     start_date: orNull(v.start_date),

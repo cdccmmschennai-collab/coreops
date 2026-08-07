@@ -597,6 +597,12 @@ def update_project(
     if "status" in fields and fields["status"] is not None:
         _validate_status_transition(project.status, fields["status"])
 
+    # scope_type is NOT NULL. An explicit null means "leave it alone" (an older
+    # client sending the whole object with the field absent-as-null must not
+    # blow up), not "clear the classification".
+    if fields.get("scope_type") is None:
+        fields.pop("scope_type", None)
+
     # code is editable (PMs need to fix codes entered before this field
     # existed) — but must stay unique among non-deleted projects, same rule
     # create_project enforces.
