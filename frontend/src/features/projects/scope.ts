@@ -39,27 +39,92 @@ export function resolveScopeType(raw: string | null | undefined): ProjectScopeTy
   return raw === "TAG_BASED" ? "TAG_BASED" : DEFAULT_PROJECT_SCOPE_TYPE;
 }
 
-export interface TagScopePlaceholder {
-  title: string;
-  description: string;
+/** How settled the estimate is. Absent (null) = no estimate established yet. */
+export type TagScopeStatus = "PROVISIONAL" | "BASELINED";
+
+export const TAG_SCOPE_STATUS_LABEL: Record<TagScopeStatus, string> = {
+  PROVISIONAL: "Provisional",
+  BASELINED: "Baselined",
+};
+
+/** Shown wherever a scope value has not been established. Never "0" — unknown
+ *  scope and a scope of zero are different business facts. */
+export const NOT_SET_LABEL = "Not set";
+
+export function resolveTagScopeStatus(
+  raw: string | null | undefined,
+): TagScopeStatus | null {
+  return raw === "PROVISIONAL" || raw === "BASELINED" ? raw : null;
+}
+
+/** Thousands-separated, with an explicit locale so it renders identically on
+ *  the server, in the browser and under `node --test`. */
+export function formatTagCount(count: number | null | undefined): string {
+  if (count === null || count === undefined) return NOT_SET_LABEL;
+  return count.toLocaleString("en-US");
+}
+
+export interface TagScopeRow {
+  label: string;
+  value: string;
+}
+
+export interface TagScopeView {
+  /**
+   * not-tag-based — scope_type NONE: nothing to configure.
+   * unconfigured  — TAG_BASED with no estimate yet (the honest NULL state).
+   * configured    — TAG_BASED with an established estimate.
+   */
+  kind: "not-tag-based" | "unconfigured" | "configured";
+  /** Headline above the rows; empty once scope exists. */
+  message: string;
+  /** Secondary explanatory line; empty when there is none. */
+  hint: string;
+  /** Read-only value rows. Empty for a non-tag project. */
+  rows: TagScopeRow[];
+}
+
+export interface TagScopeInput {
+  scopeType: ProjectScopeType;
+  estimatedTagCount: number | null | undefined;
+  tagScopeStatus: string | null | undefined;
+  tagScopeRevision: number | null | undefined;
 }
 
 /**
- * Copy for the Tag Scope tab, which is still a placeholder in this phase — the
- * two variants only tell the PM / Head whether the project is classified for
- * tag scope, and where to change that. No tag-count input, no enable button:
- * classification lives on the Project Edit form.
+ * What the Tag Scope tab renders. Read-only in this phase: no edit affordance,
+ * and deliberately no progress, worked-tag or remaining figure — those need
+ * Daily Report data this phase does not touch.
  */
-export function tagScopePlaceholder(scopeType: ProjectScopeType): TagScopePlaceholder {
-  if (scopeType === "TAG_BASED") {
+export function buildTagScopeView(input: TagScopeInput): TagScopeView {
+  const revision = input.tagScopeRevision ?? 0;
+
+  if (input.scopeType !== "TAG_BASED") {
     return {
-      title: "This project is configured as a tag-based project.",
-      description: "Tag scope configuration will be added in the next phase.",
+      kind: "not-tag-based",
+      message: "This project is not configured as a tag-based project.",
+      hint: "Change the Project Scope from the Edit Project page to enable tag-scope functionality.",
+      rows: [],
     };
   }
-  return {
-    title: "This project is not configured as a tag-based project.",
-    description:
-      "Change the Project Scope from the Edit Project page to enable tag-scope functionality.",
-  };
+
+  const status = resolveTagScopeStatus(input.tagScopeStatus);
+  const configured = input.estimatedTagCount !== null && input.estimatedTagCount !== undefined;
+
+  const rows: TagScopeRow[] = [
+    { label: "Estimated Tags", value: formatTagCount(input.estimatedTagCount) },
+    { label: "Status", value: status ? TAG_SCOPE_STATUS_LABEL[status] : NOT_SET_LABEL },
+    { label: "Revision", value: String(revision) },
+  ];
+
+  if (!configured) {
+    return {
+      kind: "unconfigured",
+      message: "Scope has not been configured yet.",
+      hint: "This project is configured as a tag-based project.",
+      rows,
+    };
+  }
+
+  return { kind: "configured", message: "", hint: "", rows };
 }

@@ -62,8 +62,28 @@ def _is_project_member(db: Session, employee_id: uuid.UUID, project_id: uuid.UUI
 
 
 def can_manage_project(db: Session, actor: User, project: Project) -> bool:
-    """Create/edit/archive the project — PM only."""
+    """Create/archive/delete the project — PM only.
+
+    Deliberately NARROWER than ``can_edit_project``: assigning a Head, archiving
+    and deleting stay PM-only. Editing project *information* is the one action a
+    Head shares.
+    """
     return actor.role == UserRole.project_manager
+
+
+def can_edit_project(db: Session, actor: User, project: Project) -> bool:
+    """Edit this project's information — PM (any project) or the employee
+    assigned as THIS project's Head.
+
+    Head authority is per-project by construction: it compares the caller's
+    employee id against ``project.head_employee_id`` of the project being
+    edited, so heading project A grants nothing on project B. Activity
+    Lead / Contributor / QC never qualify — they are activity-level staffing
+    roles, not project ownership.
+    """
+    if actor.role == UserRole.project_manager:
+        return True
+    return is_project_head(db, actor, project)
 
 
 def can_assign_head(db: Session, actor: User, project: Project) -> bool:

@@ -370,6 +370,30 @@ export interface paths {
         patch: operations["update_project_api_v1_projects__project_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/tag-scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tag Scope
+         * @description Current tag scope + full revision history. Read-only in this phase.
+         *
+         *     Nested under the project rather than a top-level resource, matching
+         *     /members, /activity-staffing and /planned-date-changes. Authorization
+         *     (PM or this project's Head) is enforced centrally in the service.
+         */
+        get: operations["get_tag_scope_api_v1_projects__project_id__tag_scope_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/head": {
         parameters: {
             query?: never;
@@ -4122,6 +4146,19 @@ export interface components {
              * @enum {string}
              */
             scope_type: "NONE" | "TAG_BASED";
+            /** Estimated Tag Count */
+            estimated_tag_count?: number | null;
+            /** Tag Scope Status */
+            tag_scope_status?: ("PROVISIONAL" | "BASELINED") | null;
+            /**
+             * Tag Scope Revision
+             * @default 0
+             */
+            tag_scope_revision: number;
+            /** Tag Scope Updated At */
+            tag_scope_updated_at?: string | null;
+            /** Tag Scope Updated By */
+            tag_scope_updated_by?: string | null;
             /** Start Date */
             start_date?: string | null;
             /** Planned Completion Date */
@@ -4486,6 +4523,88 @@ export interface components {
             notes?: string | null;
             /** Items */
             items?: components["schemas"]["SubmissionItemIn"][] | null;
+        };
+        /**
+         * TagScopeOut
+         * @description GET /projects/{id}/tag-scope — current scope plus its full history.
+         *
+         *     Read-only in this phase. Carries no progress, no worked-tag count and no
+         *     remaining figure; those belong to the later progress phase.
+         */
+        TagScopeOut: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
+            /** Estimated Tag Count */
+            estimated_tag_count?: number | null;
+            /** Tag Scope Status */
+            tag_scope_status?: ("PROVISIONAL" | "BASELINED") | null;
+            /**
+             * Tag Scope Revision
+             * @default 0
+             */
+            tag_scope_revision: number;
+            /** Tag Scope Updated At */
+            tag_scope_updated_at?: string | null;
+            /** Tag Scope Updated By */
+            tag_scope_updated_by?: string | null;
+            /** Tag Scope Updated By Name */
+            tag_scope_updated_by_name?: string | null;
+            /** Revisions */
+            revisions?: components["schemas"]["TagScopeRevisionOut"][];
+        };
+        /**
+         * TagScopeRevisionOut
+         * @description One recorded scope change. Revision 1 carries null previous_* values.
+         */
+        TagScopeRevisionOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Revision */
+            revision: number;
+            /** Previous Estimated Tag Count */
+            previous_estimated_tag_count: number | null;
+            /** New Estimated Tag Count */
+            new_estimated_tag_count: number;
+            /** Previous Status */
+            previous_status: ("PROVISIONAL" | "BASELINED") | null;
+            /**
+             * New Status
+             * @enum {string}
+             */
+            new_status: "PROVISIONAL" | "BASELINED";
+            /** Reason */
+            reason: string;
+            /**
+             * Changed By
+             * Format: uuid
+             */
+            changed_by: string;
+            /**
+             * Changed By Name
+             * @default
+             */
+            changed_by_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /**
          * TaskCompletionUpdate
@@ -6110,6 +6229,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_scope_api_v1_projects__project_id__tag_scope_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagScopeOut"];
                 };
             };
             /** @description Validation Error */

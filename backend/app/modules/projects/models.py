@@ -16,6 +16,7 @@ from sqlalchemy import (
     Enum as SAEnum,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -51,6 +52,17 @@ class ProjectStatus(str, enum.Enum):
 SCOPE_TYPE_NONE = "NONE"
 SCOPE_TYPE_TAG_BASED = "TAG_BASED"
 VALID_SCOPE_TYPES = {SCOPE_TYPE_NONE, SCOPE_TYPE_TAG_BASED}
+
+# Tag scope status (migration 0065). How settled is the estimated tag count?
+#   PROVISIONAL -> initial planning estimate, expected to move.
+#   BASELINED   -> FMTL / scope-discovery has established the working scope.
+# Deliberately no FINALIZED: scope can still be revised later when tags surface
+# from new documents, drawings, references or vendor information.
+# NULL means "no estimate exists yet" — it is not a status, and is the only
+# state a project can be in before its first revision.
+TAG_SCOPE_STATUS_PROVISIONAL = "PROVISIONAL"
+TAG_SCOPE_STATUS_BASELINED = "BASELINED"
+VALID_TAG_SCOPE_STATUSES = {TAG_SCOPE_STATUS_PROVISIONAL, TAG_SCOPE_STATUS_BASELINED}
 
 
 class ProjectMemberRole(str, enum.Enum):
@@ -112,6 +124,31 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     scope_type: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'NONE'")
     )
+    # --- Current tag scope (migration 0065) -------------------------------
+    # Denormalised "latest state" so the project page needs no aggregate over
+    # the revision history. The authoritative trail is
+    # project_tag_scope_revisions; these columns are what the newest revision
+    # left behind.
+    #
+    # NULL count = "scope not established yet", which is NOT the same business
+    # fact as 0 (0 is rejected outright). A TAG_BASED project legitimately sits
+    # at NULL until someone establishes the estimate.
+    estimated_tag_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # PROVISIONAL / BASELINED, or NULL while no estimate exists.
+    tag_scope_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 0 before the first estimate, then 1, 2, 3 ... one per recorded change.
+    tag_scope_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    tag_scope_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Plain user-id column with no FK, matching created_by / updated_by on this
+    # same table (the history table's changed_by carries the FK, mirroring
+    # ProjectPlannedDateChange).
+    tag_scope_updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -123,6 +160,20 @@ class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
         CheckConstraint(
             "scope_type IN ('NONE', 'TAG_BASED')",
             name="projects_scope_type_valid",
+        ),
+        # Unknown scope is NULL, never 0 — 0 and "not established" are different
+        # business facts, so a stored count must be a real positive estimate.
+        CheckConstraint(
+            "estimated_tag_count IS NULL OR estimated_tag_count > 0",
+            name="projects_estimated_tag_count_positive",
+        ),
+        CheckConstraint(
+            "tag_scope_status IS NULL OR tag_scope_status IN ('PROVISIONAL', 'BASELINED')",
+            name="projects_tag_scope_status_valid",
+        ),
+        CheckConstraint(
+            "tag_scope_revision >= 0",
+            name="projects_tag_scope_revision_non_negative",
         ),
         Index(
             "projects_code_uq",
@@ -262,6 +313,69 @@ class ProjectPlannedDateChange(Base):
 
     __table_args__ = (
         Index("project_planned_date_changes_project_idx", "project_id"),
+    )
+
+
+class ProjectTagScopeRevision(Base):
+    """Append-only trail of every tag-scope change on a project (migration 0065).
+
+    One row per revision. Revision 1 is the first estimate (previous_* are NULL);
+    each later row carries what the value was and what it became, plus the
+    mandatory reason. Never updated or deleted — the projects.* columns hold the
+    current state, this holds how it got there.
+
+    Deliberately shaped like ProjectPlannedDateChange (the existing "what
+    changed, why, by whom" log on this same table): explicit UUID PK, CASCADE to
+    the project, RESTRICT on the user so an actor with history cannot be hard
+    deleted. Archiving a project is a soft delete (deleted_at), so archiving
+    never touches these rows and never orphans them.
+    """
+    __tablename__ = "project_tag_scope_revisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # 1-based, dense, unique within the project (see the constraint below).
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL on revision 1 — there was no previous scope.
+    previous_estimated_tag_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    new_estimated_tag_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    new_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # Revision numbers restart per project — never globally unique.
+        UniqueConstraint("project_id", "revision", name="project_tag_scope_revisions_uq"),
+        CheckConstraint(
+            "revision >= 1", name="project_tag_scope_revisions_revision_positive"
+        ),
+        CheckConstraint(
+            "new_estimated_tag_count > 0",
+            name="project_tag_scope_revisions_new_count_positive",
+        ),
+        CheckConstraint(
+            "previous_estimated_tag_count IS NULL OR previous_estimated_tag_count > 0",
+            name="project_tag_scope_revisions_prev_count_positive",
+        ),
+        CheckConstraint(
+            "new_status IN ('PROVISIONAL', 'BASELINED')",
+            name="project_tag_scope_revisions_new_status_valid",
+        ),
+        CheckConstraint(
+            "previous_status IS NULL OR previous_status IN ('PROVISIONAL', 'BASELINED')",
+            name="project_tag_scope_revisions_prev_status_valid",
+        ),
+        Index("project_tag_scope_revisions_project_idx", "project_id", "revision"),
     )
 
 

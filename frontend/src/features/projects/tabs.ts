@@ -18,6 +18,9 @@
  * which tabs a viewer who already passed that check may open.
  */
 
+// Relative .ts value import — the node --test harness resolves it directly.
+import { canViewTagScope, type ProjectViewer } from "./permissions.ts";
+
 export type ProjectTabValue = "overview" | "tag-scope" | "summary";
 
 /** Tab shown when no tab is selected, or when the selected one is invalid. */
@@ -32,15 +35,10 @@ export interface ProjectTab {
 }
 
 /**
- * Who is looking at the page. Both flags come from helpers that already exist:
- *   canManage — `can(role, "project.manage")` (lib/rbac), i.e. Project Manager.
- *   isHead    — the viewer's employee id equals `project.head_employee_id`,
- *               the same comparison ProjectMembers uses for Head authority.
+ * Who is looking at the page. Resolved once by `useProjectAuthority` and shared
+ * with the Edit button and the /edit guard — see permissions.ts.
  */
-export interface ProjectTabViewer {
-  canManage: boolean;
-  isHead: boolean;
-}
+export type ProjectTabViewer = ProjectViewer;
 
 const ALL_TABS: readonly ProjectTab[] = [
   { value: "overview", label: "Overview" },
@@ -56,7 +54,8 @@ export function canSeeProjectTab(
   viewer: ProjectTabViewer,
 ): boolean {
   if (!MANAGER_ONLY.includes(tab)) return true;
-  return viewer.canManage || viewer.isHead;
+  // Same predicate as the Edit button and the /edit guard — one definition.
+  return canViewTagScope(viewer);
 }
 
 /** The tabs to render, in order, for this viewer. */

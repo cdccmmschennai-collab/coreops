@@ -9,12 +9,18 @@ import { AppError } from "@/lib/api-client";
 
 import { ProjectForm } from "./project-form";
 import { useProject } from "../hooks";
+import { useProjectAuthority } from "../hooks/use-project-authority";
+import { canEditProject } from "../permissions";
 import { resolveScopeType } from "../scope";
 import type { ProjectFormValues } from "../schemas";
 
 export function ProjectEdit({ id }: { id: string }) {
   const query = useProject(id);
   const project = query.data;
+  // Same resolved authority the Edit button uses, so the button and the page it
+  // links to can never disagree. Hiding the button is not the guard — this is
+  // (and the API rejects an unauthorized PATCH regardless).
+  const viewer = useProjectAuthority(project);
 
   if (query.isLoading) {
     return (
@@ -32,6 +38,15 @@ export function ProjectEdit({ id }: { id: string }) {
         title={notFound ? "Project not found" : "Couldn't load project"}
         message={notFound ? "This project may have been archived." : "Please try again."}
         onRetry={notFound ? undefined : () => void query.refetch()}
+      />
+    );
+  }
+
+  if (!canEditProject(viewer)) {
+    return (
+      <ErrorState
+        title="Not allowed"
+        message="Only project managers and this project's Head can edit it."
       />
     );
   }

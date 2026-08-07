@@ -1539,6 +1539,55 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/tag-scope": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Tag Scope",
+        "description": "Current tag scope + full revision history. Read-only in this phase.\n\nNested under the project rather than a top-level resource, matching\n/members, /activity-staffing and /planned-date-changes. Authorization\n(PM or this project's Head) is enforced centrally in the service.",
+        "operationId": "get_tag_scope_api_v1_projects__project_id__tag_scope_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagScopeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/head": {
       "put": {
         "tags": [
@@ -14656,6 +14705,61 @@
             "title": "Scope Type",
             "default": "NONE"
           },
+          "estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tag Count"
+          },
+          "tag_scope_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Status"
+          },
+          "tag_scope_revision": {
+            "type": "integer",
+            "title": "Tag Scope Revision",
+            "default": 0
+          },
+          "tag_scope_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated At"
+          },
+          "tag_scope_updated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated By"
+          },
           "start_date": {
             "anyOf": [
               {
@@ -15672,6 +15776,193 @@
         },
         "type": "object",
         "title": "SubmissionUpdate"
+      },
+      "TagScopeOut": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "TAG_BASED"
+            ],
+            "title": "Scope Type"
+          },
+          "estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tag Count"
+          },
+          "tag_scope_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Status"
+          },
+          "tag_scope_revision": {
+            "type": "integer",
+            "title": "Tag Scope Revision",
+            "default": 0
+          },
+          "tag_scope_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated At"
+          },
+          "tag_scope_updated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated By"
+          },
+          "tag_scope_updated_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated By Name"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/TagScopeRevisionOut"
+            },
+            "type": "array",
+            "title": "Revisions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "scope_type"
+        ],
+        "title": "TagScopeOut",
+        "description": "GET /projects/{id}/tag-scope \u2014 current scope plus its full history.\n\nRead-only in this phase. Carries no progress, no worked-tag count and no\nremaining figure; those belong to the later progress phase."
+      },
+      "TagScopeRevisionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "previous_estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Estimated Tag Count"
+          },
+          "new_estimated_tag_count": {
+            "type": "integer",
+            "title": "New Estimated Tag Count"
+          },
+          "previous_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Status"
+          },
+          "new_status": {
+            "type": "string",
+            "enum": [
+              "PROVISIONAL",
+              "BASELINED"
+            ],
+            "title": "New Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "changed_by": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Changed By"
+          },
+          "changed_by_name": {
+            "type": "string",
+            "title": "Changed By Name",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "revision",
+          "previous_estimated_tag_count",
+          "new_estimated_tag_count",
+          "previous_status",
+          "new_status",
+          "reason",
+          "changed_by",
+          "created_at"
+        ],
+        "title": "TagScopeRevisionOut",
+        "description": "One recorded scope change. Revision 1 carries null previous_* values."
       },
       "TaskCompletionUpdate": {
         "properties": {

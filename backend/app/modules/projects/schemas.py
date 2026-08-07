@@ -18,6 +18,10 @@ from app.modules.projects.models import (
 # can reach the database.
 ProjectScopeType = Literal["NONE", "TAG_BASED"]
 
+# How settled the estimated tag count is. NULL (absent) means no estimate has
+# been established yet — deliberately not modelled as a NOT_STARTED value.
+TagScopeStatus = Literal["PROVISIONAL", "BASELINED"]
+
 
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -42,6 +46,13 @@ class ProjectOut(BaseModel):
     # Project Tag Scope classification. Always present; pre-0064 projects read
     # "NONE" from the column's backfill.
     scope_type: ProjectScopeType = "NONE"
+    # Current tag scope. null count + null status + revision 0 = "not
+    # established yet"; a NONE project stays in that state permanently.
+    estimated_tag_count: int | None = None
+    tag_scope_status: TagScopeStatus | None = None
+    tag_scope_revision: int = 0
+    tag_scope_updated_at: datetime | None = None
+    tag_scope_updated_by: uuid.UUID | None = None
     start_date: date | None = None
     planned_completion_date: date | None = None
     actual_completion_date: date | None = None
@@ -84,6 +95,41 @@ class ProjectUpdate(BaseModel):
     # Allowed only for initial set (when the project has no planned date yet).
     # Use PATCH /projects/{id}/planned-completion-date (with reason) for subsequent changes.
     planned_completion_date: date | None = None
+
+
+class TagScopeRevisionOut(BaseModel):
+    """One recorded scope change. Revision 1 carries null previous_* values."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    revision: int
+    previous_estimated_tag_count: int | None
+    new_estimated_tag_count: int
+    previous_status: TagScopeStatus | None
+    new_status: TagScopeStatus
+    reason: str
+    changed_by: uuid.UUID
+    changed_by_name: str = ""   # populated by service join
+    created_at: datetime
+
+
+class TagScopeOut(BaseModel):
+    """GET /projects/{id}/tag-scope — current scope plus its full history.
+
+    Read-only in this phase. Carries no progress, no worked-tag count and no
+    remaining figure; those belong to the later progress phase.
+    """
+
+    project_id: uuid.UUID
+    scope_type: ProjectScopeType
+    estimated_tag_count: int | None = None
+    tag_scope_status: TagScopeStatus | None = None
+    tag_scope_revision: int = 0
+    tag_scope_updated_at: datetime | None = None
+    tag_scope_updated_by: uuid.UUID | None = None
+    tag_scope_updated_by_name: str | None = None   # populated by service join
+    revisions: list[TagScopeRevisionOut] = Field(default_factory=list)
 
 
 class ProjectPage(BaseModel):

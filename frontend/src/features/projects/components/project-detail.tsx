@@ -30,9 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
-import { can } from "@/lib/rbac";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { Tabs } from "@/components/ui/tabs";
@@ -43,6 +41,8 @@ import { StatusBadge } from "./status-badge";
 import { SummaryTab } from "./summary-tab";
 import { TagScopeTab } from "./tag-scope-tab";
 import { useProject, usePlannedDateChanges, useUpdatePlannedDate } from "../hooks";
+import { useProjectAuthority } from "../hooks/use-project-authority";
+import { canArchiveProject, canEditProject } from "../permissions";
 import { plannedDateSchema, type PlannedDateFormValues } from "../schemas";
 import { resolveScopeType } from "../scope";
 import {
@@ -189,8 +189,6 @@ function PlannedDateChangeLog({ projectId }: { projectId: string }) {
 
 export function ProjectDetail({ id }: { id: string }) {
   const router = useRouter();
-  const { role, employeeId } = useAuth();
-  const canManage = can(role, "project.manage");
 
   const query = useProject(id);
   const project = query.data;
@@ -199,10 +197,10 @@ export function ProjectDetail({ id }: { id: string }) {
   // Active tab lives in the URL so leaving and returning keeps the same tab.
   const [tabParam, setTabParam] = useUrlState(PROJECT_TAB_PARAM, PROJECT_DEFAULT_TAB);
 
-  // Same Head comparison ProjectMembers uses for staffing authority.
-  const isHead =
-    !!employeeId && !!project?.head_employee_id && employeeId === project.head_employee_id;
-  const viewer = React.useMemo(() => ({ canManage, isHead }), [canManage, isHead]);
+  // One resolved authority for this project, shared with the Edit button, the
+  // tab list and the /edit page guard.
+  const viewer = useProjectAuthority(project);
+  const canManage = viewer.canManage;
   const tabItems = React.useMemo(() => buildProjectTabs(viewer), [viewer]);
   // Never trust the raw query value: retired tabs (`activities`, `submissions`),
   // typos and a hand-typed `tag-scope` from a non-PM/non-Head all fall back to
@@ -251,18 +249,23 @@ export function ProjectDetail({ id }: { id: string }) {
         title={project.name}
         subtitle={subtitleParts.join(" · ")}
         actions={
-          canManage ? (
+          // Edit: PM or this project's Head. Archive: PM only, unchanged.
+          canEditProject(viewer) || canArchiveProject(viewer) ? (
             <>
-              <Button variant="secondary" asChild>
-                <Link href={`/projects/${project.id}/edit`}>
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                </Link>
-              </Button>
-              <Button variant="danger" onClick={() => setConfirm(project)}>
-                <Archive className="h-4 w-4" />
-                Archive
-              </Button>
+              {canEditProject(viewer) && (
+                <Button variant="secondary" asChild>
+                  <Link href={`/projects/${project.id}/edit`}>
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </Link>
+                </Button>
+              )}
+              {canArchiveProject(viewer) && (
+                <Button variant="danger" onClick={() => setConfirm(project)}>
+                  <Archive className="h-4 w-4" />
+                  Archive
+                </Button>
+              )}
             </>
           ) : null
         }
@@ -364,7 +367,12 @@ export function ProjectDetail({ id }: { id: string }) {
       )}
 
       {activeTab === "tag-scope" && (
-        <TagScopeTab scopeType={resolveScopeType(project.scope_type)} />
+        <TagScopeTab
+          scopeType={resolveScopeType(project.scope_type)}
+          estimatedTagCount={project.estimated_tag_count}
+          tagScopeStatus={project.tag_scope_status}
+          tagScopeRevision={project.tag_scope_revision}
+        />
       )}
 
       {activeTab === "summary" && <SummaryTab />}

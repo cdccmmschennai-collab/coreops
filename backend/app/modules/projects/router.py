@@ -3,8 +3,9 @@
   GET    /projects                                   list (RBAC-scoped) + search/filter/pagination
   POST   /projects                                   create (admin)
   GET    /projects/{id}                              read (RBAC-scoped)
-  PATCH  /projects/{id}                              update (admin)
+  PATCH  /projects/{id}                              update (PM or this project's Head)
   DELETE /projects/{id}                              archive / soft-delete (admin)
+  GET    /projects/{id}/tag-scope                    current tag scope + revision history (PM/Head)
   GET    /projects/{id}/members                      list members (RBAC-scoped)
   POST   /projects/{id}/members                      assign employee (admin)
   PATCH  /projects/{id}/members/{employee_id}        change member role (admin)
@@ -43,6 +44,7 @@ from app.modules.projects.schemas import (
     ProjectOut,
     ProjectPage,
     ProjectUpdate,
+    TagScopeOut,
     TimelineEventOut,
 )
 from app.modules.users.models import User
@@ -101,10 +103,27 @@ def get_project(
 def update_project(
     project_id: uuid.UUID,
     body: ProjectUpdate,
-    admin: User = Depends(require_role("project_manager")),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectOut:
-    return ProjectOut.model_validate(service.update_project(db, admin, project_id, body))
+    # Authorization (PM, or this project's assigned Head) is enforced centrally
+    # in the service via authz.can_edit_project — same pattern as PUT /head.
+    return ProjectOut.model_validate(service.update_project(db, current, project_id, body))
+
+
+@router.get("/{project_id}/tag-scope", response_model=TagScopeOut)
+def get_tag_scope(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TagScopeOut:
+    """Current tag scope + full revision history. Read-only in this phase.
+
+    Nested under the project rather than a top-level resource, matching
+    /members, /activity-staffing and /planned-date-changes. Authorization
+    (PM or this project's Head) is enforced centrally in the service.
+    """
+    return service.get_tag_scope(db, current, project_id)
 
 
 @router.put("/{project_id}/head", response_model=ProjectOut)
