@@ -45,6 +45,7 @@ from app.modules.projects.schemas import (
     ProjectUpdate,
     TagScopeOut,
     TagScopeRevisionOut,
+    TagScopeUpdate,
 )
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
@@ -595,13 +596,19 @@ _UNSET = object()
 
 
 # --------------------------------------------------------------------------
-# Project tag scope (Phase 3 — data foundation)
+# Project tag scope (Phase 3 data foundation + Phase 4 managed workflow)
 #
-# Read + the revision-recording primitive. There is deliberately NO write
-# endpoint yet: the managed "revise scope" workflow (with its reason input and
-# status transitions) is Phase 4. Nothing here reads Daily Reports, benchmarks
-# or Activity Master, and nothing computes progress.
+# Phase 3 established the columns, the append-only revision table, the read and
+# the recording primitive. Phase 4 adds the managed write workflow on top:
+# PUT /projects/{id}/tag-scope, optimistic concurrency, the no-op rule and the
+# reason policy. Nothing here reads Daily Reports, benchmarks or Activity
+# Master, and nothing computes progress.
 # --------------------------------------------------------------------------
+
+
+# Substituted when the very first estimate is saved without a reason. Revising
+# an existing scope always requires the author to say why (see below).
+INITIAL_SCOPE_REASON = "Initial project estimate"
 
 
 def _tag_scope_revision_count(db: Session, project_id: uuid.UUID) -> int:
@@ -684,6 +691,23 @@ def get_tag_scope(db: Session, actor: User, project_id: uuid.UUID) -> TagScopeOu
     )
 
 
+def _assert_scope_covers_recorded_progress(
+    db: Session, project: Project, new_estimated_tag_count: int
+) -> None:
+    """Reduction guard — deliberately a no-op in this phase.
+
+    Reducing the estimate is allowed for now (with a reason, and fully preserved
+    in history) because the scoped activity-progress service does not exist yet:
+    there is no MAX(activity progress) to compare against, and inventing one here
+    would duplicate logic the progress phase owns.
+
+    This seam exists so that phase can add the rule — "a new scope may not fall
+    below the progress already recorded against it" — by filling in this one
+    function, without reworking the revision flow, the endpoint or the UI.
+    """
+    return
+
+
 def record_tag_scope_revision(
     db: Session,
     actor: User,
@@ -691,15 +715,27 @@ def record_tag_scope_revision(
     *,
     new_estimated_tag_count: int,
     new_status: str,
-    reason: str,
+    reason: str | None,
+    expected_revision: int | None = None,
 ) -> Project:
     """Append one revision and move the project's current scope onto it.
 
-    The Phase 3 write primitive: no HTTP route exposes it yet (the managed
-    workflow is Phase 4), but the data foundation is meaningless without the
-    one operation that maintains the invariants — revision numbers dense and
-    unique per project, previous_* copied from the row being superseded, a
-    reason always recorded, and the projects.* columns kept in step.
+    The single operation that maintains every tag-scope invariant: revision
+    numbers dense and unique per project, previous_* copied from the row being
+    superseded, a reason always recorded, and the projects.* columns kept in
+    step with the newest row. All of it derived server-side — the caller never
+    supplies a revision number, a previous value or an author.
+
+    Refuses, in this order:
+      403  caller is neither PM nor THIS project's Head
+      422  project is not TAG_BASED
+      422  count is absent, zero or negative
+      422  status is not PROVISIONAL / BASELINED
+      409  ``expected_revision`` no longer matches the stored revision
+      422  reason is blank while revising an existing scope
+
+    Submitting the values the project already has is not an error and not a
+    revision: it returns the project untouched (see the no-op rule below).
     """
     project = _fetch(db, project_id)
     if not authz.can_edit_project(db, actor, project):
@@ -723,8 +759,41 @@ def record_tag_scope_revision(
         )
     if new_status not in VALID_TAG_SCOPE_STATUSES:
         raise AppError("validation_error", "Unknown tag scope status.", 422)
-    if not reason or not reason.strip():
-        raise AppError("validation_error", "A reason is required for a scope change.", 422)
+
+    # Optimistic concurrency. Two administrators can hold the same form open;
+    # whoever saves second must be told their view is stale rather than have
+    # their number quietly stack on top of a revision they never saw. Checked
+    # before anything is written, and backed by the UNIQUE(project_id, revision)
+    # constraint for the case where both commits race past this read.
+    if expected_revision is not None and expected_revision != project.tag_scope_revision:
+        raise AppError(
+            "conflict",
+            "The tag scope changed while you were editing it. Refresh and review "
+            "the latest values before updating.",
+            409,
+        )
+
+    # No-op rule: saving the values the project already carries must not mint a
+    # revision. History is a record of decisions, and "someone pressed Save"
+    # is not one. Idempotent rather than an error, so a double-submit is safe.
+    if (
+        project.estimated_tag_count == new_estimated_tag_count
+        and project.tag_scope_status == new_status
+    ):
+        return project
+
+    # Reason policy: mandatory when changing an established scope (whitespace is
+    # not a reason), defaulted for the very first estimate where "why" is simply
+    # that the project is being set up.
+    clean_reason = (reason or "").strip()
+    if not clean_reason:
+        if project.tag_scope_revision > 0:
+            raise AppError(
+                "validation_error", "A reason is required for a scope change.", 422
+            )
+        clean_reason = INITIAL_SCOPE_REASON
+
+    _assert_scope_covers_recorded_progress(db, project, new_estimated_tag_count)
 
     next_revision = project.tag_scope_revision + 1
     db.add(ProjectTagScopeRevision(
@@ -734,7 +803,7 @@ def record_tag_scope_revision(
         new_estimated_tag_count=new_estimated_tag_count,
         previous_status=project.tag_scope_status,
         new_status=new_status,
-        reason=reason.strip(),
+        reason=clean_reason,
         changed_by=actor.id,
     ))
     project.estimated_tag_count = new_estimated_tag_count
@@ -743,13 +812,42 @@ def record_tag_scope_revision(
     project.tag_scope_updated_at = datetime.now(timezone.utc)
     project.tag_scope_updated_by = actor.id
     db.add(project)
+    # One transaction: the revision row and the projects.* columns commit
+    # together or not at all, so current state and history can never diverge.
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise AppError("conflict", "Tag scope was changed concurrently.", 409)
+        raise AppError(
+            "conflict",
+            "The tag scope changed while you were editing it. Refresh and review "
+            "the latest values before updating.",
+            409,
+        )
     db.refresh(project)
     return project
+
+
+def update_tag_scope(
+    db: Session, actor: User, project_id: uuid.UUID, data: TagScopeUpdate
+) -> TagScopeOut:
+    """PUT /projects/{id}/tag-scope — the managed establish/revise workflow.
+
+    A thin, validated wrapper over the recording primitive: it exists so the
+    route never reaches the primitive with unchecked input, and so the response
+    is the same shape the tab already reads (current scope + full history),
+    letting the client refresh both from one round trip.
+    """
+    record_tag_scope_revision(
+        db,
+        actor,
+        project_id,
+        new_estimated_tag_count=data.estimated_tag_count,
+        new_status=data.status,
+        reason=data.reason,
+        expected_revision=data.expected_revision,
+    )
+    return get_tag_scope(db, actor, project_id)
 
 
 def update_project(

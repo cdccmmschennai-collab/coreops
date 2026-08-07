@@ -6,6 +6,7 @@
   PATCH  /projects/{id}                              update (PM or this project's Head)
   DELETE /projects/{id}                              archive / soft-delete (admin)
   GET    /projects/{id}/tag-scope                    current tag scope + revision history (PM/Head)
+  PUT    /projects/{id}/tag-scope                    establish / revise the tag scope (PM/Head)
   GET    /projects/{id}/members                      list members (RBAC-scoped)
   POST   /projects/{id}/members                      assign employee (admin)
   PATCH  /projects/{id}/members/{employee_id}        change member role (admin)
@@ -45,6 +46,7 @@ from app.modules.projects.schemas import (
     ProjectPage,
     ProjectUpdate,
     TagScopeOut,
+    TagScopeUpdate,
     TimelineEventOut,
 )
 from app.modules.users.models import User
@@ -117,13 +119,34 @@ def get_tag_scope(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TagScopeOut:
-    """Current tag scope + full revision history. Read-only in this phase.
+    """Current tag scope + full revision history.
 
     Nested under the project rather than a top-level resource, matching
     /members, /activity-staffing and /planned-date-changes. Authorization
     (PM or this project's Head) is enforced centrally in the service.
     """
     return service.get_tag_scope(db, current, project_id)
+
+
+@router.put("/{project_id}/tag-scope", response_model=TagScopeOut)
+def update_tag_scope(
+    project_id: uuid.UUID,
+    body: TagScopeUpdate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TagScopeOut:
+    """Establish or revise the project's estimated tag scope (PM or this
+    project's Head — enforced centrally in the service, never by the UI alone).
+
+    PUT rather than POST: the client states the scope it wants the project to
+    have, and the server derives the revision number, the previous values, the
+    author and the timestamp. Returns the same payload as the GET so the tab can
+    refresh current scope and history from one round trip.
+
+    Conflicts with 409 when `expected_revision` no longer matches the stored
+    revision — someone else revised the scope while this form was open.
+    """
+    return service.update_tag_scope(db, current, project_id, body)
 
 
 @router.put("/{project_id}/head", response_model=ProjectOut)

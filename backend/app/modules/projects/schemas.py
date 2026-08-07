@@ -114,11 +114,36 @@ class TagScopeRevisionOut(BaseModel):
     created_at: datetime
 
 
-class TagScopeOut(BaseModel):
-    """GET /projects/{id}/tag-scope — current scope plus its full history.
+class TagScopeUpdate(BaseModel):
+    """PUT /projects/{id}/tag-scope — establish or revise the estimated scope.
 
-    Read-only in this phase. Carries no progress, no worked-tag count and no
-    remaining figure; those belong to the later progress phase.
+    The client supplies only what a human decided: how many tags, how settled
+    the number is, and why it changed. Everything else on the revision row
+    (revision number, previous_*, changed_by, created_at) is derived server-side
+    — see ``service.record_tag_scope_revision``.
+    """
+
+    # gt=0 rejects 0 and negatives before the service runs; pydantic also
+    # rejects "abc", 2.5 and a missing value with a 422. The same rule is
+    # re-checked in the service and again by the projects_* CHECK constraints.
+    estimated_tag_count: int = Field(gt=0)
+    status: TagScopeStatus
+    # Optional only for the very first estimate, where the service substitutes
+    # "Initial project estimate". Revising an existing scope requires a real,
+    # non-whitespace reason (422 otherwise).
+    reason: str | None = Field(default=None, max_length=500)
+    # Optimistic concurrency: the tag_scope_revision the client was looking at
+    # when it opened the form (0 for a project with no scope yet). If the stored
+    # revision has moved on, the update is refused with 409 rather than silently
+    # superseding the other person's revision.
+    expected_revision: int = Field(ge=0)
+
+
+class TagScopeOut(BaseModel):
+    """GET/PUT /projects/{id}/tag-scope — current scope plus its full history.
+
+    Carries no progress, no worked-tag count and no remaining figure; those
+    belong to the later progress phase.
     """
 
     project_id: uuid.UUID
