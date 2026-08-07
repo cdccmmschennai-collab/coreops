@@ -63,6 +63,7 @@ import {
   useUpdateWorkReport,
   useWorkReportList,
 } from "../hooks";
+import { scaledTarget } from "../benchmark-target";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_PART_FRACTION,
@@ -782,7 +783,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         ? (sub!.relevant_count_field as RelevantCountField)
         : null;
       if (unit && sub?.benchmark_value != null) {
-        effectiveTarget += sub.benchmark_value * DAY_PART_FRACTION[t.day_part];
+        // Each half's target is rounded up to a whole unit before summing,
+        // exactly as the backend freezes it per period — so this preview can
+        // never disagree with the saved snapshot by a half unit.
+        effectiveTarget += scaledTarget(sub.benchmark_value, DAY_PART_FRACTION[t.day_part]) ?? 0;
         actualTotal += Number(t[countFieldName(unit)] || 0);
       }
     }

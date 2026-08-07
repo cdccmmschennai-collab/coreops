@@ -386,6 +386,19 @@ class WorkReportTask(UUIDMixin, Base):
     # "actual count" field — the benchmark reads straight off the existing
     # count fields below so production numbers are never entered twice.
     relevant_count_field_snapshot: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Structured benchmark exception (migration 0063) — why this row evaluates as
+    # achieved despite an actual below target. NULL = no exception (every
+    # pre-0063 row, and every ordinary row). Phase 1 value:
+    # 'NO_FURTHER_AVAILABLE_WORK' — all available TAGS were completed but fewer
+    # existed than the target.
+    #
+    # This is the ONLY input to the exception; the free-text remark is never
+    # parsed for it. It changes evaluation only: the count columns above keep
+    # the real entered actual, which is what the export displays. Validated
+    # statically on save and authoritatively at submit (_apply_benchmarks), so
+    # an exception that stops describing reality is cleared rather than frozen.
+    # See activity_master/benchmark_exception.py for the rules.
+    benchmark_exception_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     deficit: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     productivity_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
     # TASK_BASED sub-activities only: no deficit/productivity calculation —
@@ -441,6 +454,11 @@ class WorkReportTask(UUIDMixin, Base):
         CheckConstraint(
             "minutes_spent IS NULL OR (minutes_spent >= 0 AND minutes_spent <= 1440)",
             name="work_report_tasks_minutes_range",
+        ),
+        CheckConstraint(
+            "benchmark_exception_code IS NULL "
+            "OR benchmark_exception_code IN ('NO_FURTHER_AVAILABLE_WORK')",
+            name="work_report_tasks_benchmark_exception_code_valid",
         ),
         Index("work_report_tasks_report_idx", "report_id"),
         Index("work_report_tasks_period_idx", "period_id"),

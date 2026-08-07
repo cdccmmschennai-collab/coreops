@@ -11,7 +11,7 @@
  */
 import * as React from "react";
 import { type UseFormReturn } from "react-hook-form";
-import { Trash2 } from "lucide-react";
+import { Check, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,15 @@ import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { formatInt } from "@/lib/format";
 
 import type { OpenTask } from "../types";
+import {
+  BENCHMARK_EXCEPTION_NO_FURTHER_AVAILABLE_WORK,
+  EXCEPTION_CHECKBOX_HELP,
+  EXCEPTION_CHECKBOX_LABEL,
+  EXCEPTION_CONFIRMATION,
+  canShowNoFurtherWorkException,
+  resolveExceptionCode,
+} from "../benchmark-exception";
+import { scaledTarget } from "../benchmark-target";
 import { type WorkReportFormValues } from "../schemas";
 
 // COUNT_FIELD_KEY / COUNT_FIELD_LABEL are imported from activity-master/types:
@@ -232,6 +241,110 @@ function MaintenancePlantField({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * The "no further tags were available" checkbox, rendered inside the Tags count
+ * panel directly below the actual Tags input.
+ *
+ * Ticking it does NOT change the count above it. The employee's real number is
+ * what gets saved and what the benchmark report displays; the box only records
+ * WHY it fell short, so the row can be evaluated as target achieved.
+ *
+ * Its own component for one reason: the reconciliation effect. Every
+ * "clears automatically" rule — actual reached the target, actual emptied or
+ * made invalid, the benchmark changed, the row stopped being a numeric TAGS row
+ * — is the same rule (canShowNoFurtherWorkException stopped holding), so it is
+ * enforced in ONE effect instead of a handler per input. Changing the Activity
+ * or Sub-Activity clears it at the selection handler too, since that can unmount
+ * this component before the effect could run.
+ *
+ * Renders nothing at all when the conditions are not met, so a task-based
+ * activity, or a Docs / BOM / Spares / Pages / Records one, never shows it.
+ */
+function BenchmarkExceptionField({
+  form,
+  index,
+  benchmarkType,
+  countField,
+  target,
+  actual,
+}: {
+  form: UseFormReturn<WorkReportFormValues>;
+  index: number;
+  benchmarkType: SubActivityFlat["benchmark_type"];
+  countField: RelevantCountField | null;
+  target: number | null;
+  actual: string | undefined;
+}) {
+  const rules = { benchmarkType, countField, target, actual };
+  const visible = canShowNoFurtherWorkException(rules);
+  const value = form.watch(`tasks.${index}.benchmark_exception_code`);
+  // What the row SHOULD hold given what is currently selected and entered.
+  const resolved = resolveExceptionCode(rules, value) ?? "";
+
+  React.useEffect(() => {
+    if (resolved !== (value ?? "")) {
+      form.setValue(`tasks.${index}.benchmark_exception_code`, resolved, {
+        shouldDirty: true,
+      });
+    }
+  }, [resolved, value, form, index]);
+
+  if (!visible) return null;
+
+  return (
+    <FormField
+      control={form.control}
+      name={`tasks.${index}.benchmark_exception_code`}
+      render={({ field: f }) => (
+        // space-y-0: the three parts space themselves, so the checkbox line and
+        // its helper read as one block. sm:mt-6 drops the column past the
+        // input's own label so the checkbox sits level with the input beside it.
+        <FormItem className="space-y-0 sm:mt-6">
+          {/* The checkbox stays OUTSIDE the numeric input — inside it, it would
+              read as part of the value control. */}
+          <label className="flex cursor-pointer items-start gap-2">
+            <FormControl>
+              <Checkbox
+                className="mt-0.5 shrink-0"
+                checked={f.value === BENCHMARK_EXCEPTION_NO_FURTHER_AVAILABLE_WORK}
+                onChange={(e) =>
+                  f.onChange(
+                    e.target.checked
+                      ? BENCHMARK_EXCEPTION_NO_FURTHER_AVAILABLE_WORK
+                      : "",
+                  )
+                }
+              />
+            </FormControl>
+            {/* The most prominent text in this column. */}
+            <span className="text-sm font-medium leading-snug text-foreground">
+              {EXCEPTION_CHECKBOX_LABEL}
+            </span>
+          </label>
+          {/* Smaller and muted, indented to the label's text edge. */}
+          <p className="mt-1 pl-6 text-xs leading-snug text-muted-foreground">
+            {EXCEPTION_CHECKBOX_HELP}
+          </p>
+          {f.value === BENCHMARK_EXCEPTION_NO_FURTHER_AVAILABLE_WORK && (
+            // Compact success message, directly under the checkbox it belongs
+            // to rather than spanning the activity card. Uses the design
+            // system's success token (green-600) at the same
+            // tint/border/text weights as Badge variant="success".
+            <p
+              className="mt-2 ml-6 flex items-start gap-1.5 rounded-md border border-success/20 bg-success/10 px-2 py-1.5 text-xs font-medium leading-snug text-success"
+              role="status"
+            >
+              <Check className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span>{EXCEPTION_CONFIRMATION}</span>
+            </p>
+          )}
+          <FormMessage />
+        </FormItem>
+      )}
+    />
   );
 }
 
@@ -487,6 +600,11 @@ export function PeriodActivityEditor({
                         value={f.value || ""}
                         onValueChange={(v) => {
                           f.onChange(v);
+                          // A benchmark exception describes ONE activity's
+                          // available work, so it never survives a change of
+                          // activity — cleared here rather than left to the
+                          // field's own effect, which the change may unmount.
+                          form.setValue(`tasks.${index}.benchmark_exception_code`, "");
                           // Changing the Activity invalidates any previously
                           // chosen Sub-Activity from a different Activity.
                           const currentSub = form.getValues(`tasks.${index}.sub_activity_id`);
@@ -533,6 +651,10 @@ export function PeriodActivityEditor({
                             form.setValue(`tasks.${index}.activity_name`, sub?.activity_name);
                             // Server derives activity_type from the new selection.
                             form.setValue(`tasks.${index}.activity_type`, "");
+                            // A new sub-activity means a new benchmark (mode,
+                            // unit and target), so any exception recorded
+                            // against the old one no longer describes anything.
+                            form.setValue(`tasks.${index}.benchmark_exception_code`, "");
                             // Clear the OLD sub-activity's benchmarked count
                             // when the selection actually changes (see the
                             // classic form for the full rationale).
@@ -614,11 +736,21 @@ export function PeriodActivityEditor({
                 : null;
               const targetName = unit ? countFieldName(unit) : null;
               // The period fraction scales every displayed target exactly as
-              // the backend freezes it at submit (full day x1, half x0.5).
-              const targetValue =
-                sub?.benchmark_value != null
-                  ? sub.benchmark_value * fraction
-                  : null;
+              // the backend freezes it at submit (full day x1, half x0.5),
+              // rounded up to a whole unit — half of 35 tags is 18, never 17.5.
+              const targetValue = scaledTarget(sub?.benchmark_value, fraction);
+
+              // Whether the benchmark exception applies to this row, asked of
+              // the same pure rule BenchmarkExceptionField uses. Only the
+              // LAYOUT is decided here — the field owns its own rendering and
+              // clearing — so the two can never show a two-column row with an
+              // empty second column, or vice versa.
+              const canShowException = canShowNoFurtherWorkException({
+                benchmarkType: sub?.benchmark_type ?? null,
+                countField: unit,
+                target: targetValue,
+                actual: targetName ? row?.[targetName] : undefined,
+              });
 
               const others = ALL_COUNT_FIELDS.filter((n) => n !== targetName);
               // Never hide a stored value: if any collapsed unit already
@@ -682,18 +814,46 @@ export function PeriodActivityEditor({
                           </span>
                         )}
                       </div>
-                      <div className="sm:max-w-xs">
-                        {/* The target IS the input's label: the employee
-                            reads what is expected of them on the same line
-                            they type into. It comes from Activity Master
-                            and is never re-entered here. */}
-                        {renderCount(
-                          targetName,
-                          `Target: ${formatInt(targetValue)} ${COUNT_FIELD_LABEL[
-                            unit
-                          ].toUpperCase()} / ${sub!.benchmark_period_days ?? 1}d`,
-                          true,
-                        )}
+                      {/* Count input and exception control side by side on
+                          desktop (~35% / ~65%, 24px gutter), stacked on narrow
+                          screens. `fr` units rather than percentages so the gap
+                          comes out of the row, not out of the columns.
+                          The row collapses back to the single narrow input
+                          whenever the exception does not apply — decided by the
+                          SAME pure rule the field itself uses, so the two can
+                          never disagree. */}
+                      <div
+                        className={
+                          canShowException
+                            ? "grid grid-cols-1 gap-5 sm:grid-cols-[35fr_65fr] sm:gap-6"
+                            : undefined
+                        }
+                      >
+                        <div className={canShowException ? undefined : "sm:max-w-xs"}>
+                          {/* The target IS the input's label: the employee
+                              reads what is expected of them on the same line
+                              they type into. It comes from Activity Master
+                              and is never re-entered here. */}
+                          {renderCount(
+                            targetName,
+                            `Target: ${formatInt(targetValue)} ${COUNT_FIELD_LABEL[
+                              unit
+                            ].toUpperCase()} / ${sub!.benchmark_period_days ?? 1}d`,
+                            true,
+                          )}
+                        </div>
+                        {/* Beside the actual input — it is about the number
+                            just entered. Stays MOUNTED even when it renders
+                            nothing, so its clearing effect keeps running for a
+                            row whose exception has stopped applying. */}
+                        <BenchmarkExceptionField
+                          form={form}
+                          index={index}
+                          benchmarkType={sub?.benchmark_type ?? null}
+                          countField={unit}
+                          target={targetValue}
+                          actual={row?.[targetName]}
+                        />
                       </div>
                     </div>
                   )}
@@ -748,11 +908,8 @@ export function PeriodActivityEditor({
               const unit = isQuantityBenchmark(sub!.benchmark_type)
                 ? sub!.relevant_count_field
                 : null;
-              // Same fraction rule as the quantity input above.
-              const target =
-                sub!.benchmark_value != null
-                  ? sub!.benchmark_value * fraction
-                  : null;
+              // Same fraction + whole-unit rule as the quantity input above.
+              const target = scaledTarget(sub!.benchmark_value, fraction);
 
               const remarks = sub!.benchmark_remarks?.trim();
               const showNote =

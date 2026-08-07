@@ -171,13 +171,20 @@ EXPECTED_WIDTHS = {
 EXPECTED_MERGES = {"J1:O1", "P1:U1", "V1:AA1"}
 
 
+def _up(value):
+    """Every TEXT cell in this workbook is uppercased on export (the stored value
+    is untouched), so row lookups uppercase what they search for. Tests keep
+    naming employees and sub-activities the way they were created."""
+    return value.upper() if isinstance(value, str) else value
+
+
 def _detail_row(ws, label, sub, on_date):
     """Row index of one employee/sub-activity/date DETAIL row (total rows carry
     no DATE, so they never match)."""
     for r in range(3, ws.max_row + 1):
         if (
-            ws.cell(r, EMP).value == label
-            and ws.cell(r, SUB).value == sub
+            ws.cell(r, EMP).value == _up(label)
+            and ws.cell(r, SUB).value == _up(sub)
             and _cell_date(ws.cell(r, DATE_C).value) == on_date
         ):
             return r
@@ -189,8 +196,8 @@ def _sub_total_rows(ws, label, sub):
     in the PROJECT column)."""
     return [
         r for r in range(3, ws.max_row + 1)
-        if ws.cell(r, EMP).value == label
-        and ws.cell(r, SUB).value == sub
+        if ws.cell(r, EMP).value == _up(label)
+        and ws.cell(r, SUB).value == _up(sub)
         and ws.cell(r, PROJECT).value == "TOTAL"
     ]
 
@@ -206,14 +213,39 @@ def _all_total_rows(ws):
     return [r for r in range(3, ws.max_row + 1) if ws.cell(r, PROJECT).value == "TOTAL"]
 
 
+# The ACTUAL COMPLETED group carries the per-unit outcome markers: amber for an
+# accepted benchmark exception, red for a genuine shortfall. Those are the only
+# body cells besides DIFFERENCE % that may ever be filled.
+ACTUAL_COLS = set(range(ACT_TAGS, ACT_RECORDS + 1))
+AMBER = "FFFFF2CC"     # accepted exception
+SHORT_RED = "FFFFC7CE" # genuine shortfall (shares DIFFERENCE %'s red)
+
+
 def _assert_only_diff_cell_shaded(ws, row):
-    """No cell on `row` carries a fill except (possibly) DIFFERENCE %."""
+    """No cell on `row` carries a fill except DIFFERENCE % and the per-unit
+    ACTUAL COMPLETED markers.
+
+    The point this still guards: nothing spreads. The identity columns, the
+    BENCHMARK TARGET group, the PENDING group and the cycle bounds stay
+    unfilled, and no row is ever coloured end to end."""
     shaded = [
         ws.cell(row, c).coordinate
         for c in range(1, LAST_COL + 1)
-        if c != DIFF and _fill(ws.cell(row, c)) is not None
+        if c != DIFF and c not in ACTUAL_COLS and _fill(ws.cell(row, c)) is not None
     ]
-    assert shaded == [], f"row {row} must only ever shade its E cell; shaded: {shaded}"
+    assert shaded == [], (
+        f"row {row} may only shade DIFFERENCE % and ACTUAL cells; shaded: {shaded}"
+    )
+
+
+def _assert_actual_marker(ws, row, col, expected):
+    """The ACTUAL COMPLETED cell at `col` carries exactly `expected` (AMBER,
+    SHORT_RED, or None) — and the target/pending cells for that same unit stay
+    unfilled, so a marker never bleeds across its row group."""
+    assert _fill(ws.cell(row, col)) == expected, ws.cell(row, col).coordinate
+    unit_offset = col - ACT_TAGS
+    assert _fill(ws.cell(row, TGT_TAGS + unit_offset)) is None
+    assert _fill(ws.cell(row, PEN_TAGS + unit_offset)) is None
 
 
 # --- cycle bounds -----------------------------------------------------------
@@ -288,11 +320,13 @@ def test_default_export_is_previous_cycle_with_reference_layout(client, setup_au
     assert ws.auto_filter.ref == "A2:AC4"
 
     # Detail row, then its sub-activity TOTAL. No employee grand total.
+    # Every text cell is uppercased on export; the employee's stored
+    # "Test User" / "Test Project" / "Activity for FMTL" are untouched in the DB.
     d = _detail_row(ws, "E-1 - Test User", "FMTL", cycle_start)
-    assert ws.cell(d, EMP).value == "E-1 - Test User"
+    assert ws.cell(d, EMP).value == "E-1 - TEST USER"
     assert _cell_date(ws.cell(d, DATE_C).value) == cycle_start
-    assert ws.cell(d, PROJECT).value == "P-1 - Test Project"
-    assert ws.cell(d, ACTIVITY).value == "Activity for FMTL"
+    assert ws.cell(d, PROJECT).value == "P-1 - TEST PROJECT"
+    assert ws.cell(d, ACTIVITY).value == "ACTIVITY FOR FMTL"
     assert ws.cell(d, SUB).value == "FMTL"
     assert ws.cell(d, ACH).value is None             # % only on the TOTAL row
     assert ws.cell(d, DIFF).value is None
@@ -304,10 +338,10 @@ def test_default_export_is_previous_cycle_with_reference_layout(client, setup_au
     assert _cell_date(ws.cell(d, CYC_END).value) == cycle_end
 
     t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
-    assert ws.cell(t, EMP).value == "E-1 - Test User"    # repeated (filterable)
+    assert ws.cell(t, EMP).value == "E-1 - TEST USER"    # repeated (filterable)
     assert ws.cell(t, DATE_C).value is None              # DATE blank on totals
     assert ws.cell(t, PROJECT).value == "TOTAL"          # marker in PROJECT col
-    assert ws.cell(t, ACTIVITY).value == "Activity for FMTL"
+    assert ws.cell(t, ACTIVITY).value == "ACTIVITY FOR FMTL"
     assert ws.cell(t, SUB).value == "FMTL"
     assert ws.cell(t, TGT_TAGS).value == 250
     assert ws.cell(t, ACT_TAGS).value == 200
@@ -613,11 +647,17 @@ def test_acceptance_below_95_shades_difference_cell_red(client, setup_author, ac
     assert round(ws.cell(t, DIFF).value * 100, 2) == 7.69
     assert _fill(ws.cell(t, DIFF)) == RED
     assert _fill(ws.cell(t, ACH)) is None       # the decider is never shaded
+    # Short of target, so the ACTUAL cell wears the shortfall marker too.
+    _assert_actual_marker(ws, t, ACT_TAGS, SHORT_RED)
     _assert_only_diff_cell_shaded(ws, t)
 
 
-def test_acceptance_95_to_100_has_no_shade_anywhere(client, setup_author, activity_admin):
-    """Target 100 / actual 97 -> 97.00%, 3.00% difference and NO fill at all."""
+def test_acceptance_95_to_100_shades_only_the_actual_cell(
+    client, setup_author, activity_admin,
+):
+    """Target 100 / actual 97 -> 97.00%, 3.00% difference. Inside the accepted
+    band, so DIFFERENCE % stays unshaded — but the cycle is still 3 short, so
+    the ACTUAL cell carries the shortfall marker. Nothing else is filled."""
     a = setup_author()
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
@@ -628,9 +668,12 @@ def test_acceptance_95_to_100_has_no_shade_anywhere(client, setup_author, activi
     assert ws.cell(t, ACH).value == 0.97
     assert ws.cell(t, DIFF).value == pytest.approx(0.03)
     assert _fill(ws.cell(t, DIFF)) is None
-    # The entire row carries no fill whatsoever.
+    _assert_actual_marker(ws, t, ACT_TAGS, SHORT_RED)
+    # Every cell other than that one ACTUAL cell is unfilled.
     for c in range(1, LAST_COL + 1):
-        assert _fill(ws.cell(t, c)) is None
+        if c == ACT_TAGS:
+            continue
+        assert _fill(ws.cell(t, c)) is None, ws.cell(t, c).coordinate
 
 
 def test_acceptance_above_100_shades_difference_cell_green(client, setup_author, activity_admin):
@@ -676,12 +719,20 @@ def test_shade_boundaries_are_strict(client, setup_author, activity_admin):
         assert ws.cell(t, ACH).value == pytest.approx(actual / 10000)
         assert _fill(ws.cell(t, DIFF)) == expected, f"{code}: {actual / 100:.2f}%"
         assert _fill(ws.cell(t, ACH)) is None
+        # The shortfall marker follows the ARITHMETIC, not the shade bands: it
+        # appears wherever the actual is below target, including inside the
+        # 95..100% band that DIFFERENCE % leaves unshaded.
+        _assert_actual_marker(
+            ws, t, ACT_TAGS, SHORT_RED if actual < 10000 else None
+        )
         _assert_only_diff_cell_shaded(ws, t)
 
 
 def test_no_full_row_is_ever_coloured(client, setup_author, activity_admin):
-    """Across a mixed sheet (red, green, unshaded and textual rows), the ONLY
-    filled body cells in the whole workbook are DIFFERENCE % cells."""
+    """Across a mixed sheet (red, green and unshaded rows), the only filled body
+    cells in the whole workbook are DIFFERENCE % cells and per-unit ACTUAL
+    COMPLETED markers. No row is coloured end to end, and no fill ever lands in
+    an identity, TARGET, PENDING or cycle column."""
     _, sub = _make_sub_activity(client, activity_admin, benchmark_value=100, name="FMTL")
     cycle_start, _ = _prev_cycle()
     for code, actual in (("R", 80), ("G", 150), ("N", 97)):
@@ -692,13 +743,21 @@ def test_no_full_row_is_ever_coloured(client, setup_author, activity_admin):
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     filled = {
-        ws.cell(r, c).coordinate: _fill(ws.cell(r, c))
+        ws.cell(r, c).coordinate: (c, _fill(ws.cell(r, c)))
         for r in range(3, ws.max_row + 1)
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("F") for coord in filled), filled
-    assert set(filled.values()) <= {RED, GREEN}
+    # Only two columns may ever be filled: DIFFERENCE % and ACTUAL COMPLETED.
+    assert all(c == DIFF or c in ACTUAL_COLS for c, _f in filled.values()), filled
+    assert {f for _c, f in filled.values()} <= {RED, GREEN, SHORT_RED, AMBER}
+    # No row is filled across more than those two positions.
+    per_row: dict[int, int] = {}
+    for r in range(3, ws.max_row + 1):
+        per_row[r] = sum(
+            1 for c in range(1, LAST_COL + 1) if _fill(ws.cell(r, c)) is not None
+        )
+    assert max(per_row.values()) <= 2, per_row
 
 
 # --- sub_activity_id grouping + filter integrity ----------------------------
@@ -746,17 +805,36 @@ def test_filter_by_sub_activity_keeps_detail_and_subtotal(client, setup_author, 
     kept = [r for r in range(3, ws.max_row + 1) if ws.cell(r, SUB).value == sub_name]
     assert len(kept) == 2  # the detail row and its total row
     projects = {ws.cell(r, PROJECT).value for r in kept}
-    assert projects == {"P-1 - Test Project", "TOTAL"}
+    assert projects == {"P-1 - TEST PROJECT", "TOTAL"}   # uppercased on export
 
 
-# --- textual task rows: detail only, no total, no %, no shade ----------------
+# --- task-mode activities are excluded from this workbook entirely -----------
+#
+# This sheet answers "did the measured output meet the measured target?", so it
+# carries NUMERIC rows only. Task-mode activities (TASK_BASED,
+# TASK_STATUS_ONLY, TASK_WITH_QUANTITY) are deadline/completion work: they used
+# to appear here with textual "FINISHED" / "N DAYS OVERDUE" cells sitting in
+# numeric columns, and the counted variant silently moved the achievement %.
+# They are now absent from the workbook — no detail row, no total row, no
+# contribution to any target/actual/pending/percentage.
+#
+# The exclusion is scoped to THIS export: daily reports and every other view
+# still show task activities (asserted at the end of this section).
 
-def test_textual_task_rows_have_no_total_or_percentage_mahesvari(
+def _sub_rows(ws, sub_name):
+    """Every row of the sheet naming `sub_name` in SUB ACTIVITY."""
+    return [
+        r for r in range(3, ws.max_row + 1)
+        if ws.cell(r, SUB).value == _up(sub_name)
+    ]
+
+
+def test_textual_task_rows_are_absent_from_the_workbook(
     client, db, setup_author, activity_admin,
 ):
-    """Exact required case: a purely textual task sub-activity shows ONLY its
-    dated detail rows — no subtotal, no percentages, no shading, no numeric
-    totals."""
+    """Exact required case: a purely textual task sub-activity contributes NO
+    row at all — neither detail nor total — and none of its status wording
+    ("FINISH WITHIN A DAY" / "FINISHED" / "NO PENDING") reaches any cell."""
     import uuid as uuid_mod
 
     from app.modules.work_reports.models import WorkReportTask
@@ -775,66 +853,70 @@ def test_textual_task_rows_have_no_total_or_percentage_mahesvari(
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "CDCON064 - MAHESVARI S"
 
-    # Exactly two rows for the sub-activity — both DETAIL, no total.
-    sub_rows = [r for r in range(3, ws.max_row + 1) if ws.cell(r, SUB).value == sub_name]
-    assert len(sub_rows) == 2
+    assert _sub_rows(ws, sub_name) == []
     assert _sub_total_rows(ws, label, sub_name) == []
-    for r, d in zip(sub_rows, (d1, d2)):
-        assert _cell_date(ws.cell(r, DATE_C).value) == d
-        assert ws.cell(r, TGT_TAGS).value == "FINISH WITHIN A DAY"
-        assert ws.cell(r, ACT_TAGS).value == "FINISHED"
-        assert ws.cell(r, PEN_TAGS).value == "NO PENDING"
-        assert ws.cell(r, ACH).value is None            # percentages blank
-        assert ws.cell(r, DIFF).value is None
-        assert _fill(ws.cell(r, DIFF)) is None          # and never shaded
-        _assert_only_diff_cell_shaded(ws, r)
-        # Textual rows keep normal detail-row styling.
-        assert ws.cell(r, EMP).font.bold is False
-        assert ws.cell(r, EMP).font.name == "Arial" and ws.cell(r, EMP).font.sz == 10
-        assert ws.cell(r, EMP).border.top.style == "thin"
-        # No numeric totals in any target/actual/pending unit cell.
-        for c in (TGT_TAGS, ACT_TAGS, PEN_TAGS):
-            assert not isinstance(ws.cell(r, c).value, (int, float))
+    # Nothing in the sheet at all: this employee had only task work this cycle.
+    assert ws.max_row == 2  # the two header rows only
+    every_value = {
+        ws.cell(r, c).value
+        for r in range(3, ws.max_row + 1)
+        for c in range(1, LAST_COL + 1)
+    }
+    assert every_value.isdisjoint(
+        {"FINISH WITHIN A DAY", "FINISHED", "NO PENDING", "NOT COMPLETED"}
+    )
 
 
-def test_textual_status_variants_stay_textual_and_excluded(client, db, setup_author, activity_admin):
-    """FINISH WITHIN 2 DAYS / NOT COMPLETED / N DAYS OVERDUE remain textual and
-    never produce a subtotal or percentage."""
+def test_task_status_wording_never_reaches_a_numeric_column(
+    client, db, setup_author, activity_admin,
+):
+    """An OVERDUE task used to write "FINISH WITHIN 2 DAYS" / "NOT COMPLETED" /
+    "3 DAYS OVERDUE" into the TAGS columns. It now contributes nothing, so every
+    unit cell in the sheet stays a real number or blank — never a string."""
     import uuid as uuid_mod
 
     from app.modules.work_reports.models import WorkReportTask
 
     a = setup_author()
+    _, num = _make_sub_activity(client, activity_admin, benchmark_value=100, name="NUM")
     _, task = _make_task_sub(client, activity_admin, name="OVERDUE-TASK", period=2)
     cycle_start, cycle_end = _prev_cycle()
-    tid = _submit_task(client, a["header"], a["project"].id, task["id"], cycle_start)
+    # Separate dates: one report per employee per date.
+    _submit(client, a["header"], a["project"].id, num["id"], cycle_start, 80)
+    tid = _submit_task(
+        client, a["header"], a["project"].id, task["id"], cycle_start + timedelta(days=1)
+    )
     row = db.get(WorkReportTask, uuid_mod.UUID(tid))
     row.due_date = cycle_end - timedelta(days=3)   # 3 days overdue as of cycle end
     db.commit()
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "E-1 - Test User"
-    d = _detail_row(ws, label, "OVERDUE-TASK", cycle_start)
-    assert ws.cell(d, TGT_TAGS).value == "FINISH WITHIN 2 DAYS"
-    assert ws.cell(d, ACT_TAGS).value == "NOT COMPLETED"
-    assert ws.cell(d, PEN_TAGS).value == "3 DAYS OVERDUE"
-    assert ws.cell(d, ACH).value is None
-    assert ws.cell(d, DIFF).value is None
+    assert _sub_rows(ws, "OVERDUE-TASK") == []
     assert _sub_total_rows(ws, label, "OVERDUE-TASK") == []
+    # The numeric sub-activity is unaffected: 80/100 as if the task never was.
+    t = _sub_total_row(ws, label, "NUM")
+    assert ws.cell(t, ACH).value == 0.8
+    for r in range(3, ws.max_row + 1):
+        for c in range(TGT_TAGS, PEN_RECORDS + 1):
+            assert not isinstance(ws.cell(r, c).value, str), ws.cell(r, c).coordinate
 
 
-def test_count_based_task_is_numeric_and_gets_a_subtotal(client, db, setup_author, activity_admin):
-    """CASE A (count-based lumpsum with real numbers) is treated as numeric: its
-    bare numbers feed a subtotal + %. A plain textual task alongside it gets
-    none."""
+def test_count_based_task_no_longer_contributes_to_any_total(
+    client, db, setup_author, activity_admin,
+):
+    """A count-based lumpsum (TASK mode carrying a quantity) used to be folded
+    into the numeric subtotal and to move the achievement %. It is a task, so it
+    is excluded outright — the employee's numeric total reads exactly as it
+    would with no lumpsum at all."""
     import uuid as uuid_mod
 
     from app.modules.activity_master.models import ActivityMaster
     from app.modules.work_reports.models import WorkReportTask
 
     a = setup_author()
+    _, num = _make_sub_activity(client, activity_admin, benchmark_value=100, name="NUM")
     _, count_sub = _make_task_sub(client, activity_admin, name="COUNT-LUMP")
-    _, text_sub = _make_task_sub(client, activity_admin, name="TEXT-TASK")
     master = db.get(ActivityMaster, uuid_mod.UUID(count_sub["id"]))
     master.benchmark_value, master.relevant_count_field = 1000, "tags"
     db.commit()
@@ -843,39 +925,36 @@ def test_count_based_task_is_numeric_and_gets_a_subtotal(client, db, setup_autho
     payload = {
         "report_date": cycle_start.isoformat(),
         "tasks": [
+            {"project_id": str(a["project"].id), "description": "n",
+             "sub_activity_id": num["id"], "tags_count": 80},
             {"project_id": str(a["project"].id), "description": "c",
              "sub_activity_id": count_sub["id"], "tags_count": 500},
-            {"project_id": str(a["project"].id), "description": "t",
-             "sub_activity_id": text_sub["id"]},
         ],
     }
     body = client.post(BASE, headers=a["header"], json=payload).json()
     assert client.post(f"{BASE}/{body['id']}/submit", headers=a["header"]).status_code == 200
-    due = {count_sub["id"]: cycle_end - timedelta(days=5), text_sub["id"]: cycle_end - timedelta(days=3)}
     for t in body["tasks"]:
         row = db.get(WorkReportTask, uuid_mod.UUID(t["id"]))
-        row.due_date = due[str(row.sub_activity_id)]
+        if str(row.sub_activity_id) == count_sub["id"]:
+            row.due_date = cycle_end - timedelta(days=5)
     db.commit()
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "E-1 - Test User"
-    # Count-based lumpsum: text detail cells, numeric subtotal (500/1000 = 50%).
-    dc = _detail_row(ws, label, "COUNT-LUMP", cycle_start)
-    assert ws.cell(dc, TGT_TAGS).value == "1000 TAGS PER DAY"
-    ct = _sub_total_row(ws, label, "COUNT-LUMP")
-    assert ws.cell(ct, TGT_TAGS).value == 1000
-    assert ws.cell(ct, ACT_TAGS).value == 500
-    assert ws.cell(ct, ACH).value == 0.5
-    assert ws.cell(ct, DIFF).value == pytest.approx(0.5)
-    assert _fill(ws.cell(ct, DIFF)) == RED
-    # Plain textual task: detail only, no subtotal.
-    assert _sub_total_rows(ws, label, "TEXT-TASK") == []
+    assert _sub_rows(ws, "COUNT-LUMP") == []
+    assert _sub_total_rows(ws, label, "COUNT-LUMP") == []
+    # 80/100 — the lumpsum's 500 tags moved nothing.
+    t = _sub_total_row(ws, label, "NUM")
+    assert ws.cell(t, TGT_TAGS).value == 100
+    assert ws.cell(t, ACT_TAGS).value == 80
+    assert ws.cell(t, ACH).value == 0.8
 
 
-def test_numeric_and_textual_mixed_employee(client, db, setup_author, activity_admin):
-    """One employee with a NUMERIC sub-activity and a textual DONE task: the
-    numeric one gets its subtotal, the textual one does not, and the completed
-    task never moves the numeric %."""
+def test_numeric_rows_remain_when_a_task_row_shares_the_report(
+    client, db, setup_author, activity_admin,
+):
+    """The exclusion removes task rows only. A NUMERIC sub-activity on the same
+    report keeps its detail rows, its TOTAL row and its percentage."""
     import uuid as uuid_mod
 
     from app.modules.work_reports.models import WorkReportTask
@@ -886,7 +965,7 @@ def test_numeric_and_textual_mixed_employee(client, db, setup_author, activity_a
     cycle_start, _ = _prev_cycle()
     day1, day2, day3 = cycle_start, cycle_start + timedelta(days=1), cycle_start + timedelta(days=2)
     _submit(client, a["header"], a["project"].id, num["id"], day1, 200)  # over
-    _submit(client, a["header"], a["project"].id, num["id"], day2, 80)   # short -> included
+    _submit(client, a["header"], a["project"].id, num["id"], day2, 80)   # short
     tid = _submit_task(client, a["header"], a["project"].id, done["id"], day3)
     task = db.get(WorkReportTask, uuid_mod.UUID(tid))
     task.due_date, task.is_completed, task.completed_date = day3, True, day3
@@ -894,17 +973,18 @@ def test_numeric_and_textual_mixed_employee(client, db, setup_author, activity_a
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "E-1 - Test User"
+    assert len(_sub_rows(ws, "NUM")) == 3              # two details + one total
     num_total = _sub_total_row(ws, label, "NUM")
     assert ws.cell(num_total, ACH).value == 1.4        # (200+80)/(100+100)
-    assert _sub_total_rows(ws, label, "DONE") == []    # textual DONE: no total
-    d = _detail_row(ws, label, "DONE", day3)
-    assert ws.cell(d, TGT_TAGS).value == "FINISH WITHIN A DAY"
-    assert ws.cell(d, ACT_TAGS).value == "FINISHED"
+    assert _sub_rows(ws, "DONE") == []
 
 
-def test_no_numeric_target_does_not_divide_by_zero(client, db, setup_author, activity_admin):
-    """A plain textual task has no numeric target — export succeeds (no /0) and
-    emits no subtotal for it."""
+def test_task_only_employee_is_not_exported_and_export_still_succeeds(
+    client, db, setup_author, activity_admin,
+):
+    """An employee whose whole cycle was task work has nothing to measure, so
+    they are absent from the sheet — and the export still builds (the removed
+    lumpsum path was the only source of a target-less row, so there is no /0)."""
     import uuid as uuid_mod
 
     from app.modules.work_reports.models import WorkReportTask
@@ -921,6 +1001,41 @@ def test_no_numeric_target_does_not_divide_by_zero(client, db, setup_author, act
     assert res.status_code == 200  # no ZeroDivisionError
     ws = _load_sheet(res.content)
     assert _sub_total_rows(ws, "E-1 - Test User", "PLAIN") == []
+    assert ws.max_row == 2  # headers only — the employee contributed nothing
+
+
+def test_task_activities_are_still_visible_outside_this_export(
+    client, db, setup_author, activity_admin,
+):
+    """Guard on the SCOPE of the exclusion: the task row is gone from the
+    benchmark workbook but untouched everywhere else — it is still stored, still
+    returned by the daily report, and still listed by the cycle-task query the
+    other benchmark views read."""
+    import uuid as uuid_mod
+
+    from app.modules.activity_master.service import get_cycle_task_activities
+    from app.modules.work_reports.models import WorkReportTask
+
+    a = setup_author()
+    _, task = _make_task_sub(client, activity_admin, name="STILL-THERE")
+    cycle_start, cycle_end = _prev_cycle()
+    tid = _submit_task(client, a["header"], a["project"].id, task["id"], cycle_start)
+    row = db.get(WorkReportTask, uuid_mod.UUID(tid))
+    report_id = str(row.report_id)
+    row.due_date = cycle_end - timedelta(days=1)
+    db.commit()
+
+    # Gone from the benchmark workbook…
+    ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
+    assert _sub_rows(ws, "STILL-THERE") == []
+
+    # …but the daily report still carries it, verbatim and in its own case.
+    detail = client.get(f"{BASE}/{report_id}", headers=a["header"]).json()
+    assert [t["sub_activity_name"] for t in detail["tasks"]] == ["STILL-THERE"]
+
+    # …and the shared cycle-task query still returns it for the other views.
+    cyc = get_cycle_task_activities(db, employee_ids=None, today=cycle_end)
+    assert "STILL-THERE" in {r["sub_activity_name"] for r in cyc}
 
 
 # --- Excel style regression (compare actual stored workbook properties) -------
@@ -1000,6 +1115,11 @@ def test_detail_and_total_row_style_matches_reference(client, setup_author, acti
 
     for row, bold, font in ((d, False, _DATA_FONT), (t, True, _PB_TOTAL_FONT)):
         for c in range(1, LAST_COL + 1):
+            # ACT_TAGS carries the shortfall marker on this row (80 of 100), and
+            # a marker deliberately overrides the body font and border — its
+            # own styling is asserted below and in test_benchmark_scaled_target.
+            if c == ACT_TAGS:
+                continue
             cell = ws.cell(row, c)
             assert cell.font.name == font.name == "Arial", cell.coordinate
             assert cell.font.sz == 10
@@ -1017,8 +1137,13 @@ def test_detail_and_total_row_style_matches_reference(client, setup_author, acti
     assert ws.cell(t, ACH).number_format == "0.00%"
     assert ws.cell(t, DIFF).number_format == "0.00%"
 
-    # Detail row is entirely unfilled; the total row shades only its E cell.
+    # 80 of 100: the ACTUAL cell wears the shortfall marker on BOTH rows, and
+    # the total additionally shades its DIFFERENCE % cell. Nothing else fills.
+    _assert_actual_marker(ws, d, ACT_TAGS, SHORT_RED)
+    _assert_actual_marker(ws, t, ACT_TAGS, SHORT_RED)
     for c in range(1, LAST_COL + 1):
+        if c == ACT_TAGS:
+            continue
         assert _fill(ws.cell(d, c)) is None, ws.cell(d, c).coordinate
     assert _fill(ws.cell(t, DIFF)) == RED
     _assert_only_diff_cell_shaded(ws, t)
@@ -1101,6 +1226,9 @@ def test_pages_below_target_is_red(client, setup_author, activity_admin):
     assert ws.cell(t, ACH).number_format == "0.00%"
     assert ws.cell(t, DIFF).number_format == "0.00%"
     assert _fill(ws.cell(t, DIFF)) == RED
+    # The shortfall marker lands on the PAGES actual, not the TAGS one.
+    _assert_actual_marker(ws, t, ACT_PAGES, SHORT_RED)
+    assert _fill(ws.cell(t, ACT_TAGS)) is None
     _assert_only_diff_cell_shaded(ws, t)
 
 
@@ -1229,10 +1357,11 @@ def test_pages_and_records_coexist_without_compensating(client, setup_author, ac
     assert _fill(ws.cell(r, DIFF)) == RED
 
 
-def test_task_with_quantity_pages_counted_exactly_once(client, setup_author, activity_admin):
-    """TASK_WITH_QUANTITY carries a quantity AND a deadline, so it could be
-    picked up by both the daily-quantity ledger and the task lumpsum query. It
-    must appear through the lumpsum side ONLY: one subtotal, counted once."""
+def test_task_with_quantity_pages_is_excluded_entirely(client, setup_author, activity_admin):
+    """TASK_WITH_QUANTITY carries a quantity AND a deadline. It is a TASK mode,
+    so it is excluded from this workbook outright — previously it reached the
+    sheet through the lumpsum query and contributed its quantity to a subtotal.
+    Nothing of it appears now: no detail row, no total, no PAGES numbers."""
     a = setup_author()
     _, sub = _make_task_qty_sub(
         client, activity_admin, benchmark_value=500, name="MTL-TASK-PAGES", count_field="pages"
@@ -1242,29 +1371,17 @@ def test_task_with_quantity_pages_counted_exactly_once(client, setup_author, act
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "E-1 - Test User"
-    # Exactly one subtotal, and exactly one detail row for the sub-activity.
-    assert len(_sub_total_rows(ws, label, "MTL-TASK-PAGES")) == 1
-    details = [
-        r for r in range(3, ws.max_row + 1)
-        if ws.cell(r, SUB).value == "MTL-TASK-PAGES"
-        and ws.cell(r, PROJECT).value != "TOTAL"
-    ]
-    assert len(details) == 1
-    # Counted once: the target is 500, not 1000.
-    t = _sub_total_row(ws, label, "MTL-TASK-PAGES")
-    assert ws.cell(t, TGT_PAGES).value == 500
-    assert ws.cell(t, ACT_PAGES).value == 400
-    assert ws.cell(t, PEN_PAGES).value == 100
-    assert ws.cell(t, ACH).value == 0.8
-    assert _fill(ws.cell(t, DIFF)) == RED
+    assert _sub_total_rows(ws, label, "MTL-TASK-PAGES") == []
+    assert _sub_rows(ws, "MTL-TASK-PAGES") == []
+    assert ws.max_row == 2  # headers only
 
 
-def test_textual_task_beside_pages_gets_no_subtotal_and_blank_f_g(
+def test_task_row_beside_pages_leaves_the_pages_total_untouched(
     client, setup_author, activity_admin
 ):
-    """A textual "FINISH WITHIN A DAY" task keeps its detail rows only - no
-    subtotal, blank ACHIEVEMENT %/DIFFERENCE %, no shading - while a PAGES
-    activity for the same employee still totals normally."""
+    """A task row sharing the report with a PAGES activity contributes nothing:
+    the task is absent, and the PAGES sub-activity totals exactly as it would
+    have alone."""
     a = setup_author()
     _, pages_sub = _make_daily_sub(
         client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
@@ -1285,22 +1402,26 @@ def test_textual_task_beside_pages_gets_no_subtotal_and_blank_f_g(
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "E-1 - Test User"
+    assert _sub_rows(ws, "TEXT-TASK") == []
     assert _sub_total_rows(ws, label, "TEXT-TASK") == []
-    d = _detail_row(ws, label, "TEXT-TASK", cycle_start)
-    assert ws.cell(d, TGT_TAGS).value == "FINISH WITHIN A DAY"
-    assert ws.cell(d, ACH).value is None
-    assert ws.cell(d, DIFF).value is None
-    for c in range(1, LAST_COL + 1):
-        assert _fill(ws.cell(d, c)) is None, ws.cell(d, c).coordinate
-    # The PAGES activity is unaffected by the textual row sharing the report.
+    # The PAGES activity is unaffected by the task row sharing the report.
     t = _sub_total_row(ws, label, "MTL-PAGES")
     assert ws.cell(t, ACH).value == 0.8
+    assert ws.cell(t, TGT_PAGES).value == 500
+    assert ws.cell(t, ACT_PAGES).value == 400
 
 
-def test_only_difference_column_is_ever_filled_across_six_units(client, setup_author, activity_admin):
+def test_only_difference_and_actual_columns_are_ever_filled_across_six_units(
+    client, setup_author, activity_admin,
+):
     """Sheet-wide colour audit with PAGES and RECORDS in play: outside the yellow
-    header, the ONLY filled cells in the whole workbook are DIFFERENCE % cells (column F),
-    and they only ever carry the two approved colours."""
+    header, the only filled cells in the whole workbook are DIFFERENCE % cells
+    and per-unit ACTUAL COMPLETED markers, each carrying only an approved colour.
+
+    The dataset is deliberately mixed — PAGES over target (620 of 500, green
+    difference, unmarked actual) and RECORDS under it (850 of 1000, red
+    difference, red actual) — so the audit sees both outcomes at once and
+    proves a marker lands on the SHORT unit only."""
     a = setup_author()
     _, pages_sub = _make_daily_sub(
         client, activity_admin, benchmark_value=500, name="MTL-PAGES", count_field="pages"
@@ -1315,13 +1436,25 @@ def test_only_difference_column_is_ever_filled_across_six_units(client, setup_au
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     filled = {
-        ws.cell(r, c).coordinate: _fill(ws.cell(r, c))
+        ws.cell(r, c).coordinate: (c, _fill(ws.cell(r, c)))
         for r in range(3, ws.max_row + 1)
         for c in range(1, LAST_COL + 1)
         if _fill(ws.cell(r, c)) is not None
     }
-    assert all(coord.startswith("F") for coord in filled), filled
-    assert set(filled.values()) <= {RED, GREEN}
+    # Two columns may be filled, and no others — never an identity column,
+    # never a BENCHMARK TARGET or PENDING cell, never a cycle bound.
+    assert all(c == DIFF or c in ACTUAL_COLS for c, _f in filled.values()), filled
+    assert {f for _c, f in filled.values()} <= {RED, GREEN, SHORT_RED, AMBER}
+
+    # The over-target PAGES row is unmarked; the short RECORDS row is red — and
+    # neither marker strays into the other unit's columns.
+    pages_total = _sub_total_row(ws, "E-1 - Test User", "MTL-PAGES")
+    rec_total = _sub_total_row(ws, "E-1 - Test User", "DOC IDB-QC")
+    _assert_actual_marker(ws, pages_total, ACT_PAGES, None)
+    assert _fill(ws.cell(pages_total, DIFF)) == GREEN
+    _assert_actual_marker(ws, rec_total, ACT_RECORDS, SHORT_RED)
+    assert _fill(ws.cell(rec_total, DIFF)) == RED
+    assert _fill(ws.cell(rec_total, ACT_PAGES)) is None
     # The header keeps its yellow across all 29 columns. Row 1's merged
     # continuation cells hold no style of their own (Excel paints the anchor's
     # fill across the span), so only the anchors are checked there.
@@ -1409,7 +1542,7 @@ def test_day_remark_repeats_on_every_detail_row_of_that_day(
     label = "E-1 - Test User"
     for sub_name in ("FMTL-AUDIT", "MTL-DOC"):
         d = _detail_row(ws, label, sub_name, cycle_start)
-        assert ws.cell(d, REMARKS).value == "Checked audit queries", sub_name
+        assert ws.cell(d, REMARKS).value == "CHECKED AUDIT QUERIES", sub_name
     # No merged cells were introduced to achieve the repeat.
     assert {str(m) for m in ws.merged_cells.ranges} == EXPECTED_MERGES
 
@@ -1428,8 +1561,8 @@ def test_different_days_show_their_own_remarks(client, setup_author, activity_ad
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     label = "E-1 - Test User"
-    assert ws.cell(_detail_row(ws, label, "FMTL", cycle_start), REMARKS).value == "Day one remark"
-    assert ws.cell(_detail_row(ws, label, "FMTL", day2), REMARKS).value == "Day two remark"
+    assert ws.cell(_detail_row(ws, label, "FMTL", cycle_start), REMARKS).value == "DAY ONE REMARK"
+    assert ws.cell(_detail_row(ws, label, "FMTL", day2), REMARKS).value == "DAY TWO REMARK"
 
 
 def test_blank_and_whitespace_remarks_stay_blank(client, setup_author, activity_admin):
@@ -1461,9 +1594,9 @@ def test_total_row_has_blank_remarks_and_total_in_column_i(
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     t = _sub_total_row(ws, "E-1 - Test User", "FMTL")
-    assert ws.cell(t, EMP).value == "E-1 - Test User"
+    assert ws.cell(t, EMP).value == "E-1 - TEST USER"
     assert ws.cell(t, DATE_C).value is None          # B blank
-    assert ws.cell(t, ACTIVITY).value == "Activity for FMTL"
+    assert ws.cell(t, ACTIVITY).value == "ACTIVITY FOR FMTL"
     assert ws.cell(t, ACH).value == 0.8              # D
     assert ws.cell(t, DIFF).value == pytest.approx(0.2)   # E
     assert ws.cell(t, SUB).value == "FMTL"           # F
@@ -1495,7 +1628,7 @@ def test_day_remarks_never_carries_benchmark_remarks(client, db, setup_author, a
 
     ws = _load_sheet(client.get(EXPORT_URL, headers=activity_admin).content)
     d = _detail_row(ws, "E-1 - Test User", "MTL-PAGES", cycle_start)
-    assert ws.cell(d, REMARKS).value == "Waiting on vendor drawings"
+    assert ws.cell(d, REMARKS).value == "WAITING ON VENDOR DRAWINGS"
     # The Activity Master guidance appears nowhere in the sheet.
     everywhere = {
         ws.cell(r, c).value

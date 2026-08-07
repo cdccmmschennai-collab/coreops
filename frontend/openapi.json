@@ -16349,6 +16349,18 @@
             "title": "Is Completed",
             "default": false
           },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
+          },
           "work_item_id": {
             "anyOf": [
               {
@@ -16614,6 +16626,17 @@
               }
             ],
             "title": "Relevant Count Field Snapshot"
+          },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
           },
           "deficit": {
             "anyOf": [
