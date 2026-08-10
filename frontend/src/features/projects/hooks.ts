@@ -12,6 +12,7 @@ import type {
   ProjectMemberCreateBody,
   ProjectMemberRole,
   ProjectUpdateBody,
+  TagScopeUpdateBody,
 } from "./types";
 
 export function useProjects(params: ProjectListParams) {
@@ -68,6 +69,57 @@ export function useSetProjectHead(id: string) {
       qc.invalidateQueries({ queryKey: projectsKeys.members(id) });
       qc.invalidateQueries({ queryKey: projectsKeys.all });
     },
+  });
+}
+
+// ---------- tag scope ----------
+/**
+ * Current tag scope + revision history. The endpoint is PM/Head-only, so this
+ * is gated on `enabled` (the caller passes the same authority the tab uses)
+ * rather than firing a request every viewer would get a 403 for.
+ */
+export function useTagScope(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: projectsKeys.tagScope(id ?? ""),
+    queryFn: () => projectsApi.getTagScope(id as string),
+    enabled: !!id && enabled,
+  });
+}
+
+/**
+ * Establish or revise the scope. The response already carries the new current
+ * scope and the full history, so it is written straight into the tag-scope
+ * cache — the tab shows the new revision without waiting for a refetch. The
+ * project detail is invalidated too because `projects.estimated_tag_count` /
+ * `tag_scope_*` are denormalised onto the project row the Overview reads.
+ */
+export function useUpdateTagScope(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: TagScopeUpdateBody) => projectsApi.updateTagScope(id, body),
+    onSuccess: (scope) => {
+      qc.setQueryData(projectsKeys.tagScope(id), scope);
+      qc.invalidateQueries({ queryKey: projectsKeys.tagScope(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.detail(id) });
+      // Changing the estimate changes every activity's remaining figure.
+      qc.invalidateQueries({ queryKey: projectsKeys.summary(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.all });
+    },
+    onError: () => {
+      // A 409 means our view of the revision is stale; pull the winning state
+      // back so the reopened form starts from what is actually stored.
+      qc.invalidateQueries({ queryKey: projectsKeys.tagScope(id) });
+      qc.invalidateQueries({ queryKey: projectsKeys.detail(id) });
+    },
+  });
+}
+
+/** Summary tab data. Open to every project viewer, so no authority gate here. */
+export function useProjectSummary(id: string | undefined) {
+  return useQuery({
+    queryKey: projectsKeys.summary(id ?? ""),
+    queryFn: () => projectsApi.getSummary(id as string),
+    enabled: !!id,
   });
 }
 

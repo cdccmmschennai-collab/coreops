@@ -25,12 +25,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useMaintenancePlantOptions, usePlanningPlants } from "@/features/plant-master/hooks";
 import { AppError } from "@/lib/api-client";
 
 import { useCreateProject, useUpdateProject } from "../hooks";
-import { PROJECT_SCOPE_TYPES, PROJECT_SCOPE_TYPE_LABEL } from "../scope";
 import {
   PROJECT_STATUSES,
   PROJECT_STATUS_LABEL,
@@ -207,37 +207,6 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                 )}
               />
 
-              {/* Project Scope — classification only. Tag-based projects take
-                  part in Project Tag Scope; normal projects are unaffected.
-                  No tag count is asked for here. */}
-              <FormField
-                control={form.control}
-                name="scope_type"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Project Scope</FormLabel>
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {PROJECT_SCOPE_TYPES.map((s) => (
-                          <SelectItem key={s} value={s}>
-                            {PROJECT_SCOPE_TYPE_LABEL[s]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">
-                      Tag-based projects use the Tag Scope tab. Other projects are unaffected.
-                    </p>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
               {/* Planning Plant + Maintenance Plant. A project belongs to one
                   Planning Plant (project master); the Maintenance Plant dropdown is
                   scoped to that Planning Plant's plants and reloads when it changes.
@@ -370,6 +339,32 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                     <FormControl>
                       <Input type="date" {...field} />
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Project Scope — classification only, no tag count asked for
+                  here (that lives on the Tag Scope tab). A two-state setting, so
+                  a switch rather than a dropdown: it reads at a glance and sits
+                  in one grid cell beside the date above. */}
+              <FormField
+                control={form.control}
+                name="scope_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel htmlFor="scope_type">Project Scope</FormLabel>
+                    <div className="flex h-9 items-center justify-between gap-3 rounded-md border border-input bg-card px-3">
+                      <span className="text-sm">Tag based</span>
+                      <FormControl>
+                        <Switch
+                          id="scope_type"
+                          checked={field.value === "TAG_BASED"}
+                          onCheckedChange={(on) => field.onChange(on ? "TAG_BASED" : "NONE")}
+                          aria-label="Tag based project"
+                        />
+                      </FormControl>
+                    </div>
                     <FormMessage />
                   </FormItem>
                 )}

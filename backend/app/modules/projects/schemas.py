@@ -157,6 +157,36 @@ class TagScopeOut(BaseModel):
     revisions: list[TagScopeRevisionOut] = Field(default_factory=list)
 
 
+class TagScopeProgressRow(BaseModel):
+    """One tag-counted sub-activity's progress against the project's scope.
+
+    Every row carries the SAME estimated_tag_count: activities progress against
+    the project's tag universe independently, so the rows are not shares of a
+    pool and are not expected to sum to it.
+    """
+
+    sub_activity_id: uuid.UUID
+    sub_activity_name: str
+    reported_tags: int
+    estimated_tag_count: int
+    remaining_tags: int
+
+
+class ProjectSummaryOut(BaseModel):
+    """GET /projects/{id}/summary — what the Summary tab renders.
+
+    `tag_progress` is empty for a normal project, and for a tag-based project
+    with no estimate established yet: there is no capacity to measure against,
+    and inventing "0 / 0" would be a wrong summary rather than an empty one.
+    """
+
+    project_id: uuid.UUID
+    scope_type: ProjectScopeType
+    estimated_tag_count: int | None = None
+    tag_scope_status: TagScopeStatus | None = None
+    tag_progress: list[TagScopeProgressRow] = Field(default_factory=list)
+
+
 class ProjectPage(BaseModel):
     items: list[ProjectOut]
     total: int

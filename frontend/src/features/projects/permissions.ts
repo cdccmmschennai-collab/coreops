@@ -49,7 +49,23 @@ export function canArchiveProject(viewer: ProjectViewer): boolean {
   return viewer.canManage;
 }
 
-/** Administrative Tag Scope data — same set as edit: PM or this project's Head. */
-export function canViewTagScope(viewer: ProjectViewer): boolean {
+/**
+ * Reading the Tag Scope tab — every viewer who may open the project.
+ *
+ * Takes no argument on purpose: there is no viewer state that removes this
+ * right, and the API agrees (GET /projects/{id}/tag-scope authorizes as a plain
+ * project read). Kept as a named predicate rather than deleted so the tab
+ * policy still reads as a rule instead of an unexplained omission.
+ */
+export function canViewTagScope(): boolean {
+  return true;
+}
+
+/**
+ * CHANGING the scope — PM, or this project's assigned Head. The same set as
+ * canEditProject, named separately so the Revise button and the edit rule can
+ * diverge later without one silently dragging the other along.
+ */
+export function canManageTagScope(viewer: ProjectViewer): boolean {
   return isProjectAdmin(viewer);
 }

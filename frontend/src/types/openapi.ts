@@ -379,13 +379,49 @@ export interface paths {
         };
         /**
          * Get Tag Scope
-         * @description Current tag scope + full revision history. Read-only in this phase.
+         * @description Current tag scope + full revision history.
          *
          *     Nested under the project rather than a top-level resource, matching
          *     /members, /activity-staffing and /planned-date-changes. Authorization
          *     (PM or this project's Head) is enforced centrally in the service.
          */
         get: operations["get_tag_scope_api_v1_projects__project_id__tag_scope_get"];
+        /**
+         * Update Tag Scope
+         * @description Establish or revise the project's estimated tag scope (PM or this
+         *     project's Head — enforced centrally in the service, never by the UI alone).
+         *
+         *     PUT rather than POST: the client states the scope it wants the project to
+         *     have, and the server derives the revision number, the previous values, the
+         *     author and the timestamp. Returns the same payload as the GET so the tab can
+         *     refresh current scope and history from one round trip.
+         *
+         *     Conflicts with 409 when `expected_revision` no longer matches the stored
+         *     revision — someone else revised the scope while this form was open.
+         */
+        put: operations["update_tag_scope_api_v1_projects__project_id__tag_scope_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Summary
+         * @description Progress against the project's tag scope, per tag-counted sub-activity.
+         *
+         *     Visible to every user who may view the project — this is the work summary,
+         *     not the scope administration the Tag Scope tab holds.
+         */
+        get: operations["get_project_summary_api_v1_projects__project_id__summary_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4194,6 +4230,32 @@ export interface components {
          * @enum {string}
          */
         ProjectStatus: "planning" | "active" | "on_hold" | "completed" | "archived";
+        /**
+         * ProjectSummaryOut
+         * @description GET /projects/{id}/summary — what the Summary tab renders.
+         *
+         *     `tag_progress` is empty for a normal project, and for a tag-based project
+         *     with no estimate established yet: there is no capacity to measure against,
+         *     and inventing "0 / 0" would be a wrong summary rather than an empty one.
+         */
+        ProjectSummaryOut: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
+            /** Estimated Tag Count */
+            estimated_tag_count?: number | null;
+            /** Tag Scope Status */
+            tag_scope_status?: ("PROVISIONAL" | "BASELINED") | null;
+            /** Tag Progress */
+            tag_progress?: components["schemas"]["TagScopeProgressRow"][];
+        };
         /** ProjectUpdate */
         ProjectUpdate: {
             /** Code */
@@ -4526,10 +4588,10 @@ export interface components {
         };
         /**
          * TagScopeOut
-         * @description GET /projects/{id}/tag-scope — current scope plus its full history.
+         * @description GET/PUT /projects/{id}/tag-scope — current scope plus its full history.
          *
-         *     Read-only in this phase. Carries no progress, no worked-tag count and no
-         *     remaining figure; those belong to the later progress phase.
+         *     Carries no progress, no worked-tag count and no remaining figure; those
+         *     belong to the later progress phase.
          */
         TagScopeOut: {
             /**
@@ -4559,6 +4621,29 @@ export interface components {
             tag_scope_updated_by_name?: string | null;
             /** Revisions */
             revisions?: components["schemas"]["TagScopeRevisionOut"][];
+        };
+        /**
+         * TagScopeProgressRow
+         * @description One tag-counted sub-activity's progress against the project's scope.
+         *
+         *     Every row carries the SAME estimated_tag_count: activities progress against
+         *     the project's tag universe independently, so the rows are not shares of a
+         *     pool and are not expected to sum to it.
+         */
+        TagScopeProgressRow: {
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /** Reported Tags */
+            reported_tags: number;
+            /** Estimated Tag Count */
+            estimated_tag_count: number;
+            /** Remaining Tags */
+            remaining_tags: number;
         };
         /**
          * TagScopeRevisionOut
@@ -4605,6 +4690,28 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * TagScopeUpdate
+         * @description PUT /projects/{id}/tag-scope — establish or revise the estimated scope.
+         *
+         *     The client supplies only what a human decided: how many tags, how settled
+         *     the number is, and why it changed. Everything else on the revision row
+         *     (revision number, previous_*, changed_by, created_at) is derived server-side
+         *     — see ``service.record_tag_scope_revision``.
+         */
+        TagScopeUpdate: {
+            /** Estimated Tag Count */
+            estimated_tag_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "PROVISIONAL" | "BASELINED";
+            /** Reason */
+            reason?: string | null;
+            /** Expected Revision */
+            expected_revision: number;
         };
         /**
          * TaskCompletionUpdate
@@ -6260,6 +6367,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TagScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_tag_scope_api_v1_projects__project_id__tag_scope_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagScopeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_summary_api_v1_projects__project_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSummaryOut"];
                 };
             };
             /** @description Validation Error */

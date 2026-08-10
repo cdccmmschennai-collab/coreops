@@ -221,15 +221,37 @@ def test_service_rejects_non_positive_counts(db, tag_project, pm_user, bad):
     assert db.get(Project, tag_project.id).estimated_tag_count is None
 
 
-def test_service_rejects_unknown_status_and_blank_reason(db, tag_project, pm_user):
-    for kwargs in (
-        {"new_status": "FINALIZED", "reason": "r"},
-        {"new_status": "PROVISIONAL", "reason": "   "},
-    ):
-        with pytest.raises(AppError):
-            service.record_tag_scope_revision(
-                db, pm_user, tag_project.id, new_estimated_tag_count=10, **kwargs)
-        db.rollback()
+def test_service_rejects_unknown_status(db, tag_project, pm_user):
+    with pytest.raises(AppError):
+        service.record_tag_scope_revision(
+            db, pm_user, tag_project.id, new_estimated_tag_count=10,
+            new_status="FINALIZED", reason="r")
+    db.rollback()
+
+
+def test_service_reason_policy_depends_on_whether_a_scope_exists(db, tag_project, pm_user):
+    """Blank reason: defaulted on the first estimate, refused on a revision.
+
+    Phase 4 settled this deliberately — "why" is self-evident when a project is
+    being set up, but a change to an established number is a decision somebody
+    has to account for. (Phase 3 refused both; the write workflow superseded
+    that.) The endpoint-level halves live in test_project_tag_scope_write.py.
+    """
+    p = service.record_tag_scope_revision(
+        db, pm_user, tag_project.id, new_estimated_tag_count=1000,
+        new_status="PROVISIONAL", reason="   ")
+    assert p.tag_scope_revision == 1
+    row = db.query(ProjectTagScopeRevision).filter_by(revision=1).one()
+    assert row.reason == service.INITIAL_SCOPE_REASON
+
+    with pytest.raises(AppError) as e:
+        service.record_tag_scope_revision(
+            db, pm_user, tag_project.id, new_estimated_tag_count=2000,
+            new_status="BASELINED", reason="   ")
+    assert e.value.status_code == 422
+    db.rollback()
+    # The refused revision left nothing behind.
+    assert db.get(Project, tag_project.id).tag_scope_revision == 1
 
 
 def test_scope_cannot_be_set_on_a_non_tag_project(db, make_project, pm_user):
@@ -292,14 +314,23 @@ def test_head_of_another_project_may_not_read_tag_scope(
     assert client.get(f"{BASE}/{other.id}/tag-scope", headers=h).status_code == 403
 
 
-def test_plain_employee_may_not_read_tag_scope(client, auth_header, tag_project):
+def test_an_employee_outside_the_project_still_gets_nothing(client, auth_header, tag_project):
+    """Opening tag scope to "any project viewer" widens nothing for someone who
+    is not a viewer: with no membership they cannot read the project, so they
+    cannot read its scope either."""
     emp = auth_header("tsemp@x.com", role=UserRole.employee)
+    assert client.get(f"{BASE}/{tag_project.id}", headers=emp).status_code == 403
     assert client.get(f"{BASE}/{tag_project.id}/tag-scope", headers=emp).status_code == 403
 
 
-def test_project_member_may_view_project_but_not_tag_scope(
+def test_project_member_may_read_tag_scope_but_not_change_it(
     client, db, make_user, make_employee, make_project_member, tag_project
 ):
+    """Reading is open to any project viewer; only the write is restricted.
+
+    A contributor needs to see how many tags the project covers and why that
+    number moved. What they must not do is move it.
+    """
     user = make_user("tsmember@x.com", "password123", UserRole.employee)
     emp = make_employee(employee_code="TSM-1", user_id=user.id)
     make_project_member(project_id=tag_project.id, employee_id=emp.id)
@@ -309,7 +340,12 @@ def test_project_member_may_view_project_but_not_tag_scope(
     h = {"Authorization": f"Bearer {res.json()['access_token']}"}
 
     assert client.get(f"{BASE}/{tag_project.id}", headers=h).status_code == 200
-    assert client.get(f"{BASE}/{tag_project.id}/tag-scope", headers=h).status_code == 403
+    assert client.get(f"{BASE}/{tag_project.id}/tag-scope", headers=h).status_code == 200
+    assert client.put(
+        f"{BASE}/{tag_project.id}/tag-scope",
+        json={"estimated_tag_count": 500, "status": "PROVISIONAL", "expected_revision": 0},
+        headers=h,
+    ).status_code == 403
 
 
 def test_tag_scope_of_unknown_project_is_404(client, auth_header):

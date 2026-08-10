@@ -19,6 +19,7 @@ import { test } from "node:test";
 import {
   canArchiveProject,
   canEditProject,
+  canManageTagScope,
   canViewTagScope,
   isProjectAdmin,
   type ProjectViewer,
@@ -69,10 +70,21 @@ test("edit and archive are genuinely different predicates", () => {
   assert.notEqual(canEditProject(ASSIGNED_HEAD), canArchiveProject(ASSIGNED_HEAD));
 });
 
-// --- Tag Scope shares the edit predicate ----------------------------------
-test("Tag Scope visibility is the same set as edit: PM or this project's Head", () => {
+// --- Tag Scope: open to read, restricted to change -------------------------
+test("every project viewer may READ tag scope", () => {
+  assert.equal(canViewTagScope(), true);
+});
+
+test("changing tag scope is the same set as edit: PM or this project's Head", () => {
   for (const viewer of [PM, ASSIGNED_HEAD, UNASSIGNED_HEAD, MEMBER]) {
-    assert.equal(canViewTagScope(viewer), canEditProject(viewer));
-    assert.equal(canViewTagScope(viewer), isProjectAdmin(viewer));
+    assert.equal(canManageTagScope(viewer), canEditProject(viewer));
+    assert.equal(canManageTagScope(viewer), isProjectAdmin(viewer));
   }
+});
+
+test("reading and changing are genuinely different rights", () => {
+  // A plain member sees the scope and its history, and can change neither.
+  assert.equal(canViewTagScope(), true);
+  assert.equal(canManageTagScope(MEMBER), false);
+  assert.equal(canManageTagScope(UNASSIGNED_HEAD), false);
 });

@@ -7,11 +7,17 @@
  * `components/project-detail.tsx` renders exactly what these helpers return —
  * it never decides tab visibility on its own.
  *
- * Visibility rules (Phase 1):
+ * Visibility rules:
  *   Overview   — every user already permitted to view the project.
- *   Tag Scope  — Project Manager (system capability `project.manage`) or the
- *                project's assigned Head only.
+ *   Tag Scope  — every viewer too. The scope and its revision history are
+ *                context contributors need; only the Revise action inside the
+ *                tab is restricted to PM / this project's Head, which the tab
+ *                itself gates via canManageTagScope.
  *   Summary    — every user already permitted to view the project.
+ *
+ * No tab is manager-only today. MANAGER_ONLY is kept (empty) because the rule
+ * it encodes is the thing worth keeping — restricting a tab is one entry, not a
+ * re-plumbing of every caller.
  *
  * The page-level "can I see this project at all" check is unchanged and still
  * enforced by the API (GET /projects/{id} 403/404) — this module only decides
@@ -47,15 +53,14 @@ const ALL_TABS: readonly ProjectTab[] = [
 ];
 
 /** Tabs restricted to PM / Head. Everything not listed is open to all viewers. */
-const MANAGER_ONLY: readonly ProjectTabValue[] = ["tag-scope"];
+const MANAGER_ONLY: readonly ProjectTabValue[] = [];
 
 export function canSeeProjectTab(
   tab: ProjectTabValue,
-  viewer: ProjectTabViewer,
+  _viewer: ProjectTabViewer,
 ): boolean {
   if (!MANAGER_ONLY.includes(tab)) return true;
-  // Same predicate as the Edit button and the /edit guard — one definition.
-  return canViewTagScope(viewer);
+  return canViewTagScope();
 }
 
 /** The tabs to render, in order, for this viewer. */

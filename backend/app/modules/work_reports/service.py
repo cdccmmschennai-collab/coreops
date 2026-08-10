@@ -384,14 +384,68 @@ def _team_ids(manager_employee_id: uuid.UUID):
     )
 
 
+def _assert_within_tag_scope(
+    db: Session, tasks, *, exclude_report_id: uuid.UUID | None
+) -> None:
+    """Refuse a report that would push a tag-counted sub-activity past its
+    project's estimated tag scope.
+
+    Grouped by (project, sub-activity) BEFORE comparing, because one report can
+    carry several rows for the same pairing (split across day parts, or simply
+    two lines). Checking each row on its own would let 2 x 400 through against a
+    500 remainder.
+
+    Applies only where there is a real ceiling: a TAG_BASED project with an
+    established estimate, and a sub-activity whose unit is tags. Everything else
+    is unaffected, which is what keeps normal projects and non-tag activities
+    behaving exactly as they do today.
+    """
+    from app.modules.projects import tag_progress
+
+    incoming: dict[tuple[uuid.UUID, uuid.UUID], int] = {}
+    for task in tasks:
+        sub_id = getattr(task, "sub_activity_id", None)
+        if sub_id is None:
+            continue
+        count = getattr(task, "tags_count", None) or 0
+        if count <= 0:
+            continue
+        key = (task.project_id, sub_id)
+        incoming[key] = incoming.get(key, 0) + count
+
+    for (project_id, sub_id), count in incoming.items():
+        project = db.get(Project, project_id)
+        sub = db.get(ActivityMaster, sub_id)
+        remaining = tag_progress.remaining_tags(
+            db, project, sub, exclude_report_id=exclude_report_id
+        )
+        if remaining is None or count <= remaining:
+            continue
+        capacity = tag_progress.project_tag_capacity(project)
+        raise AppError(
+            "validation_error",
+            f"\"{sub.name}\" has {remaining} of {capacity} tags left on this "
+            f"project. You entered {count}.",
+            422,
+        )
+
+
 def _validate_tasks(
-    db: Session, author_id: uuid.UUID, tasks
+    db: Session,
+    author_id: uuid.UUID,
+    tasks,
+    *,
+    exclude_report_id: uuid.UUID | None = None,
 ) -> tuple[int, list[dict]]:
     """Validate project (active) + membership; return (total_minutes, snapshots).
 
     Each snapshot dict carries the project_name, project_code, and
     project_job_code_code frozen at validation time so they can be written
     directly into the task row for historical accuracy.
+
+    `exclude_report_id` is the report being rewritten, if any — it is left out
+    of the tag-scope consumption total so an edit does not count its own
+    previous numbers against itself.
     """
     # Restricted-activity enforcement (migration 0061): reject any row selecting
     # a RESTRICTED activity this employee is not authorized for, in a bulk check
@@ -514,6 +568,8 @@ def _validate_tasks(
         raise AppError(
             "validation_error", "Total minutes cannot exceed 1440 for a single day.", 422
         )
+    # Last, and across the whole task list rather than per row — see the helper.
+    _assert_within_tag_scope(db, tasks, exclude_report_id=exclude_report_id)
     return total, snapshots
 
 
@@ -1656,7 +1712,11 @@ def update_work_report(
             tasks=None,
         )
         all_tasks = [t for spec in norm["periods"] for t in spec["tasks"]]
-        total, snapshots = _validate_tasks(db, me.id, all_tasks)
+        # This report's own existing rows are about to be replaced, so they must
+        # not count against the tag scope the new rows are checked against.
+        total, snapshots = _validate_tasks(
+            db, me.id, all_tasks, exclude_report_id=report.id
+        )
         old_completed_dates: dict[uuid.UUID, date] = {
             row.sub_activity_id: row.completed_date
             for row in db.execute(
@@ -1707,7 +1767,9 @@ def update_work_report(
         # period mirroring the header.
         _sync_legacy_full_day_period(db, report)
     elif "tasks" in fields and data.tasks is not None:
-        total, snapshots = _validate_tasks(db, me.id, data.tasks)
+        total, snapshots = _validate_tasks(
+            db, me.id, data.tasks, exclude_report_id=report.id
+        )
         # Preserve completed_date across a full task-row replace: re-saving a
         # report (e.g. for an unrelated field) shouldn't reset an
         # already-completed TASK_BASED row's completion date to "today"

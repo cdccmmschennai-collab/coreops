@@ -16,8 +16,11 @@ import type {
   ProjectMemberCreateBody,
   ProjectMemberRole,
   ProjectPage,
+  ProjectSummary,
   ProjectTimelineEvent,
   ProjectUpdateBody,
+  TagScope,
+  TagScopeUpdateBody,
 } from "./types";
 
 function toQuery(p: ProjectListParams): string {
@@ -40,6 +43,13 @@ export const projectsApi = {
 
   setHead: (id: string, body: ProjectHeadUpdateBody) =>
     api.put<Project>(`/projects/${id}/head`, body),
+
+  // Tag scope. Both verbs return the same payload (current scope + full
+  // history), so a successful write refreshes the whole tab in one round trip.
+  getTagScope: (id: string) => api.get<TagScope>(`/projects/${id}/tag-scope`),
+  updateTagScope: (id: string, body: TagScopeUpdateBody) =>
+    api.put<TagScope>(`/projects/${id}/tag-scope`, body),
+  getSummary: (id: string) => api.get<ProjectSummary>(`/projects/${id}/summary`),
 
   updatePlannedDate: (id: string, body: PlannedDateUpdateBody) =>
     api.patch<Project>(`/projects/${id}/planned-completion-date`, body),

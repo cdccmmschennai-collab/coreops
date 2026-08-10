@@ -42,7 +42,7 @@ import { SummaryTab } from "./summary-tab";
 import { TagScopeTab } from "./tag-scope-tab";
 import { useProject, usePlannedDateChanges, useUpdatePlannedDate } from "../hooks";
 import { useProjectAuthority } from "../hooks/use-project-authority";
-import { canArchiveProject, canEditProject } from "../permissions";
+import { canArchiveProject, canEditProject, canManageTagScope } from "../permissions";
 import { plannedDateSchema, type PlannedDateFormValues } from "../schemas";
 import { resolveScopeType } from "../scope";
 import {
@@ -367,15 +367,17 @@ export function ProjectDetail({ id }: { id: string }) {
       )}
 
       {activeTab === "tag-scope" && (
+        // Current scope and history are fetched by the tab itself: a write
+        // returns both, so the tab refreshes from its own response instead of
+        // waiting on the project detail to be refetched.
         <TagScopeTab
+          projectId={project.id}
           scopeType={resolveScopeType(project.scope_type)}
-          estimatedTagCount={project.estimated_tag_count}
-          tagScopeStatus={project.tag_scope_status}
-          tagScopeRevision={project.tag_scope_revision}
+          canEdit={canManageTagScope(viewer)}
         />
       )}
 
-      {activeTab === "summary" && <SummaryTab />}
+      {activeTab === "summary" && <SummaryTab projectId={project.id} />}
 
       <PlannedDateDialog
         projectId={project.id}

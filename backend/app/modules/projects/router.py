@@ -44,6 +44,7 @@ from app.modules.projects.schemas import (
     ProjectMemberRoleUpdate,
     ProjectOut,
     ProjectPage,
+    ProjectSummaryOut,
     ProjectUpdate,
     TagScopeOut,
     TagScopeUpdate,
@@ -147,6 +148,20 @@ def update_tag_scope(
     revision — someone else revised the scope while this form was open.
     """
     return service.update_tag_scope(db, current, project_id, body)
+
+
+@router.get("/{project_id}/summary", response_model=ProjectSummaryOut)
+def get_project_summary(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectSummaryOut:
+    """Progress against the project's tag scope, per tag-counted sub-activity.
+
+    Visible to every user who may view the project — this is the work summary,
+    not the scope administration the Tag Scope tab holds.
+    """
+    return service.get_project_summary(db, current, project_id)
 
 
 @router.put("/{project_id}/head", response_model=ProjectOut)

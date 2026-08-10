@@ -42,8 +42,10 @@ from app.modules.projects.schemas import (
     LedProjectMember,
     PlannedDateUpdate,
     ProjectCreate,
+    ProjectSummaryOut,
     ProjectUpdate,
     TagScopeOut,
+    TagScopeProgressRow,
     TagScopeRevisionOut,
     TagScopeUpdate,
 )
@@ -633,15 +635,15 @@ def _assert_tag_scope_clearable(db: Session, project: Project) -> None:
 
 
 def _assert_can_read_tag_scope(db: Session, actor: User, project: Project) -> None:
-    """Administrative tag-scope data is PM or THIS project's Head only. Heading
-    another project grants nothing here, and ordinary members/viewers — who can
-    still read the project itself — are refused."""
-    if not authz.can_edit_project(db, actor, project):
-        raise AppError(
-            "forbidden",
-            "Only project managers and this project's Head can view tag scope.",
-            403,
-        )
+    """Reading tag scope is open to anyone who may view the project.
+
+    The scope and its history are context every contributor needs — how many
+    tags the project covers, and why that number changed. Read and write are
+    deliberately split: CHANGING the scope stays PM or THIS project's Head (see
+    record_tag_scope_revision), so a member sees the numbers without being able
+    to move them.
+    """
+    _assert_can_read(db, actor, project)
 
 
 def get_tag_scope(db: Session, actor: User, project_id: uuid.UUID) -> TagScopeOut:
@@ -688,6 +690,24 @@ def get_tag_scope(db: Session, actor: User, project_id: uuid.UUID) -> TagScopeOu
             else None
         ),
         revisions=revisions,
+    )
+
+
+def get_project_summary(db: Session, actor: User, project_id: uuid.UUID) -> ProjectSummaryOut:
+    """Summary tab payload. Readable by anyone who may view the project — unlike
+    the Tag Scope tab, this is a progress view, not scope administration."""
+    from app.modules.projects import tag_progress
+
+    project = _fetch(db, project_id)
+    _assert_can_read(db, actor, project)
+    return ProjectSummaryOut(
+        project_id=project.id,
+        scope_type=project.scope_type,
+        estimated_tag_count=project.estimated_tag_count,
+        tag_scope_status=project.tag_scope_status,
+        tag_progress=[
+            TagScopeProgressRow(**row) for row in tag_progress.project_tag_progress(db, project)
+        ],
     )
 
 

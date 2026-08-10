@@ -14,6 +14,20 @@ export type ProjectHeadUpdateBody = components["schemas"]["ProjectHeadUpdate"];
 export type PlannedDateChange = components["schemas"]["PlannedDateChangeOut"];
 export type ProjectTimelineEvent = components["schemas"]["TimelineEventOut"];
 
+// Project Tag Scope — current scope + its append-only revision history, and the
+// establish/revise body. The body carries only what a human decided (count,
+// status, why); the revision number, previous_* values and author are derived
+// server-side, which is why no such field exists on TagScopeUpdateBody.
+export type TagScope = components["schemas"]["TagScopeOut"];
+export type TagScopeRevision = components["schemas"]["TagScopeRevisionOut"];
+export type TagScopeUpdateBody = components["schemas"]["TagScopeUpdate"];
+
+// Summary tab: per-sub-activity progress against the project's tag scope. Every
+// row carries the same estimated_tag_count - activities progress against the
+// project's tag universe independently, so the rows never sum to it.
+export type ProjectSummary = components["schemas"]["ProjectSummaryOut"];
+export type TagScopeProgressRow = components["schemas"]["TagScopeProgressRow"];
+
 // Phase 3 — per-activity staffing.
 export type ActivityStaffing = components["schemas"]["ActivityStaffingOut"];
 export type ActivityMember = components["schemas"]["ActivityMemberOut"];

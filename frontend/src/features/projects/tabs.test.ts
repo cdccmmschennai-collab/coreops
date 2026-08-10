@@ -55,10 +55,12 @@ test("a Project Manager who is also the Head still gets one of each tab", () => 
 });
 
 // Test 3 — Other authorized project viewer
-test("other project viewers see Overview and Summary but not Tag Scope", () => {
-  assert.deepEqual(labels(VIEWER), ["Overview", "Summary"]);
-  assert.equal(values(VIEWER).includes("tag-scope"), false);
-  assert.equal(canSeeProjectTab("tag-scope", VIEWER), false);
+test("other project viewers see all three tabs, Tag Scope included", () => {
+  // The scope and the reasons it changed are context contributors need. What
+  // they cannot do is CHANGE it — that is canManageTagScope, gated inside the
+  // tab on the Revise button, and enforced by the API on the write endpoint.
+  assert.deepEqual(labels(VIEWER), ["Overview", "Tag Scope", "Summary"]);
+  assert.equal(canSeeProjectTab("tag-scope", VIEWER), true);
 });
 
 // Test 4 — Removed tabs
@@ -85,10 +87,11 @@ test("Overview is visible to every viewer and is the default tab", () => {
   }
 });
 
-// Test 6 — Tag Scope placeholder is reachable for Head / PM
-test("Head and PM can activate Tag Scope", () => {
-  assert.equal(resolveProjectTab("tag-scope", HEAD), "tag-scope");
-  assert.equal(resolveProjectTab("tag-scope", PM), "tag-scope");
+// Test 6 — Tag Scope is reachable for every viewer
+test("every authorized viewer can activate Tag Scope", () => {
+  for (const viewer of [HEAD, PM, VIEWER]) {
+    assert.equal(resolveProjectTab("tag-scope", viewer), "tag-scope");
+  }
 });
 
 // Test 7 — Summary placeholder is reachable for everyone
@@ -99,9 +102,14 @@ test("every authorized viewer can activate Summary", () => {
   }
 });
 
-// Test 8 — Unauthorized Tag Scope selection
-test("a non-PM/non-Head cannot activate Tag Scope through the URL", () => {
-  assert.equal(resolveProjectTab("tag-scope", VIEWER), "overview");
+// Test 8 — no tab is manager-only any more, but the mechanism still works
+test("a hand-typed tab value is still normalised for every viewer", () => {
+  for (const viewer of [HEAD, PM, VIEWER]) {
+    assert.equal(resolveProjectTab("nonsense", viewer), "overview");
+    // The retired values from bookmarked links fall back rather than blanking.
+    assert.equal(resolveProjectTab("activities", viewer), "overview");
+    assert.equal(resolveProjectTab("submissions", viewer), "overview");
+  }
 });
 
 test("Tag Scope is matched exactly, so near-miss values also fall back", () => {

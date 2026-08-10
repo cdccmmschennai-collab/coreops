@@ -1545,7 +1545,7 @@
           "projects"
         ],
         "summary": "Get Tag Scope",
-        "description": "Current tag scope + full revision history. Read-only in this phase.\n\nNested under the project rather than a top-level resource, matching\n/members, /activity-staffing and /planned-date-changes. Authorization\n(PM or this project's Head) is enforced centrally in the service.",
+        "description": "Current tag scope + full revision history.\n\nNested under the project rather than a top-level resource, matching\n/members, /activity-staffing and /planned-date-changes. Authorization\n(PM or this project's Head) is enforced centrally in the service.",
         "operationId": "get_tag_scope_api_v1_projects__project_id__tag_scope_get",
         "security": [
           {
@@ -1571,6 +1571,112 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TagScopeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Update Tag Scope",
+        "description": "Establish or revise the project's estimated tag scope (PM or this\nproject's Head — enforced centrally in the service, never by the UI alone).\n\nPUT rather than POST: the client states the scope it wants the project to\nhave, and the server derives the revision number, the previous values, the\nauthor and the timestamp. Returns the same payload as the GET so the tab can\nrefresh current scope and history from one round trip.\n\nConflicts with 409 when `expected_revision` no longer matches the stored\nrevision — someone else revised the scope while this form was open.",
+        "operationId": "update_tag_scope_api_v1_projects__project_id__tag_scope_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagScopeUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagScopeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/summary": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Project Summary",
+        "description": "Progress against the project's tag scope, per tag-counted sub-activity.\n\nVisible to every user who may view the project — this is the work summary,\nnot the scope administration the Tag Scope tab holds.",
+        "operationId": "get_project_summary_api_v1_projects__project_id__summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSummaryOut"
                 }
               }
             }
@@ -3118,7 +3224,7 @@
           "work-reports"
         ],
         "summary": "Report Scope",
-        "description": "Filter metadata for the reports view: whether the caller Heads projects\nor Leads activities, the accessible projects, the led activities per\nproject, and each project's active members. PMs get an empty scope (they\nuse the org-wide employee filter). Informational only \u2014 the report\nendpoints enforce the same scope server-side.",
+        "description": "Filter metadata for the reports view: whether the caller Heads projects\nor Leads activities, the accessible projects, the led activities per\nproject, and each project's active members. PMs get an empty scope (they\nuse the org-wide employee filter). Informational only — the report\nendpoints enforce the same scope server-side.",
         "operationId": "report_scope_api_v1_work_reports_scope_get",
         "responses": {
           "200": {
@@ -6784,7 +6890,7 @@
           "benchmarks"
         ],
         "summary": "Employees Performance",
-        "description": "Layer 1 \u2014 comparison table. Comparison columns only (reuses the frozen\n_employee_comparison rollup); no overview/analytics fields here.\n\n`week_offset` selects the Fri..Thu window: 0 = the cycle containing today,\nup to 3 cycles back. `cycle=current|previous` stays accepted as a legacy\nalias for offsets 0 and 1; both resolve through the same\nservice.resolve_week_offset, so the table and the export can never disagree\nabout which cycle was asked for.",
+        "description": "Layer 1 — comparison table. Comparison columns only (reuses the frozen\n_employee_comparison rollup); no overview/analytics fields here.\n\n`week_offset` selects the Fri..Thu window: 0 = the cycle containing today,\nup to 3 cycles back. `cycle=current|previous` stays accepted as a legacy\nalias for offsets 0 and 1; both resolve through the same\nservice.resolve_week_offset, so the table and the export can never disagree\nabout which cycle was asked for.",
         "operationId": "employees_performance_api_v1_benchmarks_employees_performance_get",
         "security": [
           {
@@ -6926,7 +7032,7 @@
           "benchmarks"
         ],
         "summary": "Pending Export Xlsx",
-        "description": "PM-only full-cycle Benchmark export \u2014 every benchmark activity row in\nthe cycle for every employee with activity (achievers included, no\npending > 0 filter), grouped employee -> sub-activity. Each numeric\nsub-activity gets one TOTAL row with its own achievement %; textual task\nsub-activities show detail rows only.\n\n`week_offset` selects the Fri..Thu window (0 = current, up to 3 back);\n`cycle=current|previous` remains as a legacy alias. Defaults to the previous\ncompleted cycle \u2014 PMs export Friday morning, once Thursday's reports are in.\nThe filename always names the SELECTED cycle, never today.",
+        "description": "PM-only full-cycle Benchmark export — every benchmark activity row in\nthe cycle for every employee with activity (achievers included, no\npending > 0 filter), grouped employee -> sub-activity. Each numeric\nsub-activity gets one TOTAL row with its own achievement %; textual task\nsub-activities show detail rows only.\n\n`week_offset` selects the Fri..Thu window (0 = current, up to 3 back);\n`cycle=current|previous` remains as a legacy alias. Defaults to the previous\ncompleted cycle — PMs export Friday morning, once Thursday's reports are in.\nThe filename always names the SELECTED cycle, never today.",
         "operationId": "pending_export_xlsx_api_v1_benchmarks_pending_export_xlsx_get",
         "security": [
           {
@@ -7001,7 +7107,7 @@
           "benchmarks"
         ],
         "summary": "Employee Overview",
-        "description": "Layer 2/3 \u2014 shared overview aggregation for the drawer and the route's\nOverview tab.",
+        "description": "Layer 2/3 — shared overview aggregation for the drawer and the route's\nOverview tab.",
         "operationId": "employee_overview_api_v1_benchmarks_employees__employee_id__overview_get",
         "security": [
           {
@@ -7050,7 +7156,7 @@
           "benchmarks"
         ],
         "summary": "Employee Benchmarks",
-        "description": "Layer 3 Benchmarks tab \u2014 full weekly ledger + overdue for one employee,\nso the client reconciles backlog (same logic as the employee's own widget).",
+        "description": "Layer 3 Benchmarks tab — full weekly ledger + overdue for one employee,\nso the client reconciles backlog (same logic as the employee's own widget).",
         "operationId": "employee_benchmarks_api_v1_benchmarks_employees__employee_id__benchmarks_get",
         "security": [
           {
@@ -8879,7 +8985,7 @@
           "name"
         ],
         "title": "ActivityCreate",
-        "description": "Top-level Activity. parent_id is implicit (None) \u2014 never accepted here."
+        "description": "Top-level Activity. parent_id is implicit (None) — never accepted here."
       },
       "ActivityMasterOut": {
         "properties": {
@@ -9092,7 +9198,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "string"
@@ -9107,7 +9213,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -9361,37 +9467,37 @@
           },
           "tags_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Tags Count",
             "default": 0
           },
           "docs_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Docs Count",
             "default": 0
           },
           "bom_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Bom Count",
             "default": 0
           },
           "spares_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Spares Count",
             "default": 0
           },
           "pages_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Pages Count",
             "default": 0
           },
           "records_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Records Count",
             "default": 0
           }
@@ -10545,7 +10651,7 @@
           "granted_at"
         ],
         "title": "AuthorizedEmployeeOut",
-        "description": "One active grant on a RESTRICTED activity. Deliberately minimal \u2014 no\nemail / phone / department; the PM only needs to identify who can use it."
+        "description": "One active grant on a RESTRICTED activity. Deliberately minimal — no\nemail / phone / department; the PM only needs to identify who can use it."
       },
       "CalendarEventCreate": {
         "properties": {
@@ -10878,7 +10984,7 @@
           "benchmark_unit"
         ],
         "title": "DailyBenchmarkRowOut",
-        "description": "One row of 'My Alerts' / 'Team Benchmark Backlog' \u2014 a single day's\nactual/target/pending for one NUMERIC sub-activity, with pending > 0\n(a clean day doesn't show up in this list, though it still counts\ntoward the weekly productivity %). `sub_activity_name` is the \"Activity\nName\" shown in the UI examples (e.g. \"FMTL Rework\")."
+        "description": "One row of 'My Alerts' / 'Team Benchmark Backlog' — a single day's\nactual/target/pending for one NUMERIC sub-activity, with pending > 0\n(a clean day doesn't show up in this list, though it still counts\ntoward the weekly productivity %). `sub_activity_name` is the \"Activity\nName\" shown in the UI examples (e.g. \"FMTL Rework\")."
       },
       "DayPart": {
         "type": "string",
@@ -11057,7 +11163,7 @@
           "employee_id"
         ],
         "title": "DeliverableConflictOut",
-        "description": "One Planned deliverable whose target date falls within \u00b12 days of a\nleave request, on a project the requesting employee is assigned to."
+        "description": "One Planned deliverable whose target date falls within ±2 days of a\nleave request, on a project the requesting employee is assigned to."
       },
       "DeliverableCreate": {
         "properties": {
@@ -11432,7 +11538,7 @@
           "overdue"
         ],
         "title": "EmployeeBenchmarksOut",
-        "description": "One employee's FULL weekly daily ledger (every NUMERIC sub-activity day,\nnot just the pending ones) + overdue, so the client can run the same\nbacklog reconciliation the employee's own widget does \u2014 later-day surplus\npaying down earlier deficits. Raw per-day pending lives in `daily`;\nreconciliation is applied client-side (display only)."
+        "description": "One employee's FULL weekly daily ledger (every NUMERIC sub-activity day,\nnot just the pending ones) + overdue, so the client can run the same\nbacklog reconciliation the employee's own widget does — later-day surplus\npaying down earlier deficits. Raw per-day pending lives in `daily`;\nreconciliation is applied client-side (display only)."
       },
       "EmployeeComplianceOut": {
         "properties": {
@@ -11938,7 +12044,7 @@
           "status"
         ],
         "title": "EmployeePerformanceRowOut",
-        "description": "One row of the PM comparison table (Layer 1). Comparison columns ONLY \u2014\ninspection/overview fields deliberately live on EmployeeOverviewOut so the\ntable can't grow into an analytics surface. `productivity` is None when the\nemployee logged no NUMERIC benchmark work this week; `status` is derived\nfrom it via the frozen thresholds in service._status_from_pct."
+        "description": "One row of the PM comparison table (Layer 1). Comparison columns ONLY —\ninspection/overview fields deliberately live on EmployeeOverviewOut so the\ntable can't grow into an analytics surface. `productivity` is None when the\nemployee logged no NUMERIC benchmark work this week; `status` is derived\nfrom it via the frozen thresholds in service._status_from_pct."
       },
       "EmployeeProfile": {
         "properties": {
@@ -12294,7 +12400,7 @@
           "employee_ids"
         ],
         "title": "GrantAccessIn",
-        "description": "POST .../access \u2014 bulk grant on an already-RESTRICTED activity."
+        "description": "POST .../access — bulk grant on an already-RESTRICTED activity."
       },
       "GrantResultOut": {
         "properties": {
@@ -12533,7 +12639,7 @@
           "days_recorded"
         ],
         "title": "LeaveAttendanceSummaryOut",
-        "description": "What attendance already exists across one leave request's dates.\n\nSummary only \u2014 a single word the manager can read at a glance. CoreOps\nattendance is maintained by hand and cancellation never writes to it; this\nexists so the manager knows what they will need to review afterwards."
+        "description": "What attendance already exists across one leave request's dates.\n\nSummary only — a single word the manager can read at a glance. CoreOps\nattendance is maintained by hand and cancellation never writes to it; this\nexists so the manager knows what they will need to review afterwards."
       },
       "LeaveBalanceHistoryOut": {
         "properties": {
@@ -13146,7 +13252,7 @@
           "is_active"
         ],
         "title": "MaintenancePlantOut",
-        "description": "Flattened with the parent Planning Plant's code/description \u2014 the\nshape both the Project form and the Work Report row need (pick the\nMaintenance Plant, auto-show the Planning Plant info)."
+        "description": "Flattened with the parent Planning Plant's code/description — the\nshape both the Project form and the Work Report row need (pick the\nMaintenance Plant, auto-show the Planning Plant info)."
       },
       "Me": {
         "properties": {
@@ -13451,8 +13557,8 @@
           },
           "break_minutes": {
             "type": "integer",
-            "maximum": 480.0,
-            "minimum": 0.0,
+            "maximum": 480,
+            "minimum": 0,
             "title": "Break Minutes",
             "default": 0
           },
@@ -13610,8 +13716,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 480.0,
-                "minimum": 0.0
+                "maximum": 480,
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -13817,7 +13923,7 @@
           "days_overdue"
         ],
         "title": "OverdueActivityOut",
-        "description": "One row of 'My Alerts' / 'Team Overdue Activities' \u2014 a TASK_BASED\nwork-report-task row past its due_date and not completed."
+        "description": "One row of 'My Alerts' / 'Team Overdue Activities' — a TASK_BASED\nwork-report-task row past its due_date and not completed."
       },
       "PasswordUpdate": {
         "properties": {
@@ -14870,6 +14976,63 @@
         ],
         "title": "ProjectStatus"
       },
+      "ProjectSummaryOut": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "TAG_BASED"
+            ],
+            "title": "Scope Type"
+          },
+          "estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tag Count"
+          },
+          "tag_scope_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Status"
+          },
+          "tag_progress": {
+            "items": {
+              "$ref": "#/components/schemas/TagScopeProgressRow"
+            },
+            "type": "array",
+            "title": "Tag Progress"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "scope_type"
+        ],
+        "title": "ProjectSummaryOut",
+        "description": "GET /projects/{id}/summary — what the Summary tab renders.\n\n`tag_progress` is empty for a normal project, and for a tag-based project\nwith no estimate established yet: there is no capacity to measure against,\nand inventing \"0 / 0\" would be a wrong summary rather than an empty one."
+      },
       "ProjectUpdate": {
         "properties": {
           "code": {
@@ -15075,7 +15238,7 @@
           "name"
         ],
         "title": "ReportScopeMember",
-        "description": "One active member of a scope project \u2014 the employee-filter option."
+        "description": "One active member of a scope project — the employee-filter option."
       },
       "ReportScopeOut": {
         "properties": {
@@ -15100,7 +15263,7 @@
         },
         "type": "object",
         "title": "ReportScopeOut",
-        "description": "GET /work-reports/scope \u2014 filter metadata for the reports view. Purely\ninformational: the list/detail/export endpoints enforce the same scope\nserver-side regardless of supplied query parameters."
+        "description": "GET /work-reports/scope — filter metadata for the reports view. Purely\ninformational: the list/detail/export endpoints enforce the same scope\nserver-side regardless of supplied query parameters."
       },
       "ReportScopeProject": {
         "properties": {
@@ -15207,7 +15370,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "string"
@@ -15222,7 +15385,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -15412,7 +15575,7 @@
           "is_active"
         ],
         "title": "SubActivityFlatOut",
-        "description": "Leaf rows flattened with the parent Activity's name \u2014 for the work-report\ncascading-select / combobox use case.\n\nCarries the FULL benchmark configuration, not just the calculation inputs:\nthe report form renders the master's own guidance (benchmark_remarks) and\nmeasurement unit next to the selection. Those two fields were missing here\nwhile present on the column and on ActivityMasterOut, which is precisely why\nguidance such as \"500 REQUIRED PAGES/DAY\" never reached the employee."
+        "description": "Leaf rows flattened with the parent Activity's name — for the work-report\ncascading-select / combobox use case.\n\nCarries the FULL benchmark configuration, not just the calculation inputs:\nthe report form renders the master's own guidance (benchmark_remarks) and\nmeasurement unit next to the selection. Those two fields were missing here\nwhile present on the column and on ActivityMasterOut, which is precisely why\nguidance such as \"500 REQUIRED PAGES/DAY\" never reached the employee."
       },
       "SubmissionCreate": {
         "properties": {
@@ -15479,7 +15642,7 @@
           },
           "quantity": {
             "type": "integer",
-            "exclusiveMinimum": 0.0,
+            "exclusiveMinimum": 0,
             "title": "Quantity"
           },
           "unit": {
@@ -15872,7 +16035,42 @@
           "scope_type"
         ],
         "title": "TagScopeOut",
-        "description": "GET /projects/{id}/tag-scope \u2014 current scope plus its full history.\n\nRead-only in this phase. Carries no progress, no worked-tag count and no\nremaining figure; those belong to the later progress phase."
+        "description": "GET/PUT /projects/{id}/tag-scope — current scope plus its full history.\n\nCarries no progress, no worked-tag count and no remaining figure; those\nbelong to the later progress phase."
+      },
+      "TagScopeProgressRow": {
+        "properties": {
+          "sub_activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sub Activity Id"
+          },
+          "sub_activity_name": {
+            "type": "string",
+            "title": "Sub Activity Name"
+          },
+          "reported_tags": {
+            "type": "integer",
+            "title": "Reported Tags"
+          },
+          "estimated_tag_count": {
+            "type": "integer",
+            "title": "Estimated Tag Count"
+          },
+          "remaining_tags": {
+            "type": "integer",
+            "title": "Remaining Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sub_activity_id",
+          "sub_activity_name",
+          "reported_tags",
+          "estimated_tag_count",
+          "remaining_tags"
+        ],
+        "title": "TagScopeProgressRow",
+        "description": "One tag-counted sub-activity's progress against the project's scope.\n\nEvery row carries the SAME estimated_tag_count: activities progress against\nthe project's tag universe independently, so the rows are not shares of a\npool and are not expected to sum to it."
       },
       "TagScopeRevisionOut": {
         "properties": {
@@ -15964,6 +16162,48 @@
         "title": "TagScopeRevisionOut",
         "description": "One recorded scope change. Revision 1 carries null previous_* values."
       },
+      "TagScopeUpdate": {
+        "properties": {
+          "estimated_tag_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Estimated Tag Count"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PROVISIONAL",
+              "BASELINED"
+            ],
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Expected Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estimated_tag_count",
+          "status",
+          "expected_revision"
+        ],
+        "title": "TagScopeUpdate",
+        "description": "PUT /projects/{id}/tag-scope — establish or revise the estimated scope.\n\nThe client supplies only what a human decided: how many tags, how settled\nthe number is, and why it changed. Everything else on the revision row\n(revision number, previous_*, changed_by, created_at) is derived server-side\n— see ``service.record_tag_scope_revision``."
+      },
       "TaskCompletionUpdate": {
         "properties": {
           "is_completed": {
@@ -15976,7 +16216,7 @@
           "is_completed"
         ],
         "title": "TaskCompletionUpdate",
-        "description": "Body for PATCH /work-reports/tasks/{task_id}/completion \u2014 the *only*\nway a TASK_BASED row's completion is changed once the parent report is\nsubmitted/locked, since these activities often complete days after the\nreport they were logged on. Independent of report.status by design."
+        "description": "Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*\nway a TASK_BASED row's completion is changed once the parent report is\nsubmitted/locked, since these activities often complete days after the\nreport they were logged on. Independent of report.status by design."
       },
       "TaskStatusOut": {
         "properties": {
@@ -16072,7 +16312,7 @@
           "days_overdue"
         ],
         "title": "TaskStatusOut",
-        "description": "One row of 'My Alerts' / 'Overdue Tasks' panel \u2014 a TASK_BASED\nwork-report-task row, broader than OverdueActivityOut: also covers\ndue-today and rows completed this week, with `status` driving the\nPending/Due Today/Completed badge in the UI."
+        "description": "One row of 'My Alerts' / 'Overdue Tasks' panel — a TASK_BASED\nwork-report-task row, broader than OverdueActivityOut: also covers\ndue-today and rows completed this week, with `status` driving the\nPending/Due Today/Completed badge in the UI."
       },
       "TeamAlertsOut": {
         "properties": {
@@ -16224,7 +16464,7 @@
           "productivity_pct"
         ],
         "title": "TeamComparisonRowOut",
-        "description": "One row of the PM 'compare employee performance' table \u2014 an employee's\nweekly benchmark rollup (summed target/actual/pending + productivity %).\nproductivity_pct is None when the employee logged no NUMERIC benchmark\nwork this week (no target to measure against)."
+        "description": "One row of the PM 'compare employee performance' table — an employee's\nweekly benchmark rollup (summed target/actual/pending + productivity %).\nproductivity_pct is None when the employee logged no NUMERIC benchmark\nwork this week (no target to measure against)."
       },
       "TeamKpisOut": {
         "properties": {
@@ -16746,7 +16986,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -16758,7 +16998,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -16770,7 +17010,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -16782,7 +17022,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -17275,7 +17515,7 @@
           "requested"
         ],
         "title": "WorkReportStatusFilter",
-        "description": "Status values accepted by the report LIST filter.\n\nMirrors WorkReportStatus but adds the **virtual** ``requested`` value: a\n``submitted`` report that carries a pending edit request\n(``edit_requested_at IS NOT NULL``). No such status is persisted \u2014 the\nservice translates the filter into a compound WHERE clause so pagination and\ncounts stay correct. To keep the two mutually exclusive, the ``submitted``\nfilter here means submitted *without* a pending edit request."
+        "description": "Status values accepted by the report LIST filter.\n\nMirrors WorkReportStatus but adds the **virtual** ``requested`` value: a\n``submitted`` report that carries a pending edit request\n(``edit_requested_at IS NOT NULL``). No such status is persisted — the\nservice translates the filter into a compound WHERE clause so pagination and\ncounts stay correct. To keep the two mutually exclusive, the ``submitted``\nfilter here means submitted *without* a pending edit request."
       },
       "WorkReportTaskIn": {
         "properties": {
@@ -17294,8 +17534,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 1440.0,
-                "minimum": 0.0
+                "maximum": 1440,
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -17307,8 +17547,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 1440.0,
-                "minimum": 0.0
+                "maximum": 1440,
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -17330,37 +17570,37 @@
           },
           "tags_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Tags Count",
             "default": 0
           },
           "docs_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Docs Count",
             "default": 0
           },
           "bom_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Bom Count",
             "default": 0
           },
           "spares_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Spares Count",
             "default": 0
           },
           "pages_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Pages Count",
             "default": 0
           },
           "records_count": {
             "type": "integer",
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Records Count",
             "default": 0
           },
@@ -17997,7 +18237,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -18009,7 +18249,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -18021,7 +18261,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
@@ -18033,7 +18273,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0.0
+                "minimum": 0
               },
               {
                 "type": "null"
