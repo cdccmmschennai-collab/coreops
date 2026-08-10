@@ -163,8 +163,20 @@ class TagScopeProgressRow(BaseModel):
     Every row carries the SAME estimated_tag_count: activities progress against
     the project's tag universe independently, so the rows are not shares of a
     pool and are not expected to sum to it.
+
+    Activity and Sub-Activity are separate fields, joined through
+    activity_master.parent_id — never one combined label, and never derived by
+    splitting the sub-activity's name. activity_* is nullable only for the
+    data-integrity case of a sub-activity with no parent row; the UI shows a
+    placeholder there rather than hiding the progress.
+
+    reported_tags / remaining_tags are whole tags and always present. A client
+    renders remaining_tags directly: it is never null, never negative, and needs
+    no arithmetic on the client to produce.
     """
 
+    activity_id: uuid.UUID | None = None
+    activity_name: str | None = None
     sub_activity_id: uuid.UUID
     sub_activity_name: str
     reported_tags: int

@@ -9198,7 +9198,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "string"
@@ -9213,7 +9213,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -9467,37 +9467,37 @@
           },
           "tags_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Tags Count",
             "default": 0
           },
           "docs_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Docs Count",
             "default": 0
           },
           "bom_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Bom Count",
             "default": 0
           },
           "spares_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Spares Count",
             "default": 0
           },
           "pages_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Pages Count",
             "default": 0
           },
           "records_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Records Count",
             "default": 0
           }
@@ -13557,8 +13557,8 @@
           },
           "break_minutes": {
             "type": "integer",
-            "maximum": 480,
-            "minimum": 0,
+            "maximum": 480.0,
+            "minimum": 0.0,
             "title": "Break Minutes",
             "default": 0
           },
@@ -13716,8 +13716,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 480,
-                "minimum": 0
+                "maximum": 480.0,
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -15370,7 +15370,7 @@
             "anyOf": [
               {
                 "type": "number",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "string"
@@ -15385,7 +15385,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -15642,7 +15642,7 @@
           },
           "quantity": {
             "type": "integer",
-            "exclusiveMinimum": 0,
+            "exclusiveMinimum": 0.0,
             "title": "Quantity"
           },
           "unit": {
@@ -16039,6 +16039,29 @@
       },
       "TagScopeProgressRow": {
         "properties": {
+          "activity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Id"
+          },
+          "activity_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Name"
+          },
           "sub_activity_id": {
             "type": "string",
             "format": "uuid",
@@ -16070,7 +16093,7 @@
           "remaining_tags"
         ],
         "title": "TagScopeProgressRow",
-        "description": "One tag-counted sub-activity's progress against the project's scope.\n\nEvery row carries the SAME estimated_tag_count: activities progress against\nthe project's tag universe independently, so the rows are not shares of a\npool and are not expected to sum to it."
+        "description": "One tag-counted sub-activity's progress against the project's scope.\n\nEvery row carries the SAME estimated_tag_count: activities progress against\nthe project's tag universe independently, so the rows are not shares of a\npool and are not expected to sum to it.\n\nActivity and Sub-Activity are separate fields, joined through\nactivity_master.parent_id — never one combined label, and never derived by\nsplitting the sub-activity's name. activity_* is nullable only for the\ndata-integrity case of a sub-activity with no parent row; the UI shows a\nplaceholder there rather than hiding the progress.\n\nreported_tags / remaining_tags are whole tags and always present. A client\nrenders remaining_tags directly: it is never null, never negative, and needs\nno arithmetic on the client to produce."
       },
       "TagScopeRevisionOut": {
         "properties": {
@@ -16166,7 +16189,7 @@
         "properties": {
           "estimated_tag_count": {
             "type": "integer",
-            "exclusiveMinimum": 0,
+            "exclusiveMinimum": 0.0,
             "title": "Estimated Tag Count"
           },
           "status": {
@@ -16191,7 +16214,7 @@
           },
           "expected_revision": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Expected Revision"
           }
         },
@@ -16986,7 +17009,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -16998,7 +17021,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -17010,7 +17033,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -17022,7 +17045,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -17534,8 +17557,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 1440,
-                "minimum": 0
+                "maximum": 1440.0,
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -17547,8 +17570,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 1440,
-                "minimum": 0
+                "maximum": 1440.0,
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -17570,37 +17593,37 @@
           },
           "tags_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Tags Count",
             "default": 0
           },
           "docs_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Docs Count",
             "default": 0
           },
           "bom_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Bom Count",
             "default": 0
           },
           "spares_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Spares Count",
             "default": 0
           },
           "pages_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Pages Count",
             "default": 0
           },
           "records_count": {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 0.0,
             "title": "Records Count",
             "default": 0
           },
@@ -18237,7 +18260,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -18249,7 +18272,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -18261,7 +18284,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"
@@ -18273,7 +18296,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 0
+                "minimum": 0.0
               },
               {
                 "type": "null"

@@ -27,7 +27,7 @@ construction, and PROJECT MEETING / TRAINING (no unit at all) never are.
 import uuid
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.modules.activity_master.models import COUNT_FIELD_TAGS, ActivityMaster
 from app.modules.projects.models import Project, SCOPE_TYPE_TAG_BASED
@@ -56,6 +56,46 @@ def is_tag_counted(sub_activity: ActivityMaster | None) -> bool:
     )
 
 
+def _consumption_stmt(
+    project_id: uuid.UUID,
+    *,
+    sub_activity_id: uuid.UUID | None = None,
+    exclude_report_id: uuid.UUID | None = None,
+):
+    """The ONE definition of "tags consumed against this project's scope".
+
+    Returns a SELECT whose single column is SUM(tags_count) over the report rows
+    that consume scope, already joined to their report header so a caller can
+    add grouping columns on top. Both readers of that number build on this — the
+    cap check that refuses an over-scope entry, and the Summary that reports
+    progress — so the two can never drift into disagreeing about how many tags a
+    sub-activity has used. A Summary total that contradicted the cap would be
+    worse than no Summary at all.
+
+    Every report status is counted. A draft is a real claim on the scope (the
+    work is being done now), and the legacy approved/rejected rows still hold
+    numbers somebody reported. Counting only submitted rows would let two people
+    each draft the last 500 tags and both succeed.
+
+    `exclude_report_id` leaves out the report currently being written, so
+    re-saving or editing a report counts its new numbers instead of stacking
+    them on top of its own previous ones. Without it, editing 500 to 600 would
+    read as 1100.
+    """
+    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+
+    stmt = (
+        select(func.coalesce(func.sum(WorkReportTask.tags_count), 0).label("reported"))
+        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
+        .where(WorkReportTask.project_id == project_id)
+    )
+    if sub_activity_id is not None:
+        stmt = stmt.where(WorkReportTask.sub_activity_id == sub_activity_id)
+    if exclude_report_id is not None:
+        stmt = stmt.where(WorkReportTask.report_id != exclude_report_id)
+    return stmt
+
+
 def recorded_tags(
     db: Session,
     project_id: uuid.UUID,
@@ -63,31 +103,17 @@ def recorded_tags(
     *,
     exclude_report_id: uuid.UUID | None = None,
 ) -> int:
-    """Tags already reported against (project, sub-activity) by anyone, any day.
-
-    `exclude_report_id` leaves out the report currently being written, so
-    re-saving or editing a report counts its new numbers instead of stacking
-    them on top of its own previous ones. Without it, editing 500 to 600 would
-    read as 1100.
-
-    Every report status is counted. A draft is a real claim on the scope (the
-    work is being done now), and the legacy approved/rejected rows still hold
-    numbers somebody reported. Counting only submitted rows would let two people
-    each draft the last 500 tags and both succeed.
-    """
-    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
-
-    stmt = (
-        select(func.coalesce(func.sum(WorkReportTask.tags_count), 0))
-        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
-        .where(
-            WorkReportTask.project_id == project_id,
-            WorkReportTask.sub_activity_id == sub_activity_id,
-        )
+    """Tags already reported against (project, sub-activity) by anyone, any day."""
+    return int(
+        db.execute(
+            _consumption_stmt(
+                project_id,
+                sub_activity_id=sub_activity_id,
+                exclude_report_id=exclude_report_id,
+            )
+        ).scalar_one()
+        or 0
     )
-    if exclude_report_id is not None:
-        stmt = stmt.where(WorkReportTask.report_id != exclude_report_id)
-    return int(db.execute(stmt).scalar_one() or 0)
 
 
 def remaining_tags(
@@ -123,35 +149,52 @@ def project_tag_progress(db: Session, project: Project) -> list[dict]:
     Driven off what was reported rather than off the Activity Master catalogue:
     listing every tags-unit sub-activity in the system would bury the handful
     this project actually uses under dozens of empty rows.
+
+    Each row carries its parent Activity as well as the sub-activity, read from
+    the real ``activity_master.parent_id`` edge rather than split out of the
+    sub-activity's name. Many sub-activity names ("SPIR DOC.NO/SPIR TAG NO") are
+    unreadable without it, and the punctuation in them is not a reliable
+    separator — DEMOLITION-REWORK happens to look parseable, FMTL DATA
+    POPULATION-SPIR DOC.NO/SPIR TAG NO does not. The outer join keeps a
+    parentless row (bad master data) visible with a null Activity instead of
+    dropping it silently from the progress table.
     """
-    from app.modules.work_reports.models import DailyWorkReport, WorkReportTask
+    from app.modules.work_reports.models import WorkReportTask
 
     capacity = project_tag_capacity(project)
     if capacity is None:
         return []
 
+    activity = aliased(ActivityMaster)   # the parent (level='activity') row
     rows = db.execute(
-        select(
-            ActivityMaster.id,
-            ActivityMaster.name,
-            func.coalesce(func.sum(WorkReportTask.tags_count), 0).label("reported"),
+        _consumption_stmt(project.id)
+        .add_columns(
+            ActivityMaster.id.label("sub_activity_id"),
+            ActivityMaster.name.label("sub_activity_name"),
+            activity.id.label("activity_id"),
+            activity.name.label("activity_name"),
         )
-        .join(WorkReportTask, WorkReportTask.sub_activity_id == ActivityMaster.id)
-        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
-        .where(
-            WorkReportTask.project_id == project.id,
-            ActivityMaster.relevant_count_field == COUNT_FIELD_TAGS,
-        )
-        .group_by(ActivityMaster.id, ActivityMaster.name)
-        .order_by(ActivityMaster.name)
+        .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
+        .outerjoin(activity, ActivityMaster.parent_id == activity.id)
+        .where(ActivityMaster.relevant_count_field == COUNT_FIELD_TAGS)
+        .group_by(ActivityMaster.id, ActivityMaster.name, activity.id, activity.name)
+        # Activity then Sub-Activity: the order the table is read in, and stable
+        # across calls. Never the database's incidental ordering.
+        .order_by(activity.name, ActivityMaster.name)
     ).all()
 
     return [
         {
-            "sub_activity_id": r.id,
-            "sub_activity_name": r.name,
+            "activity_id": r.activity_id,
+            "activity_name": r.activity_name,
+            "sub_activity_id": r.sub_activity_id,
+            "sub_activity_name": r.sub_activity_name,
             "reported_tags": int(r.reported or 0),
             "estimated_tag_count": capacity,
+            # Never negative: an estimate reduced below what history already
+            # holds reads as 0 remaining, not as a negative number. The row
+            # still reports the true `reported_tags`, so the inconsistency is
+            # visible rather than papered over.
             "remaining_tags": max(0, capacity - int(r.reported or 0)),
         }
         for r in rows
