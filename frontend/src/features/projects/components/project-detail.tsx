@@ -384,7 +384,7 @@ export function ProjectDetail({ id }: { id: string }) {
         // Assigned Head only — the tab is not in `tabItems` for anyone else,
         // and both the preview and the export endpoint enforce the same rule
         // server-side, so this is never the only guard.
-        <WeeklyReportTab projectId={project.id} projectCode={project.code} />
+        <WeeklyReportTab projectId={project.id} />
       )}
 
       <PlannedDateDialog

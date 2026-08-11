@@ -503,25 +503,42 @@ def test_response_names_the_author(client, auth_header, db, tag_project):
     assert body["revisions"][0]["changed_by_name"]
 
 
-# ---------- reclassification guard (Phase 3 rule, now reachable) ----------
-def test_tag_based_to_none_is_refused_once_a_revision_exists(
-    client, pm, db, tag_project
-):
-    """Section 24: scope history must never be silently discarded."""
+# ---------- deactivation (now reachable, because history can exist) ----------
+def test_tag_based_to_none_keeps_every_revision(client, pm, db, tag_project):
+    """Scope history must never be silently discarded.
+
+    The switch back to NONE is allowed - it deactivates tag-scope behaviour for
+    the project - but it writes nothing except the classification: three
+    revisions in, three revisions out, and the current scope still on record.
+    """
     put_scope(client, pm, tag_project.id, 2500, "BASELINED", reason="r", expected=0)
     put_scope(client, pm, tag_project.id, 2600, "BASELINED", reason="r", expected=1)
     put_scope(client, pm, tag_project.id, 2500, "BASELINED", reason="r", expected=2)
 
     res = client.patch(f"{BASE}/{tag_project.id}", headers=pm, json={"scope_type": "NONE"})
-    assert res.status_code == 422, res.text
+    assert res.status_code == 200, res.text
 
     db.expire_all()
     p = db.get(Project, tag_project.id)
-    assert p.scope_type == "TAG_BASED"
+    assert p.scope_type == "NONE"
     assert (p.estimated_tag_count, p.tag_scope_revision) == (2500, 3)
     assert db.query(ProjectTagScopeRevision).filter(
         ProjectTagScopeRevision.project_id == tag_project.id
     ).count() == 3
+
+
+def test_scope_cannot_be_revised_while_deactivated(client, pm, db, tag_project):
+    """The write endpoint keeps its own TAG_BASED requirement: while a project
+    is NONE its preserved scope is history, not something to revise."""
+    put_scope(client, pm, tag_project.id, 2500, "BASELINED", reason="r", expected=0)
+    client.patch(f"{BASE}/{tag_project.id}", headers=pm, json={"scope_type": "NONE"})
+
+    res = put_scope(client, pm, tag_project.id, 3000, "BASELINED", reason="r")
+    assert res.status_code == 422
+    assert "tag-based" in res.json()["error"]["message"]
+
+    db.expire_all()
+    assert db.get(Project, tag_project.id).estimated_tag_count == 2500
 
 
 # ---------- phase boundary ----------

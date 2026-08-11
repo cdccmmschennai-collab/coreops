@@ -227,7 +227,9 @@ export function resolveSummaryState(
   return { kind, ...SUMMARY_STATE_COPY[kind] };
 }
 
-/** Sentence above the table, explaining why the rows do not sum to a total. */
-export function summaryScopeCaption(scope: number | null | undefined): string {
-  return `Each sub-activity works through the project's ${formatCount(scope)} tags independently, so these rows are separate progressions and are not meant to add up.`;
-}
+// There is deliberately no caption above the table. The independent-progression
+// rule it used to spell out is still exactly how the numbers are computed (see
+// backend tag_progress.py) - it is simply not narrated on screen any more. The
+// columns carry it: every row shows its own "reported / <the same scope>", which
+// is what tells a reader the rows are separate progressions rather than shares
+// of a pool. Nothing about the calculation changed with the sentence.

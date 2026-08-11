@@ -20,14 +20,51 @@
 /** The two selectable cycles. No arbitrary date range in this phase. */
 export type WeeklyReportCycle = "current" | "previous";
 
+/**
+ * The selectable cycles, in menu order (nearest week first).
+ *
+ * `weekOffset` is the same whole-weeks-back number the shared cycle selector
+ * (`@/components/data/cycle-select`) and Employee Performance speak, so the two
+ * surfaces render the identical control. The API still takes the string, and
+ * this table is the ONE place the two representations meet - the tab never
+ * derives one from the other inline.
+ *
+ * Only two entries because the backend only accepts two (`CYCLE_OFFSETS` in
+ * `projects/weekly_report.py`). Offering "2 weeks ago" here would produce a 422,
+ * not a report.
+ */
 export const WEEKLY_REPORT_CYCLES: readonly {
   value: WeeklyReportCycle;
   label: string;
+  weekOffset: number;
 }[] = [
-  // Previous first, so the control reads left-to-right in time order.
-  { value: "previous", label: "Previous Week" },
-  { value: "current", label: "Current Week" },
+  { value: "current", label: "Current week", weekOffset: 0 },
+  { value: "previous", label: "Previous week", weekOffset: 1 },
 ];
+
+/** Week offsets the selector offers, in menu order. */
+export const WEEKLY_REPORT_WEEK_OFFSETS: readonly number[] =
+  WEEKLY_REPORT_CYCLES.map((c) => c.weekOffset);
+
+/** Offset → display name, the shape the shared selector reads. */
+export const WEEKLY_REPORT_CYCLE_LABEL: Record<number, string> =
+  Object.fromEntries(WEEKLY_REPORT_CYCLES.map((c) => [c.weekOffset, c.label]));
+
+/** The offset that stands for the given cycle. */
+export function weeklyReportWeekOffset(cycle: WeeklyReportCycle): number {
+  return WEEKLY_REPORT_CYCLES.find((c) => c.value === cycle)?.weekOffset ?? 0;
+}
+
+/**
+ * The cycle an offset stands for. Anything the selector could not have produced
+ * falls back to the default rather than fabricating a request the API rejects.
+ */
+export function weeklyReportCycleForOffset(offset: number): WeeklyReportCycle {
+  return (
+    WEEKLY_REPORT_CYCLES.find((c) => c.weekOffset === offset)?.value ??
+    WEEKLY_REPORT_DEFAULT_CYCLE
+  );
+}
 
 /** What the tab opens on. */
 export const WEEKLY_REPORT_DEFAULT_CYCLE: WeeklyReportCycle = "current";
@@ -185,21 +222,11 @@ export function formatReportDate(iso: unknown): string {
   return `${day} ${name} ${year}`;
 }
 
-/**
- * "07 Aug 2026 - 13 Aug 2026" - the resolved cycle, always shown so the Head
- * never has to guess what "Current Week" meant.
- */
-export function formatCycleRange(
-  start: unknown,
-  end: unknown,
-): string {
-  const from = formatReportDate(start);
-  const to = formatReportDate(end);
-  if (from === VALUE_NOT_APPLICABLE || to === VALUE_NOT_APPLICABLE) {
-    return VALUE_NOT_APPLICABLE;
-  }
-  return `${from} - ${to}`;
-}
+// There is deliberately no second date formatter here. The cycle's dates are
+// part of the cycle selector itself (`@/components/data/cycle-select`, which
+// renders "AUG 7–13 · Fri–Thu" inside the control) - a separate "07 Aug 2026 -
+// 13 Aug 2026" line under it was the same fact stated twice, in two formats,
+// with two chances to disagree.
 
 /** One fully formatted table row. Every cell is a non-empty string. */
 export interface WeeklyReportTableRow {

@@ -28,7 +28,6 @@ from app.modules.projects.models import (
     ProjectStatus,
     ProjectTagScopeRevision,
     ProjectTimelineEvent,
-    SCOPE_TYPE_NONE,
     SCOPE_TYPE_TAG_BASED,
     TimelineEventType,
     VALID_TAG_SCOPE_STATUSES,
@@ -613,25 +612,41 @@ _UNSET = object()
 INITIAL_SCOPE_REASON = "Initial project estimate"
 
 
-def _tag_scope_revision_count(db: Session, project_id: uuid.UUID) -> int:
-    return db.execute(
-        select(func.count()).select_from(ProjectTagScopeRevision).where(
-            ProjectTagScopeRevision.project_id == project_id
-        )
-    ).scalar_one()
-
-
-def _assert_tag_scope_clearable(db: Session, project: Project) -> None:
-    """Guard for TAG_BASED -> NONE. Scope history is an audit trail, so we
-    refuse the reclassification rather than delete or orphan it."""
-    has_estimate = project.estimated_tag_count is not None
-    if has_estimate or _tag_scope_revision_count(db, project.id) > 0:
-        raise AppError(
-            "validation_error",
-            "This project already has tag-scope history and cannot be changed to a "
-            "non-tag project without first resolving the existing scope.",
-            422,
-        )
+# --------------------------------------------------------------------------
+# Turning tag scope off (TAG_BASED -> NONE)
+#
+# There is no guard here, and that is the whole design. Reclassifying a project
+# back to NONE is a DEACTIVATION, not a deletion:
+#
+#   nothing is written   projects.estimated_tag_count, tag_scope_status,
+#                        tag_scope_revision and every project_tag_scope_revisions
+#                        row are left exactly as they are. No revision is minted
+#                        either - flipping the feature off is not a scope
+#                        decision, and history records decisions (1200 -> 1500),
+#                        not toggles.
+#
+#   nothing enforces     every consumer of tag scope already asks
+#                        `project.scope_type == TAG_BASED` before it does
+#                        anything (tag_progress.project_tag_capacity, which the
+#                        Daily Report cap and the Summary both go through, and
+#                        record_tag_scope_revision below). Setting NONE therefore
+#                        removes the cap, empties the Summary's progress rows and
+#                        closes the scope-management surface in one assignment,
+#                        with no second switch to keep in step.
+#
+#   nothing is rewritten reported tag counts on existing work reports are
+#                        untouched; an employee simply stops being measured
+#                        against a project ceiling.
+#
+# Switching back to TAG_BASED restores the preserved estimate, status, revision
+# number and full history unchanged - there is no reset step to undo, and no
+# duplicate rows, because nothing was ever removed.
+#
+# An earlier build refused this transition ("...cannot be changed to a non-tag
+# project without first resolving the existing scope"). That protected the audit
+# trail by making a legitimate business change impossible; preserving the trail
+# while ignoring it is strictly better.
+# --------------------------------------------------------------------------
 
 
 def _assert_can_read_tag_scope(db: Session, actor: User, project: Project) -> None:
@@ -937,10 +952,9 @@ def update_project(
     if fields.get("scope_type") is None:
         fields.pop("scope_type", None)
 
-    # Reclassifying TAG_BASED -> NONE must never silently destroy scope data.
-    # Allowed only while the project has no estimate and no revision history.
-    if fields.get("scope_type") == SCOPE_TYPE_NONE and project.scope_type == SCOPE_TYPE_TAG_BASED:
-        _assert_tag_scope_clearable(db, project)
+    # TAG_BASED -> NONE is allowed with or without existing scope history, and
+    # writes nothing but the classification itself: see the deactivation note
+    # above the tag-scope section.
 
     # code is editable (PMs need to fix codes entered before this field
     # existed) — but must stay unique among non-deleted projects, same rule

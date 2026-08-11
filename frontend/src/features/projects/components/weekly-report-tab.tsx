@@ -4,6 +4,7 @@ import * as React from "react";
 import { CalendarRange, Download, Lock } from "lucide-react";
 import { toast } from "sonner";
 
+import { CycleSelect } from "@/components/data/cycle-select";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,7 @@ import { downloadWeeklyReportXlsx } from "../api";
 import { useProjectWeeklyReport } from "../hooks";
 import {
   WEEKLY_REPORT_COLUMNS,
-  WEEKLY_REPORT_CYCLES,
+  WEEKLY_REPORT_CYCLE_LABEL,
   WEEKLY_REPORT_CYCLE_PARAM,
   WEEKLY_REPORT_DEFAULT_CYCLE,
   WEEKLY_REPORT_DOWNLOAD_ERROR,
@@ -35,10 +36,12 @@ import {
   WEEKLY_REPORT_ERROR_TITLE,
   WEEKLY_REPORT_FORBIDDEN_HINT,
   WEEKLY_REPORT_FORBIDDEN_TITLE,
+  WEEKLY_REPORT_WEEK_OFFSETS,
   buildWeeklyReportRows,
   canDownloadWeeklyReport,
-  formatCycleRange,
   resolveWeeklyReportCycle,
+  weeklyReportCycleForOffset,
+  weeklyReportWeekOffset,
   type WeeklyReportTableRow,
 } from "../weekly-report";
 
@@ -53,24 +56,16 @@ import {
  *   to the Head, and it carries doc/BOM/spares/pages/records work, task-mode
  *   work and non-benchmark work alongside tag work.
  *
- *   It is not a report builder. The only control is Previous / Current Week -
- *   no employee filter, no activity filter, no date picker. The complete
- *   downloadable record is the Excel file.
+ *   It is not a report builder. The only control is the Current / Previous week
+ *   cycle selector - no employee filter, no activity filter, no date picker. The
+ *   complete downloadable record is the Excel file.
  *
  * The table and the .xlsx come from the SAME backend dataset (the preview
  * endpoint and the export endpoint call one service), and this component does
  * no filtering, sorting or arithmetic of its own - see ../weekly-report.ts,
  * where every formatting rule lives so `node --test` can cover it.
  */
-export function WeeklyReportTab({
-  projectId,
-  projectCode,
-}: {
-  projectId: string;
-  /** From the project row the page already loaded, so the heading names the
-   *  project before the report resolves. Code only - never the name. */
-  projectCode: string;
-}) {
+export function WeeklyReportTab({ projectId }: { projectId: string }) {
   // The selected cycle lives in the URL alongside ?tab=weekly-report, so
   // navigating away and back returns to the same week.
   const [cycleParam, setCycleParam] = useUrlState(
@@ -86,8 +81,6 @@ export function WeeklyReportTab({
     [query.data],
   );
 
-  const period = query.data?.period;
-  const range = formatCycleRange(period?.start_date, period?.end_date);
   const canDownload = canDownloadWeeklyReport(query.data?.rows, query.isFetching);
 
   async function onDownload() {
@@ -111,50 +104,29 @@ export function WeeklyReportTab({
         <CardTitle>Weekly Report</CardTitle>
       </CardHeader>
       <CardContent className="px-0 pb-0">
-        <div className="flex flex-wrap items-end justify-between gap-4 px-6 pb-4">
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Project: <span className="font-mono text-foreground">{projectCode}</span>
-            </p>
+        {/* One controls row: cycle on the left, download on the right. The
+            project code is NOT repeated here - the page header two rows up
+            already names the project this tab belongs to. `flex-wrap` is what
+            makes the download drop below the selector on a narrow screen, so
+            nothing is positioned absolutely. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 pb-4">
+          {/* The same control Employee Performance uses, so a week picker looks
+              and behaves identically wherever it appears. Switching loads
+              immediately - there is nothing to save, so there is no Save
+              button. The dates live inside it; there is no second date line. */}
+          <CycleSelect
+            value={weeklyReportWeekOffset(cycle)}
+            options={WEEKLY_REPORT_WEEK_OFFSETS}
+            labels={WEEKLY_REPORT_CYCLE_LABEL}
+            onChange={(offset) => setCycleParam(weeklyReportCycleForOffset(offset))}
+            ariaLabel="Select report week"
+          />
 
-            {/* Segmented cycle selector. Switching loads immediately - there is
-                nothing to save, so there is no Save button. */}
-            <div
-              className="inline-flex rounded-md border border-border p-0.5"
-              role="group"
-              aria-label="Report week"
-            >
-              {WEEKLY_REPORT_CYCLES.map((option) => {
-                const active = option.value === cycle;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setCycleParam(option.value)}
-                    className={cn(
-                      "rounded px-3 py-1.5 text-sm font-medium transition-colors",
-                      active
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* The resolved dates, always visible: the Head should never have to
-                guess which days "Current Week" covers. */}
-            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <CalendarRange className="h-4 w-4" aria-hidden />
-              {query.isFetching ? "Loading week..." : range}
-            </p>
-          </div>
-
+          {/* Default (primary) variant and "Export Excel" wording, matching
+              every other export button in CoreOps - Employee Performance's
+              "Export Full Cycle Report" and the Reports module. An export is
+              the same action wherever it appears, so it looks the same. */}
           <Button
-            variant="secondary"
             onClick={() => void onDownload()}
             disabled={!canDownload || downloading}
             loading={downloading}
@@ -165,7 +137,7 @@ export function WeeklyReportTab({
             }
           >
             <Download className="h-4 w-4" />
-            Download Excel
+            Export Excel
           </Button>
         </div>
 

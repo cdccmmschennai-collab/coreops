@@ -383,7 +383,7 @@ def test_project_detail_shows_configured_scope(client, auth_header, db, tag_proj
     assert body["tag_scope_revision"] == 3
 
 
-# ---------- reclassification guard ----------
+# ---------- deactivation (TAG_BASED -> NONE) ----------
 def test_tag_based_to_none_allowed_while_no_scope_exists(client, auth_header, tag_project):
     pm = auth_header("scopepm7@x.com", role=UserRole.project_manager)
     res = client.patch(f"{BASE}/{tag_project.id}", headers=pm, json={"scope_type": "NONE"})
@@ -391,9 +391,16 @@ def test_tag_based_to_none_allowed_while_no_scope_exists(client, auth_header, ta
     assert res.json()["scope_type"] == "NONE"
 
 
-def test_tag_based_to_none_rejected_once_scope_history_exists(
+def test_tag_based_to_none_allowed_and_preserves_history(
     client, auth_header, db, tag_project
 ):
+    """Turning tag scope off is a deactivation, not a deletion.
+
+    Switching a project back to NONE must succeed even when scope history
+    exists, and must leave both the stored scope and the audit trail exactly as
+    they were - nothing deleted, nothing reset, and no new revision minted for
+    the toggle itself (history records scope decisions, not feature switches).
+    """
     pm_h = auth_header("scopepm8@x.com", role=UserRole.project_manager)
     pm = db.query(User).filter(User.email == "scopepm8@x.com").one()
     service.record_tag_scope_revision(
@@ -401,19 +408,47 @@ def test_tag_based_to_none_rejected_once_scope_history_exists(
         new_status="PROVISIONAL", reason="Initial project estimate")
 
     res = client.patch(f"{BASE}/{tag_project.id}", headers=pm_h, json={"scope_type": "NONE"})
-    assert res.status_code == 422
-    assert "tag-scope history" in res.json()["error"]["message"]
+    assert res.status_code == 200, res.text
+    assert res.json()["scope_type"] == "NONE"
 
-    # History and current scope survive the rejected attempt.
+    db.expire_all()
+    p = db.get(Project, tag_project.id)
+    assert p.scope_type == "NONE"
+    # Preserved historical configuration, untouched by the switch.
+    assert p.estimated_tag_count == 1000
+    assert p.tag_scope_status == "PROVISIONAL"
+    assert p.tag_scope_revision == 1
+    assert db.query(ProjectTagScopeRevision).count() == 1
+
+
+def test_re_enabling_tag_scope_restores_the_preserved_scope(
+    client, auth_header, db, tag_project
+):
+    """NONE -> TAG_BASED brings the project's own scope and history back
+    unchanged: no duplicate revisions, no reset estimate."""
+    pm_h = auth_header("scopepm8b@x.com", role=UserRole.project_manager)
+    pm = db.query(User).filter(User.email == "scopepm8b@x.com").one()
+    service.record_tag_scope_revision(
+        db, pm, tag_project.id, new_estimated_tag_count=1200,
+        new_status="BASELINED", reason="Initial project estimate")
+
+    client.patch(f"{BASE}/{tag_project.id}", headers=pm_h, json={"scope_type": "NONE"})
+    res = client.patch(
+        f"{BASE}/{tag_project.id}", headers=pm_h, json={"scope_type": "TAG_BASED"}
+    )
+    assert res.status_code == 200, res.text
+
     db.expire_all()
     p = db.get(Project, tag_project.id)
     assert p.scope_type == "TAG_BASED"
-    assert p.estimated_tag_count == 1000
+    assert (p.estimated_tag_count, p.tag_scope_status, p.tag_scope_revision) == (
+        1200, "BASELINED", 1,
+    )
     assert db.query(ProjectTagScopeRevision).count() == 1
 
 
 def test_other_edits_still_work_on_a_scoped_project(client, auth_header, db, tag_project):
-    """The guard must only block the reclassification, not ordinary edits."""
+    """Ordinary edits of a scoped project are unaffected by the scope rules."""
     pm_h = auth_header("scopepm9@x.com", role=UserRole.project_manager)
     pm = db.query(User).filter(User.email == "scopepm9@x.com").one()
     service.record_tag_scope_revision(

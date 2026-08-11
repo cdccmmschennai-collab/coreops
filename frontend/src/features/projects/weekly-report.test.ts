@@ -17,15 +17,18 @@ import {
   WEEKLY_REPORT_COLUMNS,
   WEEKLY_REPORT_CYCLES,
   WEEKLY_REPORT_DEFAULT_CYCLE,
+  WEEKLY_REPORT_CYCLE_LABEL,
+  WEEKLY_REPORT_WEEK_OFFSETS,
   buildWeeklyReportRows,
   canDownloadWeeklyReport,
   formatBenchmarkCell,
   formatCountCell,
-  formatCycleRange,
   formatReportDate,
   resolveWeeklyReportCycle,
+  weeklyReportCycleForOffset,
   weeklyReportExportPath,
   weeklyReportPath,
+  weeklyReportWeekOffset,
   type WeeklyReportApiRow,
 } from "./weekly-report.ts";
 
@@ -60,15 +63,34 @@ test("the tab opens on the current week", () => {
   assert.equal(resolveWeeklyReportCycle(undefined), "current");
 });
 
-test("only the two supported cycles exist", () => {
+test("only the two supported cycles exist, nearest week first", () => {
   assert.deepEqual(
     WEEKLY_REPORT_CYCLES.map((c) => c.value),
-    ["previous", "current"],
+    ["current", "previous"],
   );
   assert.deepEqual(
     WEEKLY_REPORT_CYCLES.map((c) => c.label),
-    ["Previous Week", "Current Week"],
+    ["Current week", "Previous week"],
   );
+});
+
+test("the selector speaks week offsets, the API speaks cycle names", () => {
+  // The shared cycle control (Employee Performance and this tab use the same
+  // one) is driven by whole-weeks-back offsets; the weekly-report API takes
+  // "current"/"previous". These two functions are the only bridge, so a
+  // round-trip must be lossless in both directions.
+  assert.deepEqual(WEEKLY_REPORT_WEEK_OFFSETS, [0, 1]);
+  assert.equal(WEEKLY_REPORT_CYCLE_LABEL[0], "Current week");
+  assert.equal(WEEKLY_REPORT_CYCLE_LABEL[1], "Previous week");
+
+  assert.equal(weeklyReportWeekOffset("current"), 0);
+  assert.equal(weeklyReportWeekOffset("previous"), 1);
+  assert.equal(weeklyReportCycleForOffset(0), "current");
+  assert.equal(weeklyReportCycleForOffset(1), "previous");
+
+  // The backend offers no third cycle, so an out-of-range offset must fall back
+  // rather than build a request that comes back 422.
+  assert.equal(weeklyReportCycleForOffset(2), "current");
 });
 
 test("a hand-typed cycle falls back rather than firing a 422", () => {
@@ -94,17 +116,10 @@ test("an unusable date reads as the placeholder, never as Invalid Date", () => {
   assert.equal(formatReportDate("2026-13-01"), VALUE_NOT_APPLICABLE);
 });
 
-test("the cycle range names both ends so the week is never a guess", () => {
-  assert.equal(
-    formatCycleRange("2026-08-07", "2026-08-13"),
-    "07 Aug 2026 - 13 Aug 2026",
-  );
-  assert.equal(
-    formatCycleRange("2026-07-31", "2026-08-06"),
-    "31 Jul 2026 - 06 Aug 2026",
-  );
-  assert.equal(formatCycleRange(null, "2026-08-13"), VALUE_NOT_APPLICABLE);
-});
+// The cycle's own date range is no longer formatted here: it is rendered inside
+// the shared cycle selector ("AUG 7–13 · Fri–Thu"), which is the one place a
+// week's dates are stated. There used to be a second, differently formatted
+// line under the control saying the same thing.
 
 // ---------- counts ----------------------------------------------------------
 test("a reported count renders as a number", () => {

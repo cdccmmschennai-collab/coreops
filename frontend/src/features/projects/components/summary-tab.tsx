@@ -28,7 +28,6 @@ import {
   buildSummaryRows,
   filterSummaryRows,
   resolveSummaryState,
-  summaryScopeCaption,
 } from "../summary";
 
 /**
@@ -105,10 +104,11 @@ export function SummaryTab({ projectId }: { projectId: string }) {
         <CardTitle>Summary</CardTitle>
       </CardHeader>
       <CardContent className="px-0 pb-0">
-        <div className="space-y-3 px-6 pb-4">
-          <p className="text-sm text-muted-foreground">
-            {summaryScopeCaption(query.data.estimated_tag_count)}
-          </p>
+        {/* Search only. The table's own header ("Reported / Scope", "Remaining"
+            against one repeated scope number) already says that each row is its
+            own progression; a paragraph restating it above every project was
+            noise on a screen people read many times a day. */}
+        <div className="px-6 pb-4">
           <div className="relative max-w-sm">
             <Search
               className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
