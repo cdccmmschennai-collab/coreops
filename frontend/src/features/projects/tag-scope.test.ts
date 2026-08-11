@@ -194,7 +194,7 @@ test("a configured project shows its audit stamp alongside the values", () => {
     v.rows.map((r) => [r.label, r.value]),
     [
       ["Estimated Tags", "2,500"],
-      ["Status", "Baselined"],
+      ["Status", "Confirmed Scope"],
       ["Revision", "3"],
       ["Last Updated", "Aug 7, 2026, 05:15 PM"],
       ["Updated By", "Project Head"],
@@ -296,7 +296,7 @@ test("a later revision shows the value it superseded", () => {
 
 test("history renders the display labels, the reason and the author", () => {
   const [newest] = buildTagScopeHistoryRows(HISTORY, isoDate);
-  assert.equal(newest.status, "Baselined");
+  assert.equal(newest.status, "Confirmed Scope");
   assert.equal(newest.reason, "Additional tags identified from new reference documents");
   assert.equal(newest.updatedBy, "Head");
   assert.equal(newest.date, "2026-08-07");
