@@ -748,3 +748,131 @@ def build_workbook(rows: list[dict], max_activities: int) -> BytesIO:
         r += 1  # blank spacer row before the next employee
 
     return _finalize(wb)
+
+
+# ---------------------------------------------------------------------------
+# Project Weekly Report (Phase 7) — the Head's per-project weekly workbook.
+#
+# Styled after the company's existing hand-made "Head Report" workbook, which is
+# the format the Heads already read: a yellow header band (FFFFFF00) in bold
+# Calibri 11 over plain body rows, one row per reported activity line, an SL.NO
+# running down the left and a wide REMARKS column on the right. The reference
+# workbook's own widths are kept where the column survived (SL.NO 6.29, DATE
+# 14.14, NAME 26.29, PROJECT 23.14, REMARKS 68.0).
+#
+# Two columns the hand-made sheet could not have: WORK PERIOD is a real column
+# here instead of a "FIRST HALF-" prefix glued onto the activity text, and
+# ACTIVITY / SUB-ACTIVITY are separate columns instead of one "MTL / MTL-ASSET
+# PHOTO..." string. Both come from real fields (work_report_periods.day_part and
+# the two Activity Master snapshots), so neither is parsed out of free text.
+#
+# The rows handed in are ALREADY the finished report (see
+# projects/weekly_report.py). This builder only renders them: it does not sort,
+# filter, aggregate or recompute anything, which is exactly why the workbook and
+# the browser preview cannot disagree.
+_WR_HEADER_FILL = PatternFill(fill_type="solid", fgColor="FFFFFF00")
+_WR_HEADER_FONT = Font(name="Calibri", size=11, bold=True)
+_WR_BODY_FONT = Font(name="Calibri", size=11)
+_WR_SHEET_NAME = "Weekly Report"
+# The blank-cell placeholder, matching the reference workbook's own "-" and the
+# browser preview. Never a 0: "no docs were reported" and "0 docs were counted
+# against the target" are different statements.
+_WR_BLANK = "-"
+
+# (header, width, kind) — kind drives alignment/format only.
+#   "text"   left, no wrap        "wrap"   left, wrapped (long free text)
+#   "num"    centered number      "date"   real Excel date
+_WR_COLUMNS = [
+    ("SL.NO", 6.28515625, "num"),
+    ("DATE", 14.140625, "date"),
+    ("WORK PERIOD", 16.0, "text"),
+    ("EMPLOYEE NAME", 26.28515625, "text"),
+    ("PROJECT", 23.140625, "text"),
+    ("ACTIVITY", 26.0, "wrap"),
+    ("SUB-ACTIVITY", 53.42578125, "wrap"),
+    ("BENCHMARK", 16.0, "num"),
+    ("TAGS", 10.0, "num"),
+    ("DOCS", 10.0, "num"),
+    ("BOM", 10.0, "num"),
+    ("SPARES", 11.0, "num"),
+    ("PAGES", 10.0, "num"),
+    ("RECORDS", 11.0, "num"),
+    ("TASK STATUS", 16.0, "text"),
+    ("REMARKS", 68.0, "wrap"),
+]
+# The six unit columns, in the order COUNT_FIELDS declares them.
+_WR_UNITS = ["tags", "docs", "bom", "spares", "pages", "records"]
+
+
+def _wr_cell_values(row: dict, serial: int) -> list:
+    """One report row -> the 16 cell values, in column order.
+
+    Numbers stay numbers (so Excel can sort and filter them), dates stay real
+    dates, and anything that does not apply becomes the "-" placeholder rather
+    than a misleading zero or an empty cell.
+    """
+    # Benchmark: the numeric target when there is one, else the textual label
+    # ("Lump Sum") for a completion-only task, else blank. Exactly the rule the
+    # preview renders, because both read the same two fields.
+    benchmark = row.get("benchmark")
+    if benchmark is None:
+        benchmark = row.get("benchmark_label") or _WR_BLANK
+    counts = [
+        row.get(unit) if row.get(unit) is not None else _WR_BLANK for unit in _WR_UNITS
+    ]
+    return [
+        serial,
+        row["report_date"],
+        row.get("work_period_label") or _WR_BLANK,
+        row.get("employee_name") or _WR_BLANK,
+        # PROJECT = code only. The project name never appears in this column.
+        row.get("project_code") or _WR_BLANK,
+        row.get("activity_name") or _WR_BLANK,
+        row.get("sub_activity_name") or _WR_BLANK,
+        benchmark,
+        *counts,
+        row.get("task_status_label") or _WR_BLANK,
+        row.get("remarks") or _WR_BLANK,
+    ]
+
+
+def build_project_weekly_report_workbook(report: dict) -> BytesIO:
+    """Render one project's weekly report (the dict from
+    projects.weekly_report.get_project_weekly_report) as .xlsx.
+
+    An empty week still produces a valid workbook with its header row — the same
+    thing every other CoreOps export does rather than returning an error or an
+    empty file. The UI keeps the Download button disabled in that case, so the
+    header-only file is a fallback, not the normal path.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = _WR_SHEET_NAME
+
+    for idx, (label, width, _kind) in enumerate(_WR_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=idx, value=label)
+        cell.font = _WR_HEADER_FONT
+        cell.fill = _WR_HEADER_FILL
+        cell.border = _BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    # The header stays put while a long week scrolls.
+    ws.freeze_panes = "A2"
+
+    for offset, row in enumerate(report.get("rows") or []):
+        excel_row = offset + 2
+        for idx, ((_label, _width, kind), value) in enumerate(
+            zip(_WR_COLUMNS, _wr_cell_values(row, offset + 1)), start=1
+        ):
+            cell = ws.cell(row=excel_row, column=idx, value=value)
+            cell.font = _WR_BODY_FONT
+            cell.border = _BORDER
+            cell.alignment = Alignment(
+                horizontal="center" if kind == "num" else "left",
+                vertical="top",
+                wrap_text=kind == "wrap",
+            )
+            if kind == "date":
+                cell.number_format = "dd-mm-yyyy"
+
+    return _finalize(wb)

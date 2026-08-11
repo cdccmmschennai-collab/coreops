@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { projectsApi } from "./api";
 import { projectsKeys } from "./keys";
+import type { WeeklyReportCycle } from "./weekly-report";
 import type {
   ActivityMemberCreateBody,
   ActivityMemberUpdateBody,
@@ -120,6 +121,30 @@ export function useProjectSummary(id: string | undefined) {
     queryKey: projectsKeys.summary(id ?? ""),
     queryFn: () => projectsApi.getSummary(id as string),
     enabled: !!id,
+  });
+}
+
+/**
+ * Weekly Report for one project and one cycle.
+ *
+ * `enabled` carries the caller's Head authority: the endpoint is Head-only, so
+ * a non-Head must not fire a request that is guaranteed to come back 403 (the
+ * tab is not rendered for them either way).
+ *
+ * `placeholderData` is deliberately NOT used here. Switching Current <-> Previous
+ * must show a loading state rather than last week's rows sitting under this
+ * week's heading - a stale row here is a wrong operational report, not a
+ * cosmetic flicker.
+ */
+export function useProjectWeeklyReport(
+  id: string | undefined,
+  cycle: WeeklyReportCycle,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: projectsKeys.weeklyReport(id ?? "", cycle),
+    queryFn: () => projectsApi.getWeeklyReport(id as string, cycle),
+    enabled: !!id && enabled,
   });
 }
 

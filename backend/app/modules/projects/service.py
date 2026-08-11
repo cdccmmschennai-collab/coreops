@@ -711,6 +711,49 @@ def get_project_summary(db: Session, actor: User, project_id: uuid.UUID) -> Proj
     )
 
 
+def _assert_can_read_weekly_report(db: Session, actor: User, project: Project) -> None:
+    """Weekly Report access — THIS project's assigned Head, and nobody else.
+
+    Narrower than every other tab on the page on purpose, and narrower than
+    ``can_edit_project``: a PM is NOT included. The current requirement is that
+    the weekly operational report belongs to the Head who runs the project; if
+    PM access is wanted later it is one clause here, not a re-plumbing.
+
+    Head authority is per-project by construction — ``authz.is_project_head``
+    compares the caller's employee id against THIS project's head_employee_id,
+    so heading project A grants nothing on project B. This is the same helper
+    the Tag Scope write path and the Edit rule use; no second role rule exists.
+    """
+    if not authz.is_project_head(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only this project's assigned Head can open the Weekly Report.",
+            403,
+        )
+
+
+def get_project_weekly_report(
+    db: Session,
+    actor: User,
+    project_id: uuid.UUID,
+    cycle: str | None = None,
+    *,
+    today: date | None = None,
+) -> dict:
+    """Weekly Report payload for the preview AND the Excel export.
+
+    Both endpoints call exactly this, so the workbook can never contain a
+    different row set from the screen it was downloaded from. Authorization is
+    re-run here rather than trusted from the caller, which is what makes the
+    export endpoint safe against a hand-typed URL.
+    """
+    from app.modules.projects import weekly_report
+
+    project = _fetch(db, project_id)
+    _assert_can_read_weekly_report(db, actor, project)
+    return weekly_report.get_project_weekly_report(db, project, cycle, today=today)
+
+
 def _assert_scope_covers_recorded_progress(
     db: Session, project: Project, new_estimated_tag_count: int
 ) -> None:

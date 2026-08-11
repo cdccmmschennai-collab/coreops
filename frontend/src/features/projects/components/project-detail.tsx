@@ -40,6 +40,7 @@ import { ProjectTimeline } from "./project-timeline";
 import { StatusBadge } from "./status-badge";
 import { SummaryTab } from "./summary-tab";
 import { TagScopeTab } from "./tag-scope-tab";
+import { WeeklyReportTab } from "./weekly-report-tab";
 import { useProject, usePlannedDateChanges, useUpdatePlannedDate } from "../hooks";
 import { useProjectAuthority } from "../hooks/use-project-authority";
 import { canArchiveProject, canEditProject, canManageTagScope } from "../permissions";
@@ -378,6 +379,13 @@ export function ProjectDetail({ id }: { id: string }) {
       )}
 
       {activeTab === "summary" && <SummaryTab projectId={project.id} />}
+
+      {activeTab === "weekly-report" && (
+        // Assigned Head only — the tab is not in `tabItems` for anyone else,
+        // and both the preview and the export endpoint enforce the same rule
+        // server-side, so this is never the only guard.
+        <WeeklyReportTab projectId={project.id} projectCode={project.code} />
+      )}
 
       <PlannedDateDialog
         projectId={project.id}

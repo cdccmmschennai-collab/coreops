@@ -21,6 +21,7 @@ import {
   canEditProject,
   canManageTagScope,
   canViewTagScope,
+  canViewWeeklyReport,
   isProjectAdmin,
   type ProjectViewer,
 } from "./permissions.ts";
@@ -87,4 +88,32 @@ test("reading and changing are genuinely different rights", () => {
   assert.equal(canViewTagScope(), true);
   assert.equal(canManageTagScope(MEMBER), false);
   assert.equal(canManageTagScope(UNASSIGNED_HEAD), false);
+});
+
+// --- Weekly Report: the assigned Head, and only them ------------------------
+test("only this project's assigned Head may open the Weekly Report", () => {
+  assert.equal(canViewWeeklyReport(ASSIGNED_HEAD), true);
+  assert.equal(canViewWeeklyReport(UNASSIGNED_HEAD), false);
+  assert.equal(canViewWeeklyReport(MEMBER), false);
+});
+
+test("a PM does NOT get the Weekly Report by virtue of being a PM", () => {
+  // The narrowest rule on the page, and deliberately not the project-admin set:
+  // this is a business decision, not an oversight.
+  assert.equal(canViewWeeklyReport(PM), false);
+  // A PM is a project ADMIN and still not a Weekly Report reader — the two sets
+  // are deliberately different.
+  assert.equal(isProjectAdmin(PM), true);
+  // A PM who IS this project's Head qualifies — as its Head, not as a PM.
+  assert.equal(canViewWeeklyReport({ canManage: true, isHead: true }), true);
+});
+
+test("Weekly Report access is strictly narrower than tag-scope management", () => {
+  for (const viewer of [PM, ASSIGNED_HEAD, UNASSIGNED_HEAD, MEMBER]) {
+    if (canViewWeeklyReport(viewer)) {
+      assert.equal(canManageTagScope(viewer), true);
+    }
+  }
+  // ...and genuinely narrower, not the same predicate renamed.
+  assert.notEqual(canViewWeeklyReport(PM), canManageTagScope(PM));
 });

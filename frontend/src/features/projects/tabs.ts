@@ -8,16 +8,15 @@
  * it never decides tab visibility on its own.
  *
  * Visibility rules:
- *   Overview   — every user already permitted to view the project.
- *   Tag Scope  — every viewer too. The scope and its revision history are
- *                context contributors need; only the Revise action inside the
- *                tab is restricted to PM / this project's Head, which the tab
- *                itself gates via canManageTagScope.
- *   Summary    — every user already permitted to view the project.
- *
- * No tab is manager-only today. MANAGER_ONLY is kept (empty) because the rule
- * it encodes is the thing worth keeping — restricting a tab is one entry, not a
- * re-plumbing of every caller.
+ *   Overview      — every user already permitted to view the project.
+ *   Tag Scope     — every viewer too. The scope and its revision history are
+ *                   context contributors need; only the Revise action inside
+ *                   the tab is restricted to PM / this project's Head, which
+ *                   the tab itself gates via canManageTagScope.
+ *   Summary       — every user already permitted to view the project.
+ *   Weekly Report — THIS project's assigned Head only (Phase 7). The one
+ *                   restricted tab on the page, and the one place a PM is not
+ *                   included; see canViewWeeklyReport for why.
  *
  * The page-level "can I see this project at all" check is unchanged and still
  * enforced by the API (GET /projects/{id} 403/404) — this module only decides
@@ -25,9 +24,13 @@
  */
 
 // Relative .ts value import — the node --test harness resolves it directly.
-import { canViewTagScope, type ProjectViewer } from "./permissions.ts";
+import {
+  canViewTagScope,
+  canViewWeeklyReport,
+  type ProjectViewer,
+} from "./permissions.ts";
 
-export type ProjectTabValue = "overview" | "tag-scope" | "summary";
+export type ProjectTabValue = "overview" | "tag-scope" | "summary" | "weekly-report";
 
 /** Tab shown when no tab is selected, or when the selected one is invalid. */
 export const PROJECT_DEFAULT_TAB: ProjectTabValue = "overview";
@@ -50,16 +53,27 @@ const ALL_TABS: readonly ProjectTab[] = [
   { value: "overview", label: "Overview" },
   { value: "tag-scope", label: "Tag Scope" },
   { value: "summary", label: "Summary" },
+  { value: "weekly-report", label: "Weekly Report" },
 ];
 
-/** Tabs restricted to PM / Head. Everything not listed is open to all viewers. */
-const MANAGER_ONLY: readonly ProjectTabValue[] = [];
+/**
+ * Tabs whose visibility depends on the viewer. Everything not listed here is
+ * open to every viewer who may open the project at all.
+ *
+ * One entry per restricted tab, each pointing at the predicate that owns the
+ * rule — so restricting a tab stays a single line, and the rule itself lives
+ * next to the backend check it mirrors rather than being inlined here.
+ */
+const RESTRICTED: Partial<Record<ProjectTabValue, (viewer: ProjectTabViewer) => boolean>> = {
+  "weekly-report": canViewWeeklyReport,
+};
 
 export function canSeeProjectTab(
   tab: ProjectTabValue,
-  _viewer: ProjectTabViewer,
+  viewer: ProjectTabViewer,
 ): boolean {
-  if (!MANAGER_ONLY.includes(tab)) return true;
+  const rule = RESTRICTED[tab];
+  if (rule) return rule(viewer);
   return canViewTagScope();
 }
 
@@ -72,8 +86,8 @@ export function buildProjectTabs(viewer: ProjectTabViewer): ProjectTab[] {
  * Normalise whatever is in the URL into a tab this viewer is actually allowed
  * to open. Everything unrecognised falls back to Overview rather than rendering
  * a blank page — including the removed `activities` / `submissions` values from
- * bookmarked links, and `tag-scope` typed in by a viewer who is neither PM nor
- * Head (so hiding the tab is not the only protection).
+ * bookmarked links, and a hand-typed `weekly-report` from someone who is not
+ * this project's Head (so hiding the tab is not the only protection).
  */
 export function resolveProjectTab(
   raw: string | null | undefined,

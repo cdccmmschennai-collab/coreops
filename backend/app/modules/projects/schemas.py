@@ -300,6 +300,77 @@ class PlannedDateUpdate(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+# ---------- Weekly Report (Phase 7) ----------------------------------------
+# The two selectable cycles. A Literal (not free text) so an unsupported value
+# is rejected with 422 by FastAPI before it reaches the service, and so the
+# OpenAPI contract states the two options for the client.
+WeeklyReportCycle = Literal["current", "previous"]
+
+# Project allocation of the reported day. Deliberately NOT called Day Status:
+# that is the attendance-shaped taxonomy (Leave / Week Off / Company Holiday /
+# Work at Office...) and answers a different question.
+WorkPeriod = Literal["full_day", "first_half", "second_half", "legacy_half_day"]
+
+
+class WeeklyReportPeriodOut(BaseModel):
+    """The resolved Friday-Thursday cycle the rows belong to. Always echoed back
+    so the Head never has to guess what "Current Week" meant."""
+
+    type: WeeklyReportCycle
+    start_date: date
+    end_date: date
+
+
+class WeeklyReportRow(BaseModel):
+    """One reported activity line: employee + date + work period + activity.
+
+    Null is meaningful throughout and is never coerced to 0 or "": a null count
+    means that unit does not apply to this row, a null benchmark means the
+    activity has no target, and a null task_status means the row is not
+    task-mode work. The clients render those as "-", which is not the same
+    statement as a zero.
+    """
+
+    report_date: date
+    work_period: WorkPeriod
+    work_period_label: str
+    employee_name: str
+    # PROJECT CODE ONLY (e.g. "4716-LC25102900") — never the project name, in
+    # the preview or the export.
+    project_code: str
+    activity_name: str | None = None
+    sub_activity_name: str | None = None
+    # Numeric target frozen at submit time, or the textual label for a
+    # completion-only task ("Lump Sum"). Both null = no benchmark configured.
+    benchmark: float | None = None
+    benchmark_label: str | None = None
+    # The six recorded units. Present when the row carries the value or the
+    # benchmark measures that unit; null when the unit does not apply.
+    tags: int | None = None
+    docs: int | None = None
+    bom: int | None = None
+    spares: int | None = None
+    pages: int | None = None
+    records: int | None = None
+    # Derived task lifecycle (IN_PROGRESS / DUE_TODAY / OVERDUE /
+    # COMPLETED_ON_TIME / COMPLETED_LATE) for task-mode rows only.
+    task_status: str | None = None
+    task_status_label: str | None = None
+    # The note belonging to this row: its own activity remark
+    # (work_report_tasks.description) when present, else its own period's remark
+    # (a half's own note; the report header's note for a Full Day). Never the
+    # Query / Issues field.
+    remarks: str | None = None
+
+
+class WeeklyReportOut(BaseModel):
+    project_id: uuid.UUID
+    project_code: str
+    period: WeeklyReportPeriodOut
+    rows: list[WeeklyReportRow] = Field(default_factory=list)
+    row_count: int = 0
+
+
 class PlannedDateChangeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

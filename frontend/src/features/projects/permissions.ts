@@ -62,6 +62,24 @@ export function canViewTagScope(): boolean {
 }
 
 /**
+ * Opening the Weekly Report (preview + Excel) — THIS project's assigned Head,
+ * and nobody else.
+ *
+ * Deliberately the narrowest rule on this page: narrower than
+ * `canManageTagScope`, and the one place a PM is NOT included. The weekly
+ * operational report belongs to the Head who runs the project; widening it to
+ * PMs is a business decision, not an oversight, so it stays one clause here.
+ *
+ * Mirrors backend `projects/service.py::_assert_can_read_weekly_report`, which
+ * is what actually enforces it — hiding the tab is a courtesy, not the guard.
+ * Both the preview and the export endpoint re-check server-side, so a pasted
+ * URL fails for everyone else regardless of what this returns.
+ */
+export function canViewWeeklyReport(viewer: ProjectViewer): boolean {
+  return viewer.isHead;
+}
+
+/**
  * CHANGING the scope — PM, or this project's assigned Head. The same set as
  * canEditProject, named separately so the Revise button and the edit rule can
  * diverge later without one silently dragging the other along.

@@ -430,6 +430,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/weekly-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Weekly Report
+         * @description All work reported on this project during the selected Fri-Thu cycle.
+         *
+         *     Assigned Project Head ONLY (enforced in the service, never by hiding the
+         *     tab). Unlike Summary, this is not restricted to tag-counted activities: it
+         *     carries every activity line on the project, benchmarked or not.
+         *
+         *     `cycle` is a Literal, so an unsupported value is rejected with 422 rather
+         *     than quietly serving a different week. No arbitrary date range in this phase.
+         */
+        get: operations["get_weekly_report_api_v1_projects__project_id__weekly_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/weekly-report.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Weekly Report Xlsx
+         * @description The same dataset as the preview, as a styled .xlsx download.
+         *
+         *     Calls the identical service function the preview does — one query, one
+         *     ordering, one set of rows — so the file can never hold more or fewer rows
+         *     than the screen it was downloaded from. Authorization runs again inside that
+         *     service, so pasting this URL as a different user fails with 403 exactly as
+         *     the preview does.
+         *
+         *     `.xlsx` suffix + StreamingResponse + Content-Disposition is the established
+         *     CoreOps export shape (/reports-export/activity-rows.xlsx,
+         *     /benchmarks/pending-export.xlsx) — no second Excel stack, no base64 in JSON.
+         */
+        get: operations["get_weekly_report_xlsx_api_v1_projects__project_id__weekly_report_xlsx_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/head": {
         parameters: {
             query?: never;
@@ -4997,6 +5054,100 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** WeeklyReportOut */
+        WeeklyReportOut: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Code */
+            project_code: string;
+            period: components["schemas"]["WeeklyReportPeriodOut"];
+            /** Rows */
+            rows?: components["schemas"]["WeeklyReportRow"][];
+            /**
+             * Row Count
+             * @default 0
+             */
+            row_count: number;
+        };
+        /**
+         * WeeklyReportPeriodOut
+         * @description The resolved Friday-Thursday cycle the rows belong to. Always echoed back
+         *     so the Head never has to guess what "Current Week" meant.
+         */
+        WeeklyReportPeriodOut: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "current" | "previous";
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+        };
+        /**
+         * WeeklyReportRow
+         * @description One reported activity line: employee + date + work period + activity.
+         *
+         *     Null is meaningful throughout and is never coerced to 0 or "": a null count
+         *     means that unit does not apply to this row, a null benchmark means the
+         *     activity has no target, and a null task_status means the row is not
+         *     task-mode work. The clients render those as "-", which is not the same
+         *     statement as a zero.
+         */
+        WeeklyReportRow: {
+            /**
+             * Report Date
+             * Format: date
+             */
+            report_date: string;
+            /**
+             * Work Period
+             * @enum {string}
+             */
+            work_period: "full_day" | "first_half" | "second_half" | "legacy_half_day";
+            /** Work Period Label */
+            work_period_label: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Project Code */
+            project_code: string;
+            /** Activity Name */
+            activity_name?: string | null;
+            /** Sub Activity Name */
+            sub_activity_name?: string | null;
+            /** Benchmark */
+            benchmark?: number | null;
+            /** Benchmark Label */
+            benchmark_label?: string | null;
+            /** Tags */
+            tags?: number | null;
+            /** Docs */
+            docs?: number | null;
+            /** Bom */
+            bom?: number | null;
+            /** Spares */
+            spares?: number | null;
+            /** Pages */
+            pages?: number | null;
+            /** Records */
+            records?: number | null;
+            /** Task Status */
+            task_status?: string | null;
+            /** Task Status Label */
+            task_status_label?: string | null;
+            /** Remarks */
+            remarks?: string | null;
+        };
         /**
          * WorkLocation
          * @enum {string}
@@ -6447,6 +6598,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectSummaryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_weekly_report_api_v1_projects__project_id__weekly_report_get: {
+        parameters: {
+            query?: {
+                /** @description Friday-Thursday cycle: 'current' or 'previous'. */
+                cycle?: "current" | "previous";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeeklyReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_weekly_report_xlsx_api_v1_projects__project_id__weekly_report_xlsx_get: {
+        parameters: {
+            query?: {
+                /** @description Friday-Thursday cycle: 'current' or 'previous'. */
+                cycle?: "current" | "previous";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
