@@ -28,6 +28,7 @@ import {
   resolveScopeType,
   tagScopeActionLabel,
   tagScopeErrorMessage,
+  TAG_SCOPE_STATUS_LABEL,
   type ProjectScopeType,
 } from "../scope";
 import { TagScopeDialog } from "./tag-scope-dialog";
@@ -45,10 +46,17 @@ interface TagScopeTabProps {
   canEdit: boolean;
 }
 
-/** Provisional reads as "not settled yet", baselined as agreed. */
+/**
+ * "Initial Estimate" reads as not settled yet, "Confirmed Scope" as accepted.
+ *
+ * `status` arrives already translated (both callers take it from a row the
+ * scope module built), so the comparison goes through TAG_SCOPE_STATUS_LABEL
+ * instead of a literal — renaming a label must not silently change a colour.
+ */
 function StatusBadge({ status }: { status: string }) {
+  const settled = status === TAG_SCOPE_STATUS_LABEL.BASELINED;
   return (
-    <Badge variant={status === "Baselined" ? "success" : "warning"} dot>
+    <Badge variant={settled ? "success" : "warning"} dot>
       {status}
     </Badge>
   );

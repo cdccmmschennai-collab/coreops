@@ -152,7 +152,7 @@ test("an unknown scope is never rendered as 0 — unknown and zero differ", () =
 });
 
 // Frontend Test — configured fixture.
-test("a configured tag-based project reads 2,500 / Baselined / 3", () => {
+test("a configured tag-based project reads 2,500 / Confirmed Scope / 3", () => {
   const v = buildTagScopeView({
     scopeType: "TAG_BASED",
     estimatedTagCount: 2500,
@@ -162,12 +162,12 @@ test("a configured tag-based project reads 2,500 / Baselined / 3", () => {
   assert.equal(v.kind, "configured");
   assert.deepEqual(rowMap(v.rows), {
     "Estimated Tags": "2,500",
-    Status: "Baselined",
+    Status: "Confirmed Scope",
     Revision: "3",
   });
 });
 
-test("a provisional first estimate reads 1,000 / Provisional / 1", () => {
+test("a provisional first estimate reads 1,000 / Initial Estimate / 1", () => {
   const v = buildTagScopeView({
     scopeType: "TAG_BASED",
     estimatedTagCount: 1000,
@@ -176,7 +176,7 @@ test("a provisional first estimate reads 1,000 / Provisional / 1", () => {
   });
   assert.deepEqual(rowMap(v.rows), {
     "Estimated Tags": "1,000",
-    Status: "Provisional",
+    Status: "Initial Estimate",
     Revision: "1",
   });
 });
@@ -220,9 +220,13 @@ test("the panel shows no progress, worked or remaining figure in this phase", ()
 type TagScopeInputLike = Parameters<typeof buildTagScopeView>[0];
 
 // ---------- status / count formatting ----------
-test("status labels are title-case for display, values stay uppercase", () => {
-  assert.equal(TAG_SCOPE_STATUS_LABEL.PROVISIONAL, "Provisional");
-  assert.equal(TAG_SCOPE_STATUS_LABEL.BASELINED, "Baselined");
+test("stored statuses display as business wording, values stay uppercase", () => {
+  assert.equal(TAG_SCOPE_STATUS_LABEL.PROVISIONAL, "Initial Estimate");
+  assert.equal(TAG_SCOPE_STATUS_LABEL.BASELINED, "Confirmed Scope");
+  // The raw enum is never what a user reads.
+  for (const label of Object.values(TAG_SCOPE_STATUS_LABEL)) {
+    assert.equal(/PROVISIONAL|BASELINED/i.test(label), false, label);
+  }
 });
 
 test("an unknown or missing status resolves to null, not a fake status", () => {

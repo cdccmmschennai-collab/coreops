@@ -42,9 +42,26 @@ export function resolveScopeType(raw: string | null | undefined): ProjectScopeTy
 /** How settled the estimate is. Absent (null) = no estimate established yet. */
 export type TagScopeStatus = "PROVISIONAL" | "BASELINED";
 
+/**
+ * The one place the stored statuses become words a user reads.
+ *
+ * The stored values stay PROVISIONAL / BASELINED everywhere — database, API,
+ * revision history. Only the wording changed, because "Baselined" was reading
+ * as "frozen" when the business meaning is softer:
+ *
+ *   Initial Estimate  an early tag count; scope may still move as FMTL /
+ *                     document / reference analysis progresses.
+ *   Confirmed Scope   the count has been accepted as the working scope. Not
+ *                     permanent: a later revision can take 1,200 to 1,350 and
+ *                     the status stays Confirmed Scope.
+ *
+ * Every display site reads this map. Do not re-spell these strings inline —
+ * `StatusBadge` compares against it rather than against a literal for exactly
+ * that reason.
+ */
 export const TAG_SCOPE_STATUS_LABEL: Record<TagScopeStatus, string> = {
-  PROVISIONAL: "Provisional",
-  BASELINED: "Baselined",
+  PROVISIONAL: "Initial Estimate",
+  BASELINED: "Confirmed Scope",
 };
 
 /** Shown wherever a scope value has not been established. Never "0" — unknown
