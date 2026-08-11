@@ -3,8 +3,13 @@
   GET    /projects                                   list (RBAC-scoped) + search/filter/pagination
   POST   /projects                                   create (admin)
   GET    /projects/{id}                              read (RBAC-scoped)
-  PATCH  /projects/{id}                              update (admin)
+  PATCH  /projects/{id}                              update (PM or this project's Head)
   DELETE /projects/{id}                              archive / soft-delete (admin)
+  GET    /projects/{id}/tag-scope                    current tag scope + revision history (PM/Head)
+  PUT    /projects/{id}/tag-scope                    establish / revise the tag scope (PM/Head)
+  GET    /projects/{id}/summary                      tag-scope progress (RBAC-scoped)
+  GET    /projects/{id}/weekly-report                Fri-Thu work report (assigned Head)
+  GET    /projects/{id}/weekly-report.xlsx           the same dataset as .xlsx (assigned Head)
   GET    /projects/{id}/members                      list members (RBAC-scoped)
   POST   /projects/{id}/members                      assign employee (admin)
   PATCH  /projects/{id}/members/{employee_id}        change member role (admin)
@@ -20,13 +25,15 @@ Note: the plain /activities path is owned by the project_activities module
 import uuid
 
 from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
 from app.modules.employees.schemas import EmployeeOut
-from app.modules.projects import service
+from app.modules.projects import service, weekly_report
 from app.modules.projects.models import ProjectStatus
+from app.modules.reports_export import export
 from app.modules.projects.schemas import (
     ActivityMemberCreate,
     ActivityMemberOut,
@@ -42,12 +49,19 @@ from app.modules.projects.schemas import (
     ProjectMemberRoleUpdate,
     ProjectOut,
     ProjectPage,
+    ProjectSummaryOut,
     ProjectUpdate,
+    TagScopeOut,
+    TagScopeUpdate,
     TimelineEventOut,
+    WeeklyReportCycle,
+    WeeklyReportOut,
 )
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.get("", response_model=ProjectPage)
@@ -101,10 +115,120 @@ def get_project(
 def update_project(
     project_id: uuid.UUID,
     body: ProjectUpdate,
-    admin: User = Depends(require_role("project_manager")),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ProjectOut:
-    return ProjectOut.model_validate(service.update_project(db, admin, project_id, body))
+    # Authorization (PM, or this project's assigned Head) is enforced centrally
+    # in the service via authz.can_edit_project — same pattern as PUT /head.
+    return ProjectOut.model_validate(service.update_project(db, current, project_id, body))
+
+
+@router.get("/{project_id}/tag-scope", response_model=TagScopeOut)
+def get_tag_scope(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TagScopeOut:
+    """Current tag scope + full revision history.
+
+    Nested under the project rather than a top-level resource, matching
+    /members, /activity-staffing and /planned-date-changes. Authorization
+    (PM or this project's Head) is enforced centrally in the service.
+    """
+    return service.get_tag_scope(db, current, project_id)
+
+
+@router.put("/{project_id}/tag-scope", response_model=TagScopeOut)
+def update_tag_scope(
+    project_id: uuid.UUID,
+    body: TagScopeUpdate,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TagScopeOut:
+    """Establish or revise the project's estimated tag scope (PM or this
+    project's Head — enforced centrally in the service, never by the UI alone).
+
+    PUT rather than POST: the client states the scope it wants the project to
+    have, and the server derives the revision number, the previous values, the
+    author and the timestamp. Returns the same payload as the GET so the tab can
+    refresh current scope and history from one round trip.
+
+    Conflicts with 409 when `expected_revision` no longer matches the stored
+    revision — someone else revised the scope while this form was open.
+    """
+    return service.update_tag_scope(db, current, project_id, body)
+
+
+@router.get("/{project_id}/summary", response_model=ProjectSummaryOut)
+def get_project_summary(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ProjectSummaryOut:
+    """Progress against the project's tag scope, per tag-counted sub-activity.
+
+    Visible to every user who may view the project — this is the work summary,
+    not the scope administration the Tag Scope tab holds.
+    """
+    return service.get_project_summary(db, current, project_id)
+
+
+@router.get("/{project_id}/weekly-report", response_model=WeeklyReportOut)
+def get_weekly_report(
+    project_id: uuid.UUID,
+    cycle: WeeklyReportCycle = Query(
+        default="current",
+        description="Friday-Thursday cycle: 'current' or 'previous'.",
+    ),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WeeklyReportOut:
+    """All work reported on this project during the selected Fri-Thu cycle.
+
+    Assigned Project Head ONLY (enforced in the service, never by hiding the
+    tab). Unlike Summary, this is not restricted to tag-counted activities: it
+    carries every activity line on the project, benchmarked or not.
+
+    `cycle` is a Literal, so an unsupported value is rejected with 422 rather
+    than quietly serving a different week. No arbitrary date range in this phase.
+    """
+    return WeeklyReportOut.model_validate(
+        service.get_project_weekly_report(db, current, project_id, cycle)
+    )
+
+
+@router.get("/{project_id}/weekly-report.xlsx")
+def get_weekly_report_xlsx(
+    project_id: uuid.UUID,
+    cycle: WeeklyReportCycle = Query(
+        default="current",
+        description="Friday-Thursday cycle: 'current' or 'previous'.",
+    ),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """The same dataset as the preview, as a styled .xlsx download.
+
+    Calls the identical service function the preview does — one query, one
+    ordering, one set of rows — so the file can never hold more or fewer rows
+    than the screen it was downloaded from. Authorization runs again inside that
+    service, so pasting this URL as a different user fails with 403 exactly as
+    the preview does.
+
+    `.xlsx` suffix + StreamingResponse + Content-Disposition is the established
+    CoreOps export shape (/reports-export/activity-rows.xlsx,
+    /benchmarks/pending-export.xlsx) — no second Excel stack, no base64 in JSON.
+    """
+    data = service.get_project_weekly_report(db, current, project_id, cycle)
+    buf = export.build_project_weekly_report_workbook(data)
+    filename = weekly_report.export_filename(
+        data["project_code"], data["period"]["start_date"], data["period"]["end_date"]
+    )
+    return StreamingResponse(
+        buf,
+        media_type=XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/{project_id}/head", response_model=ProjectOut)

@@ -17,6 +17,9 @@ export interface Recon {
   // Pending remaining after later days' excess is applied to this day's
   // deficit (0 ⇒ fully cleared, so the row reads as Completed).
   effectivePending: number;
+  // True when the day carries a validated benchmark exception: achieved through
+  // "no further work was available", with effectivePending forced to 0.
+  exception: boolean;
   // True when this day's own deficit was wiped out by a *later* day's excess
   // (i.e. it was short on the day but recovered since).
   reconciled: boolean;
@@ -59,11 +62,17 @@ export function computeReconciliation(daily: DailyBenchmarkRow[]): Map<string, R
       const key = rowKey(row);
       const actual = Number(row.actual);
       const target = Number(row.target);
-      const deficit = Math.max(0, target - actual);
+      // A day satisfied through a validated benchmark exception has no deficit
+      // to reconcile — its remainder is excused, not outstanding — so it never
+      // enters `outstanding` and never reads as pending. It contributes no
+      // surplus either: the real actual never reached the target.
+      const excepted = row.benchmark_exception_code != null;
+      const deficit = excepted ? 0 : Math.max(0, target - actual);
       let surplus = Math.max(0, actual - target);
 
       recon.set(key, {
         effectivePending: deficit,
+        exception: excepted,
         reconciled: false,
         clearedBacklog: 0,
         unit: row.benchmark_unit,

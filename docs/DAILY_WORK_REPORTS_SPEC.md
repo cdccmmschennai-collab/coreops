@@ -281,3 +281,236 @@ flags: `REPORT_DAY_PARTS_ENABLED` / `NEXT_PUBLIC_REPORT_DAY_PARTS_ENABLED`
 Full design + file-by-file plan:
 `docs/superpowers/plans/2026-07-19-split-day-work-reports.md`
 (migration `0060_work_report_periods`).
+
+---
+
+## 14. Addendum — Numeric benchmark availability exception (2026-08-06)
+
+### The problem
+
+A numeric benchmark compares what an employee produced against a configured
+daily target. It has no way to say "I finished everything there was to do, and
+there was less of it than the target." Those days read as a shortfall
+indistinguishable from underperformance, and the only way to explain them was a
+free-text remark — which no calculation can safely read.
+
+### The exception
+
+`work_report_tasks.benchmark_exception_code` (migration
+`0063_benchmark_exception_code`) is a nullable, structured reason. Phase 1
+defines exactly one value:
+
+`NO_FURTHER_AVAILABLE_WORK` — every TAG that was actually available for the
+activity was completed, but fewer were available than the target.
+
+`NULL` means "no exception" and is the default for every existing row: the
+migration is purely additive, backfills nothing, and leaves historical reports
+and their benchmark evaluation bit-for-bit unchanged.
+
+VARCHAR(40) + CHECK rather than a native enum, following the
+`benchmark_type` / `access_type` / `report_mode` precedent — widening the
+allowed set later is an ALTER of one constraint.
+
+### Validity conditions
+
+An exception applies only when ALL of these hold
+(`activity_master/benchmark_exception.py`):
+
+| # | Condition |
+|---|-----------|
+| 1 | the code is a recognised exception code |
+| 2 | `benchmark_type` is a pure numeric mode (`NUMERIC`, `NUMERIC_DAILY`) |
+| 3 | `relevant_count_field` is exception-eligible — **Phase 1: `tags` only** |
+| 4 | a positive benchmark target exists |
+| 5 | an actual count is present (`0` counts — "none were available") |
+| 6 | the actual is **strictly below** the target |
+
+Task modes are excluded by condition 2, `TASK_WITH_QUANTITY` included: a task
+carries a deadline, and its work is not per-day production.
+
+The server never trusts the client. Validation runs twice:
+
+- **on save** (`_validate_tasks`) — an unrecognised code is a 422; a known code
+  on a sub-activity that cannot carry one (task mode, or a non-eligible unit) is
+  silently **cleared**;
+- **at submit** (`_apply_benchmarks`) — the authoritative check, made where the
+  effective per-period target is frozen. An exception that has stopped
+  describing reality (the actual reached the target, the target vanished, the
+  sub-activity was reconfigured) is **cleared**, so no stale 100% survives an
+  edit-and-resubmit.
+
+Because the benchmark export reads submitted reports only, nothing that reaches
+the report can bypass the submit-time check.
+
+**The exception is structural, never textual.** No code path parses remark text.
+An employee typing "no further tags were available" into their remark changes no
+calculation and produces no system remark.
+
+### Whole-unit targets
+
+A scaled target is always a **whole number, rounded up**. Benchmarks count real
+things — tags, documents, BOM lines — so half of a 35-tag benchmark is **18**,
+not 17.5 and not 17: the employee is asked for whole work, and the rounding
+favours the benchmark rather than quietly discounting it. A target that divides
+evenly is unaffected (66 → 33).
+
+Ceiling, not nearest: 17.1 and 17.5 both become 18.
+
+The rule lives in exactly two places, one per side, and every consumer resolves
+through them so the number an employee is shown is always the number they are
+measured against:
+
+- `backend/app/modules/activity_master/service.py::scaled_target` — used by the
+  submit-time snapshot (`_apply_benchmarks`), the per-period ledger and the
+  daily ledger;
+- `frontend/src/features/work-reports/benchmark-target.ts::scaledTarget` — used
+  by the target label beside the count input, the Task-benchmark card and the
+  split-day validation preview.
+
+Existing frozen snapshots are never recomputed in the database — a historical
+report keeps the value it was saved with. They are, however, rounded **on read**
+by the same rule, because a report submitted before this rule existed has a
+fractional effective target frozen on its row (a 65-tag benchmark halved is
+32.5) and a benchmark sheet must never show half a tag. So:
+
+- the stored `benchmark_value_snapshot` stays exactly as written — no migration,
+  no resubmission, no silent rewrite of history;
+- every read path presents it whole, so old and new reports look identical in
+  the export.
+
+Every unit cell in the workbook (BENCHMARK TARGET, ACTUAL COMPLETED, PENDING
+BENCHMARK) is written as a genuine Excel **integer**, not a float that merely
+displays as one — targets are whole by the rule above, actuals come from integer
+columns, and the pending derived from them is whole too. ACHIEVEMENT % and
+DIFFERENCE % remain fractional, as percentages must.
+
+### Real actual vs effective actual
+
+The distinction the whole feature rests on:
+
+- **Real actual** — what the employee entered. Stored in the count column,
+  displayed in ACTUAL COMPLETED, summed into the TOTAL row's ACTUAL cell. It is
+  **never** overwritten with the target. Target 100 / actual 40 stays 40
+  everywhere a number is stored or shown.
+- **Effective actual** — calculation-only, never persisted and never given a
+  cell: `target` on a valid exception row, the real actual otherwise. It feeds
+  the percentages and the pending, and nothing else.
+
+```
+effective_actual = target   if the row has a valid exception
+                 = actual   otherwise
+```
+
+Per detail row with a valid exception: ACHIEVEMENT 100%, DIFFERENCE 0%,
+PENDING 0 — while ACTUAL still reads 40.
+
+Per TOTAL row:
+
+```
+total_target    = Σ row targets
+total_actual    = Σ real actuals            -> the ACTUAL COMPLETED cell
+total_effective = Σ effective actuals       -> never a cell
+achievement %   = total_effective / total_target      (uncapped, as before)
+difference %    = ABS(achievement - 100%)
+pending         = MAX(0, total_target - total_effective)
+```
+
+Overachievement is unaffected: a normal row contributes its real actual, so
+140/100 still reads 140%.
+
+### Benchmark Excel behaviour
+
+- **Numeric only.** Task-mode activities no longer appear in the benchmark
+  workbook at all — no detail row, no total row, no contribution to any target,
+  actual, pending or percentage. Their textual cells ("FINISHED",
+  "N DAYS OVERDUE") no longer sit in numeric columns, and a counted lumpsum no
+  longer moves the achievement %. **Scope: this export only** — daily reports,
+  alerts, overdue, task-status and performance views are untouched.
+- **All exported text is uppercased** on the way into a cell. Numbers stay
+  numeric, dates stay dates, percentages keep their format. The stored values in
+  PostgreSQL are never modified.
+- **Remarks.** An exception row's REMARKS cell is prefixed with the
+  system-generated `[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY]`,
+  followed by the employee's own remark after a ` | ` separator, or standing
+  alone when there is none. Composition is a pure function of the code and the
+  stored remark, so re-exporting can never duplicate the prefix, and the stored
+  remark is never rewritten.
+
+  The marker is written as a **bold run** (Excel rich text, `CellRichText` +
+  `TextBlock`) while the employee's own words keep the normal body weight, so
+  `[NO FURTHER TAGS WERE AVAILABLE FOR THIS ACTIVITY] | TNR TAG NUMBER` reads
+  as a system marker followed by the employee's text rather than one
+  undifferentiated sentence. Only the marker carries an explicit font; the rest
+  inherits the row's Arial 10, so the two halves differ in weight alone. A row
+  with no exception is written as a plain string, so bold means exactly one
+  thing in this column. Reading the file without `rich_text=True` yields the
+  identical plain sentence, so no other consumer is affected.
+- **Red shortfall cell.** ACTUAL COMPLETED is filled red (`#FFC7CE` fill,
+  `#9C0006` bold font, thin red border — Excel's own "Bad" palette, the same red
+  the DIFFERENCE % cell already uses) whenever that unit's actual is **below**
+  its target and no exception excuses it. It keys off the arithmetic, not the
+  95%/100% shade bands, so a row inside the accepted band still shows it. On a
+  TOTAL row it keys off the **evaluated** cycle figure — the same number driving
+  PENDING and the percentages — so a day's overachievement that pays off another
+  day's shortfall leaves the total unmarked.
+
+  With the amber marker this makes the ACTUAL column self-explaining, and the
+  two are mutually exclusive on any one cell:
+
+  | Marker | Meaning |
+  |---|---|
+  | Amber | accepted exception — all available work was completed |
+  | Red | genuine shortfall |
+  | unfilled | target met or beaten |
+
+- **Amber cell.** ACTUAL COMPLETED → TAGS on an exception row is styled with
+  fill `#FFF2CC`, font `#7F6000`, bold, and a thin amber border. It is an
+  **accepted-exception** marker, not an error colour — deliberately not the red
+  used for a shortfall. It lands on that ONE cell: never the whole row, never
+  the target cell, never the pending cell, and it never changes the value under
+  it. The TOTAL row's ACTUAL cell carries the same styling for any unit where at
+  least one contributing row was an exception.
+- **No column changes.** Nothing is added, removed, renamed or reordered. The
+  effective actual is an intermediate, never a column — there is no "Evaluated
+  Actual", "Exception", "Status" or "Exception Reason" column.
+
+### Employee-facing UX
+
+In the Daily Work Report activity form, a checkbox sits inside the Tags count
+panel, below the actual Tags input:
+
+> **No further tags were available for this activity**
+> Select this only when all available tags for this activity have been completed.
+
+It appears only when conditions 2–6 above hold, so it is invisible for task
+activities, for Docs/BOM/Spares/Pages/Records, before a count is entered, and
+once the count reaches the target. It is unchecked by default, restores when a
+draft or reopened report is edited, and clears automatically when the activity,
+sub-activity, benchmark or entered count stops satisfying those conditions. When
+ticked it shows:
+
+> AVAILABLE WORK COMPLETED - THIS ENTRY WILL BE EVALUATED AS TARGET ACHIEVED.
+
+### Adding a unit later (Docs, BOM, Spares, Pages, Records)
+
+Phase 1 is TAGS only, deliberately: the rule is only agreed for tags so far.
+Widening it is a two-line change plus wording:
+
+1. add the unit to `EXCEPTION_ELIGIBLE_COUNT_FIELDS` in
+   `backend/app/modules/activity_master/benchmark_exception.py`, and add its
+   system remark to `EXPORT_EXCEPTION_REMARK_BY_UNIT` (the export looks the
+   wording up per unit — nothing hard-codes "tags");
+2. add the same unit to `EXCEPTION_ELIGIBLE_COUNT_FIELDS` in
+   `frontend/src/features/work-reports/benchmark-exception.ts`, and generalise
+   the checkbox label/helper wording, which currently names tags.
+
+Everything else — validation, effective-actual, aggregation, the amber cell and
+the total-row styling — is already unit-generic and needs no change.
+
+Files: `backend/app/modules/activity_master/benchmark_exception.py`,
+`backend/alembic/versions/0063_benchmark_exception_code.py`,
+`backend/app/modules/reports_export/export.py`,
+`backend/app/modules/benchmarks/service.py`,
+`frontend/src/features/work-reports/benchmark-exception.ts`.
+Tests: `backend/tests/test_benchmark_exception.py`,
+`frontend/src/features/work-reports/benchmark-exception.test.ts`.

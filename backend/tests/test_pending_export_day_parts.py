@@ -406,9 +406,15 @@ def test_missing_snapshot_falls_back_to_live_base_times_fraction(
     assert r["unit"] == "tags"
 
 
-# --- TASK_BASED rows ---------------------------------------------------------
+# --- TASK_BASED rows: excluded from this export ------------------------------
+#
+# The benchmark export is NUMERIC-only. Task-mode rows used to appear here with
+# textual "FINISH WITHIN A DAY" / "NOT COMPLETED" / "N DAYS OVERDUE" cells
+# sitting in the numeric unit columns; they now produce no export row at all,
+# in a full day and in a half alike. The rows themselves are untouched
+# everywhere else (see test_benchmark_pending_export.py).
 
-def test_task_based_full_day_row_keeps_text_cells_and_gains_day_part(
+def test_task_based_full_day_row_produces_no_export_row(
     client, db, setup_author, pm_header
 ):
     a = setup_author()
@@ -418,20 +424,10 @@ def test_task_based_full_day_row_keeps_text_cells_and_gains_day_part(
         "tasks": [_task(a["project"].id, sub["id"])],
     })
 
-    (r,) = _sub_rows(db, "LUMPSUM")
-    assert r["day_part"] == FULL
-    assert r["day_remarks"] == "task day remark"
-    # Existing TASK_BASED text behaviour, byte-for-byte.
-    assert r["target"] == "FINISH WITHIN A DAY"
-    assert r["actual"] == "NOT COMPLETED"
-    # Overdue is judged from the cycle end (existing export behaviour).
-    days = (compute_week_bounds(TODAY)[1] - TODAY).days
-    expected = "PENDING" if days <= 0 else f"{days} DAY{'S' if days != 1 else ''} OVERDUE"
-    assert r["pending"] == expected
-    assert r["target_total"] is None
+    assert _sub_rows(db, "LUMPSUM") == []
 
 
-def test_task_based_in_a_half_carries_period_part_and_remarks(
+def test_task_based_in_a_half_produces_no_export_row(
     client, db, setup_author, pm_header, day_parts_on
 ):
     a = setup_author()
@@ -442,11 +438,7 @@ def test_task_based_in_a_half_carries_period_part_and_remarks(
         {"period_status": "leave"},
     )
 
-    (r,) = _sub_rows(db, "HALF-TASK")
-    assert r["day_part"] == FIRST
-    assert r["day_remarks"] == "AM task remark"
-    # Deadline semantics unscaled: same 1-day text as a full-day task.
-    assert r["target"] == "FINISH WITHIN A DAY"
+    assert _sub_rows(db, "HALF-TASK") == []
 
 
 # --- ordering ----------------------------------------------------------------
@@ -557,7 +549,8 @@ def test_workbook_legacy_half_day_label_and_no_day_remarks_header(
         r for r in range(3, ws.max_row + 1) if ws.cell(r, DATE_C).value is not None
     )
     assert ws.cell(detail, DAY_PART_C).value == LEGACY
-    assert ws.cell(detail, REMARKS_C).value == "old remark"
+    # Uppercased on export; the stored remark keeps its own case.
+    assert ws.cell(detail, REMARKS_C).value == "OLD REMARK"
     assert ws.cell(detail, 10).value == 60.0  # preserved effective half target
 
 

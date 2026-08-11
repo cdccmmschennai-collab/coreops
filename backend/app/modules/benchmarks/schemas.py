@@ -27,6 +27,10 @@ class DailyBenchmarkRowOut(BaseModel):
     target: Decimal
     pending: Decimal
     benchmark_unit: str | None
+    # Validated structured benchmark exception, or None (the usual case). When
+    # set, this day is ACHIEVED - EXCEPTION: `pending` is 0 and the nominal
+    # remainder (target - actual) is excused, while actual/target stay real.
+    benchmark_exception_code: str | None = None
 
 
 class OverdueActivityOut(BaseModel):
@@ -85,6 +89,7 @@ class TeamBacklogRowOut(BaseModel):
     target: Decimal
     pending: Decimal
     benchmark_unit: str | None
+    benchmark_exception_code: str | None = None
 
 
 class TeamOverdueRowOut(BaseModel):

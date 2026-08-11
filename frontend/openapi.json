@@ -587,6 +587,23 @@
             }
           },
           {
+            "name": "exclude_activity_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exclude Activity Id"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -1508,6 +1525,289 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/tag-scope": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Tag Scope",
+        "description": "Current tag scope + full revision history.\n\nNested under the project rather than a top-level resource, matching\n/members, /activity-staffing and /planned-date-changes. Authorization\n(PM or this project's Head) is enforced centrally in the service.",
+        "operationId": "get_tag_scope_api_v1_projects__project_id__tag_scope_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagScopeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Update Tag Scope",
+        "description": "Establish or revise the project's estimated tag scope (PM or this\nproject's Head \u2014 enforced centrally in the service, never by the UI alone).\n\nPUT rather than POST: the client states the scope it wants the project to\nhave, and the server derives the revision number, the previous values, the\nauthor and the timestamp. Returns the same payload as the GET so the tab can\nrefresh current scope and history from one round trip.\n\nConflicts with 409 when `expected_revision` no longer matches the stored\nrevision \u2014 someone else revised the scope while this form was open.",
+        "operationId": "update_tag_scope_api_v1_projects__project_id__tag_scope_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagScopeUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagScopeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/summary": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Project Summary",
+        "description": "Progress against the project's tag scope, per tag-counted sub-activity.\n\nVisible to every user who may view the project \u2014 this is the work summary,\nnot the scope administration the Tag Scope tab holds.",
+        "operationId": "get_project_summary_api_v1_projects__project_id__summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/weekly-report": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Weekly Report",
+        "description": "All work reported on this project during the selected Fri-Thu cycle.\n\nAssigned Project Head ONLY (enforced in the service, never by hiding the\ntab). Unlike Summary, this is not restricted to tag-counted activities: it\ncarries every activity line on the project, benchmarked or not.\n\n`cycle` is a Literal, so an unsupported value is rejected with 422 rather\nthan quietly serving a different week. No arbitrary date range in this phase.",
+        "operationId": "get_weekly_report_api_v1_projects__project_id__weekly_report_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "cycle",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "current",
+                "previous"
+              ],
+              "type": "string",
+              "description": "Friday-Thursday cycle: 'current' or 'previous'.",
+              "default": "current",
+              "title": "Cycle"
+            },
+            "description": "Friday-Thursday cycle: 'current' or 'previous'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeeklyReportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/weekly-report.xlsx": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Weekly Report Xlsx",
+        "description": "The same dataset as the preview, as a styled .xlsx download.\n\nCalls the identical service function the preview does \u2014 one query, one\nordering, one set of rows \u2014 so the file can never hold more or fewer rows\nthan the screen it was downloaded from. Authorization runs again inside that\nservice, so pasting this URL as a different user fails with 403 exactly as\nthe preview does.\n\n`.xlsx` suffix + StreamingResponse + Content-Disposition is the established\nCoreOps export shape (/reports-export/activity-rows.xlsx,\n/benchmarks/pending-export.xlsx) \u2014 no second Excel stack, no base64 in JSON.",
+        "operationId": "get_weekly_report_xlsx_api_v1_projects__project_id__weekly_report_xlsx_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "cycle",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "current",
+                "previous"
+              ],
+              "type": "string",
+              "description": "Friday-Thursday cycle: 'current' or 'previous'.",
+              "default": "current",
+              "title": "Cycle"
+            },
+            "description": "Friday-Thursday cycle: 'current' or 'previous'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -4160,6 +4460,53 @@
         ]
       }
     },
+    "/api/v1/leave-requests/attendance-summary": {
+      "post": {
+        "tags": [
+          "leave"
+        ],
+        "summary": "Attendance Summary",
+        "description": "Read-only: attendance already recorded across each displayed leave\nrequest's dates, one word per row. Never modifies attendance.",
+        "operationId": "attendance_summary_api_v1_leave_requests_attendance_summary_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttendanceSummaryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttendanceSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/leave-requests/{req_id}": {
       "get": {
         "tags": [
@@ -4271,6 +4618,150 @@
         ],
         "summary": "Cancel Leave Request",
         "operationId": "cancel_leave_request_api_v1_leave_requests__req_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/leave-requests/{req_id}/request-cancellation": {
+      "post": {
+        "tags": [
+          "leave"
+        ],
+        "summary": "Request Leave Cancellation",
+        "operationId": "request_leave_cancellation_api_v1_leave_requests__req_id__request_cancellation_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/leave-requests/{req_id}/approve-cancellation": {
+      "post": {
+        "tags": [
+          "leave"
+        ],
+        "summary": "Approve Leave Cancellation",
+        "operationId": "approve_leave_cancellation_api_v1_leave_requests__req_id__approve_cancellation_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/leave-requests/{req_id}/reject-cancellation": {
+      "post": {
+        "tags": [
+          "leave"
+        ],
+        "summary": "Reject Leave Cancellation",
+        "operationId": "reject_leave_cancellation_api_v1_leave_requests__req_id__reject_cancellation_post",
         "security": [
           {
             "HTTPBearer": []
@@ -5686,6 +6177,250 @@
                     "$ref": "#/components/schemas/SubActivityFlatOut"
                   },
                   "title": "Response List All Sub Activities Flat Api V1 Activity Master Sub Activities Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activity-master/activities/{activity_id}/access": {
+      "get": {
+        "tags": [
+          "activity-master"
+        ],
+        "summary": "Get Activity Access",
+        "operationId": "get_activity_access_api_v1_activity_master_activities__activity_id__access_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "activity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Activity Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityAccessConfigOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "activity-master"
+        ],
+        "summary": "Grant Activity Access",
+        "operationId": "grant_activity_access_api_v1_activity_master_activities__activity_id__access_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "activity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Activity Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantAccessIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResultOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activity-master/activities/{activity_id}/access-type": {
+      "patch": {
+        "tags": [
+          "activity-master"
+        ],
+        "summary": "Change Activity Access Type",
+        "operationId": "change_activity_access_type_api_v1_activity_master_activities__activity_id__access_type_patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "activity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Activity Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeAccessTypeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResultOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/activity-master/activities/{activity_id}/access/{employee_id}": {
+      "delete": {
+        "tags": [
+          "activity-master"
+        ],
+        "summary": "Revoke Activity Access",
+        "operationId": "revoke_activity_access_api_v1_activity_master_activities__activity_id__access__employee_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "activity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Activity Id"
+            }
+          },
+          {
+            "name": "employee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Employee Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Revoke Activity Access Api V1 Activity Master Activities  Activity Id  Access  Employee Id  Delete"
                 }
               }
             }
@@ -8216,6 +8951,57 @@
         ],
         "title": "AccountStatusUpdate"
       },
+      "ActivityAccessConfigOut": {
+        "properties": {
+          "activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Activity Id"
+          },
+          "access_type": {
+            "type": "string",
+            "enum": [
+              "COMMON",
+              "RESTRICTED"
+            ],
+            "title": "Access Type"
+          },
+          "authorized_count": {
+            "type": "integer",
+            "title": "Authorized Count"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizedEmployeeOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "activity_id",
+          "access_type",
+          "authorized_count",
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ActivityAccessConfigOut"
+      },
       "ActivityCell": {
         "properties": {
           "project_code": {
@@ -8456,6 +9242,14 @@
             "type": "integer",
             "title": "Sort Order"
           },
+          "access_type": {
+            "type": "string",
+            "enum": [
+              "COMMON",
+              "RESTRICTED"
+            ],
+            "title": "Access Type"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -8477,6 +9271,7 @@
           "relevant_count_field",
           "is_active",
           "sort_order",
+          "access_type",
           "created_at"
         ],
         "title": "ActivityMasterOut"
@@ -9713,6 +10508,37 @@
         ],
         "title": "AttendanceStatus"
       },
+      "AttendanceSummaryRequest": {
+        "properties": {
+          "leave_request_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Leave Request Ids"
+          }
+        },
+        "type": "object",
+        "title": "AttendanceSummaryRequest"
+      },
+      "AttendanceSummaryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LeaveAttendanceSummaryOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "AttendanceSummaryResponse"
+      },
       "AttendanceUpdate": {
         "properties": {
           "status": {
@@ -9904,6 +10730,56 @@
           "offset"
         ],
         "title": "AuditLogPage"
+      },
+      "AuthorizedEmployeeOut": {
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "employee_code": {
+            "type": "string",
+            "title": "Employee Code"
+          },
+          "employee_name": {
+            "type": "string",
+            "title": "Employee Name"
+          },
+          "granted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted By"
+          },
+          "granted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Granted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "employee_id",
+          "employee_code",
+          "employee_name",
+          "granted_by",
+          "granted_at"
+        ],
+        "title": "AuthorizedEmployeeOut",
+        "description": "One active grant on a RESTRICTED activity. Deliberately minimal \u2014 no\nemail / phone / department; the PM only needs to identify who can use it."
       },
       "CalendarEventCreate": {
         "properties": {
@@ -10097,6 +10973,32 @@
         "type": "object",
         "title": "CalendarEventUpdate"
       },
+      "ChangeAccessTypeIn": {
+        "properties": {
+          "access_type": {
+            "type": "string",
+            "enum": [
+              "COMMON",
+              "RESTRICTED"
+            ],
+            "title": "Access Type"
+          },
+          "employee_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Employee Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_type"
+        ],
+        "title": "ChangeAccessTypeIn",
+        "description": "PATCH .../access-type. COMMON->RESTRICTED must carry at least one employee\n(validated in the service, atomically with the type flip)."
+      },
       "ChangePasswordRequest": {
         "properties": {
           "current_password": {
@@ -10193,6 +11095,17 @@
               }
             ],
             "title": "Benchmark Unit"
+          },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
           }
         },
         "type": "object",
@@ -11609,6 +12522,69 @@
         ],
         "title": "EmployeesPerformancePageOut"
       },
+      "GrantAccessIn": {
+        "properties": {
+          "employee_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Employee Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "employee_ids"
+        ],
+        "title": "GrantAccessIn",
+        "description": "POST .../access \u2014 bulk grant on an already-RESTRICTED activity."
+      },
+      "GrantResultOut": {
+        "properties": {
+          "activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Activity Id"
+          },
+          "access_type": {
+            "type": "string",
+            "enum": [
+              "COMMON",
+              "RESTRICTED"
+            ],
+            "title": "Access Type"
+          },
+          "granted": {
+            "type": "integer",
+            "title": "Granted"
+          },
+          "reactivated": {
+            "type": "integer",
+            "title": "Reactivated"
+          },
+          "already_active": {
+            "type": "integer",
+            "title": "Already Active"
+          },
+          "authorized_count": {
+            "type": "integer",
+            "title": "Authorized Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "activity_id",
+          "access_type",
+          "granted",
+          "reactivated",
+          "already_active",
+          "authorized_count"
+        ],
+        "title": "GrantResultOut",
+        "description": "Summary of a bulk grant / access-type change."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -11778,6 +12754,31 @@
         },
         "type": "object",
         "title": "JobCodeUpdate"
+      },
+      "LeaveAttendanceSummaryOut": {
+        "properties": {
+          "leave_request_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Leave Request Id"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "days_recorded": {
+            "type": "integer",
+            "title": "Days Recorded"
+          }
+        },
+        "type": "object",
+        "required": [
+          "leave_request_id",
+          "summary",
+          "days_recorded"
+        ],
+        "title": "LeaveAttendanceSummaryOut",
+        "description": "What attendance already exists across one leave request's dates.\n\nSummary only \u2014 a single word the manager can read at a glance. CoreOps\nattendance is maintained by hand and cancellation never writes to it; this\nexists so the manager knows what they will need to review afterwards."
       },
       "LeaveBalanceHistoryOut": {
         "properties": {
@@ -12226,7 +13227,8 @@
           "pending",
           "approved",
           "rejected",
-          "cancelled"
+          "cancelled",
+          "cancellation_requested"
         ],
         "title": "LeaveStatus"
       },
@@ -13621,6 +14623,15 @@
             "$ref": "#/components/schemas/ProjectStatus",
             "default": "planning"
           },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "TAG_BASED"
+            ],
+            "title": "Scope Type",
+            "default": "NONE"
+          },
           "start_date": {
             "anyOf": [
               {
@@ -13930,6 +14941,70 @@
           "status": {
             "$ref": "#/components/schemas/ProjectStatus"
           },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "TAG_BASED"
+            ],
+            "title": "Scope Type",
+            "default": "NONE"
+          },
+          "estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tag Count"
+          },
+          "tag_scope_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Status"
+          },
+          "tag_scope_revision": {
+            "type": "integer",
+            "title": "Tag Scope Revision",
+            "default": 0
+          },
+          "tag_scope_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated At"
+          },
+          "tag_scope_updated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated By"
+          },
           "start_date": {
             "anyOf": [
               {
@@ -14040,6 +15115,63 @@
         ],
         "title": "ProjectStatus"
       },
+      "ProjectSummaryOut": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "TAG_BASED"
+            ],
+            "title": "Scope Type"
+          },
+          "estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tag Count"
+          },
+          "tag_scope_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Status"
+          },
+          "tag_progress": {
+            "items": {
+              "$ref": "#/components/schemas/TagScopeProgressRow"
+            },
+            "type": "array",
+            "title": "Tag Progress"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "scope_type"
+        ],
+        "title": "ProjectSummaryOut",
+        "description": "GET /projects/{id}/summary \u2014 what the Summary tab renders.\n\n`tag_progress` is empty for a normal project, and for a tag-based project\nwith no estimate established yet: there is no capacity to measure against,\nand inventing \"0 / 0\" would be a wrong summary rather than an empty one."
+      },
       "ProjectUpdate": {
         "properties": {
           "code": {
@@ -14132,6 +15264,21 @@
                 "type": "null"
               }
             ]
+          },
+          "scope_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "NONE",
+                  "TAG_BASED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Type"
           },
           "start_date": {
             "anyOf": [
@@ -14932,6 +16079,293 @@
         "type": "object",
         "title": "SubmissionUpdate"
       },
+      "TagScopeOut": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "NONE",
+              "TAG_BASED"
+            ],
+            "title": "Scope Type"
+          },
+          "estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Tag Count"
+          },
+          "tag_scope_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Status"
+          },
+          "tag_scope_revision": {
+            "type": "integer",
+            "title": "Tag Scope Revision",
+            "default": 0
+          },
+          "tag_scope_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated At"
+          },
+          "tag_scope_updated_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated By"
+          },
+          "tag_scope_updated_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tag Scope Updated By Name"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/TagScopeRevisionOut"
+            },
+            "type": "array",
+            "title": "Revisions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "scope_type"
+        ],
+        "title": "TagScopeOut",
+        "description": "GET/PUT /projects/{id}/tag-scope \u2014 current scope plus its full history.\n\nCarries no progress, no worked-tag count and no remaining figure; those\nbelong to the later progress phase."
+      },
+      "TagScopeProgressRow": {
+        "properties": {
+          "activity_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Id"
+          },
+          "activity_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Name"
+          },
+          "sub_activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sub Activity Id"
+          },
+          "sub_activity_name": {
+            "type": "string",
+            "title": "Sub Activity Name"
+          },
+          "reported_tags": {
+            "type": "integer",
+            "title": "Reported Tags"
+          },
+          "estimated_tag_count": {
+            "type": "integer",
+            "title": "Estimated Tag Count"
+          },
+          "remaining_tags": {
+            "type": "integer",
+            "title": "Remaining Tags"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sub_activity_id",
+          "sub_activity_name",
+          "reported_tags",
+          "estimated_tag_count",
+          "remaining_tags"
+        ],
+        "title": "TagScopeProgressRow",
+        "description": "One tag-counted sub-activity's progress against the project's scope.\n\nEvery row carries the SAME estimated_tag_count: activities progress against\nthe project's tag universe independently, so the rows are not shares of a\npool and are not expected to sum to it.\n\nActivity and Sub-Activity are separate fields, joined through\nactivity_master.parent_id \u2014 never one combined label, and never derived by\nsplitting the sub-activity's name. activity_* is nullable only for the\ndata-integrity case of a sub-activity with no parent row; the UI shows a\nplaceholder there rather than hiding the progress.\n\nreported_tags / remaining_tags are whole tags and always present. A client\nrenders remaining_tags directly: it is never null, never negative, and needs\nno arithmetic on the client to produce."
+      },
+      "TagScopeRevisionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "previous_estimated_tag_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Estimated Tag Count"
+          },
+          "new_estimated_tag_count": {
+            "type": "integer",
+            "title": "New Estimated Tag Count"
+          },
+          "previous_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PROVISIONAL",
+                  "BASELINED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Status"
+          },
+          "new_status": {
+            "type": "string",
+            "enum": [
+              "PROVISIONAL",
+              "BASELINED"
+            ],
+            "title": "New Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "changed_by": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Changed By"
+          },
+          "changed_by_name": {
+            "type": "string",
+            "title": "Changed By Name",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "revision",
+          "previous_estimated_tag_count",
+          "new_estimated_tag_count",
+          "previous_status",
+          "new_status",
+          "reason",
+          "changed_by",
+          "created_at"
+        ],
+        "title": "TagScopeRevisionOut",
+        "description": "One recorded scope change. Revision 1 carries null previous_* values."
+      },
+      "TagScopeUpdate": {
+        "properties": {
+          "estimated_tag_count": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Estimated Tag Count"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PROVISIONAL",
+              "BASELINED"
+            ],
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "estimated_tag_count",
+          "status",
+          "expected_revision"
+        ],
+        "title": "TagScopeUpdate",
+        "description": "PUT /projects/{id}/tag-scope \u2014 establish or revise the estimated scope.\n\nThe client supplies only what a human decided: how many tags, how settled\nthe number is, and why it changed. Everything else on the revision row\n(revision number, previous_*, changed_by, created_at) is derived server-side\n\u2014 see ``service.record_tag_scope_revision``."
+      },
       "TaskCompletionUpdate": {
         "properties": {
           "is_completed": {
@@ -15131,6 +16565,17 @@
               }
             ],
             "title": "Benchmark Unit"
+          },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
           }
         },
         "type": "object",
@@ -15601,6 +17046,255 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WeeklyReportOut": {
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "project_code": {
+            "type": "string",
+            "title": "Project Code"
+          },
+          "period": {
+            "$ref": "#/components/schemas/WeeklyReportPeriodOut"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/WeeklyReportRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "row_count": {
+            "type": "integer",
+            "title": "Row Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_id",
+          "project_code",
+          "period"
+        ],
+        "title": "WeeklyReportOut"
+      },
+      "WeeklyReportPeriodOut": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "current",
+              "previous"
+            ],
+            "title": "Type"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date",
+            "title": "End Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type",
+          "start_date",
+          "end_date"
+        ],
+        "title": "WeeklyReportPeriodOut",
+        "description": "The resolved Friday-Thursday cycle the rows belong to. Always echoed back\nso the Head never has to guess what \"Current Week\" meant."
+      },
+      "WeeklyReportRow": {
+        "properties": {
+          "report_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Report Date"
+          },
+          "work_period": {
+            "type": "string",
+            "enum": [
+              "full_day",
+              "first_half",
+              "second_half",
+              "legacy_half_day"
+            ],
+            "title": "Work Period"
+          },
+          "work_period_label": {
+            "type": "string",
+            "title": "Work Period Label"
+          },
+          "employee_name": {
+            "type": "string",
+            "title": "Employee Name"
+          },
+          "project_code": {
+            "type": "string",
+            "title": "Project Code"
+          },
+          "activity_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Name"
+          },
+          "sub_activity_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Activity Name"
+          },
+          "benchmark": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark"
+          },
+          "benchmark_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Label"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tags"
+          },
+          "docs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Docs"
+          },
+          "bom": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bom"
+          },
+          "spares": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spares"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages"
+          },
+          "records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Records"
+          },
+          "task_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Status"
+          },
+          "task_status_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Status Label"
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report_date",
+          "work_period",
+          "work_period_label",
+          "employee_name",
+          "project_code"
+        ],
+        "title": "WeeklyReportRow",
+        "description": "One reported activity line: employee + date + work period + activity.\n\nNull is meaningful throughout and is never coerced to 0 or \"\": a null count\nmeans that unit does not apply to this row, a null benchmark means the\nactivity has no target, and a null task_status means the row is not\ntask-mode work. The clients render those as \"-\", which is not the same\nstatement as a zero."
       },
       "WorkLocation": {
         "type": "string",
@@ -16349,6 +18043,18 @@
             "title": "Is Completed",
             "default": false
           },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
+          },
           "work_item_id": {
             "anyOf": [
               {
@@ -16615,6 +18321,17 @@
             ],
             "title": "Relevant Count Field Snapshot"
           },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
+          },
           "deficit": {
             "anyOf": [
               {
@@ -16636,6 +18353,28 @@
               }
             ],
             "title": "Productivity Pct"
+          },
+          "benchmark_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Status"
+          },
+          "excused_remaining": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excused Remaining"
           },
           "started_date": {
             "anyOf": [

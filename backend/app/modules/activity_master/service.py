@@ -7,12 +7,13 @@ and that benchmark_* fields are never set on a level='activity' row.
 """
 import uuid
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
+from app.modules.activity_master.benchmark_exception import is_valid_exception
 from app.modules.activity_master.models import (
     COUNT_FIELD_BY_UNIT,
     DAILY_QUANTITY_BENCHMARK_TYPES,
@@ -33,6 +34,26 @@ _BENCHMARK_FIELDS = (
     "benchmark_type", "benchmark_value", "benchmark_period_days",
     "benchmark_unit_note", "benchmark_remarks", "relevant_count_field",
 )
+
+
+def scaled_target(base_value, fraction) -> Decimal:
+    """The effective per-period benchmark target: base x fraction, ROUNDED UP to
+    a whole unit.
+
+    Targets are counts of real things — tags, documents, BOM lines. Half of a
+    35-tag benchmark is 17.5, and there is no such thing as half a tag, so a
+    half-day target of 35 is 18: the employee is asked for whole work, and the
+    rounding favours the benchmark rather than quietly discounting it. A target
+    that already divides evenly is unaffected (66 -> 33).
+
+    Rounding up (ceiling), not nearest: 17.5 -> 18 and 17.1 -> 18 alike. This is
+    the ONE place the rule lives — the submit-time snapshot, both ledgers and
+    the frontend's displayed target all resolve through it (the frontend mirrors
+    it in work-reports/benchmark-target.ts), so the number an employee is shown
+    is always the number they are measured against.
+    """
+    value = Decimal(str(base_value or 0)) * Decimal(str(fraction))
+    return value.to_integral_value(rounding=ROUND_CEILING)
 
 
 def actual_count_expr():
@@ -174,7 +195,12 @@ def get_daily_benchmark_ledger(
             ActivityMaster.id.label("sub_activity_id"),
             ActivityMaster.name.label("sub_activity_name"),
             ActivityMaster.benchmark_value,
+            ActivityMaster.benchmark_type,
             ActivityMaster.relevant_count_field,
+            # Structured benchmark exception (migration 0063) — the SAME column
+            # the benchmark export reads. Carried here so the live alert views
+            # reach the identical verdict as the workbook instead of their own.
+            WorkReportTask.benchmark_exception_code,
             WorkReportTask.project_name,
             WorkReportTask.project_code,
             actual_expr.label("actual"),
@@ -217,6 +243,7 @@ def get_daily_benchmark_ledger(
             "activity_id": r.activity_id,
             "sub_activity_name": r.sub_activity_name,
             "benchmark_value": r.benchmark_value,
+            "benchmark_type": r.benchmark_type,
             "relevant_count_field": r.relevant_count_field,
         }
         dkey = (r.employee_id, r.report_date, r.sub_activity_id)
@@ -239,10 +266,19 @@ def get_daily_benchmark_ledger(
                 # Also per-report, not per-task: every detail row of this date
                 # repeats it, so a filtered row still reads on its own.
                 "day_remarks": r.day_remarks,
+                # Structured benchmark exception. Set below if ANY task row
+                # folded into this (employee, date, sub_activity) group carries
+                # one — the group shares one effective target, so one row
+                # reporting "no further work was available" describes it. Same
+                # grouping rule the period ledger already uses for the export;
+                # re-validated against the summed actual before it is published.
+                "exception_code": None,
             },
         )
         bucket["actual"] += Decimal(r.actual or 0)
         bucket["hours_minutes"] += int(r.hours_minutes or 0)
+        if bucket["exception_code"] is None and r.benchmark_exception_code:
+            bucket["exception_code"] = r.benchmark_exception_code
         if r.period_id is not None and r.work_fraction is not None:
             bucket["fractions"][r.period_id] = Decimal(r.work_fraction)
         else:
@@ -277,11 +313,29 @@ def get_daily_benchmark_ledger(
             Decimal("1.0"),
             sum(bucket["fractions"].values(), Decimal("0")) or Decimal("1.0"),
         )
-        target = base * fraction
+        target = scaled_target(base, fraction)
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
         project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None
-        pending = max(Decimal("0"), target - actual)
+        # Same verdict as the export (benchmark_exception.is_valid_exception),
+        # evaluated against this row's own effective target and summed actual:
+        # an exception survives only while it still describes reality. When it
+        # does, the row has NO remaining benchmark obligation — pending is 0 and
+        # the row drops out of every "still pending" view. actual and target are
+        # left untouched, so productivity keeps reporting the real figures.
+        exception_code = bucket["exception_code"]
+        if exception_code is not None and not is_valid_exception(
+            exception_code,
+            benchmark_type=m["benchmark_type"],
+            count_field=m["relevant_count_field"],
+            target=target,
+            actual=actual,
+        ):
+            exception_code = None
+        pending = (
+            Decimal("0") if exception_code is not None
+            else max(Decimal("0"), target - actual)
+        )
         out.append({
             "employee_id": employee_id,
             "date": d,
@@ -297,6 +351,10 @@ def get_daily_benchmark_ledger(
             "target": target,
             "actual": actual,
             "pending": pending,
+            # Validated exception, or None. Consumers use it to render
+            # "Achieved - Exception" and to treat the excused remainder
+            # (target - actual) as no longer outstanding.
+            "benchmark_exception_code": exception_code,
         })
     out.sort(key=lambda r: (r["date"], r["sub_activity_name"]))
     return out
@@ -399,9 +457,11 @@ def get_period_benchmark_ledger(
             ActivityMaster.id.label("sub_activity_id"),
             ActivityMaster.name.label("sub_activity_name"),
             ActivityMaster.benchmark_value,
+            ActivityMaster.benchmark_type,
             ActivityMaster.relevant_count_field,
             WorkReportTask.benchmark_value_snapshot,
             WorkReportTask.relevant_count_field_snapshot,
+            WorkReportTask.benchmark_exception_code,
             WorkReportTask.tags_count,
             WorkReportTask.docs_count,
             WorkReportTask.bom_count,
@@ -469,6 +529,15 @@ def get_period_benchmark_ledger(
                     )
                 ),
                 "actual": Decimal("0"),
+                "benchmark_type": r.benchmark_type,
+                # Structured benchmark exception (migration 0063), NULL for
+                # every ordinary row. Set below if ANY task row folded into this
+                # period bucket carries one — the rows share one effective
+                # target, so one row reporting "no further work was available"
+                # describes the whole bucket. Re-validated against the bucket's
+                # summed actual before it is published, so it cannot survive a
+                # bucket that in fact reached its target.
+                "exception_code": None,
                 "projects": [],
                 "project_codes": [],
             },
@@ -480,6 +549,8 @@ def get_period_benchmark_ledger(
         # row of this period + sub-activity; take the first one, never sum.
         if bucket["target_snapshot"] is None and r.benchmark_value_snapshot is not None:
             bucket["target_snapshot"] = Decimal(str(r.benchmark_value_snapshot))
+        if bucket["exception_code"] is None and r.benchmark_exception_code:
+            bucket["exception_code"] = r.benchmark_exception_code
         count_column = COUNT_FIELD_BY_UNIT.get(unit)
         if count_column is not None:
             bucket["actual"] += Decimal(getattr(r, count_column) or 0)
@@ -502,10 +573,31 @@ def get_period_benchmark_ledger(
     out = []
     for bucket in buckets.values():
         if bucket["target_snapshot"] is not None:
-            target = bucket["target_snapshot"]
+            # The frozen effective target — but rounded up on READ as well.
+            # Snapshots written before the whole-unit rule existed can carry a
+            # half unit (a 65-tag benchmark halved is 32.5), and a benchmark
+            # report must never show half a tag. The stored snapshot is left
+            # exactly as it was; only its presentation is made whole, so an
+            # existing report needs no migration and no resubmission.
+            # `fraction=1` because the snapshot is ALREADY scaled — this call
+            # only applies the rounding.
+            target = scaled_target(bucket["target_snapshot"], 1)
         else:
-            target = Decimal(str(bucket["live_value"] or 0)) * bucket["fraction"]
+            target = scaled_target(bucket["live_value"], bucket["fraction"])
         actual = bucket["actual"]
+        # Publish the exception only while it still describes the row: a
+        # positive target, an eligible unit, and a summed actual genuinely below
+        # that target (see benchmark_exception.is_valid_exception). A row that
+        # met its target needs no exception and never carries one.
+        exception_code = bucket["exception_code"]
+        if exception_code is not None and not is_valid_exception(
+            exception_code,
+            benchmark_type=bucket["benchmark_type"],
+            count_field=bucket["unit"],
+            target=target,
+            actual=actual,
+        ):
+            exception_code = None
         out.append({
             "employee_id": bucket["employee_id"],
             "date": bucket["date"],
@@ -520,7 +612,10 @@ def get_period_benchmark_ledger(
             "project_code": ", ".join(bucket["project_codes"]) or None,
             "target": target,
             "actual": actual,
+            # The REAL shortage. The benchmark export decides separately whether
+            # an exception zeroes it for display — this stays the raw arithmetic.
             "pending": max(Decimal("0"), target - actual),
+            "benchmark_exception_code": exception_code,
         })
     out.sort(
         key=lambda r: (

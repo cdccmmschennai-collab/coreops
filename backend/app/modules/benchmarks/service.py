@@ -12,10 +12,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.service import (
-    DAY_PART_HALF_LABELS,
     DAY_PART_SORT_RANK,
     compute_week_bounds,
-    get_cycle_task_activities,
     get_daily_benchmark_ledger,
     get_overdue_activities,
     get_period_benchmark_ledger,
@@ -48,6 +46,9 @@ def _daily_row(r: dict) -> dict:
         "target": r["target"],
         "pending": r["pending"],
         "benchmark_unit": r["benchmark_unit"],
+        # Validated structured exception (or None): this day's benchmark is
+        # ACHIEVED even though actual < target, and its remainder is excused.
+        "benchmark_exception_code": r.get("benchmark_exception_code"),
     }
 
 
@@ -117,7 +118,13 @@ def _reconcile_effective_pending(daily: list[dict]) -> dict[tuple, Decimal]:
         for row in ordered:
             target = Decimal(str(row["target"]))
             actual = Decimal(str(row["actual"]))
-            deficit = max(Decimal("0"), target - actual)
+            # An exception-achieved day has no deficit to reconcile: its
+            # remainder is excused, not outstanding. It contributes no surplus
+            # either — the real actual never reached the target.
+            excepted = row.get("benchmark_exception_code") is not None
+            deficit = (
+                Decimal("0") if excepted else max(Decimal("0"), target - actual)
+            )
             surplus = max(Decimal("0"), actual - target)
             key = (row["employee_id"], row["date"], row["sub_activity_id"])
             effective[key] = deficit
@@ -317,7 +324,17 @@ def get_employee_overview(
 
     days_worked = _days_worked_this_week(db, employee_id, today=today)
     pending = sum(1 for r in daily if r["pending"] > 0)
-    completed = sum(1 for r in daily if r["target"] > 0 and r["actual"] >= r["target"])
+    # Met by real output, or satisfied through a validated benchmark exception —
+    # both are closed benchmarks with nothing left to do.
+    completed = sum(
+        1
+        for r in daily
+        if r["target"] > 0
+        and (
+            r["actual"] >= r["target"]
+            or r.get("benchmark_exception_code") is not None
+        )
+    )
 
     return {
         "employee_id": employee_id,
@@ -445,92 +462,44 @@ def _sub_activity_group_key(sub_activity_id: uuid.UUID | None, sub_activity_name
     return f"name:{_normalize_sub_activity_label(sub_activity_name)}"
 
 
-def _fmt_qty(value: Decimal) -> str:
-    """Trim trailing zeros for display inside text cells (1000.00 -> 1000)."""
-    return f"{value.normalize():f}"
-
-
-def _task_pending_text(r: dict) -> str:
-    """PENDING-cell text for a lumpsum row by its state: finished this cycle ->
-    "NO PENDING"; still open and past due -> "N DAYS OVERDUE"; open but not yet
-    due -> "PENDING"."""
-    if r.get("is_completed"):
-        return "NO PENDING"
-    days = r["days_overdue"]
-    if days > 0:
-        return f"{days} DAY{'S' if days != 1 else ''} OVERDUE"
-    return "PENDING"
-
-
-def _task_export_cells(r: dict) -> dict:
-    """Cell values for one TASK_BASED (lumpsum) row of the export. The row may
-    be completed, overdue, or still-open (see get_cycle_task_activities).
-
-    CASE A — count-based lumpsum (benchmark_value + a counted unit): text
-    cells like "1000 TAGS PER DAY" / "500 TAGS" / "500 TAGS" (or "NO PENDING"
-    when finished), with the bare numbers contributed to the employee TOTAL row
-    and the achievement %.
-
-    CASE B — plain finish-by-due-date task: "FINISH WITHIN A DAY" /
-    "FINISHED"|"NOT COMPLETED" / "NO PENDING"|"N DAYS OVERDUE"|"PENDING",
-    contributing nothing to the numeric totals."""
-    period = r["benchmark_period_days"] or 1
-    unit = r["benchmark_unit"]
-    completed = bool(r.get("is_completed"))
-    if r["benchmark_value"] is not None and unit:
-        target = Decimal(str(r["benchmark_value"]))
-        actual = Decimal(str(r["actual"] or 0))
-        pending = max(Decimal("0"), target - actual)
-        unit_label = unit.upper()
-        per = "PER DAY" if period == 1 else f"PER {period} DAYS"
-        return {
-            "unit": unit,
-            "target": f"{_fmt_qty(target)} {unit_label} {per}",
-            "actual": f"{_fmt_qty(actual)} {unit_label}",
-            "pending": "NO PENDING" if completed else f"{_fmt_qty(pending)} {unit_label}",
-            "target_total": target,
-            "actual_total": actual,
-            "pending_total": pending,
-        }
-    return {
-        # No counted unit to place this under — default to the TAGS column.
-        "unit": unit or "tags",
-        "target": "FINISH WITHIN A DAY" if period == 1 else f"FINISH WITHIN {period} DAYS",
-        "actual": "FINISHED" if completed else "NOT COMPLETED",
-        "pending": _task_pending_text(r),
-        "target_total": None,
-        "actual_total": None,
-        "pending_total": None,
-    }
-
-
 def get_pending_benchmark_export(
     db: Session, *, cycle: str | int | None = 1, today: date | None = None
 ) -> dict:
     """Rows for the PM's full-cycle benchmark XLSX export.
 
-    EVERY employee with ANY benchmark activity this cycle is exported — a daily
-    quantity ledger day or a task lumpsum — regardless of whether anything is
-    still pending. Management evaluates complete cycle performance, so an
-    employee who met or exceeded every benchmark appears alongside one who fell
-    short; nothing is filtered on pending > 0. Each employee shows their WHOLE
-    Fri..Thu benchmark story: every daily-quantity day (over-, exactly-, or
-    under-target) and every task lumpsum (completed, overdue, or still open).
+    NUMERIC ONLY. This report answers one question — "did the measured output
+    meet the measured target?" — so it carries exactly one row source: the
+    per-period ledger of DAILY_QUANTITY_BENCHMARK_TYPES (NUMERIC,
+    NUMERIC_DAILY). Task-mode activities (TASK_BASED, TASK_STATUS_ONLY,
+    TASK_WITH_QUANTITY) are deadline-and-completion work, not per-day
+    production: they have no place in a target-vs-actual sheet, where their
+    textual "FINISHED" / "N DAYS OVERDUE" cells sat in numeric columns and,
+    for the counted lumpsum variant, quietly moved the achievement %. They are
+    excluded here in FULL — no detail row, no total row, no contribution to any
+    target, actual, pending or percentage.
 
-    The two row sources are disjoint BY CONSTRUCTION, so nothing duplicates:
-    the ledger selects DAILY_QUANTITY_BENCHMARK_TYPES (NUMERIC, NUMERIC_DAILY)
-    while the lumpsum query selects TASK_BENCHMARK_TYPES (TASK_BASED,
-    TASK_STATUS_ONLY, TASK_WITH_QUANTITY), and those two sets are defined as
-    disjoint in activity_master/models.py. TASK_WITH_QUANTITY carries a quantity
-    but is exported through the lumpsum side only — _task_row_cells CASE A gives
-    it real target/actual/pending numbers, so it still participates in the
-    numeric subtotal without being counted twice.
+    This exclusion is scoped to THIS export. Task activities are untouched
+    everywhere else: they still appear on daily reports, the alerts/overdue
+    views, the performance table and the task-status views, all of which read
+    get_cycle_task_activities / get_overdue_activities / get_task_status_activities
+    directly. Only this workbook's row set changed.
 
-    Each NUMERIC detail row shows its own *daily* shortage (max(0, daily target
-    - daily actual)); the per-employee TOTAL row instead nets the whole cycle
-    per unit (see the workbook builder), so a day's overachievement compensates
+    EVERY employee with any numeric benchmark day this cycle is exported,
+    regardless of whether anything is still pending. Management evaluates
+    complete cycle performance, so an employee who met or exceeded every
+    benchmark appears alongside one who fell short; nothing is filtered on
+    pending > 0.
+
+    Each detail row shows its own *daily* shortage (max(0, daily target - daily
+    actual)); the per-sub-activity TOTAL row instead nets the whole cycle per
+    unit (see the workbook builder), so a day's overachievement compensates
     another day's shortfall within the same benchmark unit — the total pending
     is NOT the sum of the daily shortages.
+
+    A row may carry `benchmark_exception_code` (migration 0063): a validated,
+    structured statement that all available work was completed even though the
+    actual fell short. The row's real actual travels unchanged; only the
+    workbook's evaluation of it differs (see build_pending_benchmark_workbook).
 
     `cycle` picks the Fri..Thu window as an offset back from the one containing
     today (0 = current, 1 = previous, up to MAX_WEEK_OFFSET); the legacy
@@ -538,23 +507,24 @@ def get_pending_benchmark_export(
     last completed cycle — PMs export on Friday morning after Thursday's reports
     are in.
 
-    Cycle isolation is structural, not filtered after the fact: both source
-    queries derive their own Fri..Thu bounds from the `today` they are handed,
-    so passing this cycle's end date makes them select exactly this cycle's
-    rows. Nothing is persisted or cached; every cycle is recomputed live from
-    the same work-report rows, so no neighbouring cycle can leak in."""
+    Cycle isolation is structural, not filtered after the fact: the source
+    query derives its own Fri..Thu bounds from the `today` it is handed, so
+    passing this cycle's end date makes it select exactly this cycle's rows.
+    Nothing is persisted or cached; every cycle is recomputed live from the same
+    work-report rows, so no neighbouring cycle can leak in."""
     cycle_start, cycle_end = _cycle_window(cycle, today or date.today())
 
     # The ledger derives its own bounds from `today`, so any date inside the
     # wanted cycle selects it; use its end day. The export reads the PER-PERIOD
     # ledger (frozen snapshots, one row per DAY PART) — the merged
     # get_daily_benchmark_ledger stays serving the live alert/performance views.
+    # It selects DAILY_QUANTITY_BENCHMARK_TYPES only, which is exactly the
+    # numeric-only rule this report needs; no task query is consulted here.
     daily = get_period_benchmark_ledger(db, employee_ids=None, today=cycle_end)
-    cycle_tasks = get_cycle_task_activities(db, employee_ids=None, today=cycle_end)
 
-    # Inclusion set: everyone with any benchmark activity this cycle, achievers
-    # included. No pending filter.
-    included = {r["employee_id"] for r in daily} | {r["employee_id"] for r in cycle_tasks}
+    # Inclusion set: everyone with any numeric benchmark day this cycle,
+    # achievers included. No pending filter.
+    included = {r["employee_id"] for r in daily}
 
     labels: dict[uuid.UUID, str] = {}
     if included:
@@ -587,31 +557,11 @@ def get_pending_benchmark_export(
             "target_total": r["target"],
             "actual_total": r["actual"],
             "pending_total": r["pending"],
+            # Validated structured exception, or None. The workbook uses it to
+            # evaluate this row at target while still printing r["actual"].
+            "benchmark_exception_code": r.get("benchmark_exception_code"),
         }
         for r in daily
-        if r["employee_id"] in included
-    ]
-    # Every lumpsum (completed / overdue / open) for an included employee. The
-    # REMARKS mapping matches the numeric rows: a task in a half shows that
-    # half's period remarks, a full-day/legacy task the report-header remark.
-    rows += [
-        {
-            "employee_label": labels.get(r["employee_id"], "-"),
-            "date": r["report_date"],
-            "day_part": r["day_part"],
-            "project": _project_label(r["project_code"], r["project_name"]),
-            "activity": r["activity_name"] or "",
-            "sub_activity": r["sub_activity_name"],
-            "sub_activity_id": r["sub_activity_id"],
-            "group_key": _sub_activity_group_key(r["sub_activity_id"], r["sub_activity_name"]),
-            "day_remarks": _day_remarks(
-                r.get("period_remarks")
-                if r["day_part"] in DAY_PART_HALF_LABELS
-                else r.get("day_remarks")
-            ),
-            **_task_export_cells(r),
-        }
-        for r in cycle_tasks
         if r["employee_id"] in included
     ]
 

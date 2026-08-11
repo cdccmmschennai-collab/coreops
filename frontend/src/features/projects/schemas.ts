@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-import type { ProjectCreateBody, ProjectUpdateBody } from "./types";
+// Relative .ts value import — the node --test harness resolves it directly.
+import {
+  DEFAULT_PROJECT_SCOPE_TYPE,
+  parseTagCount,
+  PROJECT_SCOPE_TYPES,
+  REASON_REQUIRED_ERROR,
+  TAG_COUNT_ERROR,
+} from "./scope.ts";
+import type { ProjectCreateBody, ProjectUpdateBody, TagScopeUpdateBody } from "./types";
 
 export const PROJECT_STATUSES = [
   "planning",
@@ -31,6 +39,8 @@ export const projectFormSchema = z
     client: z.string().trim(),
     description: z.string().trim(),
     status: z.enum(PROJECT_STATUSES),
+    // Classification only: whether this project takes part in Project Tag Scope.
+    scope_type: z.enum(PROJECT_SCOPE_TYPES),
     start_date: z.string(),
     planned_completion_date: z.string(),
     actual_completion_date: z.string(),
@@ -56,6 +66,7 @@ export const EMPTY_PROJECT_FORM: ProjectFormValues = {
   client: "",
   description: "",
   status: "planning",
+  scope_type: DEFAULT_PROJECT_SCOPE_TYPE,
   start_date: "",
   planned_completion_date: "",
   actual_completion_date: "",
@@ -71,6 +82,7 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
     planning_plant_id: orNull(v.planning_plant_id),
     maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
+    scope_type: v.scope_type,
     client: orNull(v.client),
     description: orNull(v.description),
     start_date: orNull(v.start_date),
@@ -92,6 +104,7 @@ export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
     planning_plant_id: orNull(v.planning_plant_id),
     maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
+    scope_type: v.scope_type,
     client: orNull(v.client),
     description: orNull(v.description),
     start_date: orNull(v.start_date),
@@ -106,3 +119,52 @@ export const plannedDateSchema = z.object({
 });
 
 export type PlannedDateFormValues = z.infer<typeof plannedDateSchema>;
+
+// ---------- tag scope (Phase 4) ----------
+
+/**
+ * The Set / Revise Tag Scope form.
+ *
+ * The count is held as a string because that is what an <input> gives us, and
+ * because `valueAsNumber` turns "abc" into NaN — indistinguishable from empty.
+ * `parseTagCount` is the single definition of a valid count, shared with the
+ * Save-button state, so the field and the button can never disagree.
+ *
+ * `requireReason` is a parameter rather than a second schema: the rule is the
+ * backend's (mandatory when revising an established scope, defaulted to
+ * "Initial project estimate" for the first one), and this mirrors it exactly.
+ */
+export function tagScopeFormSchema(requireReason: boolean) {
+  return z.object({
+    estimated_tag_count: z
+      .string()
+      .refine((v) => parseTagCount(v) !== null, { message: TAG_COUNT_ERROR }),
+    status: z.enum(["PROVISIONAL", "BASELINED"]),
+    reason: requireReason
+      ? z.string().trim().min(1, REASON_REQUIRED_ERROR).max(500)
+      : z.string().trim().max(500),
+  });
+}
+
+export type TagScopeFormValues = z.infer<ReturnType<typeof tagScopeFormSchema>>;
+
+/**
+ * Form values -> PUT body. `expected_revision` is the revision the form was
+ * opened against, so the server can refuse a save built on a view somebody else
+ * has already superseded. The new revision number is never sent — the backend
+ * owns it.
+ */
+export function toTagScopeBody(
+  v: TagScopeFormValues,
+  expectedRevision: number,
+): TagScopeUpdateBody {
+  const reason = v.reason.trim();
+  return {
+    // Non-null by construction: the schema rejects anything parseTagCount
+    // refuses, so this branch is only reached with a valid count.
+    estimated_tag_count: parseTagCount(v.estimated_tag_count) ?? 0,
+    status: v.status,
+    reason: reason === "" ? null : reason,
+    expected_revision: expectedRevision,
+  };
+}

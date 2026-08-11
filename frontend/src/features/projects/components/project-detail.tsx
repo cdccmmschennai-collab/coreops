@@ -30,20 +30,28 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
-import { can } from "@/lib/rbac";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { Tabs } from "@/components/ui/tabs";
-import { ActivitiesTab } from "@/features/project-activities/components/activities-tab";
-import { SubmissionsTab } from "@/features/project-submissions/components/submissions-tab";
 import { ArchiveDialog } from "./archive-dialog";
 import { ProjectMembers } from "./project-members";
 import { ProjectTimeline } from "./project-timeline";
 import { StatusBadge } from "./status-badge";
+import { SummaryTab } from "./summary-tab";
+import { TagScopeTab } from "./tag-scope-tab";
+import { WeeklyReportTab } from "./weekly-report-tab";
 import { useProject, usePlannedDateChanges, useUpdatePlannedDate } from "../hooks";
+import { useProjectAuthority } from "../hooks/use-project-authority";
+import { canArchiveProject, canEditProject, canManageTagScope } from "../permissions";
 import { plannedDateSchema, type PlannedDateFormValues } from "../schemas";
+import { resolveScopeType } from "../scope";
+import {
+  buildProjectTabs,
+  resolveProjectTab,
+  PROJECT_DEFAULT_TAB,
+  PROJECT_TAB_PARAM,
+} from "../tabs";
 import type { PlannedDateChange, Project } from "../types";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
@@ -182,15 +190,30 @@ function PlannedDateChangeLog({ projectId }: { projectId: string }) {
 
 export function ProjectDetail({ id }: { id: string }) {
   const router = useRouter();
-  const { role } = useAuth();
-  const canManage = can(role, "project.manage");
 
   const query = useProject(id);
   const project = query.data;
   const [confirm, setConfirm] = React.useState<Project | null>(null);
   const [dateDialogOpen, setDateDialogOpen] = React.useState(false);
   // Active tab lives in the URL so leaving and returning keeps the same tab.
-  const [activeTab, setActiveTab] = useUrlState("tab", "overview");
+  const [tabParam, setTabParam] = useUrlState(PROJECT_TAB_PARAM, PROJECT_DEFAULT_TAB);
+
+  // One resolved authority for this project, shared with the Edit button, the
+  // tab list and the /edit page guard.
+  const viewer = useProjectAuthority(project);
+  const canManage = viewer.canManage;
+  const tabItems = React.useMemo(() => buildProjectTabs(viewer), [viewer]);
+  // Never trust the raw query value: retired tabs (`activities`, `submissions`),
+  // typos and a hand-typed `tag-scope` from a non-PM/non-Head all fall back to
+  // Overview instead of rendering nothing.
+  const activeTab = resolveProjectTab(tabParam, viewer);
+
+  React.useEffect(() => {
+    // Rewrite the URL only once the project has loaded — until then we don't
+    // know whether the viewer is this project's Head.
+    if (!project) return;
+    if (tabParam !== activeTab) setTabParam(activeTab);
+  }, [project, tabParam, activeTab, setTabParam]);
 
   if (query.isLoading) {
     return (
@@ -227,18 +250,23 @@ export function ProjectDetail({ id }: { id: string }) {
         title={project.name}
         subtitle={subtitleParts.join(" · ")}
         actions={
-          canManage ? (
+          // Edit: PM or this project's Head. Archive: PM only, unchanged.
+          canEditProject(viewer) || canArchiveProject(viewer) ? (
             <>
-              <Button variant="secondary" asChild>
-                <Link href={`/projects/${project.id}/edit`}>
-                  <Pencil className="h-4 w-4" />
-                  Edit
-                </Link>
-              </Button>
-              <Button variant="danger" onClick={() => setConfirm(project)}>
-                <Archive className="h-4 w-4" />
-                Archive
-              </Button>
+              {canEditProject(viewer) && (
+                <Button variant="secondary" asChild>
+                  <Link href={`/projects/${project.id}/edit`}>
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </Link>
+                </Button>
+              )}
+              {canArchiveProject(viewer) && (
+                <Button variant="danger" onClick={() => setConfirm(project)}>
+                  <Archive className="h-4 w-4" />
+                  Archive
+                </Button>
+              )}
             </>
           ) : null
         }
@@ -247,12 +275,8 @@ export function ProjectDetail({ id }: { id: string }) {
       <Tabs
         className="mb-4"
         value={activeTab}
-        onChange={setActiveTab}
-        items={[
-          { value: "overview", label: "Overview" },
-          { value: "activities", label: "Activities" },
-          { value: "submissions", label: "Submissions" },
-        ]}
+        onChange={setTabParam}
+        items={tabItems}
       />
 
       {activeTab === "overview" && (
@@ -343,16 +367,24 @@ export function ProjectDetail({ id }: { id: string }) {
         </div>
       )}
 
-      {activeTab === "activities" && (
-        <ActivitiesTab
+      {activeTab === "tag-scope" && (
+        // Current scope and history are fetched by the tab itself: a write
+        // returns both, so the tab refreshes from its own response instead of
+        // waiting on the project detail to be refetched.
+        <TagScopeTab
           projectId={project.id}
-          canManage={canManage}
-          canEdit={canManage}
+          scopeType={resolveScopeType(project.scope_type)}
+          canEdit={canManageTagScope(viewer)}
         />
       )}
 
-      {activeTab === "submissions" && (
-        <SubmissionsTab projectId={project.id} canManage={canManage} />
+      {activeTab === "summary" && <SummaryTab projectId={project.id} />}
+
+      {activeTab === "weekly-report" && (
+        // Assigned Head only — the tab is not in `tabItems` for anyone else,
+        // and both the preview and the export endpoint enforce the same rule
+        // server-side, so this is never the only guard.
+        <WeeklyReportTab projectId={project.id} />
       )}
 
       <PlannedDateDialog

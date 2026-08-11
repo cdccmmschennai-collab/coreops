@@ -26,8 +26,11 @@ from app.modules.projects.models import (
     ProjectMemberRole,
     ProjectPlannedDateChange,
     ProjectStatus,
+    ProjectTagScopeRevision,
     ProjectTimelineEvent,
+    SCOPE_TYPE_TAG_BASED,
     TimelineEventType,
+    VALID_TAG_SCOPE_STATUSES,
 )
 from app.modules.projects.schemas import (
     ActivityMemberCreate,
@@ -38,7 +41,12 @@ from app.modules.projects.schemas import (
     LedProjectMember,
     PlannedDateUpdate,
     ProjectCreate,
+    ProjectSummaryOut,
     ProjectUpdate,
+    TagScopeOut,
+    TagScopeProgressRow,
+    TagScopeRevisionOut,
+    TagScopeUpdate,
 )
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
@@ -588,14 +596,365 @@ def _validate_status_transition(current: ProjectStatus, new: ProjectStatus) -> N
 _UNSET = object()
 
 
+# --------------------------------------------------------------------------
+# Project tag scope (Phase 3 data foundation + Phase 4 managed workflow)
+#
+# Phase 3 established the columns, the append-only revision table, the read and
+# the recording primitive. Phase 4 adds the managed write workflow on top:
+# PUT /projects/{id}/tag-scope, optimistic concurrency, the no-op rule and the
+# reason policy. Nothing here reads Daily Reports, benchmarks or Activity
+# Master, and nothing computes progress.
+# --------------------------------------------------------------------------
+
+
+# Substituted when the very first estimate is saved without a reason. Revising
+# an existing scope always requires the author to say why (see below).
+INITIAL_SCOPE_REASON = "Initial project estimate"
+
+
+# --------------------------------------------------------------------------
+# Turning tag scope off (TAG_BASED -> NONE)
+#
+# There is no guard here, and that is the whole design. Reclassifying a project
+# back to NONE is a DEACTIVATION, not a deletion:
+#
+#   nothing is written   projects.estimated_tag_count, tag_scope_status,
+#                        tag_scope_revision and every project_tag_scope_revisions
+#                        row are left exactly as they are. No revision is minted
+#                        either - flipping the feature off is not a scope
+#                        decision, and history records decisions (1200 -> 1500),
+#                        not toggles.
+#
+#   nothing enforces     every consumer of tag scope already asks
+#                        `project.scope_type == TAG_BASED` before it does
+#                        anything (tag_progress.project_tag_capacity, which the
+#                        Daily Report cap and the Summary both go through, and
+#                        record_tag_scope_revision below). Setting NONE therefore
+#                        removes the cap, empties the Summary's progress rows and
+#                        closes the scope-management surface in one assignment,
+#                        with no second switch to keep in step.
+#
+#   nothing is rewritten reported tag counts on existing work reports are
+#                        untouched; an employee simply stops being measured
+#                        against a project ceiling.
+#
+# Switching back to TAG_BASED restores the preserved estimate, status, revision
+# number and full history unchanged - there is no reset step to undo, and no
+# duplicate rows, because nothing was ever removed.
+#
+# An earlier build refused this transition ("...cannot be changed to a non-tag
+# project without first resolving the existing scope"). That protected the audit
+# trail by making a legitimate business change impossible; preserving the trail
+# while ignoring it is strictly better.
+# --------------------------------------------------------------------------
+
+
+def _assert_can_read_tag_scope(db: Session, actor: User, project: Project) -> None:
+    """Reading tag scope is open to anyone who may view the project.
+
+    The scope and its history are context every contributor needs — how many
+    tags the project covers, and why that number changed. Read and write are
+    deliberately split: CHANGING the scope stays PM or THIS project's Head (see
+    record_tag_scope_revision), so a member sees the numbers without being able
+    to move them.
+    """
+    _assert_can_read(db, actor, project)
+
+
+def get_tag_scope(db: Session, actor: User, project_id: uuid.UUID) -> TagScopeOut:
+    """Current scope plus its full revision history, newest revision last."""
+    project = _fetch(db, project_id)
+    _assert_can_read_tag_scope(db, actor, project)
+
+    rows = db.execute(
+        select(ProjectTagScopeRevision)
+        .where(ProjectTagScopeRevision.project_id == project_id)
+        .order_by(ProjectTagScopeRevision.revision)
+    ).scalars().all()
+
+    # Resolve actor names in one pass (same join style as _attach_* helpers).
+    user_ids = {r.changed_by for r in rows}
+    if project.tag_scope_updated_by is not None:
+        user_ids.add(project.tag_scope_updated_by)
+    names: dict[uuid.UUID, str] = {}
+    if user_ids:
+        for uid, email, first, last in db.execute(
+            select(User.id, User.email, Employee.first_name, Employee.last_name)
+            .outerjoin(Employee, (Employee.user_id == User.id) & (Employee.deleted_at.is_(None)))
+            .where(User.id.in_(user_ids))
+        ).all():
+            names[uid] = f"{first} {last}".strip() if first else email
+
+    revisions = []
+    for r in rows:
+        out = TagScopeRevisionOut.model_validate(r)
+        out.changed_by_name = names.get(r.changed_by, "")
+        revisions.append(out)
+
+    return TagScopeOut(
+        project_id=project.id,
+        scope_type=project.scope_type,
+        estimated_tag_count=project.estimated_tag_count,
+        tag_scope_status=project.tag_scope_status,
+        tag_scope_revision=project.tag_scope_revision,
+        tag_scope_updated_at=project.tag_scope_updated_at,
+        tag_scope_updated_by=project.tag_scope_updated_by,
+        tag_scope_updated_by_name=(
+            names.get(project.tag_scope_updated_by)
+            if project.tag_scope_updated_by is not None
+            else None
+        ),
+        revisions=revisions,
+    )
+
+
+def get_project_summary(db: Session, actor: User, project_id: uuid.UUID) -> ProjectSummaryOut:
+    """Summary tab payload. Readable by anyone who may view the project — unlike
+    the Tag Scope tab, this is a progress view, not scope administration."""
+    from app.modules.projects import tag_progress
+
+    project = _fetch(db, project_id)
+    _assert_can_read(db, actor, project)
+    return ProjectSummaryOut(
+        project_id=project.id,
+        scope_type=project.scope_type,
+        estimated_tag_count=project.estimated_tag_count,
+        tag_scope_status=project.tag_scope_status,
+        tag_progress=[
+            TagScopeProgressRow(**row) for row in tag_progress.project_tag_progress(db, project)
+        ],
+    )
+
+
+def _assert_can_read_weekly_report(db: Session, actor: User, project: Project) -> None:
+    """Weekly Report access — THIS project's assigned Head, and nobody else.
+
+    Narrower than every other tab on the page on purpose, and narrower than
+    ``can_edit_project``: a PM is NOT included. The current requirement is that
+    the weekly operational report belongs to the Head who runs the project; if
+    PM access is wanted later it is one clause here, not a re-plumbing.
+
+    Head authority is per-project by construction — ``authz.is_project_head``
+    compares the caller's employee id against THIS project's head_employee_id,
+    so heading project A grants nothing on project B. This is the same helper
+    the Tag Scope write path and the Edit rule use; no second role rule exists.
+    """
+    if not authz.is_project_head(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only this project's assigned Head can open the Weekly Report.",
+            403,
+        )
+
+
+def get_project_weekly_report(
+    db: Session,
+    actor: User,
+    project_id: uuid.UUID,
+    cycle: str | None = None,
+    *,
+    today: date | None = None,
+) -> dict:
+    """Weekly Report payload for the preview AND the Excel export.
+
+    Both endpoints call exactly this, so the workbook can never contain a
+    different row set from the screen it was downloaded from. Authorization is
+    re-run here rather than trusted from the caller, which is what makes the
+    export endpoint safe against a hand-typed URL.
+    """
+    from app.modules.projects import weekly_report
+
+    project = _fetch(db, project_id)
+    _assert_can_read_weekly_report(db, actor, project)
+    return weekly_report.get_project_weekly_report(db, project, cycle, today=today)
+
+
+def _assert_scope_covers_recorded_progress(
+    db: Session, project: Project, new_estimated_tag_count: int
+) -> None:
+    """Reduction guard — deliberately a no-op in this phase.
+
+    Reducing the estimate is allowed for now (with a reason, and fully preserved
+    in history) because the scoped activity-progress service does not exist yet:
+    there is no MAX(activity progress) to compare against, and inventing one here
+    would duplicate logic the progress phase owns.
+
+    This seam exists so that phase can add the rule — "a new scope may not fall
+    below the progress already recorded against it" — by filling in this one
+    function, without reworking the revision flow, the endpoint or the UI.
+    """
+    return
+
+
+def record_tag_scope_revision(
+    db: Session,
+    actor: User,
+    project_id: uuid.UUID,
+    *,
+    new_estimated_tag_count: int,
+    new_status: str,
+    reason: str | None,
+    expected_revision: int | None = None,
+) -> Project:
+    """Append one revision and move the project's current scope onto it.
+
+    The single operation that maintains every tag-scope invariant: revision
+    numbers dense and unique per project, previous_* copied from the row being
+    superseded, a reason always recorded, and the projects.* columns kept in
+    step with the newest row. All of it derived server-side — the caller never
+    supplies a revision number, a previous value or an author.
+
+    Refuses, in this order:
+      403  caller is neither PM nor THIS project's Head
+      422  project is not TAG_BASED
+      422  count is absent, zero or negative
+      422  status is not PROVISIONAL / BASELINED
+      409  ``expected_revision`` no longer matches the stored revision
+      422  reason is blank while revising an existing scope
+
+    Submitting the values the project already has is not an error and not a
+    revision: it returns the project untouched (see the no-op rule below).
+    """
+    project = _fetch(db, project_id)
+    if not authz.can_edit_project(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only project managers and this project's Head can set tag scope.",
+            403,
+        )
+    if project.scope_type != SCOPE_TYPE_TAG_BASED:
+        raise AppError(
+            "validation_error",
+            "Tag scope can only be set on a tag-based project.",
+            422,
+        )
+    # Unknown scope is NULL, never 0 — a stored estimate must be a real count.
+    if new_estimated_tag_count is None or new_estimated_tag_count <= 0:
+        raise AppError(
+            "validation_error",
+            "Estimated tag count must be greater than 0.",
+            422,
+        )
+    if new_status not in VALID_TAG_SCOPE_STATUSES:
+        raise AppError("validation_error", "Unknown tag scope status.", 422)
+
+    # Optimistic concurrency. Two administrators can hold the same form open;
+    # whoever saves second must be told their view is stale rather than have
+    # their number quietly stack on top of a revision they never saw. Checked
+    # before anything is written, and backed by the UNIQUE(project_id, revision)
+    # constraint for the case where both commits race past this read.
+    if expected_revision is not None and expected_revision != project.tag_scope_revision:
+        raise AppError(
+            "conflict",
+            "The tag scope changed while you were editing it. Refresh and review "
+            "the latest values before updating.",
+            409,
+        )
+
+    # No-op rule: saving the values the project already carries must not mint a
+    # revision. History is a record of decisions, and "someone pressed Save"
+    # is not one. Idempotent rather than an error, so a double-submit is safe.
+    if (
+        project.estimated_tag_count == new_estimated_tag_count
+        and project.tag_scope_status == new_status
+    ):
+        return project
+
+    # Reason policy: mandatory when changing an established scope (whitespace is
+    # not a reason), defaulted for the very first estimate where "why" is simply
+    # that the project is being set up.
+    clean_reason = (reason or "").strip()
+    if not clean_reason:
+        if project.tag_scope_revision > 0:
+            raise AppError(
+                "validation_error", "A reason is required for a scope change.", 422
+            )
+        clean_reason = INITIAL_SCOPE_REASON
+
+    _assert_scope_covers_recorded_progress(db, project, new_estimated_tag_count)
+
+    next_revision = project.tag_scope_revision + 1
+    db.add(ProjectTagScopeRevision(
+        project_id=project.id,
+        revision=next_revision,
+        previous_estimated_tag_count=project.estimated_tag_count,
+        new_estimated_tag_count=new_estimated_tag_count,
+        previous_status=project.tag_scope_status,
+        new_status=new_status,
+        reason=clean_reason,
+        changed_by=actor.id,
+    ))
+    project.estimated_tag_count = new_estimated_tag_count
+    project.tag_scope_status = new_status
+    project.tag_scope_revision = next_revision
+    project.tag_scope_updated_at = datetime.now(timezone.utc)
+    project.tag_scope_updated_by = actor.id
+    db.add(project)
+    # One transaction: the revision row and the projects.* columns commit
+    # together or not at all, so current state and history can never diverge.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError(
+            "conflict",
+            "The tag scope changed while you were editing it. Refresh and review "
+            "the latest values before updating.",
+            409,
+        )
+    db.refresh(project)
+    return project
+
+
+def update_tag_scope(
+    db: Session, actor: User, project_id: uuid.UUID, data: TagScopeUpdate
+) -> TagScopeOut:
+    """PUT /projects/{id}/tag-scope — the managed establish/revise workflow.
+
+    A thin, validated wrapper over the recording primitive: it exists so the
+    route never reaches the primitive with unchecked input, and so the response
+    is the same shape the tab already reads (current scope + full history),
+    letting the client refresh both from one round trip.
+    """
+    record_tag_scope_revision(
+        db,
+        actor,
+        project_id,
+        new_estimated_tag_count=data.estimated_tag_count,
+        new_status=data.status,
+        reason=data.reason,
+        expected_revision=data.expected_revision,
+    )
+    return get_tag_scope(db, actor, project_id)
+
+
 def update_project(
     db: Session, actor: User, project_id: uuid.UUID, data: ProjectUpdate
 ) -> Project:
     project = _fetch(db, project_id)
+    # PM (any project) or the employee assigned as THIS project's Head. Checked
+    # here rather than with require_role on the route so the rule lives in one
+    # place and the router cannot drift from it.
+    if not authz.can_edit_project(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only project managers and this project's Head can edit it.",
+            403,
+        )
     fields = data.model_dump(exclude_unset=True)
 
     if "status" in fields and fields["status"] is not None:
         _validate_status_transition(project.status, fields["status"])
+
+    # scope_type is NOT NULL. An explicit null means "leave it alone" (an older
+    # client sending the whole object with the field absent-as-null must not
+    # blow up), not "clear the classification".
+    if fields.get("scope_type") is None:
+        fields.pop("scope_type", None)
+
+    # TAG_BASED -> NONE is allowed with or without existing scope history, and
+    # writes nothing but the classification itself: see the deactivation note
+    # above the tag-scope section.
 
     # code is editable (PMs need to fix codes entered before this field
     # existed) — but must stay unique among non-deleted projects, same rule

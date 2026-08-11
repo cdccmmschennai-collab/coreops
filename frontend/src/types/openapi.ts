@@ -370,6 +370,123 @@ export interface paths {
         patch: operations["update_project_api_v1_projects__project_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/tag-scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tag Scope
+         * @description Current tag scope + full revision history.
+         *
+         *     Nested under the project rather than a top-level resource, matching
+         *     /members, /activity-staffing and /planned-date-changes. Authorization
+         *     (PM or this project's Head) is enforced centrally in the service.
+         */
+        get: operations["get_tag_scope_api_v1_projects__project_id__tag_scope_get"];
+        /**
+         * Update Tag Scope
+         * @description Establish or revise the project's estimated tag scope (PM or this
+         *     project's Head — enforced centrally in the service, never by the UI alone).
+         *
+         *     PUT rather than POST: the client states the scope it wants the project to
+         *     have, and the server derives the revision number, the previous values, the
+         *     author and the timestamp. Returns the same payload as the GET so the tab can
+         *     refresh current scope and history from one round trip.
+         *
+         *     Conflicts with 409 when `expected_revision` no longer matches the stored
+         *     revision — someone else revised the scope while this form was open.
+         */
+        put: operations["update_tag_scope_api_v1_projects__project_id__tag_scope_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Project Summary
+         * @description Progress against the project's tag scope, per tag-counted sub-activity.
+         *
+         *     Visible to every user who may view the project — this is the work summary,
+         *     not the scope administration the Tag Scope tab holds.
+         */
+        get: operations["get_project_summary_api_v1_projects__project_id__summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/weekly-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Weekly Report
+         * @description All work reported on this project during the selected Fri-Thu cycle.
+         *
+         *     Assigned Project Head ONLY (enforced in the service, never by hiding the
+         *     tab). Unlike Summary, this is not restricted to tag-counted activities: it
+         *     carries every activity line on the project, benchmarked or not.
+         *
+         *     `cycle` is a Literal, so an unsupported value is rejected with 422 rather
+         *     than quietly serving a different week. No arbitrary date range in this phase.
+         */
+        get: operations["get_weekly_report_api_v1_projects__project_id__weekly_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/weekly-report.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Weekly Report Xlsx
+         * @description The same dataset as the preview, as a styled .xlsx download.
+         *
+         *     Calls the identical service function the preview does — one query, one
+         *     ordering, one set of rows — so the file can never hold more or fewer rows
+         *     than the screen it was downloaded from. Authorization runs again inside that
+         *     service, so pasting this URL as a different user fails with 403 exactly as
+         *     the preview does.
+         *
+         *     `.xlsx` suffix + StreamingResponse + Content-Disposition is the established
+         *     CoreOps export shape (/reports-export/activity-rows.xlsx,
+         *     /benchmarks/pending-export.xlsx) — no second Excel stack, no base64 in JSON.
+         */
+        get: operations["get_weekly_report_xlsx_api_v1_projects__project_id__weekly_report_xlsx_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/head": {
         parameters: {
             query?: never;
@@ -908,6 +1025,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leave-requests/attendance-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attendance Summary
+         * @description Read-only: attendance already recorded across each displayed leave
+         *     request's dates, one word per row. Never modifies attendance.
+         */
+        post: operations["attendance_summary_api_v1_leave_requests_attendance_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/leave-requests/{req_id}": {
         parameters: {
             query?: never;
@@ -937,6 +1075,57 @@ export interface paths {
         put?: never;
         /** Cancel Leave Request */
         post: operations["cancel_leave_request_api_v1_leave_requests__req_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-requests/{req_id}/request-cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Leave Cancellation */
+        post: operations["request_leave_cancellation_api_v1_leave_requests__req_id__request_cancellation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-requests/{req_id}/approve-cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Leave Cancellation */
+        post: operations["approve_leave_cancellation_api_v1_leave_requests__req_id__approve_cancellation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-requests/{req_id}/reject-cancellation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Leave Cancellation */
+        post: operations["reject_leave_cancellation_api_v1_leave_requests__req_id__reject_cancellation_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1235,6 +1424,58 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Activity Access */
+        get: operations["get_activity_access_api_v1_activity_master_activities__activity_id__access_get"];
+        put?: never;
+        /** Grant Activity Access */
+        post: operations["grant_activity_access_api_v1_activity_master_activities__activity_id__access_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/access-type": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change Activity Access Type */
+        patch: operations["change_activity_access_type_api_v1_activity_master_activities__activity_id__access_type_patch"];
+        trace?: never;
+    };
+    "/api/v1/activity-master/activities/{activity_id}/access/{employee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Activity Access */
+        delete: operations["revoke_activity_access_api_v1_activity_master_activities__activity_id__access__employee_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1837,6 +2078,29 @@ export interface components {
             /** Is Active */
             is_active: boolean;
         };
+        /** ActivityAccessConfigOut */
+        ActivityAccessConfigOut: {
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
+            /** Authorized Count */
+            authorized_count: number;
+            /** Items */
+            items: components["schemas"]["AuthorizedEmployeeOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** ActivityCell */
         ActivityCell: {
             /** Project Code */
@@ -1909,6 +2173,11 @@ export interface components {
             is_active: boolean;
             /** Sort Order */
             sort_order: number;
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
             /**
              * Created At
              * Format: date-time
@@ -2413,6 +2682,16 @@ export interface components {
          * @enum {string}
          */
         AttendanceStatus: "present" | "absent" | "half_day" | "leave" | "holiday" | "weekend" | "comp_off";
+        /** AttendanceSummaryRequest */
+        AttendanceSummaryRequest: {
+            /** Leave Request Ids */
+            leave_request_ids?: string[];
+        };
+        /** AttendanceSummaryResponse */
+        AttendanceSummaryResponse: {
+            /** Items */
+            items: components["schemas"]["LeaveAttendanceSummaryOut"][];
+        };
         /** AttendanceUpdate */
         AttendanceUpdate: {
             status?: components["schemas"]["AttendanceStatus"] | null;
@@ -2464,6 +2743,26 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /**
+         * AuthorizedEmployeeOut
+         * @description One active grant on a RESTRICTED activity. Deliberately minimal — no
+         *     email / phone / department; the PM only needs to identify who can use it.
+         */
+        AuthorizedEmployeeOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Granted By */
+            granted_by: string | null;
+            /** Granted At */
+            granted_at: string | null;
         };
         /** CalendarEventCreate */
         CalendarEventCreate: {
@@ -2536,6 +2835,20 @@ export interface components {
             description?: string | null;
         };
         /**
+         * ChangeAccessTypeIn
+         * @description PATCH .../access-type. COMMON->RESTRICTED must carry at least one employee
+         *     (validated in the service, atomically with the type flip).
+         */
+        ChangeAccessTypeIn: {
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
+            /** Employee Ids */
+            employee_ids?: string[];
+        };
+        /**
          * ChangePasswordRequest
          * @description Self-service password change. Confirm-new is validated client-side.
          */
@@ -2582,6 +2895,8 @@ export interface components {
             pending: string;
             /** Benchmark Unit */
             benchmark_unit: string | null;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
         };
         /**
          * DayPart
@@ -3015,6 +3330,38 @@ export interface components {
             /** Page Size */
             page_size: number;
         };
+        /**
+         * GrantAccessIn
+         * @description POST .../access — bulk grant on an already-RESTRICTED activity.
+         */
+        GrantAccessIn: {
+            /** Employee Ids */
+            employee_ids: string[];
+        };
+        /**
+         * GrantResultOut
+         * @description Summary of a bulk grant / access-type change.
+         */
+        GrantResultOut: {
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /**
+             * Access Type
+             * @enum {string}
+             */
+            access_type: "COMMON" | "RESTRICTED";
+            /** Granted */
+            granted: number;
+            /** Reactivated */
+            reactivated: number;
+            /** Already Active */
+            already_active: number;
+            /** Authorized Count */
+            authorized_count: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -3074,6 +3421,25 @@ export interface components {
             description?: string | null;
             /** Is Active */
             is_active?: boolean | null;
+        };
+        /**
+         * LeaveAttendanceSummaryOut
+         * @description What attendance already exists across one leave request's dates.
+         *
+         *     Summary only — a single word the manager can read at a glance. CoreOps
+         *     attendance is maintained by hand and cancellation never writes to it; this
+         *     exists so the manager knows what they will need to review afterwards.
+         */
+        LeaveAttendanceSummaryOut: {
+            /**
+             * Leave Request Id
+             * Format: uuid
+             */
+            leave_request_id: string;
+            /** Summary */
+            summary: string;
+            /** Days Recorded */
+            days_recorded: number;
         };
         /** LeaveBalanceHistoryOut */
         LeaveBalanceHistoryOut: {
@@ -3248,7 +3614,7 @@ export interface components {
          * LeaveStatus
          * @enum {string}
          */
-        LeaveStatus: "pending" | "approved" | "rejected" | "cancelled";
+        LeaveStatus: "pending" | "approved" | "rejected" | "cancelled" | "cancellation_requested";
         /**
          * LeaveType
          * @enum {string}
@@ -3768,6 +4134,12 @@ export interface components {
             description?: string | null;
             /** @default planning */
             status: components["schemas"]["ProjectStatus"];
+            /**
+             * Scope Type
+             * @default NONE
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
             /** Start Date */
             start_date?: string | null;
             /** Planned Completion Date */
@@ -3863,6 +4235,25 @@ export interface components {
             /** Description */
             description?: string | null;
             status: components["schemas"]["ProjectStatus"];
+            /**
+             * Scope Type
+             * @default NONE
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
+            /** Estimated Tag Count */
+            estimated_tag_count?: number | null;
+            /** Tag Scope Status */
+            tag_scope_status?: ("PROVISIONAL" | "BASELINED") | null;
+            /**
+             * Tag Scope Revision
+             * @default 0
+             */
+            tag_scope_revision: number;
+            /** Tag Scope Updated At */
+            tag_scope_updated_at?: string | null;
+            /** Tag Scope Updated By */
+            tag_scope_updated_by?: string | null;
             /** Start Date */
             start_date?: string | null;
             /** Planned Completion Date */
@@ -3898,6 +4289,32 @@ export interface components {
          * @enum {string}
          */
         ProjectStatus: "planning" | "active" | "on_hold" | "completed" | "archived";
+        /**
+         * ProjectSummaryOut
+         * @description GET /projects/{id}/summary — what the Summary tab renders.
+         *
+         *     `tag_progress` is empty for a normal project, and for a tag-based project
+         *     with no estimate established yet: there is no capacity to measure against,
+         *     and inventing "0 / 0" would be a wrong summary rather than an empty one.
+         */
+        ProjectSummaryOut: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
+            /** Estimated Tag Count */
+            estimated_tag_count?: number | null;
+            /** Tag Scope Status */
+            tag_scope_status?: ("PROVISIONAL" | "BASELINED") | null;
+            /** Tag Progress */
+            tag_progress?: components["schemas"]["TagScopeProgressRow"][];
+        };
         /** ProjectUpdate */
         ProjectUpdate: {
             /** Code */
@@ -3915,6 +4332,8 @@ export interface components {
             /** Description */
             description?: string | null;
             status?: components["schemas"]["ProjectStatus"] | null;
+            /** Scope Type */
+            scope_type?: ("NONE" | "TAG_BASED") | null;
             /** Start Date */
             start_date?: string | null;
             /** Actual Completion Date */
@@ -4227,6 +4646,147 @@ export interface components {
             items?: components["schemas"]["SubmissionItemIn"][] | null;
         };
         /**
+         * TagScopeOut
+         * @description GET/PUT /projects/{id}/tag-scope — current scope plus its full history.
+         *
+         *     Carries no progress, no worked-tag count and no remaining figure; those
+         *     belong to the later progress phase.
+         */
+        TagScopeOut: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Scope Type
+             * @enum {string}
+             */
+            scope_type: "NONE" | "TAG_BASED";
+            /** Estimated Tag Count */
+            estimated_tag_count?: number | null;
+            /** Tag Scope Status */
+            tag_scope_status?: ("PROVISIONAL" | "BASELINED") | null;
+            /**
+             * Tag Scope Revision
+             * @default 0
+             */
+            tag_scope_revision: number;
+            /** Tag Scope Updated At */
+            tag_scope_updated_at?: string | null;
+            /** Tag Scope Updated By */
+            tag_scope_updated_by?: string | null;
+            /** Tag Scope Updated By Name */
+            tag_scope_updated_by_name?: string | null;
+            /** Revisions */
+            revisions?: components["schemas"]["TagScopeRevisionOut"][];
+        };
+        /**
+         * TagScopeProgressRow
+         * @description One tag-counted sub-activity's progress against the project's scope.
+         *
+         *     Every row carries the SAME estimated_tag_count: activities progress against
+         *     the project's tag universe independently, so the rows are not shares of a
+         *     pool and are not expected to sum to it.
+         *
+         *     Activity and Sub-Activity are separate fields, joined through
+         *     activity_master.parent_id — never one combined label, and never derived by
+         *     splitting the sub-activity's name. activity_* is nullable only for the
+         *     data-integrity case of a sub-activity with no parent row; the UI shows a
+         *     placeholder there rather than hiding the progress.
+         *
+         *     reported_tags / remaining_tags are whole tags and always present. A client
+         *     renders remaining_tags directly: it is never null, never negative, and needs
+         *     no arithmetic on the client to produce.
+         */
+        TagScopeProgressRow: {
+            /** Activity Id */
+            activity_id?: string | null;
+            /** Activity Name */
+            activity_name?: string | null;
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /** Sub Activity Name */
+            sub_activity_name: string;
+            /** Reported Tags */
+            reported_tags: number;
+            /** Estimated Tag Count */
+            estimated_tag_count: number;
+            /** Remaining Tags */
+            remaining_tags: number;
+        };
+        /**
+         * TagScopeRevisionOut
+         * @description One recorded scope change. Revision 1 carries null previous_* values.
+         */
+        TagScopeRevisionOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Revision */
+            revision: number;
+            /** Previous Estimated Tag Count */
+            previous_estimated_tag_count: number | null;
+            /** New Estimated Tag Count */
+            new_estimated_tag_count: number;
+            /** Previous Status */
+            previous_status: ("PROVISIONAL" | "BASELINED") | null;
+            /**
+             * New Status
+             * @enum {string}
+             */
+            new_status: "PROVISIONAL" | "BASELINED";
+            /** Reason */
+            reason: string;
+            /**
+             * Changed By
+             * Format: uuid
+             */
+            changed_by: string;
+            /**
+             * Changed By Name
+             * @default
+             */
+            changed_by_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * TagScopeUpdate
+         * @description PUT /projects/{id}/tag-scope — establish or revise the estimated scope.
+         *
+         *     The client supplies only what a human decided: how many tags, how settled
+         *     the number is, and why it changed. Everything else on the revision row
+         *     (revision number, previous_*, changed_by, created_at) is derived server-side
+         *     — see ``service.record_tag_scope_revision``.
+         */
+        TagScopeUpdate: {
+            /** Estimated Tag Count */
+            estimated_tag_count: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "PROVISIONAL" | "BASELINED";
+            /** Reason */
+            reason?: string | null;
+            /** Expected Revision */
+            expected_revision: number;
+        };
+        /**
          * TaskCompletionUpdate
          * @description Body for PATCH /work-reports/tasks/{task_id}/completion — the *only*
          *     way a TASK_BASED row's completion is changed once the parent report is
@@ -4313,6 +4873,8 @@ export interface components {
             pending: string;
             /** Benchmark Unit */
             benchmark_unit: string | null;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
         };
         /**
          * TeamComparisonRowOut
@@ -4495,6 +5057,100 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** WeeklyReportOut */
+        WeeklyReportOut: {
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Code */
+            project_code: string;
+            period: components["schemas"]["WeeklyReportPeriodOut"];
+            /** Rows */
+            rows?: components["schemas"]["WeeklyReportRow"][];
+            /**
+             * Row Count
+             * @default 0
+             */
+            row_count: number;
+        };
+        /**
+         * WeeklyReportPeriodOut
+         * @description The resolved Friday-Thursday cycle the rows belong to. Always echoed back
+         *     so the Head never has to guess what "Current Week" meant.
+         */
+        WeeklyReportPeriodOut: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "current" | "previous";
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+        };
+        /**
+         * WeeklyReportRow
+         * @description One reported activity line: employee + date + work period + activity.
+         *
+         *     Null is meaningful throughout and is never coerced to 0 or "": a null count
+         *     means that unit does not apply to this row, a null benchmark means the
+         *     activity has no target, and a null task_status means the row is not
+         *     task-mode work. The clients render those as "-", which is not the same
+         *     statement as a zero.
+         */
+        WeeklyReportRow: {
+            /**
+             * Report Date
+             * Format: date
+             */
+            report_date: string;
+            /**
+             * Work Period
+             * @enum {string}
+             */
+            work_period: "full_day" | "first_half" | "second_half" | "legacy_half_day";
+            /** Work Period Label */
+            work_period_label: string;
+            /** Employee Name */
+            employee_name: string;
+            /** Project Code */
+            project_code: string;
+            /** Activity Name */
+            activity_name?: string | null;
+            /** Sub Activity Name */
+            sub_activity_name?: string | null;
+            /** Benchmark */
+            benchmark?: number | null;
+            /** Benchmark Label */
+            benchmark_label?: string | null;
+            /** Tags */
+            tags?: number | null;
+            /** Docs */
+            docs?: number | null;
+            /** Bom */
+            bom?: number | null;
+            /** Spares */
+            spares?: number | null;
+            /** Pages */
+            pages?: number | null;
+            /** Records */
+            records?: number | null;
+            /** Task Status */
+            task_status?: string | null;
+            /** Task Status Label */
+            task_status_label?: string | null;
+            /** Remarks */
+            remarks?: string | null;
         };
         /**
          * WorkLocation
@@ -4755,6 +5411,8 @@ export interface components {
              * @default false
              */
             is_completed: boolean;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
             /** Work Item Id */
             work_item_id?: string | null;
             /** Maintenance Plant Id */
@@ -4838,10 +5496,16 @@ export interface components {
             benchmark_type_snapshot?: string | null;
             /** Relevant Count Field Snapshot */
             relevant_count_field_snapshot?: string | null;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
             /** Deficit */
             deficit?: string | null;
             /** Productivity Pct */
             productivity_pct?: string | null;
+            /** Benchmark Status */
+            benchmark_status?: string | null;
+            /** Excused Remaining */
+            excused_remaining?: string | null;
             /** Started Date */
             started_date?: string | null;
             /** Due Date */
@@ -5284,6 +5948,7 @@ export interface operations {
                 status?: components["schemas"]["EmployeeStatus"] | null;
                 department?: string | null;
                 manager_id?: string | null;
+                exclude_activity_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -5844,6 +6509,171 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_scope_api_v1_projects__project_id__tag_scope_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_tag_scope_api_v1_projects__project_id__tag_scope_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagScopeUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagScopeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_summary_api_v1_projects__project_id__summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSummaryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_weekly_report_api_v1_projects__project_id__weekly_report_get: {
+        parameters: {
+            query?: {
+                /** @description Friday-Thursday cycle: 'current' or 'previous'. */
+                cycle?: "current" | "previous";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeeklyReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_weekly_report_xlsx_api_v1_projects__project_id__weekly_report_xlsx_get: {
+        parameters: {
+            query?: {
+                /** @description Friday-Thursday cycle: 'current' or 'previous'. */
+                cycle?: "current" | "previous";
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -7226,6 +8056,39 @@ export interface operations {
             };
         };
     };
+    attendance_summary_api_v1_leave_requests_attendance_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttendanceSummaryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_leave_request_api_v1_leave_requests__req_id__get: {
         parameters: {
             query?: never;
@@ -7293,6 +8156,99 @@ export interface operations {
         };
     };
     cancel_leave_request_api_v1_leave_requests__req_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_leave_cancellation_api_v1_leave_requests__req_id__request_cancellation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_leave_cancellation_api_v1_leave_requests__req_id__approve_cancellation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_leave_cancellation_api_v1_leave_requests__req_id__reject_cancellation_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -8098,6 +9054,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubActivityFlatOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_activity_access_api_v1_activity_master_activities__activity_id__access_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityAccessConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_activity_access_api_v1_activity_master_activities__activity_id__access_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantAccessIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_activity_access_type_api_v1_activity_master_activities__activity_id__access_type_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeAccessTypeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_activity_access_api_v1_activity_master_activities__activity_id__access__employee_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                activity_id: string;
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */

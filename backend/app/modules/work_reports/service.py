@@ -33,7 +33,16 @@ from app.modules.activity_master.models import (
     ActivityMaster,
 )
 from app.modules.activity_master import access_service
-from app.modules.activity_master.service import compute_benchmark, compute_overdue
+from app.modules.activity_master.benchmark_exception import (
+    VALID_BENCHMARK_EXCEPTION_CODES,
+    is_eligible_row,
+    is_valid_exception,
+)
+from app.modules.activity_master.service import (
+    compute_benchmark,
+    compute_overdue,
+    scaled_target,
+)
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
@@ -375,14 +384,68 @@ def _team_ids(manager_employee_id: uuid.UUID):
     )
 
 
+def _assert_within_tag_scope(
+    db: Session, tasks, *, exclude_report_id: uuid.UUID | None
+) -> None:
+    """Refuse a report that would push a tag-counted sub-activity past its
+    project's estimated tag scope.
+
+    Grouped by (project, sub-activity) BEFORE comparing, because one report can
+    carry several rows for the same pairing (split across day parts, or simply
+    two lines). Checking each row on its own would let 2 x 400 through against a
+    500 remainder.
+
+    Applies only where there is a real ceiling: a TAG_BASED project with an
+    established estimate, and a sub-activity whose unit is tags. Everything else
+    is unaffected, which is what keeps normal projects and non-tag activities
+    behaving exactly as they do today.
+    """
+    from app.modules.projects import tag_progress
+
+    incoming: dict[tuple[uuid.UUID, uuid.UUID], int] = {}
+    for task in tasks:
+        sub_id = getattr(task, "sub_activity_id", None)
+        if sub_id is None:
+            continue
+        count = getattr(task, "tags_count", None) or 0
+        if count <= 0:
+            continue
+        key = (task.project_id, sub_id)
+        incoming[key] = incoming.get(key, 0) + count
+
+    for (project_id, sub_id), count in incoming.items():
+        project = db.get(Project, project_id)
+        sub = db.get(ActivityMaster, sub_id)
+        remaining = tag_progress.remaining_tags(
+            db, project, sub, exclude_report_id=exclude_report_id
+        )
+        if remaining is None or count <= remaining:
+            continue
+        capacity = tag_progress.project_tag_capacity(project)
+        raise AppError(
+            "validation_error",
+            f"\"{sub.name}\" has {remaining} of {capacity} tags left on this "
+            f"project. You entered {count}.",
+            422,
+        )
+
+
 def _validate_tasks(
-    db: Session, author_id: uuid.UUID, tasks
+    db: Session,
+    author_id: uuid.UUID,
+    tasks,
+    *,
+    exclude_report_id: uuid.UUID | None = None,
 ) -> tuple[int, list[dict]]:
     """Validate project (active) + membership; return (total_minutes, snapshots).
 
     Each snapshot dict carries the project_name, project_code, and
     project_job_code_code frozen at validation time so they can be written
     directly into the task row for historical accuracy.
+
+    `exclude_report_id` is the report being rewritten, if any — it is left out
+    of the tag-scope consumption total so an edit does not count its own
+    previous numbers against itself.
     """
     # Restricted-activity enforcement (migration 0061): reject any row selecting
     # a RESTRICTED activity this employee is not authorized for, in a bulk check
@@ -421,6 +484,20 @@ def _validate_tasks(
         activity_type = getattr(task, "activity_type", None)
         is_task_based = False
         benchmark_period_days: int | None = None
+        # Structured benchmark exception (migration 0063). An unknown code is a
+        # client error and is rejected outright; a known code on a row whose
+        # benchmark configuration cannot carry one is silently CLEARED rather
+        # than rejected — same spirit as the count fields, where an irrelevant
+        # unit is simply not read. The numbers-based half of the rule (positive
+        # target, actual below it) needs the frozen per-period target, which
+        # only exists at submit, so it is enforced authoritatively there
+        # (_apply_benchmarks). Nothing that reaches the benchmark export
+        # bypasses that check.
+        exception_code = getattr(task, "benchmark_exception_code", None) or None
+        if exception_code is not None and exception_code not in VALID_BENCHMARK_EXCEPTION_CODES:
+            raise AppError(
+                "validation_error", "Unknown benchmark exception code.", 422
+            )
         if getattr(task, "sub_activity_id", None) is not None:
             sub = db.get(ActivityMaster, task.sub_activity_id)
             if (
@@ -444,6 +521,16 @@ def _validate_tasks(
             # a quantity does not stop it being a deadline-bearing task).
             is_task_based = sub.benchmark_type in TASK_BENCHMARK_TYPES
             benchmark_period_days = sub.benchmark_period_days
+            # Clear an exception the selected sub-activity cannot carry: a task
+            # mode, or a counted unit outside the eligible set (Phase 1: TAGS).
+            if exception_code is not None and not is_eligible_row(
+                sub.benchmark_type, sub.relevant_count_field
+            ):
+                exception_code = None
+        else:
+            # No Activity Master selection at all — nothing to benchmark, so
+            # nothing to except.
+            exception_code = None
         # Optional Maintenance Plant selection — independent of the project's
         # own assigned plant; which plant the employee worked at that day.
         maintenance_plant_code: str | None = None
@@ -470,6 +557,7 @@ def _validate_tasks(
             "activity_type": activity_type,
             "is_task_based": is_task_based,
             "benchmark_period_days": benchmark_period_days,
+            "benchmark_exception_code": exception_code,
             "maintenance_plant_code": maintenance_plant_code,
             "maintenance_plant_description": maintenance_plant_description,
             "planning_plant_code": planning_plant_code,
@@ -480,6 +568,8 @@ def _validate_tasks(
         raise AppError(
             "validation_error", "Total minutes cannot exceed 1440 for a single day.", 422
         )
+    # Last, and across the whole task list rather than per row — see the helper.
+    _assert_within_tag_scope(db, tasks, exclude_report_id=exclude_report_id)
     return total, snapshots
 
 
@@ -1369,6 +1459,9 @@ def _add_task_row(
             sub_activity_id=task.sub_activity_id,
             sub_activity_name=snap["sub_activity_name"],
             activity_name=snap["activity_name"],
+            # Already validated/cleared for static eligibility by _validate_tasks;
+            # re-checked against the frozen target at submit.
+            benchmark_exception_code=snap["benchmark_exception_code"],
             started_date=life["started_date"],
             due_date=life["due_date"],
             is_completed=life["is_completed"],
@@ -1619,7 +1712,11 @@ def update_work_report(
             tasks=None,
         )
         all_tasks = [t for spec in norm["periods"] for t in spec["tasks"]]
-        total, snapshots = _validate_tasks(db, me.id, all_tasks)
+        # This report's own existing rows are about to be replaced, so they must
+        # not count against the tag scope the new rows are checked against.
+        total, snapshots = _validate_tasks(
+            db, me.id, all_tasks, exclude_report_id=report.id
+        )
         old_completed_dates: dict[uuid.UUID, date] = {
             row.sub_activity_id: row.completed_date
             for row in db.execute(
@@ -1670,7 +1767,9 @@ def update_work_report(
         # period mirroring the header.
         _sync_legacy_full_day_period(db, report)
     elif "tasks" in fields and data.tasks is not None:
-        total, snapshots = _validate_tasks(db, me.id, data.tasks)
+        total, snapshots = _validate_tasks(
+            db, me.id, data.tasks, exclude_report_id=report.id
+        )
         # Preserve completed_date across a full task-row replace: re-saving a
         # report (e.g. for an unrelated field) shouldn't reset an
         # already-completed TASK_BASED row's completion date to "today"
@@ -1840,17 +1939,27 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         select(WorkReportTask).where(WorkReportTask.report_id == report.id)
     ).scalars().all()
     for row in rows:
-        if row.sub_activity_id is None:
-            continue
-        sub = db.get(ActivityMaster, row.sub_activity_id)
+        sub = (
+            db.get(ActivityMaster, row.sub_activity_id)
+            if row.sub_activity_id is not None
+            else None
+        )
         if sub is None:
+            # No benchmark to evaluate — and therefore nothing an exception
+            # could except (a row whose sub-activity has since been removed).
+            if row.benchmark_exception_code is not None:
+                row.benchmark_exception_code = None
+                db.add(row)
             continue
         fraction = fraction_by_period.get(row.period_id)
         if fraction is None:
             fraction = Decimal("0.5") if legacy_half else Decimal("1.0")
         base_value = sub.benchmark_value
+        # Whole units only: half of a 35-tag benchmark is frozen as 18, not
+        # 17.5 (see activity_master.service.scaled_target). The base and the
+        # fraction are recorded beside it, so the derivation stays inspectable.
         benchmark_value = (
-            Decimal(base_value) * fraction if base_value is not None else None
+            scaled_target(base_value, fraction) if base_value is not None else None
         )
         row.benchmark_type_snapshot = sub.benchmark_type
         row.benchmark_value_snapshot = benchmark_value
@@ -1862,6 +1971,21 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         if sub.relevant_count_field:
             column = _COUNT_FIELD_COLUMNS.get(sub.relevant_count_field)
             actual_value = getattr(row, column) if column else None
+        # Authoritative exception verdict (migration 0063), taken here because
+        # this is where the effective per-period target is frozen. An exception
+        # that no longer holds — the actual reached or passed the target, the
+        # target vanished, the sub-activity was reconfigured — is CLEARED, so a
+        # stale 100% can never survive an edit-and-resubmit. deficit and
+        # productivity_pct stay the REAL figures: the exception is an evaluation
+        # rule for the benchmark report, not a rewrite of the row's own numbers.
+        if row.benchmark_exception_code is not None and not is_valid_exception(
+            row.benchmark_exception_code,
+            benchmark_type=sub.benchmark_type,
+            count_field=sub.relevant_count_field,
+            target=benchmark_value,
+            actual=actual_value,
+        ):
+            row.benchmark_exception_code = None
         deficit, productivity_pct = compute_benchmark(
             sub.benchmark_type, benchmark_value, actual_value
         )

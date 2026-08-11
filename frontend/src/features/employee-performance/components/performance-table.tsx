@@ -2,20 +2,15 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarDays, Check, ChevronDown, ChevronRight, Download } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { toast } from "sonner";
 
+import { CycleSelect } from "@/components/data/cycle-select";
 import { Pagination } from "@/components/data/pagination";
 import { SearchInput } from "@/components/data/search-input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -32,7 +27,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { weekStartISO } from "@/features/dashboard/utils";
 import { formatInt } from "@/lib/format";
 import { useUrlState } from "@/lib/use-url-state";
 
@@ -56,7 +50,6 @@ function needsReview(pending: string): boolean {
   return Number(pending) > 0;
 }
 
-const MONTHS_SHORT = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 
 /**
  * Status is derived solely from the employee's Pending value: zero pending →
@@ -78,25 +71,6 @@ function StatusBadge({ pending }: { pending: string }) {
       On Track
     </Badge>
   );
-}
-
-/**
- * Compact date range for a benchmark cycle — Friday → Thursday, anchored to IST
- * via `weekStartISO()`, `weekOffset` whole weeks back from the current cycle.
- * Computed from the same one-line rule as the backend
- * (start = currentStart - 7 * offset, end = start + 6), so the label always
- * names the window the API will actually return.
- *
- * Handles a cycle that spans two months ("JUN 26 – JUL 2").
- */
-function cycleRangeLabel(weekOffset: WeekOffset): string {
-  const [y, m, d] = weekStartISO().split("-").map(Number);
-  const fri = new Date(y, m - 1, d - 7 * weekOffset);
-  const thu = new Date(y, m - 1, d - 7 * weekOffset + 6);
-  if (fri.getMonth() === thu.getMonth()) {
-    return `${MONTHS_SHORT[fri.getMonth()]} ${fri.getDate()}–${thu.getDate()}`;
-  }
-  return `${MONTHS_SHORT[fri.getMonth()]} ${fri.getDate()} – ${MONTHS_SHORT[thu.getMonth()]} ${thu.getDate()}`;
 }
 
 /**
@@ -271,40 +245,13 @@ export function PerformanceTable() {
         <div ref={scrollRef}>
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
             <div className="flex items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label="Select benchmark cycle"
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-input bg-card px-3 text-sm shadow-sm transition-colors hover:bg-secondary"
-                  >
-                    <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span className="text-muted-foreground">
-                      {WEEK_OFFSET_LABEL[weekOffset]}
-                    </span>
-                    <span className="font-semibold tabular text-foreground">
-                      {cycleRangeLabel(weekOffset)}
-                    </span>
-                    <span className="text-xs text-muted-foreground">Fri–Thu</span>
-                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  {WEEK_OFFSETS.map((option) => (
-                    <DropdownMenuItem key={option} onSelect={() => onCycleChange(option)}>
-                      <div className="flex-1">
-                        <div className="font-medium">{WEEK_OFFSET_LABEL[option]}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {cycleRangeLabel(option)} · Fri–Thu
-                        </div>
-                      </div>
-                      {weekOffset === option && (
-                        <Check className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-                      )}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <CycleSelect
+                value={weekOffset}
+                options={WEEK_OFFSETS}
+                labels={WEEK_OFFSET_LABEL}
+                onChange={(offset) => onCycleChange(offset as WeekOffset)}
+                ariaLabel="Select benchmark cycle"
+              />
               <Button onClick={onExport} disabled={exporting}>
                 <Download className="h-4 w-4" />
                 {exporting ? "Exporting…" : "Export Full Cycle Report"}

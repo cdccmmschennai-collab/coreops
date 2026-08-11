@@ -63,6 +63,7 @@ import {
   useUpdateWorkReport,
   useWorkReportList,
 } from "../hooks";
+import { scaledTarget } from "../benchmark-target";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_PART_FRACTION,
@@ -111,6 +112,24 @@ const NO_APPROVAL_ACTIVITIES = new Set([
 export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
+  // The form is taller than the viewport, so an error raised at the top is off
+  // screen by the time the user presses Save at the bottom. Every path that
+  // raises one goes through showFormError, and the effect below brings the
+  // banner into view — so a new error site added later scrolls for free.
+  const formErrorRef = React.useRef<HTMLDivElement>(null);
+  // Bumped on every raise. Keying the effect on the message alone would not
+  // re-scroll when the SAME error repeats (pressing Save twice on an over-cap
+  // count sets an identical string, and React skips the state change).
+  const [formErrorSeq, setFormErrorSeq] = React.useState(0);
+  const showFormError = React.useCallback((message: string) => {
+    setFormError(message);
+    setFormErrorSeq((n) => n + 1);
+  }, []);
+
+  React.useEffect(() => {
+    if (!formError) return;
+    formErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [formError, formErrorSeq]);
 
   const { employeeId } = useAuth();
   const { byId: empById } = useEmployeeOptions();
@@ -286,7 +305,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     // add a second row the split rules forbid). Make the user resolve it first
     // rather than silently deleting their request.
     if (next === "split_day" && pendingRequest) {
-      setFormError(
+      showFormError(
         "Resolve or dismiss the pending additional-activity request before switching to Split Day.",
       );
       return;
@@ -373,12 +392,12 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       const key = countField ? countFieldName(countField) : null;
       if (key && Number(t[key] || 0) <= 0) {
         form.setError(`tasks.${i}.${key}`, {
-          message: `Required — ${sub!.name} has a benchmark target`,
+          message: `Required - ${sub!.name} has a benchmark target`,
         });
         ok = false;
       }
     });
-    if (!ok) setFormError("Fill in the required benchmark count(s) highlighted below.");
+    if (!ok) showFormError("Fill in the required benchmark count(s) highlighted below.");
     return ok;
   }
 
@@ -442,7 +461,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         remove(values.tasks.length - 1);
       }
     } catch (err) {
-      setFormError(
+      showFormError(
         err instanceof AppError ? err.message : "Could not send your request.",
       );
     }
@@ -725,7 +744,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
           return;
         }
       }
-      setFormError(
+      showFormError(
         error instanceof AppError ? error.message : "Something went wrong. Please try again.",
       );
     }
@@ -782,7 +801,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
         ? (sub!.relevant_count_field as RelevantCountField)
         : null;
       if (unit && sub?.benchmark_value != null) {
-        effectiveTarget += sub.benchmark_value * DAY_PART_FRACTION[t.day_part];
+        // Each half's target is rounded up to a whole unit before summing,
+        // exactly as the backend freezes it per period — so this preview can
+        // never disagree with the saved snapshot by a half unit.
+        effectiveTarget += scaledTarget(sub.benchmark_value, DAY_PART_FRACTION[t.day_part]) ?? 0;
         actualTotal += Number(t[countFieldName(unit)] || 0);
       }
     }
@@ -848,8 +870,11 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       <CardContent className="pt-6">
         {formError && (
           <div
+            ref={formErrorRef}
             role="alert"
-            className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            // scroll-mt keeps the banner clear of the sticky app header when the
+            // browser lands on it.
+            className="mb-4 scroll-mt-24 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
             {formError}
           </div>

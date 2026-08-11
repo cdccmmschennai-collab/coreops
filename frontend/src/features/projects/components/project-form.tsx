@@ -7,6 +7,16 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Form,
   FormControl,
   FormField,
@@ -25,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useMaintenancePlantOptions, usePlanningPlants } from "@/features/plant-master/hooks";
 import { AppError } from "@/lib/api-client";
@@ -48,6 +59,13 @@ interface ProjectFormProps {
 export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps) {
   const router = useRouter();
   const [formError, setFormError] = React.useState<string | null>(null);
+  // Asked before Tag based is switched off on a project that is stored as
+  // TAG_BASED. Turning it off changes how the project is reported on (no tag
+  // cap, no scoped progress), so it should not happen on a stray click - but it
+  // deletes nothing, so the dialog is a confirmation, not a destructive warning.
+  // Only for `edit`: a project being created has no scope to switch off.
+  const [confirmScopeOff, setConfirmScopeOff] = React.useState(false);
+  const scopeWasTagBased = mode === "edit" && defaultValues.scope_type === "TAG_BASED";
 
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(projectFormSchema),
@@ -339,6 +357,67 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                       <Input type="date" {...field} />
                     </FormControl>
                     <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Project Scope — classification only, no tag count asked for
+                  here (that lives on the Tag Scope tab). A two-state setting, so
+                  a switch rather than a dropdown: it reads at a glance and sits
+                  in one grid cell beside the date above. */}
+              <FormField
+                control={form.control}
+                name="scope_type"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel htmlFor="scope_type">Project Scope</FormLabel>
+                    <div className="flex h-9 items-center justify-between gap-3 rounded-md border border-input bg-card px-3">
+                      <span className="text-sm">Tag based</span>
+                      <FormControl>
+                        <Switch
+                          id="scope_type"
+                          checked={field.value === "TAG_BASED"}
+                          onCheckedChange={(on) => {
+                            // Turning it ON is unremarkable - it restores the
+                            // project's preserved scope. Turning it OFF on a
+                            // project that is stored as tag-based is confirmed
+                            // first; the switch does not move until then.
+                            if (!on && scopeWasTagBased) {
+                              setConfirmScopeOff(true);
+                              return;
+                            }
+                            field.onChange(on ? "TAG_BASED" : "NONE");
+                          }}
+                          aria-label="Tag based project"
+                        />
+                      </FormControl>
+                    </div>
+                    <FormMessage />
+
+                    <AlertDialog open={confirmScopeOff} onOpenChange={setConfirmScopeOff}>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Disable Tag Scope?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This project will return to normal project reporting.
+                            Existing tag-scope history will be preserved, but tag
+                            limits and tag-based progress tracking will no longer
+                            apply.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => {
+                              field.onChange("NONE");
+                              setConfirmScopeOff(false);
+                            }}
+                          >
+                            Disable Tag Scope
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
                   </FormItem>
                 )}
               />

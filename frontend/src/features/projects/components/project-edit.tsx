@@ -9,11 +9,18 @@ import { AppError } from "@/lib/api-client";
 
 import { ProjectForm } from "./project-form";
 import { useProject } from "../hooks";
+import { useProjectAuthority } from "../hooks/use-project-authority";
+import { canEditProject } from "../permissions";
+import { resolveScopeType } from "../scope";
 import type { ProjectFormValues } from "../schemas";
 
 export function ProjectEdit({ id }: { id: string }) {
   const query = useProject(id);
   const project = query.data;
+  // Same resolved authority the Edit button uses, so the button and the page it
+  // links to can never disagree. Hiding the button is not the guard — this is
+  // (and the API rejects an unauthorized PATCH regardless).
+  const viewer = useProjectAuthority(project);
 
   if (query.isLoading) {
     return (
@@ -35,6 +42,15 @@ export function ProjectEdit({ id }: { id: string }) {
     );
   }
 
+  if (!canEditProject(viewer)) {
+    return (
+      <ErrorState
+        title="Not allowed"
+        message="Only project managers and this project's Head can edit it."
+      />
+    );
+  }
+
   const defaults: ProjectFormValues = {
     code: project.code,
     name: project.name,
@@ -44,6 +60,7 @@ export function ProjectEdit({ id }: { id: string }) {
     client: project.client ?? "",
     description: project.description ?? "",
     status: project.status,
+    scope_type: resolveScopeType(project.scope_type),
     start_date: project.start_date ?? "",
     planned_completion_date: project.planned_completion_date ?? "",
     actual_completion_date: project.actual_completion_date ?? "",

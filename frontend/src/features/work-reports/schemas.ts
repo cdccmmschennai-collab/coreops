@@ -228,6 +228,12 @@ const taskSchema = z
     // (shown read-only from the API, set via the dedicated completion-toggle
     // endpoint — see useToggleTaskCompletion).
     is_completed: z.boolean().default(false),
+    // Structured benchmark exception (see benchmark-exception.ts). "" = none,
+    // which is the default for every row; the only other value is
+    // NO_FURTHER_AVAILABLE_WORK. Held as a code rather than a boolean so more
+    // exception reasons can be added without another field, and it is NEVER
+    // derived from the remark text.
+    benchmark_exception_code: z.string().optional().default(""),
     started_date: z.string().optional(),
     due_date: z.string().optional(),
     completed_date: z.string().optional(),
@@ -420,6 +426,7 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   pages_count:    "0",
   records_count:  "0",
   is_completed:   false,
+  benchmark_exception_code: "",
   started_date:   undefined,
   due_date:       undefined,
   completed_date: undefined,
@@ -489,6 +496,9 @@ function toTaskBody(t: WorkReportFormValues["tasks"][number]) {
     pages_count:   toCount(t.pages_count),
     records_count: toCount(t.records_count),
     is_completed:  t.is_completed,
+    // null (not "") when unset — the column is nullable and the server treats
+    // an unknown code as a client error, so an empty string must never be sent.
+    benchmark_exception_code: orNull(t.benchmark_exception_code),
     work_item_id:  orNull(t.work_item_id),
     maintenance_plant_id: orNull(t.maintenance_plant_id),
   };
@@ -628,6 +638,10 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             pages_count:   String(t.pages_count ?? 0),
             records_count: String(t.records_count ?? 0),
             is_completed:   t.is_completed ?? false,
+            // Restores the checkbox when editing a draft or a reopened report.
+            // The server returns what it currently HOLDS (it clears an
+            // exception that no longer holds), so a stale tick never comes back.
+            benchmark_exception_code: t.benchmark_exception_code ?? "",
             started_date:   t.started_date ?? undefined,
             due_date:       t.due_date ?? undefined,
             completed_date: t.completed_date ?? undefined,
