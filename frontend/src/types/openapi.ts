@@ -2895,6 +2895,8 @@ export interface components {
             pending: string;
             /** Benchmark Unit */
             benchmark_unit: string | null;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
         };
         /**
          * DayPart
@@ -4871,6 +4873,8 @@ export interface components {
             pending: string;
             /** Benchmark Unit */
             benchmark_unit: string | null;
+            /** Benchmark Exception Code */
+            benchmark_exception_code?: string | null;
         };
         /**
          * TeamComparisonRowOut
@@ -5498,6 +5502,10 @@ export interface components {
             deficit?: string | null;
             /** Productivity Pct */
             productivity_pct?: string | null;
+            /** Benchmark Status */
+            benchmark_status?: string | null;
+            /** Excused Remaining */
+            excused_remaining?: string | null;
             /** Started Date */
             started_date?: string | null;
             /** Due Date */

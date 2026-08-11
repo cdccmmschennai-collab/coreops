@@ -21,6 +21,11 @@ export interface DailyBenchmarkRow {
   target: string;
   pending: string;
   benchmark_unit: BenchmarkUnit | null;
+  // Validated structured benchmark exception, or null (the usual case). When
+  // set, this day is ACHIEVED - EXCEPTION: the server has already zeroed
+  // `pending`, and the nominal remainder (target - actual) is excused, so the
+  // row must never be listed as In Progress / Overdue or show "N Left".
+  benchmark_exception_code?: string | null;
 }
 
 export interface OverdueActivity {
@@ -86,6 +91,7 @@ export interface TeamBacklogRow {
   target: string;
   pending: string;
   benchmark_unit: BenchmarkUnit | null;
+  benchmark_exception_code?: string | null;
 }
 
 export interface TeamOverdueRow {

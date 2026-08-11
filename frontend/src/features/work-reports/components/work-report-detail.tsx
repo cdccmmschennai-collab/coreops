@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { KeyRound, Pencil, Send, Trash2, Unlock } from "lucide-react";
+import { Check, KeyRound, Pencil, Send, Trash2, Unlock } from "lucide-react";
 import { toast } from "sonner";
 
 import { ErrorState } from "@/components/feedback/error-state";
@@ -105,6 +105,13 @@ function benchmarkActualCount(t: WorkReportTask): number | "—" {
   if (!t.relevant_count_field_snapshot) return "—";
   return countFor(t, t.relevant_count_field_snapshot);
 }
+
+/** Explanatory line under the "Benchmark Achieved - Exception applied" block.
+ *  Phase 1 has exactly one exception code (NO_FURTHER_AVAILABLE_WORK) and no
+ *  free-text reason is stored, so the wording is fixed rather than invented per
+ *  report. */
+const EXCEPTION_DETAIL_NOTE =
+  "No additional tags were available for processing. The remaining benchmark scope has been excused.";
 
 /** A second activity the author has requested but the PM hasn't decided yet.
  *  Rendered alongside the logged activities on the report info page so a
@@ -508,21 +515,53 @@ export function WorkReportDetail({ id }: { id: string }) {
                         rows or sub-activities with no benchmark tracked. */}
                     {t.benchmark_type_snapshot &&
                       QUANTITY_BENCHMARK_TYPES.has(t.benchmark_type_snapshot) && (
-                      <div className="mt-4 grid grid-cols-4 gap-x-6 gap-y-3 border-t border-border pt-3">
-                        <Stat label="Target" value={formatInt(t.benchmark_value_snapshot)} />
-                        <Stat
-                          label={
-                            t.relevant_count_field_snapshot
-                              ? `Actual (${COUNT_FIELD_LABEL[t.relevant_count_field_snapshot] ?? t.relevant_count_field_snapshot})`
-                              : "Actual"
-                          }
-                          value={benchmarkActualCount(t)}
-                        />
-                        <Stat label="Deficit" value={formatInt(t.deficit)} />
-                        <Stat
-                          label="Productivity %"
-                          value={t.productivity_pct != null ? `${t.productivity_pct}%` : "—"}
-                        />
+                      <div className="mt-4 border-t border-border pt-3">
+                        {/* Achieved through a benchmark exception: the remainder
+                            is excused, not owed, so it is never labelled a
+                            Deficit. actual / productivity stay the real figures. */}
+                        {t.benchmark_status === "achieved_exception" && (
+                          <div className="mb-3 rounded-md border border-success/30 bg-success/10 px-3 py-2">
+                            <p className="flex items-center gap-1.5 text-sm font-medium text-success">
+                              <Check className="h-4 w-4 shrink-0" />
+                              Benchmark Achieved - Exception applied
+                            </p>
+                            <p className="mt-0.5 text-xs text-muted-foreground">
+                              {EXCEPTION_DETAIL_NOTE}
+                            </p>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-4 gap-x-6 gap-y-3">
+                          <Stat label="Target" value={formatInt(t.benchmark_value_snapshot)} />
+                          <Stat
+                            label={
+                              t.relevant_count_field_snapshot
+                                ? `Actual (${COUNT_FIELD_LABEL[t.relevant_count_field_snapshot] ?? t.relevant_count_field_snapshot})`
+                                : "Actual"
+                            }
+                            value={benchmarkActualCount(t)}
+                          />
+                          {t.benchmark_status === "achieved_exception" ? (
+                            <Stat
+                              label="Excused Remaining"
+                              value={formatInt(t.excused_remaining)}
+                            />
+                          ) : (
+                            <Stat label="Deficit" value={formatInt(t.deficit)} />
+                          )}
+                          <Stat
+                            label={
+                              t.benchmark_status === "achieved_exception"
+                                ? "Actual Productivity"
+                                : "Productivity %"
+                            }
+                            value={t.productivity_pct != null ? `${t.productivity_pct}%` : "—"}
+                          />
+                        </div>
+                        {t.benchmark_status === "achieved_exception" && (
+                          <div className="mt-3">
+                            <Stat label="Benchmark Status" value="Achieved - Exception" />
+                          </div>
+                        )}
                       </div>
                     )}
                     {/* TASK_BASED tracking — started_date/due_date are set as

@@ -195,7 +195,12 @@ def get_daily_benchmark_ledger(
             ActivityMaster.id.label("sub_activity_id"),
             ActivityMaster.name.label("sub_activity_name"),
             ActivityMaster.benchmark_value,
+            ActivityMaster.benchmark_type,
             ActivityMaster.relevant_count_field,
+            # Structured benchmark exception (migration 0063) — the SAME column
+            # the benchmark export reads. Carried here so the live alert views
+            # reach the identical verdict as the workbook instead of their own.
+            WorkReportTask.benchmark_exception_code,
             WorkReportTask.project_name,
             WorkReportTask.project_code,
             actual_expr.label("actual"),
@@ -238,6 +243,7 @@ def get_daily_benchmark_ledger(
             "activity_id": r.activity_id,
             "sub_activity_name": r.sub_activity_name,
             "benchmark_value": r.benchmark_value,
+            "benchmark_type": r.benchmark_type,
             "relevant_count_field": r.relevant_count_field,
         }
         dkey = (r.employee_id, r.report_date, r.sub_activity_id)
@@ -260,10 +266,19 @@ def get_daily_benchmark_ledger(
                 # Also per-report, not per-task: every detail row of this date
                 # repeats it, so a filtered row still reads on its own.
                 "day_remarks": r.day_remarks,
+                # Structured benchmark exception. Set below if ANY task row
+                # folded into this (employee, date, sub_activity) group carries
+                # one — the group shares one effective target, so one row
+                # reporting "no further work was available" describes it. Same
+                # grouping rule the period ledger already uses for the export;
+                # re-validated against the summed actual before it is published.
+                "exception_code": None,
             },
         )
         bucket["actual"] += Decimal(r.actual or 0)
         bucket["hours_minutes"] += int(r.hours_minutes or 0)
+        if bucket["exception_code"] is None and r.benchmark_exception_code:
+            bucket["exception_code"] = r.benchmark_exception_code
         if r.period_id is not None and r.work_fraction is not None:
             bucket["fractions"][r.period_id] = Decimal(r.work_fraction)
         else:
@@ -302,7 +317,25 @@ def get_daily_benchmark_ledger(
         actual = bucket["actual"]
         project_name = ", ".join(bucket["projects"]) if bucket["projects"] else None
         project_code = ", ".join(bucket["project_codes"]) if bucket["project_codes"] else None
-        pending = max(Decimal("0"), target - actual)
+        # Same verdict as the export (benchmark_exception.is_valid_exception),
+        # evaluated against this row's own effective target and summed actual:
+        # an exception survives only while it still describes reality. When it
+        # does, the row has NO remaining benchmark obligation — pending is 0 and
+        # the row drops out of every "still pending" view. actual and target are
+        # left untouched, so productivity keeps reporting the real figures.
+        exception_code = bucket["exception_code"]
+        if exception_code is not None and not is_valid_exception(
+            exception_code,
+            benchmark_type=m["benchmark_type"],
+            count_field=m["relevant_count_field"],
+            target=target,
+            actual=actual,
+        ):
+            exception_code = None
+        pending = (
+            Decimal("0") if exception_code is not None
+            else max(Decimal("0"), target - actual)
+        )
         out.append({
             "employee_id": employee_id,
             "date": d,
@@ -318,6 +351,10 @@ def get_daily_benchmark_ledger(
             "target": target,
             "actual": actual,
             "pending": pending,
+            # Validated exception, or None. Consumers use it to render
+            # "Achieved - Exception" and to treat the excused remainder
+            # (target - actual) as no longer outstanding.
+            "benchmark_exception_code": exception_code,
         })
     out.sort(key=lambda r: (r["date"], r["sub_activity_name"]))
     return out

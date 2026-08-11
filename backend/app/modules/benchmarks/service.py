@@ -46,6 +46,9 @@ def _daily_row(r: dict) -> dict:
         "target": r["target"],
         "pending": r["pending"],
         "benchmark_unit": r["benchmark_unit"],
+        # Validated structured exception (or None): this day's benchmark is
+        # ACHIEVED even though actual < target, and its remainder is excused.
+        "benchmark_exception_code": r.get("benchmark_exception_code"),
     }
 
 
@@ -115,7 +118,13 @@ def _reconcile_effective_pending(daily: list[dict]) -> dict[tuple, Decimal]:
         for row in ordered:
             target = Decimal(str(row["target"]))
             actual = Decimal(str(row["actual"]))
-            deficit = max(Decimal("0"), target - actual)
+            # An exception-achieved day has no deficit to reconcile: its
+            # remainder is excused, not outstanding. It contributes no surplus
+            # either — the real actual never reached the target.
+            excepted = row.get("benchmark_exception_code") is not None
+            deficit = (
+                Decimal("0") if excepted else max(Decimal("0"), target - actual)
+            )
             surplus = max(Decimal("0"), actual - target)
             key = (row["employee_id"], row["date"], row["sub_activity_id"])
             effective[key] = deficit
@@ -315,7 +324,17 @@ def get_employee_overview(
 
     days_worked = _days_worked_this_week(db, employee_id, today=today)
     pending = sum(1 for r in daily if r["pending"] > 0)
-    completed = sum(1 for r in daily if r["target"] > 0 and r["actual"] >= r["target"])
+    # Met by real output, or satisfied through a validated benchmark exception —
+    # both are closed benchmarks with nothing left to do.
+    completed = sum(
+        1
+        for r in daily
+        if r["target"] > 0
+        and (
+            r["actual"] >= r["target"]
+            or r.get("benchmark_exception_code") is not None
+        )
+    )
 
     return {
         "employee_id": employee_id,

@@ -129,6 +129,46 @@ def effective_actual(target, actual, *, has_exception: bool):
     return actual if target_d is None else target_d
 
 
+# The single vocabulary for "how did this benchmark end up?". Derived on read
+# from numbers that already exist (target, actual, the stored exception code) —
+# no column, no enum type, no migration.
+BENCHMARK_STATUS_ACHIEVED = "achieved"
+BENCHMARK_STATUS_ACHIEVED_EXCEPTION = "achieved_exception"
+BENCHMARK_STATUS_IN_PROGRESS = "in_progress"
+
+
+def benchmark_outcome(target, actual, *, has_exception: bool) -> str | None:
+    """The one benchmark verdict every surface reads — Excel, the daily report
+    detail, the homepage list.
+
+    Precedence is fixed: real output first, exception second. A row that reached
+    its target is plainly ACHIEVED even if an exception was also recorded, so an
+    exception can never downgrade genuine work. Returns None when there is no
+    numeric benchmark to judge (no positive target)."""
+    target_d = _to_decimal(target)
+    if target_d is None or target_d <= 0:
+        return None
+    actual_d = _to_decimal(actual) or Decimal("0")
+    if actual_d >= target_d:
+        return BENCHMARK_STATUS_ACHIEVED
+    if has_exception:
+        return BENCHMARK_STATUS_ACHIEVED_EXCEPTION
+    return BENCHMARK_STATUS_IN_PROGRESS
+
+
+def excused_remaining(target, actual, *, has_exception: bool):
+    """The nominal scope the exception writes off: target - actual, never
+    negative, and None whenever no exception applies. This is deliberately NOT
+    called a deficit — nothing is owed."""
+    if not has_exception:
+        return None
+    target_d = _to_decimal(target)
+    if target_d is None:
+        return None
+    actual_d = _to_decimal(actual) or Decimal("0")
+    return max(Decimal("0"), target_d - actual_d)
+
+
 def export_exception_remark(count_field: str | None) -> str | None:
     """The system remark for an exception row's exported REMARKS cell, or None
     for a unit that carries no remark wording (cannot happen for an exception

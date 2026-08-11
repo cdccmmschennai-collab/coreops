@@ -392,7 +392,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
       const key = countField ? countFieldName(countField) : null;
       if (key && Number(t[key] || 0) <= 0) {
         form.setError(`tasks.${i}.${key}`, {
-          message: `Required — ${sub!.name} has a benchmark target`,
+          message: `Required - ${sub!.name} has a benchmark target`,
         });
         ok = false;
       }

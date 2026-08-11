@@ -11095,6 +11095,17 @@
               }
             ],
             "title": "Benchmark Unit"
+          },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
           }
         },
         "type": "object",
@@ -16554,6 +16565,17 @@
               }
             ],
             "title": "Benchmark Unit"
+          },
+          "benchmark_exception_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Exception Code"
           }
         },
         "type": "object",
@@ -18331,6 +18353,28 @@
               }
             ],
             "title": "Productivity Pct"
+          },
+          "benchmark_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Status"
+          },
+          "excused_remaining": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excused Remaining"
           },
           "started_date": {
             "anyOf": [

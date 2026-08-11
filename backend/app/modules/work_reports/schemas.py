@@ -13,8 +13,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.activity_master.benchmark_exception import (
+    BENCHMARK_STATUS_ACHIEVED_EXCEPTION,
+    benchmark_outcome,
+    excused_remaining,
+)
+from app.modules.activity_master.models import COUNT_FIELD_BY_UNIT
 from app.modules.work_reports.models import (
     DayPart,
     DayStatus,
@@ -140,6 +146,13 @@ class WorkReportTaskOut(BaseModel):
     benchmark_exception_code: str | None = None
     deficit: Decimal | None = None
     productivity_pct: Decimal | None = None
+    # Derived on read from the three fields above + the row's own count (see the
+    # validator below) — no column, no migration. `benchmark_status` is the same
+    # verdict the benchmark export applies; `excused_remaining` is the nominal
+    # scope an exception writes off, and is None unless one applies. deficit and
+    # productivity_pct deliberately keep reporting the REAL figures.
+    benchmark_status: str | None = None
+    excused_remaining: Decimal | None = None
     # TASK_BASED tracking: started_date/due_date are computed server-side the
     # moment a TASK_BASED sub-activity is attached (see _validate_tasks);
     # is_completed/completed_date are set via the completion-toggle endpoint.
@@ -186,6 +199,27 @@ class WorkReportTaskOut(BaseModel):
     maintenance_plant_description: str | None = None
     planning_plant_code: str | None = None
     planning_plant_description: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_benchmark_outcome(self) -> "WorkReportTaskOut":
+        """Fill benchmark_status / excused_remaining from what the row already
+        holds, so every client reads one verdict instead of re-deriving its own.
+        The actual is the count field the frozen snapshot names — the same value
+        _apply_benchmarks measured against the target."""
+        target = self.benchmark_value_snapshot
+        column = COUNT_FIELD_BY_UNIT.get(self.relevant_count_field_snapshot or "")
+        actual = getattr(self, column, None) if column else None
+        self.benchmark_status = benchmark_outcome(
+            target, actual, has_exception=self.benchmark_exception_code is not None
+        )
+        self.excused_remaining = excused_remaining(
+            target,
+            actual,
+            has_exception=(
+                self.benchmark_status == BENCHMARK_STATUS_ACHIEVED_EXCEPTION
+            ),
+        )
+        return self
 
 
 class WorkReportPeriodIn(BaseModel):
