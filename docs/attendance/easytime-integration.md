@@ -272,7 +272,7 @@ GET    /api/v1/biometric/sync-batches       (?provider= &status= &limit= &offset
 
 ---
 
-## 6a. Database (migration `0063_biometric_punch_ingestion`)
+## 6a. Database (migration `0066_biometric_punch_ingestion`)
 
 Three additive tables. No existing table, column, enum, index or constraint was
 altered.

@@ -1,4 +1,4 @@
-"""Biometric ingestion ORM models (migration 0063).
+"""Biometric ingestion ORM models (migration 0066).
 
 Three additive tables. Nothing here touches `attendance_records` or any other
 existing table - the only link to the rest of CoreOps is a nullable

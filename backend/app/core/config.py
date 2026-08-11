@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # environment.
     REPORT_DAY_PARTS_ENABLED: bool = False
 
-    # --- EasyTime biometric ingestion (Phase 2, migration 0063) -------------
+    # --- EasyTime biometric ingestion (Phase 2, migration 0066) -------------
     # Master switch for the office-connector ingestion endpoint
     # (POST {prefix}/integrations/easytime/punches/batch). Off by default: while
     # false the route is mounted but answers 404 to everyone, so no biometric

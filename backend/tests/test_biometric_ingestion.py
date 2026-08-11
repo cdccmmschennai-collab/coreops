@@ -1,4 +1,4 @@
-"""EasyTime raw-punch ingestion (Phase 2, migration 0063).
+"""EasyTime raw-punch ingestion (Phase 2, migration 0066).
 
 Covers connector authentication, per-record validation, idempotent insertion,
 sync-batch bookkeeping, employee mapping, and the guarantee that ingestion
@@ -1050,7 +1050,26 @@ def test_local_env_may_run_tokenless_for_development():
     assert cfg.ENV == "local"
 
 
-def test_ingestion_defaults_to_off():
+def test_ingestion_defaults_to_off(monkeypatch):
+    """The SHIPPED defaults, on a machine that configures nothing.
+
+    The sibling tests above pass every value they assert on explicitly, so the
+    ambient environment cannot reach them. This one asserts what a field falls
+    back to when nothing sets it, which makes it the only test here that a
+    developer's own EasyTime setup can break: `_env_file=None` keeps
+    backend/.env out, but pydantic-settings still reads the real process
+    environment, and a working dev container exports
+    EASYTIME_INGESTION_ENABLED=true plus a real connector token. Clear exactly
+    the three variables under assertion for the duration of this test, so the
+    values below come from config.py and nowhere else.
+    """
+    for var in (
+        "EASYTIME_INGESTION_ENABLED",
+        "EASYTIME_CONNECTOR_TOKEN",
+        "ATTENDANCE_TIMEZONE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
     cfg = _settings(ENV="local")
     assert cfg.EASYTIME_INGESTION_ENABLED is False
     assert cfg.EASYTIME_CONNECTOR_TOKEN == ""

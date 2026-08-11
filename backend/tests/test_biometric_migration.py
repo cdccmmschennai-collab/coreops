@@ -1,4 +1,4 @@
-"""Migration 0063 safety - schema shape, reversibility, and non-interference.
+"""Migration 0066 safety - schema shape, reversibility, and non-interference.
 
 Follows the house pattern for migration suites (see test_split_day_migration.py):
 assert the real schema in the live test database, then rehearse
@@ -11,10 +11,13 @@ import pytest
 from sqlalchemy import text
 
 _VERSIONS = pathlib.Path(__file__).resolve().parents[1] / "alembic" / "versions"
-_MIG_PATH = _VERSIONS / "0063_biometric_punch_ingestion.py"
+_MIG_PATH = _VERSIONS / "0066_biometric_punch_ingestion.py"
 
-PREVIOUS_HEAD = "0062_leave_cancellation_status"
-THIS_REVISION = "0063_biometric_punch_ingestion"
+# The biometric revision was rebased off the abandoned 0063 branch onto main's
+# head after the 0063/0064/0065 merge, so the parent it must chain onto is main's
+# tag-scope revision, not the 0062 it was originally authored against.
+PREVIOUS_HEAD = "0065_project_tag_scope"
+THIS_REVISION = "0066_biometric_punch_ingestion"
 
 NEW_TABLES = (
     "biometric_punches",
@@ -24,7 +27,7 @@ NEW_TABLES = (
 
 
 def _load_migration():
-    spec = importlib.util.spec_from_file_location("mig0063", _MIG_PATH)
+    spec = importlib.util.spec_from_file_location("mig0066", _MIG_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -230,7 +233,7 @@ def test_status_check_rejects_an_unknown_status(db):
 # ── non-interference with the existing schema ───────────────────────────────
 
 def test_existing_attendance_schema_is_untouched(db):
-    """0063 is additive: attendance_records keeps exactly the shape it had."""
+    """0066 is additive: attendance_records keeps exactly the shape it had."""
     cols = _columns(db, "attendance_records")
     assert set(cols) == {
         "id",
@@ -257,7 +260,7 @@ def test_no_biometric_column_leaked_into_existing_tables(db):
 # ── reversibility ───────────────────────────────────────────────────────────
 
 def test_downgrade_and_upgrade_rehearsal(db):
-    """Walk the schema down to 0062 and back to head against the live test
+    """Walk the schema down to the previous head and back to head against the live test
     database. Defined LAST in this file so it runs last (pytest keeps definition
     order); `_clean_state` truncates per test, so no data depends on the tables
     being recreated."""

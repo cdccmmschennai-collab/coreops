@@ -1,4 +1,4 @@
-"""0063 biometric punch ingestion (EasyTime Phase 2)
+"""0066 biometric punch ingestion (EasyTime Phase 2)
 
 Purely additive: three NEW tables and nothing else. No existing table, column,
 enum, index or constraint is altered or dropped. In particular
@@ -44,9 +44,18 @@ stays unresolved (docs/attendance/punch-state-mapping.md).
 Downgrade drops only these three new tables, in FK-safe order. It reads and
 modifies no pre-existing row.
 
-Revision ID: 0063_biometric_punch_ingestion
-Revises: 0062_leave_cancellation_status
-Create Date: 2026-07-30
+Originally authored on the biometric feature branch as
+`0063_biometric_punch_ingestion`, chained off 0062. That revision was never
+deployed anywhere, and meanwhile main grew its own 0063 (benchmark exception
+code), 0064 and 0065 off the same 0062 parent - two heads. Because the old
+revision existed only on this branch and in no `alembic_version` table, it is
+replaced outright rather than joined with a merge revision: this file re-chains
+the identical schema onto the current main head, 0065_project_tag_scope. The
+DDL below is unchanged from the original.
+
+Revision ID: 0066_biometric_punch_ingestion
+Revises: 0065_project_tag_scope
+Create Date: 2026-08-11
 """
 from typing import Sequence, Union
 
@@ -54,8 +63,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0063_biometric_punch_ingestion"
-down_revision: Union[str, None] = "0062_leave_cancellation_status"
+revision: str = "0066_biometric_punch_ingestion"
+down_revision: Union[str, None] = "0065_project_tag_scope"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

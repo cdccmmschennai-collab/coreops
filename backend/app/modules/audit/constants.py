@@ -63,7 +63,7 @@ class AuditAction:
     ACTIVITY_ACCESS_GRANTED = "activity.access.grant"
     ACTIVITY_ACCESS_REVOKED = "activity.access.revoke"
 
-    # --- biometric ingestion (Tier B, migration 0063) ---
+    # --- biometric ingestion (Tier B, migration 0066) ---
     # Deliberately event-level, NOT per punch: a successful batch of 500 punches
     # emits zero audit rows, only the structured ingestion log line. Audit is
     # reserved for security-relevant or operator-actionable events.
