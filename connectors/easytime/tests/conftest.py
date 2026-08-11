@@ -16,7 +16,12 @@ CONNECTOR_DIR = Path(__file__).resolve().parents[1]
 if str(CONNECTOR_DIR) not in sys.path:
     sys.path.insert(0, str(CONNECTOR_DIR))
 
-from config import EasyTimeConfig  # noqa: E402
+from config import (  # noqa: E402
+    ConnectorConfig,
+    CoreOpsConfig,
+    EasyTimeConfig,
+    SyncConfig,
+)
 
 
 @pytest.fixture()
@@ -64,3 +69,65 @@ def transaction(
         "upload_time": "2026-07-28 09:30:04",
         "source": "1",
     }
+
+
+def live_transaction(txn_id: int, emp_code: str = "61", punch_time: str = "2026-07-29 10:12:10") -> dict:
+    """A record shaped like what the LIVE 10.2.2 probe actually returned.
+
+    The difference from ``transaction`` matters: every observed punch had state
+    ``"0"`` with ``punch_state_display: null``, and the employee code was a bare
+    number, not a CoreOps ``EMP***`` code. Phase 3 tests assert against this
+    shape so a change that only works on the tidy fixture cannot pass.
+    """
+    return {
+        "id": txn_id,
+        "emp_code": emp_code,
+        "first_name": "Should",
+        "last_name": "BeStripped",
+        "punch_time": punch_time,
+        "punch_state": "0",
+        "punch_state_display": None,
+        "verify_type": "1",
+        "terminal_sn": "CDC-DEV-01",
+        "terminal_alias": "F22/ID",
+        "upload_time": "2026-07-30 07:02:00",  # uploaded the FOLLOWING morning
+        "source": "1",
+    }
+
+
+# -- Phase 3 fixtures --------------------------------------------------------
+# The token is long enough for redaction.contains_secret and distinctive enough
+# that a leak into a log file or a URL is unambiguous in an assertion.
+TEST_CONNECTOR_TOKEN = "test-connector-token-NEVER-LOG-THIS-0123456789"
+TEST_CONNECTOR_ID = "admin-pc-test"
+
+
+@pytest.fixture()
+def coreops_config() -> CoreOpsConfig:
+    return CoreOpsConfig(
+        api_url="https://coreops.example.test/api/v1",
+        connector_token=TEST_CONNECTOR_TOKEN,
+        connector_id=TEST_CONNECTOR_ID,
+        timeout_seconds=1.0,
+        retries=3,
+        batch_size=2,  # small, so batching is exercised by two or three punches
+    )
+
+
+@pytest.fixture()
+def sync_config(tmp_path) -> SyncConfig:
+    """Every path lands under tmp_path - no test ever touches ProgramData."""
+    return SyncConfig(
+        lookback_minutes=15,
+        reconciliation_days=7,
+        first_run_lookback_hours=24,
+        max_range_days=31,
+        state_path=tmp_path / "data" / "state.db",
+        log_dir=tmp_path / "logs",
+        lock_path=tmp_path / "data" / "sync.lock",
+    )
+
+
+@pytest.fixture()
+def connector_config(config, coreops_config, sync_config) -> ConnectorConfig:
+    return ConnectorConfig(easytime=config, coreops=coreops_config, sync=sync_config)

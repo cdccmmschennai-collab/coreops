@@ -60,3 +60,8 @@ connectors/easytime/logs/
 connectors/easytime/probe-output/
 connectors/easytime/.venv/
 connectors/easytime/dist/
+# Phase 3 local sync state: state.db, sync.lock. Never committed - a cursor is
+# specific to one PC, and committing one would make another machine think it
+# had already synced a window it has never seen.
+connectors/easytime/data/
+connectors/easytime/*.lock
