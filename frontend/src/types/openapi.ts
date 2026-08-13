@@ -2034,6 +2034,160 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/easytime/punches/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Punch Batch
+         * @description Ingest one batch of raw punches. Idempotent.
+         *
+         *     200 (not 201) because a retry of an identical payload is a normal, expected
+         *     outcome that creates nothing: the connector re-fetches an overlap window
+         *     every run and relies on this endpoint absorbing what it has already sent.
+         */
+        post: operations["ingest_punch_batch_api_v1_integrations_easytime_punches_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Employee Mappings */
+        get: operations["list_employee_mappings_api_v1_biometric_mappings_get"];
+        put?: never;
+        /** Create Employee Mapping */
+        post: operations["create_employee_mapping_api_v1_biometric_mappings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/external-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List External Codes
+         * @description Every DISTINCT external employee code seen in the raw punch log, with
+         *     its punch count, seen-window and current mapping.
+         *
+         *     Read-only, and it proposes nothing: no mapping is created here, no employee
+         *     is suggested, and nothing about a stored punch changes.
+         */
+        get: operations["list_external_codes_api_v1_biometric_external_codes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/daily-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Daily Summary
+         * @description First IN / last OUT per mapped employee per attendance day (Asia/Kolkata).
+         *
+         *     NOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies
+         *     no punch direction in this deployment, so these are the earliest and latest
+         *     punch of the day after re-scan collapsing - see `summary.py`. Nothing is
+         *     written, no session or duration is computed, and `attendance_records` remains
+         *     the official source.
+         *
+         *     Unlike the rest of this router this is NOT project_manager-only: an employee
+         *     must be able to see their own calendar. Scoping mirrors the attendance module
+         *     exactly - a PM sees everyone, anyone else only themselves.
+         */
+        get: operations["list_daily_summary_api_v1_biometric_daily_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/mappings/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Employee Mappings Bulk
+         * @description Apply a reviewed list of mappings in one go (initial setup).
+         *
+         *     200, not 201: the outcome is per item - some are created, some are already
+         *     correct, some are skipped - so there is no single resource to point at.
+         *     Every pair must be supplied explicitly by the caller.
+         */
+        post: operations["create_employee_mappings_bulk_api_v1_biometric_mappings_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/mappings/{mapping_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Deactivate Employee Mapping */
+        delete: operations["deactivate_employee_mapping_api_v1_biometric_mappings__mapping_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/sync-batches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Sync Batches */
+        get: operations["list_sync_batches_api_v1_biometric_sync_batches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2764,6 +2918,66 @@ export interface components {
             /** Granted At */
             granted_at: string | null;
         };
+        /**
+         * BulkMappingCreate
+         * @description An explicitly reviewed bulk import.
+         *
+         *     The client sends the EXACT pairs a project manager confirmed. The server
+         *     never derives a pair of its own - if it did, "bulk import" would become "the
+         *     machine decided", which is the one thing this whole module is built to avoid.
+         */
+        BulkMappingCreate: {
+            /** Provider */
+            provider: string;
+            /** Items */
+            items: components["schemas"]["BulkMappingItem"][];
+            /**
+             * Allow Remap
+             * @default false
+             */
+            allow_remap: boolean;
+        };
+        /** BulkMappingItem */
+        BulkMappingItem: {
+            /** External Employee Code */
+            external_employee_code: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+        };
+        /** BulkMappingItemResult */
+        BulkMappingItemResult: {
+            /** External Employee Code */
+            external_employee_code: string;
+            /** Status */
+            status: string;
+            /** Reason */
+            reason?: string | null;
+            /** Employee Id */
+            employee_id?: string | null;
+            /** Mapping Id */
+            mapping_id?: string | null;
+        };
+        /**
+         * BulkMappingResult
+         * @description Per-item outcome plus totals. `mapped + unchanged + skipped == requested`.
+         */
+        BulkMappingResult: {
+            /** Provider */
+            provider: string;
+            /** Requested */
+            requested: number;
+            /** Mapped */
+            mapped: number;
+            /** Unchanged */
+            unchanged: number;
+            /** Skipped */
+            skipped: number;
+            /** Items */
+            items: components["schemas"]["BulkMappingItemResult"][];
+        };
         /** CalendarEventCreate */
         CalendarEventCreate: {
             /**
@@ -2897,6 +3111,83 @@ export interface components {
             benchmark_unit: string | null;
             /** Benchmark Exception Code */
             benchmark_exception_code?: string | null;
+        };
+        /**
+         * DailySummaryOut
+         * @description One employee, one attendance day: the outer boundary of their punches.
+         *
+         *     `first_in` / `last_out` are the earliest and latest punch of the day after
+         *     re-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does
+         *     not provide (see `summary.py`). They are deliberately not named
+         *     check_in/check_out: this is observation, and `attendance_records` remains the
+         *     official source.
+         *
+         *     `last_out` is null when only one punch survives collapsing. One sighting
+         *     cannot be both an arrival and a departure, and an OUT is never invented.
+         */
+        DailySummaryOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code?: string | null;
+            /** Employee Name */
+            employee_name?: string | null;
+            /**
+             * Summary Date
+             * Format: date
+             */
+            summary_date: string;
+            /** First In */
+            first_in?: string | null;
+            /** Last Out */
+            last_out?: string | null;
+            /**
+             * Punch Count
+             * @default 0
+             */
+            punch_count: number;
+            /**
+             * Kept Count
+             * @default 0
+             */
+            kept_count: number;
+            /** Punch Times */
+            punch_times?: string[];
+            /** External Employee Codes */
+            external_employee_codes?: string[];
+        };
+        /** DailySummaryPage */
+        DailySummaryPage: {
+            /** Items */
+            items: components["schemas"]["DailySummaryOut"][];
+            /** Total */
+            total: number;
+            /** Provider */
+            provider: string;
+            /**
+             * Date From
+             * Format: date
+             */
+            date_from: string;
+            /**
+             * Date To
+             * Format: date
+             */
+            date_to: string;
+            /**
+             * Derivation
+             * @default anchor_earliest_latest
+             */
+            derivation: string;
+            /**
+             * Punch State Available
+             * @default false
+             */
+            punch_state_available: boolean;
+            schedule?: components["schemas"]["SummarySchedule"] | null;
         };
         /**
          * DayPart
@@ -3139,6 +3430,66 @@ export interface components {
             /** @default active */
             status: components["schemas"]["EmployeeStatus"];
         };
+        /** EmployeeMappingCreate */
+        EmployeeMappingCreate: {
+            /** Provider */
+            provider: string;
+            /** External Employee Code */
+            external_employee_code: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+        };
+        /** EmployeeMappingOut */
+        EmployeeMappingOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Provider */
+            provider: string;
+            /** External Employee Code */
+            external_employee_code: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code?: string | null;
+            /** Employee Name */
+            employee_name?: string | null;
+            /** Is Active */
+            is_active: boolean;
+            /** Verified At */
+            verified_at?: string | null;
+            /** Verified By User Id */
+            verified_by_user_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** EmployeeMappingPage */
+        EmployeeMappingPage: {
+            /** Items */
+            items: components["schemas"]["EmployeeMappingOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
         /** EmployeeOut */
         EmployeeOut: {
             /**
@@ -3329,6 +3680,74 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
+        };
+        /**
+         * ExternalCodeOut
+         * @description One DISTINCT external employee code seen in biometric_punches.
+         *
+         *     Punch counts and the first/last-seen window come from the raw punch table
+         *     and are read-only: this view never touches a punch row.
+         *
+         *     There is NO suggested employee. The only employee named here is one an
+         *     active mapping row already points at; a code with no mapping reports no
+         *     employee at all, and the PM picks one explicitly.
+         */
+        ExternalCodeOut: {
+            /** Provider */
+            provider: string;
+            /** External Employee Code */
+            external_employee_code: string;
+            /** Punch Count */
+            punch_count: number;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Status */
+            status: string;
+            /** Mapping Id */
+            mapping_id?: string | null;
+            /** Employee Id */
+            employee_id?: string | null;
+            /** Employee Code */
+            employee_code?: string | null;
+            /** Employee Name */
+            employee_name?: string | null;
+            /** Verified At */
+            verified_at?: string | null;
+            /**
+             * Attributed Punch Count
+             * @default 0
+             */
+            attributed_punch_count: number;
+            /**
+             * Resolves By Exact Code
+             * @default false
+             */
+            resolves_by_exact_code: boolean;
+        };
+        /** ExternalCodePage */
+        ExternalCodePage: {
+            /** Items */
+            items: components["schemas"]["ExternalCodeOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total Codes */
+            total_codes: number;
+            /** Mapped Codes */
+            mapped_codes: number;
+            /** Unmapped Codes */
+            unmapped_codes: number;
         };
         /**
          * GrantAccessIn
@@ -4342,6 +4761,81 @@ export interface components {
             planned_completion_date?: string | null;
         };
         /**
+         * PunchBatchIn
+         * @description One connector POST: a window of punches plus the batch identity.
+         */
+        PunchBatchIn: {
+            /** Provider */
+            provider: string;
+            /** Connector Id */
+            connector_id: string;
+            /** Batch Key */
+            batch_key?: string | null;
+            /** Source From Time */
+            source_from_time?: string | null;
+            /** Source To Time */
+            source_to_time?: string | null;
+            /** Punches */
+            punches: components["schemas"]["PunchIn"][];
+        };
+        /**
+         * PunchBatchResult
+         * @description Deterministic ingestion counters.
+         *
+         *     Invariant: ``inserted + duplicates + invalid == received``.
+         *
+         *     ``unmapped`` is NOT part of that sum - it counts how many of the newly
+         *     INSERTED rows carry ``employee_id = NULL``. An unmapped punch is stored, it
+         *     is simply not attributable to a CoreOps employee yet.
+         */
+        PunchBatchResult: {
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            /** Received */
+            received: number;
+            /** Inserted */
+            inserted: number;
+            /** Duplicates */
+            duplicates: number;
+            /** Unmapped */
+            unmapped: number;
+            /** Invalid */
+            invalid: number;
+            /** Status */
+            status: string;
+        };
+        /**
+         * PunchIn
+         * @description One normalized punch as pushed by the office-side connector.
+         */
+        PunchIn: {
+            /** External Transaction Id */
+            external_transaction_id: string;
+            /** Employee Code */
+            employee_code: string;
+            /** Punch Time */
+            punch_time: string;
+            /** Raw Punch State */
+            raw_punch_state?: string | null;
+            /** Punch State Display */
+            punch_state_display?: string | null;
+            /** Terminal Alias */
+            terminal_alias?: string | null;
+            /** Terminal Serial Number */
+            terminal_serial_number?: string | null;
+            /** Verify Type */
+            verify_type?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Upload Time */
+            upload_time?: string | null;
+            /** Raw Payload */
+            raw_payload?: Record<string, never> | null;
+        };
+        /**
          * ReportMode
          * @description How the report's day is divided (migration 0060). full_day = one
          *     Full-Day period; split_day = a First-Half + a Second-Half period. Always
@@ -4644,6 +5138,78 @@ export interface components {
             notes?: string | null;
             /** Items */
             items?: components["schemas"]["SubmissionItemIn"][] | null;
+        };
+        /**
+         * SummarySchedule
+         * @description The employee's contracted office hours - CoreOps' own data, not biometric.
+         *
+         *     Carried on the page rather than per day because it is a property of the
+         *     employee's office, constant across the range, and it must still be available
+         *     for a day that has NO punches at all (where there is no item to hang it on).
+         */
+        SummarySchedule: {
+            /** Office Name */
+            office_name?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+            /** Shift Start */
+            shift_start?: string | null;
+            /** Shift End */
+            shift_end?: string | null;
+            /** Break Minutes */
+            break_minutes?: number | null;
+        };
+        /** SyncBatchOut */
+        SyncBatchOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Provider */
+            provider: string;
+            /** Connector Id */
+            connector_id: string;
+            /** Batch Key */
+            batch_key: string;
+            /** Source From Time */
+            source_from_time?: string | null;
+            /** Source To Time */
+            source_to_time?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Records Received */
+            records_received: number;
+            /** Records Inserted */
+            records_inserted: number;
+            /** Records Duplicates */
+            records_duplicates: number;
+            /** Records Unmapped */
+            records_unmapped: number;
+            /** Records Invalid */
+            records_invalid: number;
+            /** Status */
+            status: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Message */
+            error_message?: string | null;
+        };
+        /** SyncBatchPage */
+        SyncBatchPage: {
+            /** Items */
+            items: components["schemas"]["SyncBatchOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /**
          * TagScopeOut
@@ -10549,6 +11115,275 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MaintenancePlantOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_punch_batch_api_v1_integrations_easytime_punches_batch_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-coreops-connector-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PunchBatchIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PunchBatchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_employee_mappings_api_v1_biometric_mappings_get: {
+        parameters: {
+            query?: {
+                provider?: string | null;
+                is_active?: boolean | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeMappingPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_employee_mapping_api_v1_biometric_mappings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmployeeMappingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeMappingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_external_codes_api_v1_biometric_external_codes_get: {
+        parameters: {
+            query?: {
+                provider?: string;
+                status?: string | null;
+                q?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalCodePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_daily_summary_api_v1_biometric_daily_summary_get: {
+        parameters: {
+            query: {
+                provider?: string;
+                employee_id?: string | null;
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailySummaryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_employee_mappings_bulk_api_v1_biometric_mappings_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkMappingCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkMappingResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deactivate_employee_mapping_api_v1_biometric_mappings__mapping_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mapping_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmployeeMappingOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_sync_batches_api_v1_biometric_sync_batches_get: {
+        parameters: {
+            query?: {
+                provider?: string | null;
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncBatchPage"];
                 };
             };
             /** @description Validation Error */

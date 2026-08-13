@@ -12,13 +12,15 @@ Phase 1 connector DTO `NormalizedPunch` calls the state field `punch_state`, so
 both spellings are accepted via AliasChoices and the connector needs no change.
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.biometric.constants import (
+    DERIVATION_ANCHOR,
     MAX_BATCH_KEY_LEN,
     MAX_BATCH_SIZE,
+    MAX_BULK_MAPPING_ITEMS,
     MAX_CONNECTOR_ID_LEN,
     MAX_EMPLOYEE_CODE_LEN,
     MAX_EXTERNAL_ID_LEN,
@@ -152,6 +154,171 @@ class EmployeeMappingPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ── Phase 5: external-code operations view + bulk mapping ───────────────────
+
+class ExternalCodeOut(BaseModel):
+    """One DISTINCT external employee code seen in biometric_punches.
+
+    Punch counts and the first/last-seen window come from the raw punch table
+    and are read-only: this view never touches a punch row.
+
+    There is NO suggested employee. The only employee named here is one an
+    active mapping row already points at; a code with no mapping reports no
+    employee at all, and the PM picks one explicitly.
+    """
+
+    provider: str
+    external_employee_code: str
+    punch_count: int
+    first_seen: datetime
+    last_seen: datetime
+
+    status: str  # mapped | unmapped
+
+    mapping_id: uuid.UUID | None = None
+    employee_id: uuid.UUID | None = None
+    employee_code: str | None = None
+    employee_name: str | None = None
+    verified_at: datetime | None = None
+
+    # How many of this code's stored punches already carry an employee_id.
+    # Punches are immutable, so mapping a code does NOT change this for history
+    # - later phases attribute historical punches through the mapping table.
+    attributed_punch_count: int = 0
+
+    # True when this code would resolve at ingestion time by the exact
+    # employee_code fallback even with no mapping row (see
+    # BIOMETRIC_EXACT_CODE_MATCH_ENABLED). Shown so "unmapped" is never
+    # misleading.
+    resolves_by_exact_code: bool = False
+
+
+class ExternalCodePage(BaseModel):
+    items: list[ExternalCodeOut]
+    total: int
+    limit: int
+    offset: int
+    # Totals for the WHOLE provider, not the current page - the PM needs to see
+    # "12 of 46 mapped" while looking at page 2.
+    total_codes: int
+    mapped_codes: int
+    unmapped_codes: int
+
+
+class BulkMappingItem(BaseModel):
+    external_employee_code: str = Field(min_length=1, max_length=MAX_EMPLOYEE_CODE_LEN)
+    employee_id: uuid.UUID
+
+
+class BulkMappingCreate(BaseModel):
+    """An explicitly reviewed bulk import.
+
+    The client sends the EXACT pairs a project manager confirmed. The server
+    never derives a pair of its own - if it did, "bulk import" would become "the
+    machine decided", which is the one thing this whole module is built to avoid.
+    """
+
+    provider: str = Field(max_length=30)
+    items: list[BulkMappingItem] = Field(min_length=1, max_length=MAX_BULK_MAPPING_ITEMS)
+    # Off by default: a bulk import may not silently re-point a code that
+    # already maps to a DIFFERENT employee. Repointing stays a deliberate,
+    # one-at-a-time act unless the caller opts in.
+    allow_remap: bool = False
+
+    @field_validator("provider")
+    @classmethod
+    def _supported_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SUPPORTED_PROVIDERS:
+            raise ValueError(
+                f"Unsupported provider; expected one of {sorted(SUPPORTED_PROVIDERS)}."
+            )
+        return normalized
+
+
+class BulkMappingItemResult(BaseModel):
+    external_employee_code: str
+    status: str  # mapped | unchanged | skipped
+    reason: str | None = None
+    employee_id: uuid.UUID | None = None
+    mapping_id: uuid.UUID | None = None
+
+
+class BulkMappingResult(BaseModel):
+    """Per-item outcome plus totals. `mapped + unchanged + skipped == requested`."""
+
+    provider: str
+    requested: int
+    mapped: int
+    unchanged: int
+    skipped: int
+    items: list[BulkMappingItemResult]
+
+
+# ── Phase 6: daily biometric summary (read-only, shadow) ────────────────────
+
+class DailySummaryOut(BaseModel):
+    """One employee, one attendance day: the outer boundary of their punches.
+
+    `first_in` / `last_out` are the earliest and latest punch of the day after
+    re-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does
+    not provide (see `summary.py`). They are deliberately not named
+    check_in/check_out: this is observation, and `attendance_records` remains the
+    official source.
+
+    `last_out` is null when only one punch survives collapsing. One sighting
+    cannot be both an arrival and a departure, and an OUT is never invented.
+    """
+
+    employee_id: uuid.UUID
+    employee_code: str | None = None
+    employee_name: str | None = None
+    # Attendance day in ATTENDANCE_TIMEZONE (Asia/Kolkata), not UTC.
+    summary_date: date
+    first_in: datetime | None = None
+    last_out: datetime | None = None
+    # Debugging: raw punches for the day, and how many survived collapsing.
+    punch_count: int = 0
+    kept_count: int = 0
+    # The surviving punches the boundary was taken FROM, so a human reviewer can
+    # check the derivation instead of trusting it. Times only - never raw_payload.
+    punch_times: list[datetime] = Field(default_factory=list)
+    external_employee_codes: list[str] = Field(default_factory=list)
+
+
+class SummarySchedule(BaseModel):
+    """The employee's contracted office hours - CoreOps' own data, not biometric.
+
+    Carried on the page rather than per day because it is a property of the
+    employee's office, constant across the range, and it must still be available
+    for a day that has NO punches at all (where there is no item to hang it on).
+    """
+
+    office_name: str | None = None
+    timezone: str | None = None
+    shift_start: time | None = None
+    shift_end: time | None = None
+    break_minutes: int | None = None
+
+
+class DailySummaryPage(BaseModel):
+    items: list[DailySummaryOut]
+    total: int
+    # Echoed back so a caller can tell what was actually summarized.
+    provider: str
+    date_from: date
+    date_to: date
+    # How the boundary was derived. A constant today; it exists so that the day
+    # real punch states arrive, consumers can see the meaning changed instead of
+    # silently reinterpreting stored history.
+    derivation: str = DERIVATION_ANCHOR
+    # False while EasyTime reports no usable punch direction.
+    punch_state_available: bool = False
+    # Present only when exactly one employee is in scope, and only when that
+    # employee is assigned to an office. Null is normal, not an error.
+    schedule: SummarySchedule | None = None
 
 
 class SyncBatchOut(BaseModel):

@@ -95,8 +95,10 @@ place only - the reconciliation service in Phase 8.
 Phase 2   punches land in biometric_punches. Nothing else changes.
 Phase 3   pure session engine, unit-tested, wired to nothing.
 Phase 4   sessions + day summaries computed in SHADOW. attendance_records untouched.
-Phase 5   read-only UI behind BIOMETRIC_UI_ENABLED.
-Phase 6   permission workflow (Head approves, PM fallback).
+Phase 5   PM-only employee mapping UI. No flag; no punch is ever rewritten.
+Phase 6   read-only daily summary: first/last punch per day on the calendar.
+          SHADOW - attendance_records untouched. No session, no duration.
+Phase 7   permission workflow (Head approves, PM fallback).
 Phase 7   regularization + official duty, as separate workflows.
 Phase 8   reconciliation writes the final daily summary.
 Phase 9   PM-only monthly Excel export.
@@ -154,15 +156,18 @@ BIOMETRIC_EXACT_CODE_MATCH_ENABLED=true
 ```
 
 Still **not** added - they belong to later phases and nothing reads them yet:
-`BIOMETRIC_UI_ENABLED`, `BIOMETRIC_ATTENDANCE_APPLY_ENABLED`,
-`PERMISSION_WORKFLOW_ENABLED`, `BIOMETRIC_SYNC_STALE_MINUTES`.
+`BIOMETRIC_ATTENDANCE_APPLY_ENABLED`, `PERMISSION_WORKFLOW_ENABLED`,
+`BIOMETRIC_SYNC_STALE_MINUTES`.
 
 The EasyTime username/password are deliberately absent: the VPS never talks to
 EasyTime.
 
-### Frontend - Phase 5, not added yet
+### Frontend
 
-`NEXT_PUBLIC_BIOMETRIC_UI_ENABLED=false` only. Never any EasyTime credential.
+**No new variable.** Settings → Biometric is always shown; reaching Settings
+already requires `user.manage`, and the endpoints behind the tab are
+project_manager-guarded. Ingestion has its own backend switch. Never any EasyTime
+credential in a `NEXT_PUBLIC_` variable.
 
 ---
 
@@ -261,14 +266,18 @@ Status is `completed` when everything was valid and mapped,
 record was rejected or storage itself failed. `200` (not `201`) because a retry
 that creates nothing is a normal, expected outcome.
 
-### Administrative endpoints (project_manager, backend only - no frontend)
+### Administrative endpoints (project_manager)
 
 ```
+GET    /api/v1/biometric/external-codes     (?provider= &status= &q= &limit= &offset=)
 GET    /api/v1/biometric/mappings
 POST   /api/v1/biometric/mappings
+POST   /api/v1/biometric/mappings/bulk
 DELETE /api/v1/biometric/mappings/{id}      (deactivate; never deletes)
 GET    /api/v1/biometric/sync-batches       (?provider= &status= &limit= &offset=)
 ```
+
+`external-codes` and `mappings/bulk` arrived in Phase 5; see section 6f.
 
 ---
 
@@ -368,6 +377,387 @@ Two queries resolve a whole batch, whatever its size. Mapping changes are
 audited; re-pointing a code at a different employee deactivates the previous row
 rather than editing it. **Punches already stored are never rewritten** - they are
 immutable, and re-attributing historical punches is a later phase's job.
+
+---
+
+## 6f. Employee mapping management (Phase 5, delivered)
+
+No migration. Phase 5 is read/write over the three tables migration 0066 already
+created; the schema is untouched.
+
+### The operations view
+
+```
+GET /api/v1/biometric/external-codes?provider=easytime&status=&q=&limit=&offset=
+```
+
+One row per **distinct** `external_employee_code` present in `biometric_punches`,
+aggregated straight from the raw log: `punch_count`, `first_seen`, `last_seen`,
+`attributed_punch_count`, and the active mapping if any. `status`
+filters `mapped` / `unmapped`; `q` matches the external code, the mapped
+employee's code, or their name. Page totals (`total_codes`, `mapped_codes`,
+`unmapped_codes`) are **provider-wide**, so "12 of 46 mapped" stays true on a
+filtered page 2.
+
+Ordering uses `lpad(code, 20, '0')`, which sorts `59, 091, 215, 1001` the way an
+operator reads them without casting anything to an integer - no row can raise,
+and no leading zero is lost.
+
+`resolves_by_exact_code` marks a code with no mapping row that ingestion would
+still resolve through the exact-`employee_code` fallback, so "unmapped" is never
+misleading. It uses the **same predicate as ingestion** (`deleted_at IS NULL`,
+status not considered), so the two can never disagree.
+
+### CoreOps proposes nothing
+
+**There is no suggestion mechanism.** No code normalization (`EMP061` is not
+treated as `61`), no name comparison, no similarity scoring, and no
+`suggestions.py` - the module was removed on 2026-08-13. The response names an
+employee only where an active mapping row already exists.
+
+A project manager reads the EasyTime code, searches the employee directory, and
+saves. That is the only way a mapping is ever created.
+
+Two consequences worth stating, because they are the point rather than a
+limitation:
+
+* An "obvious" pairing like EasyTime `61` and `EMP061` is **not** offered. Nothing
+  in CoreOps knows those are the same person until someone says so.
+* An ambiguous code is simply `unmapped`. `EM001` and `MGR-001` both "look like"
+  1; no tier-break rule exists to prefer one, so none is applied.
+
+If advice is ever wanted again, it may only ever be **advice a PM confirms** -
+never a silent write, and never a runtime punch-attribution rule. Attribution at
+ingestion time (§6c) is unchanged and has always been mapping-row-then-exact-code
+only.
+
+### Reviewed bulk import
+
+**No UI calls this.** It exists for a reviewed initial import and is invoked
+directly against the API; every mapping made on screen goes through the
+single-mapping endpoint, one code at a time.
+
+```
+POST /api/v1/biometric/mappings/bulk
+{ "provider": "easytime", "allow_remap": false,
+  "items": [{ "external_employee_code": "61", "employee_id": "<uuid>" }] }
+```
+
+The caller sends the **exact pairs a project manager confirmed**. The server
+derives no pair of its own - if it did, "bulk import" would quietly become "the
+machine decided".
+
+Every write goes through the same `_apply_mapping` helper as the single-mapping
+endpoint, so history and audit rows are identical; a bulk import is not a second,
+laxer code path. One transaction, `mapped + unchanged + skipped == requested`.
+
+Nothing ambiguous is ever written:
+
+| Skip reason | Meaning |
+|---|---|
+| `employee_not_found` | not in **this** database, or soft-deleted |
+| `duplicate_code_in_request` | one code listed twice - **all** its rows are skipped |
+| `duplicate_employee_in_request` | one employee listed twice (e.g. both `091` and `91` pointed at `EMP091`) |
+| `employee_already_mapped_to_other_code` | that employee already holds an active mapping elsewhere |
+| `remap_not_allowed` | the code already maps to someone else and `allow_remap` is false |
+
+`allow_remap` defaults to **false**: a bulk import may not silently re-point an
+existing mapping. Changing one stays a deliberate, one-row action.
+
+### Environment isolation
+
+The API accepts an employee **UUID**, never an employee code, as the mapping
+target. A mapping exported from local and replayed against production therefore
+fails loudly (`employee_not_found` / 422) instead of binding to whatever row
+happens to hold that id. **Production mappings must be created against production
+`employees.id` values, through this API - never via a data migration, and never
+by copying UUIDs between databases.**
+
+### Frontend
+
+Settings → **Biometric** (project_manager only, no feature flag). Columns:
+EasyTime code, punch count, first/last seen (Asia/Kolkata), mapped employee,
+status, action. Filters All / Mapped / Unmapped plus search. Actions: Map, Change
+mapping, Deactivate.
+
+**One code at a time.** There is no suggested-employee column, no row selection
+and no batch action: the Map dialog opens with nothing chosen (or, for a mapped
+code, with its current employee), and the PM searches the directory and saves.
+The picker is server-side and restricted to **active** employees, so it cannot
+offer someone who has left.
+
+There is no biometric mapping UI for ordinary employees.
+
+**EasyTime employee names are not shown** because CoreOps does not have them.
+
+### What Phase 5 does NOT do
+
+* No `UPDATE biometric_punches`. Mapping a code today makes its **old** punches
+  attributable through `biometric_employee_mappings` when a later phase
+  calculates; the stored rows are never rewritten. Verified against the real
+  370-row local backfill: byte-identical before and after a bulk import.
+* No inferred pairing of any kind - see "CoreOps proposes nothing" above.
+* No session, no IN/OUT, no duration, no `attendance_records` write.
+
+---
+
+## 6g. Daily biometric summary (Phase 6, delivered)
+
+No migration. Read-only over the tables migration 0066 already created.
+
+### The evidence: EasyTime sends no punch direction
+
+Measured over the full 370-punch backfill (46 codes, 3 days, 2026-07-29 /
+08-10 / 08-11):
+
+| Field | Distinct values across all 370 rows |
+|---|---|
+| `punch_state` | **`"0"` only** - zero variance |
+| `punch_state_display` | empty on every row |
+| `terminal_alias` / SN | **one device** - `F22/ID` / `CK5T224960376` |
+| `verify_type` | `1` only |
+| `is_attendance` | `NULL` on every row |
+| `purpose` / `work_code` | constant `9` / `"0"` |
+
+One terminal means there is no IN-reader / OUT-reader split either. **No
+per-punch IN/OUT label can be derived from this data.**
+
+**Odd/even pairing is disproven, not merely unproven.** Punches per employee-day:
+
+```
+1 -> 3 days    3 -> 8    5 -> 9    7 -> 1    9 -> 2    13 -> 1     (24 ODD days)
+2 -> 52 days   4 -> 23   6 -> 8    8 -> 2                          (85 EVEN days)
+```
+
+24 of 109 employee-days (22%) carry an odd count, which "odd = IN, even = OUT"
+would mis-classify outright.
+
+### What the data DID settle: the timezone is right
+
+Punch-hour histogram in `Asia/Kolkata` (the connector's `+05:30` reading of
+EasyTime's naive strings):
+
+```
+08h  26   |  09h  82  <- arrival   |  13h  76  <- lunch
+17h  38   |  18h  63  <- departure |
+```
+
+That is a textbook Chennai office day. Had the raw string actually been UTC, the
+arrival peak would fall at 14:30 IST and departure at 23:30 - implausible. The
+connector's interpretation is **confirmed by the data**, not assumed.
+
+### The rule: an anchor boundary, not an IN/OUT classifier
+
+`app/modules/biometric/summary.py` is pure - no DB, no ORM, no writes:
+
+1. **Sort ascending.** Input order is never trusted; backfills and late uploads
+   arrive out of order.
+2. **Collapse re-scans.** Keep a punch only when it is at least
+   `DEDUP_WINDOW_SECONDS` (60) after the last **kept** punch. Real data has taps
+   3-22 seconds apart (code 187 at 10:43:20 / :28 / :34). Comparing against the
+   last *kept* punch rather than the previous raw one stops a slow drip of taps
+   surviving one by one.
+3. `first_in` = first surviving punch.
+4. `last_out` = last surviving punch **only when at least two survive**. One
+   sighting cannot be both an arrival and a departure, so `last_out` stays
+   `null`. **An OUT is never invented.**
+
+This is an explicitly approved assumption about the outer boundary of a day, not
+a device fact. It is deliberately not called check-in/check-out, and the response
+carries `derivation: "anchor_earliest_latest"` and
+`punch_state_available: false` so that the day real punch states arrive, a new
+slug appears rather than the meaning of stored history changing silently.
+`summary.py` is the only file that would have to change.
+
+### The endpoint
+
+```
+GET /api/v1/biometric/daily-summary?employee_id=&from=&to=&provider=easytime
+```
+
+Per employee per attendance day: `first_in`, `last_out`, `punch_count`,
+`kept_count`, `external_employee_codes`. Days are bucketed in
+`ATTENDANCE_TIMEZONE`, so a 01:00 IST punch belongs to the IST date a person
+would name. Range is capped at `MAX_SUMMARY_RANGE_DAYS` (100).
+
+**Not project_manager-only**, unlike the rest of `/biometric` - an employee must
+see their own calendar. Scoping mirrors the attendance module exactly: a PM sees
+everyone, anyone else only themselves (403 when asking for another
+`employee_id`), and a user with no employee profile sees nothing.
+
+**Attribution joins `biometric_employee_mappings`, never
+`biometric_punches.employee_id`.** This is not a style preference: every punch in
+the real backfill is stored with `employee_id = NULL` because it arrived before
+any mapping existed, so reading the stored column would report an empty calendar
+forever. Joining the mapping table is what lets a mapping created today cover
+punches stored last month, with no punch rewritten.
+
+### Verified on real data
+
+51 employee-days over the three punch dates, all plausible - e.g. EMP133 on
+2026-07-29 reads 09:19 to 18:03 IST, matching a direct query of the raw log.
+Re-scans were collapsed on 10 of the 51 days, **0 OUTs were invented**, the punch
+table md5 was byte-identical before and after (`dda2080a...`, 370 rows,
+`count(employee_id) = 0`), and `attendance_records` stayed at 6 rows.
+
+### Calendar UI
+
+The existing `features/attendance/components/attendance-calendar.tsx` month grid,
+extended - **not** a parallel calendar. It already fetched attendance and
+calendar events for the visible month; it now also calls `useDailySummary` for
+the same window and renders one quiet line per cell:
+
+```
+09:19 - 18:03        (a missing OUT shows --:-- at reduced opacity)
+```
+
+Muted, tabular, `text-[10px]`, below the holiday text and above the status row,
+so the attendance status keeps its position and visual weight. The hover title
+spells out what the numbers are and how many raw punches were collapsed. The
+Legend card carries **no** biometric sample or explanatory paragraph - it was
+added in Phase 6 and removed at the user's request as clutter.
+
+### What Phase 6 does NOT do
+
+* No session pairing, no worked-duration calculation, no overtime.
+* No write to `attendance_records`, and no change to attendance status. Shadow
+  mode is intact: this is observation displayed beside the official record.
+* No `UPDATE biometric_punches` - verified by md5 before and after.
+* No claim that a punch is an IN or an OUT. Only "first seen" and "last seen".
+
+---
+
+## 6h. Day-detail popover (Phase 6A, delivered)
+
+No migration. Read-only. The derivation rule from 6g is **unchanged** - this phase
+makes it inspectable by a human instead of only visible as two numbers in a cell.
+
+### Two read-only fields added to the existing endpoint
+
+No second summary system was created. `GET /biometric/daily-summary` gained:
+
+| Field | Where | Why |
+|---|---|---|
+| `punch_times` | per item | The **surviving** punches the boundary was taken from. A derived boundary has to be checkable, so the reviewer sees the list, not just a count. Times only - never `raw_payload`, transaction id or terminal serial. |
+| `schedule` | per **page** | The employee's contracted office window from `offices` via `employees.office_id` (`shift_start`, `shift_end`, `break_minutes`, `office_name`, `timezone`). |
+
+`schedule` sits on the page, not the item, for two reasons: it is a property of the
+employee's office rather than of a day, and **a day with no punches has no item to
+hang it on** - yet that day still has to show CoreOps Time. It is populated only
+when exactly one `employee_id` is in scope, and is `null` when the employee has no
+office (`office_id` is nullable; absent is normal, not an error).
+
+`DaySummary.kept` in `summary.py` now carries the surviving instants rather than
+only their count; `kept_count` became a derived property, so the rule itself did
+not change.
+
+### Status vocabulary - deliberately NOT AttendanceStatus
+
+Three states, and only three, because only three are supported by the data:
+
+| Status | Condition | Label |
+|---|---|---|
+| `complete` | at least two surviving punches | Complete |
+| `review_required` | exactly one surviving punch | Working / Review Required |
+| `no_record` | no mapped punch for that employee-day | No biometric record |
+
+These do **not** reuse `AttendanceStatus` (`present` / `absent` / `half_day` /
+`leave` / `holiday` / `weekend` / `comp_off`). That enum records an official
+attendance **decision**, which this phase does not make; borrowing its words would
+imply biometric observation had produced a verdict. A test asserts the two
+vocabularies never collide.
+
+### Total hours
+
+`last_out - first_in`, computed in the browser for **display only**, and only when
+both boundaries exist. Never persisted, never sent to the server, no breaks, no
+sessions, no overtime, no payable total. A negative span renders `-` rather than
+`0h 00m` so an impossible value cannot hide.
+
+### The popover
+
+`features/biometric/components/attendance-day-popover.tsx`, opened by clicking any
+day in the existing attendance calendar.
+
+A **contextual macOS-style popover**, not a modal and not a drawer: **no backdrop,
+no blur, no dimming**. The calendar stays fully readable behind it and a caret
+points back at the day that opened it. Deliberately NOT built on `Dialog`, whose
+contract is a full-screen blurred overlay - reusing it would reintroduce exactly
+the appearance this replaces. (An earlier iteration was a right-edge `Dialog`
+drawer; it was rejected as too heavy and has been removed.)
+
+Content is deliberately minimal - **five lines, nothing else**:
+
+```
+Friday, 14 August 2026
+COREOPS TIME      09:30
+First IN          Last OUT
+09:10             17:10
+● Present · 8h 00m
+```
+
+No derivation text, no punch list, no employee id, no provider, no punch counts,
+no mapping or sync metadata. `punch_times` is still returned by the API (it is
+part of the 6A contract and remains tested) but nothing renders it.
+
+`status · duration` prefers the **official attendance record's** status label when
+the day has one, falling back to the biometric completeness word
+(`Present` / `Partial` / `No biometric record`) otherwise - observation never
+overrules the record. The duration is appended only when both boundaries exist, so
+an incomplete day reads as a bare status rather than "· -".
+
+### Placement
+
+`features/biometric/popover-position.ts` - pure geometry, no DOM, **18 unit
+tests**. Above the day when it fits, below when it does not, the roomier side when
+neither does, and always clamped inside the viewport (`fitsInViewport` is asserted
+across a whole week of columns). The caret tracks the day even after the popover
+is clamped sideways, never sits on a corner radius (`ARROW_INSET`), and is dropped
+entirely if the day ends up outside the card. At ≤480px wide it returns
+`placement: "sheet"` and the same content renders as a bottom sheet.
+
+Position is recomputed on `resize` and on capture-phase `scroll`, so it stays
+attached while the page moves. Opening fades in with a 150ms lift, disabled under
+`motion-reduce`.
+
+Interaction: click a day to open, click the same day to close, click another day to
+move the single popover, click outside to close, Escape to close. Changing month
+closes it, because React reuses the cell elements and a stale caret would point at
+the wrong date.
+
+### Calendar changes
+
+Minimal: each day cell became a `<button>` (keyboard- and screen-reader-reachable,
+with `aria-expanded`) carrying hover, focus-visible and selected rings; one
+`selected` state holding the ISO date and the anchor element. No new request - the
+popover reads the month payload the calendar had already fetched, so opening a day
+is instant. Month navigation, holiday overrides, weekend shading and the status
+dots are untouched.
+
+Display logic lives in `features/biometric/day-detail.ts` - pure, import-free, and
+unit-tested (19 tests) because the repo's host-Node harness has no DOM and cannot
+render components. **Popover interaction itself is therefore not covered by an
+automated test**; placement is covered by `popover-position.test.ts`, and the rest
+is exercised by the production build only.
+
+The sidebar **Shift** card previously showed a hardcoded `09:00 – 17:30` labelled
+"Preview". It now shows the real office window when one is available, keeping the
+"Preview" chip only in the fallback case.
+
+### Verified on real data
+
+`EMP187` with the real backfill: schedule `Chennai 09:00-17:30, 30m break`; 07-29
+`5 raw -> 5 kept` Complete 8h 50m; 08-10 `3 raw -> 2 kept` Complete 8h 46m; 08-11
+`8 raw -> 5 kept` Complete 9h 04m. Punch table md5 `dda2080a...` identical before
+and after (370 rows, `count(employee_id) = 0`), `attendance_records` unchanged at
+6 rows, and no `raw_payload` / transaction id / terminal serial in any response.
+
+### What Phase 6A does NOT do
+
+* No session pairing, no break calculation, no overtime, no payable hours.
+* No duration persisted - total hours dies with the render.
+* No write to `attendance_records`, and no manual edit or approval action.
+* No migration; head remains `0066_biometric_punch_ingestion`.
 
 ---
 

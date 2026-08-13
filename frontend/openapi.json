@@ -8867,6 +8867,582 @@
           }
         }
       }
+    },
+    "/api/v1/integrations/easytime/punches/batch": {
+      "post": {
+        "tags": [
+          "biometric-ingestion"
+        ],
+        "summary": "Ingest Punch Batch",
+        "description": "Ingest one batch of raw punches. Idempotent.\n\n200 (not 201) because a retry of an identical payload is a normal, expected\noutcome that creates nothing: the connector re-fetches an overlap window\nevery run and relies on this endpoint absorbing what it has already sent.",
+        "operationId": "ingest_punch_batch_api_v1_integrations_easytime_punches_batch_post",
+        "parameters": [
+          {
+            "name": "x-coreops-connector-token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Coreops-Connector-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PunchBatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PunchBatchResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/biometric/mappings": {
+      "get": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "List Employee Mappings",
+        "operationId": "list_employee_mappings_api_v1_biometric_mappings_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Is Active"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeMappingPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "Create Employee Mapping",
+        "operationId": "create_employee_mapping_api_v1_biometric_mappings_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmployeeMappingCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeMappingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/biometric/external-codes": {
+      "get": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "List External Codes",
+        "description": "Every DISTINCT external employee code seen in the raw punch log, with\nits punch count, seen-window and current mapping.\n\nRead-only, and it proposes nothing: no mapping is created here, no employee\nis suggested, and nothing about a stored punch changes.",
+        "operationId": "list_external_codes_api_v1_biometric_external_codes_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "easytime",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalCodePage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/biometric/daily-summary": {
+      "get": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "List Daily Summary",
+        "description": "First IN / last OUT per mapped employee per attendance day (Asia/Kolkata).\n\nNOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies\nno punch direction in this deployment, so these are the earliest and latest\npunch of the day after re-scan collapsing - see `summary.py`. Nothing is\nwritten, no session or duration is computed, and `attendance_records` remains\nthe official source.\n\nUnlike the rest of this router this is NOT project_manager-only: an employee\nmust be able to see their own calendar. Scoping mirrors the attendance module\nexactly - a PM sees everyone, anyone else only themselves.",
+        "operationId": "list_daily_summary_api_v1_biometric_daily_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "easytime",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "employee_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Employee Id"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailySummaryPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/biometric/mappings/bulk": {
+      "post": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "Create Employee Mappings Bulk",
+        "description": "Apply a reviewed list of mappings in one go (initial setup).\n\n200, not 201: the outcome is per item - some are created, some are already\ncorrect, some are skipped - so there is no single resource to point at.\nEvery pair must be supplied explicitly by the caller.",
+        "operationId": "create_employee_mappings_bulk_api_v1_biometric_mappings_bulk_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkMappingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkMappingResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/biometric/mappings/{mapping_id}": {
+      "delete": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "Deactivate Employee Mapping",
+        "operationId": "deactivate_employee_mapping_api_v1_biometric_mappings__mapping_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "mapping_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Mapping Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeMappingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/biometric/sync-batches": {
+      "get": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "List Sync Batches",
+        "operationId": "list_sync_batches_api_v1_biometric_sync_batches_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncBatchPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -10781,6 +11357,152 @@
         "title": "AuthorizedEmployeeOut",
         "description": "One active grant on a RESTRICTED activity. Deliberately minimal \u2014 no\nemail / phone / department; the PM only needs to identify who can use it."
       },
+      "BulkMappingCreate": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "maxLength": 30,
+            "title": "Provider"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BulkMappingItem"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Items"
+          },
+          "allow_remap": {
+            "type": "boolean",
+            "title": "Allow Remap",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "items"
+        ],
+        "title": "BulkMappingCreate",
+        "description": "An explicitly reviewed bulk import.\n\nThe client sends the EXACT pairs a project manager confirmed. The server\nnever derives a pair of its own - if it did, \"bulk import\" would become \"the\nmachine decided\", which is the one thing this whole module is built to avoid."
+      },
+      "BulkMappingItem": {
+        "properties": {
+          "external_employee_code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "External Employee Code"
+          },
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "external_employee_code",
+          "employee_id"
+        ],
+        "title": "BulkMappingItem"
+      },
+      "BulkMappingItemResult": {
+        "properties": {
+          "external_employee_code": {
+            "type": "string",
+            "title": "External Employee Code"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "employee_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Id"
+          },
+          "mapping_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "external_employee_code",
+          "status"
+        ],
+        "title": "BulkMappingItemResult"
+      },
+      "BulkMappingResult": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "requested": {
+            "type": "integer",
+            "title": "Requested"
+          },
+          "mapped": {
+            "type": "integer",
+            "title": "Mapped"
+          },
+          "unchanged": {
+            "type": "integer",
+            "title": "Unchanged"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BulkMappingItemResult"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "requested",
+          "mapped",
+          "unchanged",
+          "skipped",
+          "items"
+        ],
+        "title": "BulkMappingResult",
+        "description": "Per-item outcome plus totals. `mapped + unchanged + skipped == requested`."
+      },
       "CalendarEventCreate": {
         "properties": {
           "event_date": {
@@ -11124,6 +11846,156 @@
         ],
         "title": "DailyBenchmarkRowOut",
         "description": "One row of 'My Alerts' / 'Team Benchmark Backlog' \u2014 a single day's\nactual/target/pending for one NUMERIC sub-activity, with pending > 0\n(a clean day doesn't show up in this list, though it still counts\ntoward the weekly productivity %). `sub_activity_name` is the \"Activity\nName\" shown in the UI examples (e.g. \"FMTL Rework\")."
+      },
+      "DailySummaryOut": {
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "employee_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Code"
+          },
+          "employee_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Name"
+          },
+          "summary_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Summary Date"
+          },
+          "first_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First In"
+          },
+          "last_out": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Out"
+          },
+          "punch_count": {
+            "type": "integer",
+            "title": "Punch Count",
+            "default": 0
+          },
+          "kept_count": {
+            "type": "integer",
+            "title": "Kept Count",
+            "default": 0
+          },
+          "punch_times": {
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "type": "array",
+            "title": "Punch Times"
+          },
+          "external_employee_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "External Employee Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "employee_id",
+          "summary_date"
+        ],
+        "title": "DailySummaryOut",
+        "description": "One employee, one attendance day: the outer boundary of their punches.\n\n`first_in` / `last_out` are the earliest and latest punch of the day after\nre-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does\nnot provide (see `summary.py`). They are deliberately not named\ncheck_in/check_out: this is observation, and `attendance_records` remains the\nofficial source.\n\n`last_out` is null when only one punch survives collapsing. One sighting\ncannot be both an arrival and a departure, and an OUT is never invented."
+      },
+      "DailySummaryPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DailySummaryOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "date_from": {
+            "type": "string",
+            "format": "date",
+            "title": "Date From"
+          },
+          "date_to": {
+            "type": "string",
+            "format": "date",
+            "title": "Date To"
+          },
+          "derivation": {
+            "type": "string",
+            "title": "Derivation",
+            "default": "anchor_earliest_latest"
+          },
+          "punch_state_available": {
+            "type": "boolean",
+            "title": "Punch State Available",
+            "default": false
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SummarySchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "provider",
+          "date_from",
+          "date_to"
+        ],
+        "title": "DailySummaryPage"
       },
       "DayPart": {
         "type": "string",
@@ -11886,6 +12758,157 @@
         ],
         "title": "EmployeeCreate"
       },
+      "EmployeeMappingCreate": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "maxLength": 30,
+            "title": "Provider"
+          },
+          "external_employee_code": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "External Employee Code"
+          },
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "external_employee_code",
+          "employee_id"
+        ],
+        "title": "EmployeeMappingCreate"
+      },
+      "EmployeeMappingOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "external_employee_code": {
+            "type": "string",
+            "title": "External Employee Code"
+          },
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "employee_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Code"
+          },
+          "employee_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Name"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "verified_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified By User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "external_employee_code",
+          "employee_id",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EmployeeMappingOut"
+      },
+      "EmployeeMappingPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EmployeeMappingOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "EmployeeMappingPage"
+      },
       "EmployeeOut": {
         "properties": {
           "id": {
@@ -12521,6 +13544,161 @@
           "page_size"
         ],
         "title": "EmployeesPerformancePageOut"
+      },
+      "ExternalCodeOut": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "external_employee_code": {
+            "type": "string",
+            "title": "External Employee Code"
+          },
+          "punch_count": {
+            "type": "integer",
+            "title": "Punch Count"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "mapping_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mapping Id"
+          },
+          "employee_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Id"
+          },
+          "employee_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Code"
+          },
+          "employee_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Name"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          },
+          "attributed_punch_count": {
+            "type": "integer",
+            "title": "Attributed Punch Count",
+            "default": 0
+          },
+          "resolves_by_exact_code": {
+            "type": "boolean",
+            "title": "Resolves By Exact Code",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "external_employee_code",
+          "punch_count",
+          "first_seen",
+          "last_seen",
+          "status"
+        ],
+        "title": "ExternalCodeOut",
+        "description": "One DISTINCT external employee code seen in biometric_punches.\n\nPunch counts and the first/last-seen window come from the raw punch table\nand are read-only: this view never touches a punch row.\n\nThere is NO suggested employee. The only employee named here is one an\nactive mapping row already points at; a code with no mapping reports no\nemployee at all, and the PM picks one explicitly."
+      },
+      "ExternalCodePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExternalCodeOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "total_codes": {
+            "type": "integer",
+            "title": "Total Codes"
+          },
+          "mapped_codes": {
+            "type": "integer",
+            "title": "Mapped Codes"
+          },
+          "unmapped_codes": {
+            "type": "integer",
+            "title": "Unmapped Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "total_codes",
+          "mapped_codes",
+          "unmapped_codes"
+        ],
+        "title": "ExternalCodePage"
       },
       "GrantAccessIn": {
         "properties": {
@@ -15320,6 +16498,241 @@
         "type": "object",
         "title": "ProjectUpdate"
       },
+      "PunchBatchIn": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "maxLength": 30,
+            "title": "Provider"
+          },
+          "connector_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Connector Id"
+          },
+          "batch_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Key"
+          },
+          "source_from_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source From Time"
+          },
+          "source_to_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source To Time"
+          },
+          "punches": {
+            "items": {
+              "$ref": "#/components/schemas/PunchIn"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Punches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "connector_id",
+          "punches"
+        ],
+        "title": "PunchBatchIn",
+        "description": "One connector POST: a window of punches plus the batch identity."
+      },
+      "PunchBatchResult": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          },
+          "received": {
+            "type": "integer",
+            "title": "Received"
+          },
+          "inserted": {
+            "type": "integer",
+            "title": "Inserted"
+          },
+          "duplicates": {
+            "type": "integer",
+            "title": "Duplicates"
+          },
+          "unmapped": {
+            "type": "integer",
+            "title": "Unmapped"
+          },
+          "invalid": {
+            "type": "integer",
+            "title": "Invalid"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "batch_id",
+          "received",
+          "inserted",
+          "duplicates",
+          "unmapped",
+          "invalid",
+          "status"
+        ],
+        "title": "PunchBatchResult",
+        "description": "Deterministic ingestion counters.\n\nInvariant: ``inserted + duplicates + invalid == received``.\n\n``unmapped`` is NOT part of that sum - it counts how many of the newly\nINSERTED rows carry ``employee_id = NULL``. An unmapped punch is stored, it\nis simply not attributable to a CoreOps employee yet."
+      },
+      "PunchIn": {
+        "properties": {
+          "external_transaction_id": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "External Transaction Id"
+          },
+          "employee_code": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Employee Code"
+          },
+          "punch_time": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Punch Time"
+          },
+          "raw_punch_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Punch State"
+          },
+          "punch_state_display": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Punch State Display"
+          },
+          "terminal_alias": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Alias"
+          },
+          "terminal_serial_number": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Serial Number"
+          },
+          "verify_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verify Type"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "upload_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Time"
+          },
+          "raw_payload": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Payload"
+          }
+        },
+        "type": "object",
+        "required": [
+          "external_transaction_id",
+          "employee_code",
+          "punch_time"
+        ],
+        "title": "PunchIn",
+        "description": "One normalized punch as pushed by the office-side connector."
+      },
       "ReportMode": {
         "type": "string",
         "enum": [
@@ -16078,6 +17491,224 @@
         },
         "type": "object",
         "title": "SubmissionUpdate"
+      },
+      "SummarySchedule": {
+        "properties": {
+          "office_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Office Name"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "shift_start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shift Start"
+          },
+          "shift_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shift End"
+          },
+          "break_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Break Minutes"
+          }
+        },
+        "type": "object",
+        "title": "SummarySchedule",
+        "description": "The employee's contracted office hours - CoreOps' own data, not biometric.\n\nCarried on the page rather than per day because it is a property of the\nemployee's office, constant across the range, and it must still be available\nfor a day that has NO punches at all (where there is no item to hang it on)."
+      },
+      "SyncBatchOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "connector_id": {
+            "type": "string",
+            "title": "Connector Id"
+          },
+          "batch_key": {
+            "type": "string",
+            "title": "Batch Key"
+          },
+          "source_from_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source From Time"
+          },
+          "source_to_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source To Time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "records_received": {
+            "type": "integer",
+            "title": "Records Received"
+          },
+          "records_inserted": {
+            "type": "integer",
+            "title": "Records Inserted"
+          },
+          "records_duplicates": {
+            "type": "integer",
+            "title": "Records Duplicates"
+          },
+          "records_unmapped": {
+            "type": "integer",
+            "title": "Records Unmapped"
+          },
+          "records_invalid": {
+            "type": "integer",
+            "title": "Records Invalid"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "connector_id",
+          "batch_key",
+          "started_at",
+          "records_received",
+          "records_inserted",
+          "records_duplicates",
+          "records_unmapped",
+          "records_invalid",
+          "status"
+        ],
+        "title": "SyncBatchOut"
+      },
+      "SyncBatchPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SyncBatchOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "SyncBatchPage"
       },
       "TagScopeOut": {
         "properties": {

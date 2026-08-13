@@ -24,10 +24,10 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,16 @@ from app.modules.biometric.constants import (
     BATCH_COMPLETED_WITH_ERRORS,
     BATCH_FAILED,
     BATCH_PROCESSING,
+    BULK_DUPLICATE_CODE_IN_REQUEST,
+    BULK_DUPLICATE_EMPLOYEE_IN_REQUEST,
+    BULK_EMPLOYEE_MAPPED_TO_OTHER_CODE,
+    BULK_EMPLOYEE_NOT_FOUND,
+    BULK_MAPPED,
+    BULK_REMAP_NOT_ALLOWED,
+    BULK_SKIPPED,
+    BULK_UNCHANGED,
+    CODE_STATUS_MAPPED,
+    CODE_STATUS_UNMAPPED,
     ERROR_ALL_RECORDS_INVALID,
     ERROR_STORAGE_FAILURE,
     INVALID_DUPLICATE_IN_BATCH,
@@ -47,6 +57,7 @@ from app.modules.biometric.constants import (
     INVALID_PUNCH_TIME,
     INVALID_PUNCH_TIME_OUT_OF_RANGE,
     MAX_PUNCH_AGE_DAYS,
+    MAX_SUMMARY_RANGE_DAYS,
     MAX_PUNCH_FUTURE_DAYS,
     MAX_RAW_PAYLOAD_CHARS,
     MAX_RAW_PAYLOAD_KEYS,
@@ -63,9 +74,17 @@ from app.modules.biometric.models import (
     BiometricPunch,
     BiometricSyncBatch,
 )
-from app.modules.biometric.schemas import PunchBatchIn, PunchBatchResult, PunchIn
+from app.modules.biometric.schemas import (
+    BulkMappingItem,
+    PunchBatchIn,
+    PunchBatchResult,
+    PunchIn,
+)
+from app.modules.biometric.summary import summarize_day
 from app.modules.employees.models import Employee
-from app.modules.users.models import User
+from app.modules.employees.service import _current_employee
+from app.modules.offices.models import Office
+from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
 logger = logging.getLogger("coreops.biometric.ingestion")
@@ -702,38 +721,10 @@ def _maybe_audit_unmapped(
 
 # ── administrative surfaces (project_manager only) ──────────────────────────
 
-def create_mapping(
-    db: Session,
-    *,
-    actor: User,
-    provider: str,
-    external_employee_code: str,
-    employee_id: uuid.UUID,
-) -> BiometricEmployeeMapping:
-    """Point an external code at a CoreOps employee.
-
-    Idempotent when the active mapping already names the same employee.
-    Re-pointing a code at a DIFFERENT employee deactivates the current row and
-    inserts a new one, so the previous attribution stays visible in history;
-    both paths are audited.
-
-    Existing punches are NOT rewritten - raw punches are immutable. Attributing
-    already-stored punches is a later phase's job, and it will read the mapping
-    rather than mutate the punch.
-    """
-    employee = db.execute(
-        select(Employee).where(
-            Employee.id == employee_id, Employee.deleted_at.is_(None)
-        )
-    ).scalar_one_or_none()
-    if employee is None:
-        raise AppError("validation_error", "Employee not found.", 422)
-
-    code = external_employee_code.strip()
-    if not code:
-        raise AppError("validation_error", "External employee code is required.", 422)
-
-    current = db.execute(
+def _active_mapping(
+    db: Session, *, provider: str, code: str
+) -> BiometricEmployeeMapping | None:
+    return db.execute(
         select(BiometricEmployeeMapping).where(
             BiometricEmployeeMapping.provider == provider,
             BiometricEmployeeMapping.external_employee_code == code,
@@ -741,10 +732,27 @@ def create_mapping(
         )
     ).scalar_one_or_none()
 
-    if current is not None and current.employee_id == employee_id:
-        return current
 
-    now = _now()
+def _apply_mapping(
+    db: Session,
+    *,
+    actor: User,
+    provider: str,
+    code: str,
+    employee_id: uuid.UUID,
+    current: BiometricEmployeeMapping | None,
+) -> tuple[BiometricEmployeeMapping, bool]:
+    """Write one mapping and its audit row. FLUSHES, never commits.
+
+    Returns `(row, changed)`; `changed` is False when the active mapping already
+    named this employee and nothing was written. Shared verbatim by the
+    single-mapping endpoint and the bulk import, so both produce identical
+    history and identical audit events - a bulk import is not a second, laxer
+    code path.
+    """
+    if current is not None and current.employee_id == employee_id:
+        return current, False
+
     previous_employee_id = None
     if current is not None:
         previous_employee_id = current.employee_id
@@ -758,7 +766,7 @@ def create_mapping(
         external_employee_code=code,
         employee_id=employee_id,
         is_active=True,
-        verified_at=now,
+        verified_at=_now(),
         verified_by_user_id=actor.id,
     )
     db.add(row)
@@ -785,6 +793,51 @@ def create_mapping(
             ),
         },
     )
+    return row, True
+
+
+def create_mapping(
+    db: Session,
+    *,
+    actor: User,
+    provider: str,
+    external_employee_code: str,
+    employee_id: uuid.UUID,
+) -> BiometricEmployeeMapping:
+    """Point an external code at a CoreOps employee.
+
+    THE authoritative mapping-creation path. Idempotent when the active mapping
+    already names the same employee. Re-pointing a code at a DIFFERENT employee
+    deactivates the current row and inserts a new one, so the previous
+    attribution stays visible in history; both paths are audited.
+
+    Existing punches are NOT rewritten - raw punches are immutable. Attributing
+    already-stored punches is a later phase's job, and it will read the mapping
+    rather than mutate the punch.
+    """
+    employee = db.execute(
+        select(Employee).where(
+            Employee.id == employee_id, Employee.deleted_at.is_(None)
+        )
+    ).scalar_one_or_none()
+    if employee is None:
+        raise AppError("validation_error", "Employee not found.", 422)
+
+    code = external_employee_code.strip()
+    if not code:
+        raise AppError("validation_error", "External employee code is required.", 422)
+
+    current = _active_mapping(db, provider=provider, code=code)
+    row, changed = _apply_mapping(
+        db,
+        actor=actor,
+        provider=provider,
+        code=code,
+        employee_id=employee_id,
+        current=current,
+    )
+    if not changed:
+        return row
     db.commit()
     db.refresh(row)
     return row
@@ -873,6 +926,524 @@ def list_mappings(
             }
         )
     return items, total
+
+
+# ── Phase 5: the external-code operations view ──────────────────────────────
+
+def list_external_codes(
+    db: Session,
+    *,
+    provider: str,
+    status: str | None,
+    q: str | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict], int, dict]:
+    """DISTINCT external employee codes seen in `biometric_punches`, with their
+    mapping state.
+
+    Nothing here proposes an employee. The PM reads the code and chooses, so no
+    normalization rule, name comparison or similarity heuristic exists anywhere
+    in this path - the only employee named in a response is one already stored in
+    `biometric_employee_mappings`.
+
+    Read-only in the strictest sense: it aggregates the raw punch table and
+    LEFT JOINs the active mapping. No punch is read for mutation, and grouping
+    by `external_employee_code` (not by `punch_time`) is what lets a code
+    mapped TODAY still account for punches stored last month - the mapping
+    table is the join, not a rewritten `employee_id` column.
+
+    Returns `(page_items, filtered_total, summary)`.
+    """
+    # One row per distinct code: counts and the seen-window, straight from raw.
+    agg = (
+        select(
+            BiometricPunch.external_employee_code.label("code"),
+            func.count().label("punch_count"),
+            func.min(BiometricPunch.punch_time).label("first_seen"),
+            func.max(BiometricPunch.punch_time).label("last_seen"),
+            # count(col) skips NULLs - this is "how many already carry an id".
+            func.count(BiometricPunch.employee_id).label("attributed"),
+        )
+        .where(BiometricPunch.provider == provider)
+        .group_by(BiometricPunch.external_employee_code)
+        .subquery()
+    )
+
+    active_mapping_join = and_(
+        BiometricEmployeeMapping.provider == provider,
+        BiometricEmployeeMapping.external_employee_code == agg.c.code,
+        BiometricEmployeeMapping.is_active.is_(True),
+    )
+
+    # Provider-wide totals, independent of the page and of any filter: the PM
+    # needs "12 of 46 mapped" while looking at a filtered page 2.
+    total_codes, mapped_codes = db.execute(
+        select(func.count(), func.count(BiometricEmployeeMapping.id))
+        .select_from(agg)
+        .outerjoin(BiometricEmployeeMapping, active_mapping_join)
+    ).one()
+
+    stmt = (
+        select(
+            agg.c.code,
+            agg.c.punch_count,
+            agg.c.first_seen,
+            agg.c.last_seen,
+            agg.c.attributed,
+            BiometricEmployeeMapping.id,
+            BiometricEmployeeMapping.employee_id,
+            BiometricEmployeeMapping.verified_at,
+            Employee.employee_code,
+            Employee.first_name,
+            Employee.last_name,
+        )
+        .select_from(agg)
+        .outerjoin(BiometricEmployeeMapping, active_mapping_join)
+        .outerjoin(Employee, Employee.id == BiometricEmployeeMapping.employee_id)
+    )
+
+    if status == CODE_STATUS_MAPPED:
+        stmt = stmt.where(BiometricEmployeeMapping.id.isnot(None))
+    elif status == CODE_STATUS_UNMAPPED:
+        stmt = stmt.where(BiometricEmployeeMapping.id.is_(None))
+
+    if q:
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                agg.c.code.ilike(like),
+                Employee.employee_code.ilike(like),
+                (Employee.first_name + " " + Employee.last_name).ilike(like),
+            )
+        )
+
+    filtered_total = db.execute(
+        select(func.count()).select_from(stmt.order_by(None).subquery())
+    ).scalar_one()
+
+    # Numeric-ish ordering without a cast: lpad turns "59"/"091"/"1001" into
+    # equal-width strings, so they sort 59, 91, 1001 instead of 091, 1001, 59.
+    # A non-numeric code just sorts lexicographically, and no row can raise.
+    rows = db.execute(
+        stmt.order_by(func.lpad(agg.c.code, 20, "0")).limit(limit).offset(offset)
+    ).all()
+
+    # Codes ingestion would resolve by its own EXACT, case-sensitive fallback.
+    # Deliberately the same predicate as _resolve_employee_ids step 2 (including
+    # `exited` employees, which that path does not exclude) so the status shown
+    # here cannot disagree with what ingestion actually does.
+    exact_match_codes: set[str] = set()
+    page_codes = {row[0] for row in rows}
+    if settings.BIOMETRIC_EXACT_CODE_MATCH_ENABLED and page_codes:
+        exact_match_codes = set(
+            db.execute(
+                select(Employee.employee_code).where(
+                    Employee.employee_code.in_(page_codes),
+                    Employee.deleted_at.is_(None),
+                )
+            ).scalars()
+        )
+
+    items: list[dict] = []
+    for (
+        code,
+        punch_count,
+        first_seen,
+        last_seen,
+        attributed,
+        mapping_id,
+        employee_id,
+        verified_at,
+        employee_code,
+        first_name,
+        last_name,
+    ) in rows:
+        items.append(
+            {
+                "provider": provider,
+                "external_employee_code": code,
+                "punch_count": punch_count,
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+                "status": (
+                    CODE_STATUS_MAPPED if mapping_id is not None
+                    else CODE_STATUS_UNMAPPED
+                ),
+                "mapping_id": mapping_id,
+                "employee_id": employee_id,
+                "employee_code": employee_code,
+                "employee_name": (
+                    f"{first_name} {last_name}".strip()
+                    if first_name is not None
+                    else None
+                ),
+                "verified_at": verified_at,
+                "attributed_punch_count": attributed,
+                # An exact code match is what ingestion itself would fall back
+                # to, so a code with no mapping row is not necessarily orphaned.
+                "resolves_by_exact_code": code in exact_match_codes,
+            }
+        )
+
+    summary = {
+        "total_codes": total_codes,
+        "mapped_codes": mapped_codes,
+        "unmapped_codes": total_codes - mapped_codes,
+    }
+    return items, filtered_total, summary
+
+
+# ── Phase 6: daily biometric summary (read-only, shadow) ────────────────────
+
+def _summary_scope(db: Session, actor: User) -> tuple[uuid.UUID | None, bool]:
+    """(forced_employee_id, allowed) for a summary read.
+
+    Mirrors attendance's `_apply_scope` so biometric observation is never more
+    visible than the attendance it shadows: a project manager sees everyone,
+    anyone else sees only their own employee record, and a user with no employee
+    profile sees nothing.
+    """
+    if actor.role == UserRole.project_manager:
+        return None, True
+    me = _current_employee(db, actor)
+    if me is None:
+        return None, False
+    return me.id, True
+
+
+def _employee_schedule(db: Session, employee_id: uuid.UUID) -> dict | None:
+    """The employee's office hours: CoreOps' own contracted data, not biometric.
+
+    Read-only, and absent is normal - `employees.office_id` is nullable, so an
+    employee with no office simply has no scheduled window to compare against.
+    """
+    row = db.execute(
+        select(
+            Office.name,
+            Office.timezone,
+            Office.shift_start,
+            Office.shift_end,
+            Office.break_minutes,
+        )
+        .select_from(Employee)
+        .join(Office, Office.id == Employee.office_id)
+        .where(Employee.id == employee_id, Employee.deleted_at.is_(None))
+    ).one_or_none()
+    if row is None:
+        return None
+    name, tz, shift_start, shift_end, break_minutes = row
+    return {
+        "office_name": name,
+        "timezone": tz,
+        "shift_start": shift_start,
+        "shift_end": shift_end,
+        "break_minutes": break_minutes,
+    }
+
+
+def list_daily_summary(
+    db: Session,
+    *,
+    actor: User,
+    provider: str,
+    employee_id: uuid.UUID | None,
+    date_from: date,
+    date_to: date,
+) -> tuple[list[dict], dict | None]:
+    """First IN / last OUT per mapped employee per attendance day.
+
+    Read-only in the strictest sense: it SELECTs punches and writes nothing. No
+    session, no duration, no `attendance_records` row - the result is observation
+    that a caller may display beside the official record.
+
+    Attribution goes through `biometric_employee_mappings`, never through
+    `biometric_punches.employee_id`. That matters on real data: every punch in
+    the production backfill was stored with `employee_id = NULL` because it
+    arrived before any mapping existed, so reading the stored column would report
+    an empty calendar forever. Joining the mapping table is what makes a mapping
+    created today apply to punches stored last month, with no punch rewritten.
+
+    Days are bucketed in ATTENDANCE_TIMEZONE, so a 01:00 IST punch belongs to the
+    IST date a person would name, not to the UTC date.
+
+    Returns `(items, schedule)`. `schedule` is the office window for the single
+    employee in scope, or None - it is CoreOps data included so a reviewer can
+    compare a derived boundary against contracted hours without a second request,
+    including on a day that has no punches at all.
+    """
+    forced_employee_id, allowed = _summary_scope(db, actor)
+    if not allowed:
+        return [], None
+    if forced_employee_id is not None and employee_id not in (None, forced_employee_id):
+        # Asking for somebody else's summary is not a silent empty page.
+        raise AppError("forbidden", "You can only view your own biometric summary.", 403)
+    if forced_employee_id is not None:
+        employee_id = forced_employee_id
+
+    if date_to < date_from:
+        raise AppError("validation_error", "'to' must not be before 'from'.", 422)
+    span_days = (date_to - date_from).days + 1
+    if span_days > MAX_SUMMARY_RANGE_DAYS:
+        raise AppError(
+            "validation_error",
+            f"Date range must not exceed {MAX_SUMMARY_RANGE_DAYS} days.",
+            422,
+        )
+
+    # The punch's attendance day, in local terms. `timezone(zone, timestamptz)`
+    # yields the naive local wall clock, which cast to date is the IST day.
+    local_day = cast(
+        func.timezone(settings.ATTENDANCE_TIMEZONE, BiometricPunch.punch_time), Date
+    ).label("summary_date")
+
+    stmt = (
+        select(
+            Employee.id,
+            Employee.employee_code,
+            Employee.first_name,
+            Employee.last_name,
+            local_day,
+            BiometricPunch.punch_time,
+            BiometricPunch.external_employee_code,
+        )
+        .select_from(BiometricPunch)
+        .join(
+            BiometricEmployeeMapping,
+            and_(
+                BiometricEmployeeMapping.provider == BiometricPunch.provider,
+                BiometricEmployeeMapping.external_employee_code
+                == BiometricPunch.external_employee_code,
+                BiometricEmployeeMapping.is_active.is_(True),
+            ),
+        )
+        .join(Employee, Employee.id == BiometricEmployeeMapping.employee_id)
+        .where(
+            BiometricPunch.provider == provider,
+            Employee.deleted_at.is_(None),
+            local_day >= date_from,
+            local_day <= date_to,
+        )
+        .order_by(Employee.employee_code, local_day, BiometricPunch.punch_time)
+    )
+    if employee_id is not None:
+        stmt = stmt.where(Employee.id == employee_id)
+
+    # Group in Python so the boundary rule lives in one pure, tested place
+    # (summary.py) rather than being restated in SQL.
+    grouped: dict[tuple[uuid.UUID, date], dict] = {}
+    for emp_id, emp_code, first_name, last_name, day, punch_time, ext_code in db.execute(
+        stmt
+    ):
+        bucket = grouped.setdefault(
+            (emp_id, day),
+            {
+                "employee_id": emp_id,
+                "employee_code": emp_code,
+                "employee_name": f"{first_name} {last_name}".strip(),
+                "summary_date": day,
+                "_times": [],
+                "_codes": set(),
+            },
+        )
+        bucket["_times"].append(punch_time)
+        bucket["_codes"].add(ext_code)
+
+    items: list[dict] = []
+    for bucket in grouped.values():
+        day_summary = summarize_day(bucket.pop("_times"))
+        codes = bucket.pop("_codes")
+        items.append(
+            {
+                **bucket,
+                "first_in": day_summary.first_in,
+                "last_out": day_summary.last_out,
+                "punch_count": day_summary.punch_count,
+                "kept_count": day_summary.kept_count,
+                # The punches the boundary was taken from, for human review.
+                "punch_times": list(day_summary.kept),
+                # More than one code here means two device codes map to the same
+                # employee - worth seeing rather than silently merging.
+                "external_employee_codes": sorted(codes),
+            }
+        )
+
+    items.sort(key=lambda i: (i["summary_date"], i["employee_code"] or ""))
+    schedule = _employee_schedule(db, employee_id) if employee_id is not None else None
+    return items, schedule
+
+
+# ── Phase 5: reviewed bulk import ───────────────────────────────────────────
+
+def create_mappings_bulk(
+    db: Session,
+    *,
+    actor: User,
+    provider: str,
+    items: list[BulkMappingItem],
+    allow_remap: bool,
+) -> dict:
+    """Apply a list of PM-confirmed pairings in one transaction.
+
+    Every pair comes from the caller. The server derives NO pair of its own here
+    - if it did, "bulk import" would quietly become "the machine decided", which
+    is the exact failure this module exists to prevent.
+
+    Nothing ambiguous is ever written. A code listed twice, an employee listed
+    twice, an employee already mapped under a different code, or a code that
+    would be re-pointed without `allow_remap` are all SKIPPED with a reason and
+    leave the database untouched. Each write goes through `_apply_mapping`, so
+    history and audit rows are identical to the one-at-a-time endpoint.
+
+    Raw punches are not touched. Mapping a code today makes its OLD punches
+    attributable through this table; it does not rewrite them.
+    """
+    normalized: list[tuple[str, uuid.UUID]] = []
+    for item in items:
+        code = item.external_employee_code.strip()
+        if not code:
+            raise AppError(
+                "validation_error", "External employee code is required.", 422
+            )
+        normalized.append((code, item.employee_id))
+
+    # Ambiguity inside the request itself, detected before anything is written.
+    code_counts: dict[str, int] = {}
+    employee_counts: dict[uuid.UUID, int] = {}
+    for code, employee_id in normalized:
+        code_counts[code] = code_counts.get(code, 0) + 1
+        employee_counts[employee_id] = employee_counts.get(employee_id, 0) + 1
+
+    valid_employee_ids = set(
+        db.execute(
+            select(Employee.id).where(
+                Employee.id.in_({e for _, e in normalized}),
+                Employee.deleted_at.is_(None),
+            )
+        ).scalars()
+    )
+
+    existing = {
+        row.external_employee_code: row
+        for row in db.execute(
+            select(BiometricEmployeeMapping).where(
+                BiometricEmployeeMapping.provider == provider,
+                BiometricEmployeeMapping.external_employee_code.in_(
+                    {c for c, _ in normalized}
+                ),
+                BiometricEmployeeMapping.is_active.is_(True),
+            )
+        ).scalars()
+    }
+
+    # Employee -> the code they are ALREADY actively mapped under, provider-wide.
+    employee_to_code = {
+        employee_id: code
+        for employee_id, code in db.execute(
+            select(
+                BiometricEmployeeMapping.employee_id,
+                BiometricEmployeeMapping.external_employee_code,
+            ).where(
+                BiometricEmployeeMapping.provider == provider,
+                BiometricEmployeeMapping.is_active.is_(True),
+            )
+        ).all()
+    }
+
+    results: list[dict] = []
+    counts = {BULK_MAPPED: 0, BULK_UNCHANGED: 0, BULK_SKIPPED: 0}
+
+    def _skip(code: str, employee_id: uuid.UUID, reason: str) -> None:
+        counts[BULK_SKIPPED] += 1
+        results.append(
+            {
+                "external_employee_code": code,
+                "status": BULK_SKIPPED,
+                "reason": reason,
+                "employee_id": employee_id,
+                "mapping_id": None,
+            }
+        )
+
+    for code, employee_id in normalized:
+        if code_counts[code] > 1:
+            _skip(code, employee_id, BULK_DUPLICATE_CODE_IN_REQUEST)
+            continue
+        if employee_counts[employee_id] > 1:
+            _skip(code, employee_id, BULK_DUPLICATE_EMPLOYEE_IN_REQUEST)
+            continue
+        if employee_id not in valid_employee_ids:
+            _skip(code, employee_id, BULK_EMPLOYEE_NOT_FOUND)
+            continue
+
+        current = existing.get(code)
+        if current is not None and current.employee_id == employee_id:
+            counts[BULK_UNCHANGED] += 1
+            results.append(
+                {
+                    "external_employee_code": code,
+                    "status": BULK_UNCHANGED,
+                    "reason": None,
+                    "employee_id": employee_id,
+                    "mapping_id": current.id,
+                }
+            )
+            continue
+
+        held = employee_to_code.get(employee_id)
+        if held is not None and held != code:
+            # This employee is already the target of another external code.
+            # Legitimate in principle (two devices), but never something a bulk
+            # import should decide on its own.
+            _skip(code, employee_id, BULK_EMPLOYEE_MAPPED_TO_OTHER_CODE)
+            continue
+
+        if current is not None and not allow_remap:
+            _skip(code, employee_id, BULK_REMAP_NOT_ALLOWED)
+            continue
+
+        row, _changed = _apply_mapping(
+            db,
+            actor=actor,
+            provider=provider,
+            code=code,
+            employee_id=employee_id,
+            current=current,
+        )
+        employee_to_code[employee_id] = code
+        counts[BULK_MAPPED] += 1
+        results.append(
+            {
+                "external_employee_code": code,
+                "status": BULK_MAPPED,
+                "reason": None,
+                "employee_id": employee_id,
+                "mapping_id": row.id,
+            }
+        )
+
+    db.commit()
+
+    logger.info(
+        "biometric bulk mapping provider=%s actor=%s requested=%s mapped=%s "
+        "unchanged=%s skipped=%s allow_remap=%s",
+        provider,
+        actor.id,
+        len(normalized),
+        counts[BULK_MAPPED],
+        counts[BULK_UNCHANGED],
+        counts[BULK_SKIPPED],
+        allow_remap,
+    )
+
+    return {
+        "provider": provider,
+        "requested": len(normalized),
+        "mapped": counts[BULK_MAPPED],
+        "unchanged": counts[BULK_UNCHANGED],
+        "skipped": counts[BULK_SKIPPED],
+        "items": results,
+    }
 
 
 def list_sync_batches(

@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Tabs } from "@/components/ui/tabs";
 import { ActivityMasterManager } from "@/features/activity-master/components/activity-master-manager";
 import { AuditLogView } from "@/features/audit/components/audit-log-view";
+import { BiometricMappingTab } from "@/features/biometric/components/biometric-mapping-tab";
 import { UsersView } from "@/features/users/components/users-view";
 
 import { RolesTab } from "./components/roles-tab";
@@ -17,12 +18,17 @@ type TabKey =
   | "users"
   | "roles"
   | "activity-master"
+  | "biometric"
   | "audit";
 
+// Biometric sits in Settings with the other admin surfaces. It needs no feature
+// flag: reaching Settings at all already requires user.manage, and every endpoint
+// behind the tab is project_manager-only.
 const TABS = [
   { value: "users",           label: "Users & Roles" },
   { value: "roles",           label: "Roles" },
   { value: "activity-master", label: "Activity Master" },
+  { value: "biometric",       label: "Biometric" },
   { value: "audit",           label: "Audit log" },
 ];
 
@@ -56,6 +62,7 @@ function SettingsContent() {
       {tab === "users"           && <Suspense><UsersView hideHeader /></Suspense>}
       {tab === "roles"           && <RolesTab />}
       {tab === "activity-master" && <ActivityMasterManager />}
+      {tab === "biometric"       && <BiometricMappingTab />}
       {tab === "audit"           && <AuditLogView />}
     </RequireCapability>
   );

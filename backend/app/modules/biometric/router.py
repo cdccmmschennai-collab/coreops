@@ -6,30 +6,49 @@ Two routers with deliberately different authentication:
                 Machine-to-machine. Authenticated by the office connector's
                 shared secret in X-CoreOps-Connector-Token - never a user JWT.
 
-  admin_router  /biometric/mappings, /biometric/sync-batches
-                Ordinary project_manager endpoints for operations: create the
+  admin_router  /biometric/mappings, /biometric/external-codes,
+                /biometric/sync-batches
+                Ordinary project_manager endpoints for operations: review the
+                external codes the devices actually reported, create the
                 external-code -> employee mappings, and read what each
-                ingestion attempt did. Backend only; Phase 2 ships no frontend.
+                ingestion attempt did.
 
-There is no endpoint here that reads, writes or derives attendance. Punches go
-in; nothing comes out that any existing module consumes.
+No endpoint here writes attendance. `GET /biometric/daily-summary` (Phase 6) is
+read-only observation: the first and last punch of an attendance day, which the
+calendar shows beside the official record. Nothing here pairs punches into
+sessions, infers a device IN/OUT state, computes a duration, or touches
+`attendance_records`.
 """
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.deps import require_role
+from app.core.deps import get_current_user, require_role
 from app.modules.biometric import service
-from app.modules.biometric.constants import BATCH_STATUSES, PROVIDER_EASYTIME
+from app.modules.biometric.constants import (
+    BATCH_STATUSES,
+    CODE_STATUS_MAPPED,
+    CODE_STATUS_UNMAPPED,
+    PROVIDER_EASYTIME,
+    SUPPORTED_PROVIDERS,
+)
 from app.modules.biometric.dependencies import ConnectorIdentity, require_connector
 from app.modules.biometric.schemas import (
+    BulkMappingCreate,
+    BulkMappingResult,
+    DailySummaryOut,
+    DailySummaryPage,
     EmployeeMappingCreate,
     EmployeeMappingOut,
     EmployeeMappingPage,
+    ExternalCodeOut,
+    ExternalCodePage,
     PunchBatchIn,
     PunchBatchResult,
+    SummarySchedule,
     SyncBatchOut,
     SyncBatchPage,
 )
@@ -100,6 +119,125 @@ def create_employee_mapping(
         employee_id=body.employee_id,
     )
     return EmployeeMappingOut.model_validate(row)
+
+
+@admin_router.get("/external-codes", response_model=ExternalCodePage)
+def list_external_codes(
+    provider: str = Query(default=PROVIDER_EASYTIME),
+    code_status: str | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> ExternalCodePage:
+    """Every DISTINCT external employee code seen in the raw punch log, with
+    its punch count, seen-window and current mapping.
+
+    Read-only, and it proposes nothing: no mapping is created here, no employee
+    is suggested, and nothing about a stored punch changes.
+    """
+    normalized_provider = provider.strip().lower()
+    if normalized_provider not in SUPPORTED_PROVIDERS:
+        raise AppError(
+            "validation_error",
+            f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}.",
+            422,
+        )
+    if code_status is not None and code_status not in (
+        CODE_STATUS_MAPPED,
+        CODE_STATUS_UNMAPPED,
+    ):
+        raise AppError(
+            "validation_error",
+            f"status must be '{CODE_STATUS_MAPPED}' or '{CODE_STATUS_UNMAPPED}'.",
+            422,
+        )
+
+    items, total, summary = service.list_external_codes(
+        db,
+        provider=normalized_provider,
+        status=code_status,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return ExternalCodePage(
+        items=[ExternalCodeOut.model_validate(i) for i in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+        **summary,
+    )
+
+
+@admin_router.get("/daily-summary", response_model=DailySummaryPage)
+def list_daily_summary(
+    provider: str = Query(default=PROVIDER_EASYTIME),
+    employee_id: uuid.UUID | None = Query(default=None),
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DailySummaryPage:
+    """First IN / last OUT per mapped employee per attendance day (Asia/Kolkata).
+
+    NOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies
+    no punch direction in this deployment, so these are the earliest and latest
+    punch of the day after re-scan collapsing - see `summary.py`. Nothing is
+    written, no session or duration is computed, and `attendance_records` remains
+    the official source.
+
+    Unlike the rest of this router this is NOT project_manager-only: an employee
+    must be able to see their own calendar. Scoping mirrors the attendance module
+    exactly - a PM sees everyone, anyone else only themselves.
+    """
+    normalized_provider = provider.strip().lower()
+    if normalized_provider not in SUPPORTED_PROVIDERS:
+        raise AppError(
+            "validation_error",
+            f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}.",
+            422,
+        )
+
+    items, schedule = service.list_daily_summary(
+        db,
+        actor=current,
+        provider=normalized_provider,
+        employee_id=employee_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return DailySummaryPage(
+        items=[DailySummaryOut.model_validate(i) for i in items],
+        total=len(items),
+        provider=normalized_provider,
+        date_from=date_from,
+        date_to=date_to,
+        schedule=SummarySchedule.model_validate(schedule) if schedule else None,
+    )
+
+
+@admin_router.post("/mappings/bulk", response_model=BulkMappingResult)
+def create_employee_mappings_bulk(
+    body: BulkMappingCreate,
+    current: User = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> BulkMappingResult:
+    """Apply a reviewed list of mappings in one go (initial setup).
+
+    200, not 201: the outcome is per item - some are created, some are already
+    correct, some are skipped - so there is no single resource to point at.
+    Every pair must be supplied explicitly by the caller.
+    """
+    result = service.create_mappings_bulk(
+        db,
+        actor=current,
+        provider=body.provider,
+        items=body.items,
+        allow_remap=body.allow_remap,
+    )
+    return BulkMappingResult.model_validate(result)
 
 
 @admin_router.delete("/mappings/{mapping_id}", response_model=EmployeeMappingOut)

@@ -1,0 +1,135 @@
+/**
+ * Biometric employee mapping (Phase 5) - PM-only.
+ *
+ * Mirrors `app/modules/biometric/schemas.py`. Nothing here describes a session,
+ * an IN/OUT state or a duration: punch-state semantics are still unresolved and
+ * this module does not pretend otherwise.
+ */
+
+export const PROVIDER_EASYTIME = "easytime";
+
+export type CodeStatus = "mapped" | "unmapped";
+
+/**
+ * One distinct EasyTime code seen in the raw punch log.
+ *
+ * There is no suggested employee, here or in the API: the employee fields are
+ * populated only when an active mapping row exists. A PM reads the code and
+ * chooses - CoreOps never proposes a pairing.
+ */
+export interface ExternalCode {
+  provider: string;
+  external_employee_code: string;
+  punch_count: number;
+  first_seen: string;
+  last_seen: string;
+  status: CodeStatus;
+
+  mapping_id: string | null;
+  employee_id: string | null;
+  employee_code: string | null;
+  employee_name: string | null;
+  verified_at: string | null;
+
+  /** How many of this code's stored punches already carry an employee id.
+   *  Mapping a code does NOT change this - raw punches are immutable. */
+  attributed_punch_count: number;
+  /** Would resolve at ingestion time by the exact employee_code fallback even
+   *  without a mapping row. */
+  resolves_by_exact_code: boolean;
+}
+
+export interface ExternalCodePage {
+  items: ExternalCode[];
+  total: number;
+  limit: number;
+  offset: number;
+  /** Provider-wide, independent of the current filter/page. */
+  total_codes: number;
+  mapped_codes: number;
+  unmapped_codes: number;
+}
+
+/**
+ * One employee, one attendance day: the outer boundary of their punches.
+ *
+ * `first_in` / `last_out` are the earliest and latest punch of the IST day after
+ * re-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does not
+ * send. `last_out` is null when only one punch survived: one sighting cannot be
+ * both an arrival and a departure, and an OUT is never invented.
+ *
+ * This is observation shown beside attendance. It is not an attendance record.
+ */
+export interface DailySummary {
+  employee_id: string;
+  employee_code: string | null;
+  employee_name: string | null;
+  /** Attendance day in Asia/Kolkata, `YYYY-MM-DD`. */
+  summary_date: string;
+  first_in: string | null;
+  last_out: string | null;
+  /** Raw punches for the day, and how many survived collapsing. Debugging. */
+  punch_count: number;
+  kept_count: number;
+  /** The surviving punches the boundary was taken from, so a human reviewer can
+   *  check the derivation. Times only - never the raw device payload. */
+  punch_times: string[];
+  external_employee_codes: string[];
+}
+
+/** The employee's contracted office hours - CoreOps' own data, not biometric.
+ *  Plain local TIME strings (`"09:30:00"`); never timezone-converted. */
+export interface SummarySchedule {
+  office_name: string | null;
+  timezone: string | null;
+  shift_start: string | null;
+  shift_end: string | null;
+  break_minutes: number | null;
+}
+
+export interface DailySummaryPage {
+  items: DailySummary[];
+  total: number;
+  provider: string;
+  date_from: string;
+  date_to: string;
+  /** How the boundary was derived; `anchor_earliest_latest` today. */
+  derivation: string;
+  /** False while EasyTime reports no usable punch direction. */
+  punch_state_available: boolean;
+  /** Set only when a single employee was requested and they have an office. */
+  schedule: SummarySchedule | null;
+}
+
+export interface EmployeeMapping {
+  id: string;
+  provider: string;
+  external_employee_code: string;
+  employee_id: string;
+  employee_code: string | null;
+  employee_name: string | null;
+  is_active: boolean;
+  verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// POST /biometric/mappings/bulk exists server-side for a reviewed initial
+// import, but no screen calls it: every mapping in the UI is made one code at a
+// time through POST /biometric/mappings. Nothing is typed for it here on purpose.
+
+/** One row of the employee picker. */
+export interface EmployeeOption {
+  id: string;
+  employee_code: string;
+  first_name: string;
+  last_name: string;
+  status: string;
+}
+
+export interface EmployeePage {
+  items: EmployeeOption[];
+  total: number;
+  limit: number;
+  offset: number;
+}

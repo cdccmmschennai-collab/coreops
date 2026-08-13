@@ -45,6 +45,55 @@ INVALID_PUNCH_TIME_OUT_OF_RANGE = "punch_time_out_of_range"
 INVALID_DUPLICATE_IN_BATCH = "duplicate_in_batch"
 
 
+# ── external-code mapping state (Phase 5) ───────────────────────────────────
+# CoreOps proposes NO mapping. There is no suggestion tier, no code
+# normalization ("EMP061" is not treated as "61"), and no name comparison
+# anywhere in this module: a mapping row exists only where a project manager
+# explicitly created it. Do not reintroduce an inferred pairing here - the
+# closest thing that may ever exist is ADVICE a PM must confirm, and it must
+# never become a runtime punch-attribution rule.
+#
+# Mapping state of one distinct external code, as reported by the operations
+# view. Deliberately coarse: a code either has an ACTIVE mapping row or it does
+# not.
+CODE_STATUS_MAPPED = "mapped"
+CODE_STATUS_UNMAPPED = "unmapped"
+
+
+# ── bulk mapping outcomes (Phase 5) ─────────────────────────────────────────
+BULK_MAPPED = "mapped"        # a new ACTIVE mapping row was written
+BULK_UNCHANGED = "unchanged"  # the active mapping already named this employee
+BULK_SKIPPED = "skipped"      # nothing was written; see the reason slug
+
+# Why an item was skipped. Every one of these means "no row was written" - a
+# bulk import never guesses its way past an ambiguity.
+BULK_EMPLOYEE_NOT_FOUND = "employee_not_found"
+BULK_DUPLICATE_CODE_IN_REQUEST = "duplicate_code_in_request"
+BULK_DUPLICATE_EMPLOYEE_IN_REQUEST = "duplicate_employee_in_request"
+BULK_EMPLOYEE_MAPPED_TO_OTHER_CODE = "employee_already_mapped_to_other_code"
+BULK_REMAP_NOT_ALLOWED = "remap_not_allowed"
+
+# One bulk request. The initial import covers ~50 EasyTime codes; this leaves
+# generous headroom while keeping the whole operation one short transaction.
+MAX_BULK_MAPPING_ITEMS = 500
+
+
+# ── daily summary (Phase 6, read-only shadow) ───────────────────────────────
+# How first_in / last_out were derived. EasyTime reports no punch direction in
+# this deployment (punch_state is "0" on every row, one terminal), so the summary
+# reports the OUTER BOUNDARY of the day - earliest and latest punch after
+# re-scan collapsing - and says so. See summary.py for the evidence and the rule.
+#
+# This value is part of the API contract on purpose: if real punch states ever
+# arrive, a new derivation slug must appear here so consumers can see that the
+# meaning of a stored boundary changed, rather than silently reinterpreting it.
+DERIVATION_ANCHOR = "anchor_earliest_latest"
+
+# How many days one summary request may span. A month view needs 31; this allows
+# a full quarter while keeping the punch scan bounded.
+MAX_SUMMARY_RANGE_DAYS = 100
+
+
 # ── size limits ─────────────────────────────────────────────────────────────
 # One connector POST. 1000 punches ≈ a busy full day for a few hundred staff,
 # and keeps the single INSERT statement and its JSONB payloads well inside
