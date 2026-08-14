@@ -75,7 +75,42 @@ export interface DailySummary {
    *  check the derivation. Times only - never the raw device payload. */
   punch_times: string[];
   external_employee_codes: string[];
+
+  /** Elapsed minutes between first_in and last_out. ONE session - no break
+   *  deduction, no overtime. Null (not 0) when both boundaries do not exist. */
+  worked_minutes: number | null;
+  /** The employee's CONTRACTED window for this day, from their office row. */
+  scheduled_start_at: string | null;
+  scheduled_end_at: string | null;
+  scheduled_minutes: number | null;
+  /** `office` when the employee's office supplied the window, `default` when the
+   *  backend fallback did. Shown rather than hidden. */
+  shift_source: ShiftSource | null;
+  /** The conservative verdict. NOT an attendance status: biometric evidence
+   *  carries no cause, so half day / permission / leave / absent never appear. */
+  classification: BiometricClassification;
+  review_required: boolean;
+  /** Stable slugs, most-decisive first. Some are verdicts
+   *  (`short_of_scheduled_duration`), some are context that does not open a
+   *  review on its own (`first_punch_after_shift_start`). */
+  review_reasons: string[];
 }
+
+/**
+ * The four things biometric evidence can support, and no more.
+ *
+ * Mirrors `CLASSIFICATIONS` in `app/modules/biometric/constants.py`. Deliberately
+ * NOT `AttendanceStatus`: every interesting value of that enum encodes a CAUSE
+ * (half day, leave, holiday), and a punch stream cannot supply one. A 6-hour day
+ * is `needs_review`, never "half day".
+ */
+export type BiometricClassification =
+  | "present"
+  | "incomplete"
+  | "needs_review"
+  | "no_record";
+
+export type ShiftSource = "office" | "default";
 
 /** The employee's contracted office hours - CoreOps' own data, not biometric.
  *  Plain local TIME strings (`"09:30:00"`); never timezone-converted. */
@@ -99,6 +134,10 @@ export interface DailySummaryPage {
   punch_state_available: boolean;
   /** Set only when a single employee was requested and they have an office. */
   schedule: SummarySchedule | null;
+  /** Minutes a day may fall short of its scheduled window and still count as
+   *  `present`. Zero because the late-arrival grace period is an unanswered
+   *  management question, not because zero is a rule. */
+  grace_minutes: number;
 }
 
 export interface EmployeeMapping {

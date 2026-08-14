@@ -17,6 +17,7 @@ from datetime import date, datetime, time
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.biometric.constants import (
+    CLASSIFICATION_NO_RECORD,
     DERIVATION_ANCHOR,
     MAX_BATCH_KEY_LEN,
     MAX_BATCH_SIZE,
@@ -27,6 +28,7 @@ from app.modules.biometric.constants import (
     MAX_SHORT_FIELD_LEN,
     MAX_STATE_FIELD_LEN,
     MAX_TIMESTAMP_TEXT_LEN,
+    SHORTFALL_GRACE_MINUTES,
     SUPPORTED_PROVIDERS,
 )
 
@@ -287,6 +289,30 @@ class DailySummaryOut(BaseModel):
     punch_times: list[datetime] = Field(default_factory=list)
     external_employee_codes: list[str] = Field(default_factory=list)
 
+    # ── Phase 7: duration + conservative classification (computed, never stored)
+    # Elapsed minutes between first_in and last_out - ONE session, no break
+    # deduction, no overtime. Null (not 0) when both boundaries do not exist:
+    # zero would read as a measurement, null is the truth.
+    worked_minutes: int | None = None
+    # The employee's CONTRACTED window for this day, from `offices.shift_start` /
+    # `shift_end`. Instants, so a caller compares like with like against first_in.
+    scheduled_start_at: datetime | None = None
+    scheduled_end_at: datetime | None = None
+    scheduled_minutes: int | None = None
+    # `office` when the employee's office row supplied the window, `default` when
+    # the module fallback did (employees.office_id is nullable). Never hidden.
+    shift_source: str | None = None
+    # present | incomplete | needs_review | no_record. NOT an AttendanceStatus:
+    # biometric evidence carries no CAUSE, so half_day / permission / leave /
+    # absent are never concluded here. See classification.py.
+    classification: str = CLASSIFICATION_NO_RECORD
+    # True when a human has to settle this day. Derived from the reasons below.
+    review_required: bool = True
+    # Ordered most-decisive first. Some are verdicts (missing_second_punch,
+    # short_of_scheduled_duration), some are context that does not open a review
+    # on its own (first_punch_after_shift_start).
+    review_reasons: list[str] = Field(default_factory=list)
+
 
 class SummarySchedule(BaseModel):
     """The employee's contracted office hours - CoreOps' own data, not biometric.
@@ -319,6 +345,11 @@ class DailySummaryPage(BaseModel):
     # Present only when exactly one employee is in scope, and only when that
     # employee is assigned to an office. Null is normal, not an error.
     schedule: SummarySchedule | None = None
+    # Phase 7. Minutes a day was allowed to fall short of its scheduled window and
+    # still count as `present`. Echoed because it is the single number that decides
+    # how many days land in review, and it is 0 only because the late-arrival grace
+    # period (O-3) is an unanswered management question - not because 0 is a rule.
+    grace_minutes: int = SHORTFALL_GRACE_MINUTES
 
 
 class SyncBatchOut(BaseModel):

@@ -25,14 +25,7 @@ import { AttendanceCalendar } from "./attendance-calendar";
 import { AttendanceHistory } from "./attendance-history";
 import { AttendanceKpis } from "./attendance-kpis";
 import { CorrectionsPreview } from "./corrections-preview";
-
-type TabKey =
-  | "calendar"
-  | "history"
-  | "leave"
-  | "leave-balance"
-  | "corrections"
-  | "holidays";
+import { attendanceTabs, resolveTab, type TabKey } from "../tabs";
 
 export function AttendanceView() {
   const { role, employeeId } = useAuth();
@@ -53,12 +46,14 @@ export function AttendanceView() {
     }
   }, [searchParams, canRequestLeave]);
 
-  // Only allow tabs the current user can see; anything else (a stale URL, or a
-  // manager-only tab for a non-manager) falls back to Calendar.
-  const allowedTabs: TabKey[] = ["calendar", "history", "leave", "holidays"];
-  if (canManage) allowedTabs.push("leave-balance");
-  if (features.attendanceCorrections) allowedTabs.push("corrections");
-  const tab = (allowedTabs as string[]).includes(rawTab) ? (rawTab as TabKey) : "calendar";
+  // Which tabs exist for this user, and which one the URL selects. Both come
+  // from the pure `tabs.ts` config so the labels are unit-testable - this repo
+  // has no DOM test harness, so a label inside JSX cannot be asserted on.
+  const tabOptions = {
+    canManage,
+    correctionsEnabled: features.attendanceCorrections,
+  };
+  const tab = resolveTab(rawTab, tabOptions);
 
   const actions = (
     <>
@@ -97,20 +92,7 @@ export function AttendanceView() {
         className="mb-4"
         value={tab}
         onChange={(v) => setTab(v as TabKey)}
-        items={[
-          { value: "calendar", label: "Calendar" },
-          { value: "history", label: "History" },
-          { value: "leave", label: "Leave" },
-          // Leave Balance is a manager/admin-only maintenance view.
-          ...(canManage ? [{ value: "leave-balance", label: "Leave Balance" }] : []),
-          // Corrections is deferred until biometric / automated attendance
-          // capture exists (attendance is entered manually today). Hidden
-          // behind a feature flag; see features.attendanceCorrections.
-          ...(features.attendanceCorrections
-            ? [{ value: "corrections", label: "Corrections" }]
-            : []),
-          { value: "holidays", label: "Holidays" },
-        ]}
+        items={attendanceTabs(tabOptions)}
       />
 
       {tab === "calendar" &&
@@ -119,7 +101,7 @@ export function AttendanceView() {
         ) : (
           <EmptyState
             title="No personal calendar"
-            description="Your account isn't linked to an employee profile, so there's no personal attendance calendar. Use the History tab to browse records."
+            description="Your account isn't linked to an employee profile, so there's no personal attendance calendar. Use the Records tab to browse attendance."
           />
         ))}
       {tab === "history" && <AttendanceHistory />}

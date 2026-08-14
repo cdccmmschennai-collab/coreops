@@ -13,11 +13,15 @@ Two routers with deliberately different authentication:
                 external-code -> employee mappings, and read what each
                 ingestion attempt did.
 
-No endpoint here writes attendance. `GET /biometric/daily-summary` (Phase 6) is
-read-only observation: the first and last punch of an attendance day, which the
-calendar shows beside the official record. Nothing here pairs punches into
-sessions, infers a device IN/OUT state, computes a duration, or touches
-`attendance_records`.
+No endpoint here writes attendance. `GET /biometric/daily-summary` (Phase 6, with
+Phase 7's duration and classification layered on) is read-only observation: the
+first and last punch of an attendance day, how long that spans, and whether the
+day is objectively settled - which the calendar shows beside the official record.
+
+Nothing here pairs punches into multiple sessions, infers a device IN/OUT state,
+or touches `attendance_records`. The classification never concludes half_day,
+permission, leave or absent: biometric evidence carries no cause. See
+`classification.py`.
 """
 import uuid
 from datetime import date
@@ -180,13 +184,16 @@ def list_daily_summary(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DailySummaryPage:
-    """First IN / last OUT per mapped employee per attendance day (Asia/Kolkata).
+    """First IN / last OUT per mapped employee per attendance day (Asia/Kolkata),
+    with the worked duration and a conservative classification.
 
     NOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies
-    no punch direction in this deployment, so these are the earliest and latest
-    punch of the day after re-scan collapsing - see `summary.py`. Nothing is
-    written, no session or duration is computed, and `attendance_records` remains
-    the official source.
+    no punch direction in this deployment, so the boundaries are the earliest and
+    latest punch of the day after re-scan collapsing (`summary.py`), and the
+    classification only ever says `present` / `incomplete` / `needs_review` /
+    `no_record` - never half_day, permission, leave or absent
+    (`classification.py`). Nothing is written and `attendance_records` remains the
+    official source.
 
     Unlike the rest of this router this is NOT project_manager-only: an employee
     must be able to see their own calendar. Scoping mirrors the attendance module

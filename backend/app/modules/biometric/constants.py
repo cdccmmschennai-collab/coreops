@@ -8,6 +8,7 @@ stored verbatim; the live probe returned "0" for every observed punch and
 `punch_state_display` was null, so IN/OUT remains unresolved
 (docs/attendance/punch-state-mapping.md).
 """
+from datetime import time as _time
 
 # ── providers ───────────────────────────────────────────────────────────────
 PROVIDER_EASYTIME = "easytime"
@@ -92,6 +93,93 @@ DERIVATION_ANCHOR = "anchor_earliest_latest"
 # How many days one summary request may span. A month view needs 31; this allows
 # a full quarter while keeping the punch scan bounded.
 MAX_SUMMARY_RANGE_DAYS = 100
+
+
+# ── worked duration + attendance classification (Phase 7, read-only) ────────
+# Phase 7 sits ABOVE the Phase 6 boundary: given first_in / last_out and the
+# employee's contracted shift, how long were they on site, and is that day
+# objectively settled or does a human have to look at it?
+#
+# The vocabulary is deliberately its OWN, and deliberately NOT
+# `attendance.models.AttendanceStatus`. That enum (present / absent / half_day /
+# leave / holiday / weekend / comp_off) is the vocabulary of the OFFICIAL record,
+# and every one of its interesting values encodes a CAUSE - why somebody was not
+# at work. Biometric evidence never carries a cause: a 6-hour day is a 6-hour
+# day, and whether it was half-day, permission, an early release or a missed
+# punch is not in the punch stream. Borrowing that enum here would silently turn
+# "we measured 6 hours" into "HR decided half day", which is the exact failure
+# this module exists to prevent.
+CLASSIFICATION_PRESENT = "present"          # objectively a complete scheduled day
+CLASSIFICATION_INCOMPLETE = "incomplete"    # seen once; the day cannot be closed
+CLASSIFICATION_NEEDS_REVIEW = "needs_review"  # measurable, but not objectively settled
+CLASSIFICATION_NO_RECORD = "no_record"      # no punches at all - NOT "absent"
+
+CLASSIFICATIONS = (
+    CLASSIFICATION_PRESENT,
+    CLASSIFICATION_INCOMPLETE,
+    CLASSIFICATION_NEEDS_REVIEW,
+    CLASSIFICATION_NO_RECORD,
+)
+
+# Why a day landed where it did. Stable slugs, so operations can grep them and a
+# later review UI can group by them. A day may carry several.
+REASON_NO_BIOMETRIC_RECORD = "no_biometric_record"
+REASON_MISSING_SECOND_PUNCH = "missing_second_punch"
+REASON_SHORT_OF_SCHEDULED = "short_of_scheduled_duration"
+REASON_LATE_FIRST_PUNCH = "first_punch_after_shift_start"
+REASON_EARLY_LAST_PUNCH = "last_punch_before_shift_end"
+REASON_SHIFT_UNKNOWN = "shift_unknown"
+REASON_UNSUPPORTED_SHIFT_WINDOW = "unsupported_shift_window"
+REASON_SHIFT_TIMEZONE_INVALID = "shift_timezone_invalid"
+REASON_DEFAULT_SHIFT_ASSUMED = "default_shift_assumed"
+
+# Reasons that mean "a human must decide this day". The rest are OBSERVATIONS
+# that travel with the row for context and do not, on their own, open a review:
+# arriving at 09:10 and leaving at 17:40 is a complete scheduled day that happens
+# to have started late, and calling that unsettled would make the review queue
+# meaningless.
+BLOCKING_REVIEW_REASONS = frozenset(
+    {
+        REASON_NO_BIOMETRIC_RECORD,
+        REASON_MISSING_SECOND_PUNCH,
+        REASON_SHORT_OF_SCHEDULED,
+        REASON_SHIFT_UNKNOWN,
+        REASON_UNSUPPORTED_SHIFT_WINDOW,
+        REASON_SHIFT_TIMEZONE_INVALID,
+    }
+)
+
+# Where the compared shift window came from, reported per day so a reader never
+# has to guess whether the comparison used real configuration or a fallback.
+SHIFT_SOURCE_OFFICE = "office"
+SHIFT_SOURCE_DEFAULT = "default"
+
+# THE fallback shift, and the only place 09:00 / 17:30 is written in the backend.
+# `offices.shift_start` / `shift_end` (migration 0007) is the real source of
+# truth and always wins - this covers the nullable `employees.office_id` case
+# only. It matches the value the live office rows already carry, so the fallback
+# cannot quietly disagree with configuration.
+#
+# 09:00 -> 17:30 is 510 minutes. That is a START and an END, not a required
+# duration: O-1 in docs/attendance/attendance-policy-open-decisions.md ("required
+# daily working duration") is still OPEN, and Phase 7 therefore compares against
+# the scheduled WINDOW rather than against an invented requirement.
+DEFAULT_SHIFT_START = _time(9, 0)
+DEFAULT_SHIFT_END = _time(17, 30)
+
+# Minutes a day may fall short of its scheduled window and still count as a
+# complete day. ZERO until O-3 (late-arrival grace period) is answered by
+# management - a grace period is company policy, not something CoreOps may
+# invent. Consequence, stated plainly: a 09:10 -> 17:10 day is 8h00 against a
+# scheduled 8h30 and comes back `needs_review`, not `present`.
+#
+# This is the ONE place to change it. Nothing else compares a duration.
+SHORTFALL_GRACE_MINUTES = 0
+
+# Phase 7 deliberately does NOT deduct `offices.break_minutes` from worked time.
+# O-2 ("does the 30-minute lunch count as worked time?") is open, and deducting
+# it would silently change every day by 30 minutes. break_minutes is carried to
+# the client as information and never enters a calculation.
 
 
 # ── size limits ─────────────────────────────────────────────────────────────

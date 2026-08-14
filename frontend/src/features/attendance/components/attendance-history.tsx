@@ -21,7 +21,9 @@ function parseStatus(value: string | null): AttendanceStatus | "" {
     : "";
 }
 
-/** History tab: the URL-driven, role-scoped attendance list (filters + table). */
+/** Records tab (URL key `history`): the URL-driven, role-scoped attendance list
+ *  (filters + table). The component and file keep the `History` name so existing
+ *  imports stay valid; only the visible label changed. */
 export function AttendanceHistory() {
   const router = useRouter();
   const pathname = usePathname();

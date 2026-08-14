@@ -2109,13 +2109,16 @@ export interface paths {
         };
         /**
          * List Daily Summary
-         * @description First IN / last OUT per mapped employee per attendance day (Asia/Kolkata).
+         * @description First IN / last OUT per mapped employee per attendance day (Asia/Kolkata),
+         *     with the worked duration and a conservative classification.
          *
          *     NOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies
-         *     no punch direction in this deployment, so these are the earliest and latest
-         *     punch of the day after re-scan collapsing - see `summary.py`. Nothing is
-         *     written, no session or duration is computed, and `attendance_records` remains
-         *     the official source.
+         *     no punch direction in this deployment, so the boundaries are the earliest and
+         *     latest punch of the day after re-scan collapsing (`summary.py`), and the
+         *     classification only ever says `present` / `incomplete` / `needs_review` /
+         *     `no_record` - never half_day, permission, leave or absent
+         *     (`classification.py`). Nothing is written and `attendance_records` remains the
+         *     official source.
          *
          *     Unlike the rest of this router this is NOT project_manager-only: an employee
          *     must be able to see their own calendar. Scoping mirrors the attendance module
@@ -3158,6 +3161,28 @@ export interface components {
             punch_times?: string[];
             /** External Employee Codes */
             external_employee_codes?: string[];
+            /** Worked Minutes */
+            worked_minutes?: number | null;
+            /** Scheduled Start At */
+            scheduled_start_at?: string | null;
+            /** Scheduled End At */
+            scheduled_end_at?: string | null;
+            /** Scheduled Minutes */
+            scheduled_minutes?: number | null;
+            /** Shift Source */
+            shift_source?: string | null;
+            /**
+             * Classification
+             * @default no_record
+             */
+            classification: string;
+            /**
+             * Review Required
+             * @default true
+             */
+            review_required: boolean;
+            /** Review Reasons */
+            review_reasons?: string[];
         };
         /** DailySummaryPage */
         DailySummaryPage: {
@@ -3188,6 +3213,11 @@ export interface components {
              */
             punch_state_available: boolean;
             schedule?: components["schemas"]["SummarySchedule"] | null;
+            /**
+             * Grace Minutes
+             * @default 0
+             */
+            grace_minutes: number;
         };
         /**
          * DayPart

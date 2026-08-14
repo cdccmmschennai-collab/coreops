@@ -2,9 +2,14 @@
 
 Everything Phase 2 does happens here: validate a connector batch, resolve
 employee mappings, store raw punches idempotently, and finalize the sync-batch
-record. Nothing in this module infers IN/OUT, pairs punches, or computes a
+record. Nothing on the INGESTION path infers IN/OUT, pairs punches, or computes a
 duration - punch-state semantics are unresolved and stay that way
 (docs/attendance/punch-state-mapping.md).
+
+The read-only summary path (`list_daily_summary`) does compute an elapsed
+duration and a conservative classification, both delegated to pure modules
+(`summary.py`, `classification.py`) and neither stored: no punch, mapping or
+attendance record is written by a read.
 
 No EasyTime HTTP client lives here. The backend only ever sees the normalized
 payload the office-side connector POSTs; talking to EasyTime is
@@ -34,6 +39,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.modules.audit.constants import STATUS_FAILURE, AuditAction, EntityType
 from app.modules.audit.service import record_audit
+from app.modules.biometric.classification import Shift, classify_day
 from app.modules.biometric.constants import (
     BATCH_COMPLETED,
     BATCH_COMPLETED_WITH_ERRORS,
@@ -66,6 +72,7 @@ from app.modules.biometric.constants import (
     RAW_PUNCH_TIME_TEXT_KEY,
     RAW_UPLOAD_TIME_TEXT_KEY,
     SECRET_KEY_MARKERS,
+    SHIFT_SOURCE_OFFICE,
     UNMAPPED_ALERT_MIN_RECORDS,
     UNMAPPED_ALERT_RATIO,
 )
@@ -1112,6 +1119,43 @@ def _summary_scope(db: Session, actor: User) -> tuple[uuid.UUID | None, bool]:
     return me.id, True
 
 
+def _employee_shifts(
+    db: Session, employee_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, Shift]:
+    """Contracted shift per employee, for the Phase 7 comparison. One query.
+
+    Read-only, and absent is normal rather than an error: `employees.office_id` is
+    nullable, so an employee with no office is simply missing from the result and
+    the caller falls back to `Shift.default`. Returning a partial dict rather than
+    filling gaps here keeps "which employees have real configuration" visible to
+    the caller instead of hiding it behind a default.
+    """
+    if not employee_ids:
+        return {}
+    rows = db.execute(
+        select(
+            Employee.id,
+            Office.timezone,
+            Office.shift_start,
+            Office.shift_end,
+            Office.break_minutes,
+        )
+        .select_from(Employee)
+        .join(Office, Office.id == Employee.office_id)
+        .where(Employee.id.in_(employee_ids))
+    ).all()
+    return {
+        emp_id: Shift(
+            start=shift_start,
+            end=shift_end,
+            timezone=tz,
+            break_minutes=break_minutes,
+            source=SHIFT_SOURCE_OFFICE,
+        )
+        for emp_id, tz, shift_start, shift_end, break_minutes in rows
+    }
+
+
 def _employee_schedule(db: Session, employee_id: uuid.UUID) -> dict | None:
     """The employee's office hours: CoreOps' own contracted data, not biometric.
 
@@ -1151,11 +1195,19 @@ def list_daily_summary(
     date_from: date,
     date_to: date,
 ) -> tuple[list[dict], dict | None]:
-    """First IN / last OUT per mapped employee per attendance day.
+    """First IN / last OUT per mapped employee per attendance day, plus Phase 7's
+    worked duration and conservative classification.
 
-    Read-only in the strictest sense: it SELECTs punches and writes nothing. No
-    session, no duration, no `attendance_records` row - the result is observation
-    that a caller may display beside the official record.
+    Read-only in the strictest sense: it SELECTs punches and writes nothing. The
+    duration and the verdict are computed per request and stored nowhere - no
+    `attendance_records` row is created or touched, and no punch is rewritten.
+    The result is observation that a caller may display beside the official
+    record, which remains authoritative.
+
+    Only days that HAVE punches produce a row. A day with no biometric record is
+    absent from `items` rather than being reported as absent from work: the reason
+    could be leave, a holiday, or a device that failed to record, and deciding
+    which is not this layer's job.
 
     Attribution goes through `biometric_employee_mappings`, never through
     `biometric_punches.employee_id`. That matters on real data: every punch in
@@ -1249,10 +1301,24 @@ def list_daily_summary(
         bucket["_times"].append(punch_time)
         bucket["_codes"].add(ext_code)
 
+    # Phase 7 needs each employee's contracted window. Resolved once for the whole
+    # page rather than per row: a month of days for one employee is one query, not
+    # thirty.
+    shifts = _employee_shifts(db, {emp_id for emp_id, _day in grouped})
+
     items: list[dict] = []
     for bucket in grouped.values():
         day_summary = summarize_day(bucket.pop("_times"))
         codes = bucket.pop("_codes")
+        # Phase 7: duration and a conservative verdict, computed here and stored
+        # nowhere. An employee with no office falls back to the module default,
+        # and the row says so via `shift_source`.
+        verdict = classify_day(
+            day_summary,
+            day=bucket["summary_date"],
+            shift=shifts.get(bucket["employee_id"])
+            or Shift.default(timezone_name=settings.ATTENDANCE_TIMEZONE),
+        )
         items.append(
             {
                 **bucket,
@@ -1265,6 +1331,14 @@ def list_daily_summary(
                 # More than one code here means two device codes map to the same
                 # employee - worth seeing rather than silently merging.
                 "external_employee_codes": sorted(codes),
+                "worked_minutes": verdict.worked_minutes,
+                "scheduled_start_at": verdict.scheduled_start_at,
+                "scheduled_end_at": verdict.scheduled_end_at,
+                "scheduled_minutes": verdict.scheduled_minutes,
+                "shift_source": verdict.shift_source,
+                "classification": verdict.classification,
+                "review_required": verdict.review_required,
+                "review_reasons": list(verdict.reasons),
             }
         )
 

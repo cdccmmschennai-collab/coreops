@@ -4,7 +4,7 @@ Every number the biometric attendance calculation depends on. Confirmed items ar
 implemented as configuration, never as constants scattered through services.
 Open items block the phase named in the last column - not the phases before it.
 
-Last updated: 2026-07-29 (Phase 0/1).
+Last updated: 2026-08-14 (Phase 7 - see section 6).
 
 ---
 
@@ -94,3 +94,55 @@ Worked example (required 8h 30m, actual 5h 30m, permission 2h): credited 7h 30m,
 shortfall 1h, overtime none.
 
 The `required` value is O-1 and is still open.
+
+---
+
+## 6. Phase 7 - duration + classification (implemented 2026-08-14)
+
+Read-only. No migration, no `attendance_records` write, no persistence of any
+kind: `GET /biometric/daily-summary` computes these per request.
+
+### What was decided (engineering, not policy)
+
+| Decision | Choice | Why |
+|---|---|---|
+| Shift source of truth | `offices.shift_start` / `shift_end` / `timezone` / `break_minutes` (migration 0007), per employee via `employees.office_id` | Already exists and already holds 09:00 / 17:30 / Asia/Kolkata for Chennai. Phase 7 added no shift table and no second configuration path. |
+| Fallback when `office_id` is NULL | `DEFAULT_SHIFT_START` / `DEFAULT_SHIFT_END` in `biometric/constants.py` - the ONLY place 09:00 / 17:30 is written in the backend | The column is nullable, so a fallback is unavoidable; duplicating the literal is not. Flagged per row as `shift_source: "default"` + reason `default_shift_assumed`, never presented as configuration. |
+| Scheduled duration | `shift_end - shift_start` = **510 minutes** for Chennai | A window, not a "required duration". O-1 is still open, so nothing compares against an invented requirement. |
+| Classification vocabulary | Its own 4 values: `present`, `incomplete`, `needs_review`, `no_record` | `AttendanceStatus` (present/absent/half_day/leave/holiday/weekend/comp_off) encodes a CAUSE. Biometric evidence has none - a 6h day may be half day, permission, early release or a missed punch. Borrowing that enum would turn a measurement into an HR decision. |
+| Session model | ONE session: `last_out - first_in` | EasyTime reports no punch direction (see `punch-state-mapping.md`), so pairing middle punches would be a guess about which trips were lunch and which were exits. |
+| Break deduction | **None** | O-2 is open. Deducting 30 minutes would change every day silently. `break_minutes` is displayed only. |
+| Overtime | **Not computed** | Days over 510 minutes are `present`, nothing more. Overtime needs O-1 first. |
+| Night / cross-midnight shifts | Refused, not wrapped | `shift_end <= shift_start` yields reason `unsupported_shift_window` and sends the day to review rather than inventing a next-day rollover. |
+| Bad office timezone | Refused, not defaulted to UTC | Reading a contracted 09:00 as UTC would move it by 5h30m for every day. Reason `shift_timezone_invalid`. |
+
+### Still open, and now visible in the API
+
+| # | Question | What Phase 7 does instead | Impact if answered |
+|---|---|---|---|
+| O-1 | Required daily working duration | Compares against the scheduled WINDOW (510m) | Would replace the comparison basis |
+| O-2 | Does the 30m lunch count as worked time | No deduction | Every day changes by 30m |
+| **O-3** | **Late-arrival grace period** | `SHORTFALL_GRACE_MINUTES = 0`. A day short of its window by even 1 minute is `needs_review` + `short_of_scheduled_duration` - never `half_day` | **One constant.** On the real 54-employee-day dataset, grace 0 already settles 44 days automatically because real days run longer than scheduled (average 9h 30m) |
+| O-4 | Expected shift end | Uses `offices.shift_end` (17:30) | Would confirm or replace it |
+
+`grace_minutes` is echoed on every response page so a consumer can see which
+value produced the verdicts.
+
+### Two discrepancies recorded rather than resolved
+
+1. **Shift start: 08:30 vs 09:00.** Section 1 of this document lists 08:30 as
+   confirmed by management, and warns that the office rows "may still hold the
+   09:00 placeholder". The live rows hold **09:00** for all three offices, and
+   09:00 - 17:30 is the baseline Phase 7 was specified against. Phase 7 reads
+   configuration, so it currently computes against 09:00 / 510 minutes. If 08:30
+   is correct, the fix is a data change to `offices.shift_start` (and the
+   `DEFAULT_SHIFT_*` constants), not a code change - but it would make the
+   scheduled window 540 minutes and move days between `present` and
+   `needs_review`. **Needs confirmation before Phase 10.**
+2. **Attendance day vs office timezone.** Phase 6 buckets the attendance day in
+   `ATTENDANCE_TIMEZONE` (Asia/Kolkata) for every employee, while Phase 7 builds
+   the scheduled window in the OFFICE's own timezone (per `offices/models.py`).
+   For Chennai - every punch currently in the system - these agree. For the Qatar
+   row (`Asia/Qatar`, 09:00 - 18:00) they would not, and "whose midnight starts an
+   attendance day" is an unmade decision. Not blocking while the connector is
+   single-office.

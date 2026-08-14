@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 import {
   buildDayDetail,
   EMPTY_VALUE,
-  formatShiftTime,
+  formatDuration,
+  formatShiftWindow,
   statusLine,
-  type BiometricDayStatus,
+  type BiometricClassification,
 } from "../day-detail";
 import { formatISTTime } from "../mapping-format";
 import {
@@ -34,8 +35,8 @@ import type { DailySummary, SummarySchedule } from "../types";
  * viewport, with the caret tracking the day even after clamping. Below 480px it
  * becomes a bottom sheet with identical content.
  *
- * Read-only. Nothing here writes, and total hours is a rendered string that dies
- * with the component.
+ * Read-only. Nothing here writes, and nothing here decides: the duration and the
+ * classification arrive computed by the backend and are formatted, not derived.
  */
 export function AttendanceDayPopover({
   anchor,
@@ -187,11 +188,12 @@ export function AttendanceDayPopover({
         <div className="mt-3">
           <Micro>CoreOps time</Micro>
           <p className="tabular mt-0.5 text-base font-semibold">
-            {formatShiftTime(schedule?.shift_start)}
+            {formatShiftWindow(schedule?.shift_start, schedule?.shift_end) ??
+              EMPTY_VALUE}
           </p>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-3 border-t border-border pt-3">
+        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3 border-t border-border pt-3">
           <div>
             <Micro>First IN</Micro>
             <p className="tabular mt-0.5 text-base font-semibold">
@@ -209,17 +211,45 @@ export function AttendanceDayPopover({
               {detail.lastOut ? formatISTTime(detail.lastOut) : EMPTY_VALUE}
             </p>
           </div>
+          <div>
+            <Micro>Duration</Micro>
+            {/* Straight from the API. A missing OUT shows "-", never the
+                scheduled end standing in for a punch nobody made. */}
+            <p
+              className={cn(
+                "tabular mt-0.5 text-sm font-semibold",
+                detail.workedMinutes == null && "text-muted-foreground",
+              )}
+            >
+              {formatDuration(detail.workedMinutes)}
+            </p>
+          </div>
+          <div>
+            <Micro>Scheduled</Micro>
+            <p className="tabular mt-0.5 text-sm font-semibold text-muted-foreground">
+              {formatDuration(detail.scheduledMinutes)}
+            </p>
+          </div>
         </div>
 
         <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
           <span
             aria-hidden
-            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[detail.status])}
+            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[detail.classification])}
           />
           <p className="text-xs font-medium">
             {statusLine(detail, attendanceLabel)}
           </p>
         </div>
+
+        {/* Said out loud rather than implied by a colour: the biometric evidence
+            does not settle this day, and nothing has been decided from it. The
+            review itself is a later phase - this only reports the condition. */}
+        {detail.reviewRequired && (
+          <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
+            Not settled by biometric data alone - awaiting review.
+          </p>
+        )}
       </div>
     </div>,
     document.body,
@@ -229,10 +259,13 @@ export function AttendanceDayPopover({
 /** Compact by design: this sits next to a day cell, not in a page column. */
 const CARD_WIDTH = 232;
 
-/** Matches the calendar legend's dot vocabulary, so a colour means one thing. */
-const DOT: Record<BiometricDayStatus, string> = {
-  complete: "bg-emerald-500",
-  partial: "bg-amber-500",
+/** Matches the calendar legend's dot vocabulary, so a colour means one thing.
+ *  `needs_review` shares amber with `incomplete`: both mean "a human still has to
+ *  look at this", and splitting them by colour would suggest one is settled. */
+const DOT: Record<BiometricClassification, string> = {
+  present: "bg-emerald-500",
+  incomplete: "bg-amber-500",
+  needs_review: "bg-amber-500",
   no_record: "bg-slate-300",
 };
 

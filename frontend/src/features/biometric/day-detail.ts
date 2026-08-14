@@ -2,27 +2,35 @@
  * Display logic for the attendance day popover. Pure, read-only.
  *
  * No imports, no React, no `@/` alias - the host-Node unit test loads this file
- * directly. Nothing here writes anything, calls an API, or re-derives a boundary:
- * `first_in` and `last_out` arrive already decided by the Phase 6 backend rule
- * and are passed through untouched.
+ * directly. Nothing here writes anything or calls an API.
  *
- * Total hours is computed here for DISPLAY only and dies with the render. Session
- * pairing, breaks, overtime and payable hours belong to a later phase.
+ * IT ALSO DECIDES NOTHING. Since Phase 7 the classification and the worked
+ * duration arrive already computed by the backend (`classification.py`) and are
+ * passed straight through. The frontend deliberately owns no second copy of the
+ * duration rule: two implementations of "how long was this person here" would
+ * eventually disagree, and the one the user sees would be the wrong one. What is
+ * left here is formatting and label lookup.
  */
 
 /**
- * The three completeness states the biometric data can support.
+ * The four things biometric evidence can support.
  *
- * Used only when the day has NO official attendance record. When a record exists
- * its own status wins, because that is the authoritative word for the day and
- * biometric observation must not overrule it.
+ * Mirrors the backend vocabulary exactly. Note what is NOT here: half day,
+ * permission, leave, absent. Those encode a CAUSE, and a punch stream has none -
+ * a short day means "we measured 6 hours", never "HR decided half day".
  */
-export type BiometricDayStatus = "complete" | "partial" | "no_record";
+export type BiometricClassification =
+  | "present"
+  | "incomplete"
+  | "needs_review"
+  | "no_record";
 
-export const STATUS_LABEL: Record<BiometricDayStatus, string> = {
-  complete: "Present",
+export const CLASSIFICATION_LABEL: Record<BiometricClassification, string> = {
+  present: "Present",
   // One surviving punch: seen, but the day cannot be closed out.
-  partial: "Partial",
+  incomplete: "Incomplete",
+  // Measurable, but not objectively settled - a human decides.
+  needs_review: "Needs review",
   no_record: "No biometric record",
 };
 
@@ -30,69 +38,69 @@ export const STATUS_LABEL: Record<BiometricDayStatus, string> = {
 export interface DaySummaryLike {
   first_in: string | null;
   last_out: string | null;
+  worked_minutes: number | null;
+  scheduled_minutes: number | null;
+  classification: BiometricClassification;
+  review_required: boolean;
 }
 
 export interface DayDetail {
-  status: BiometricDayStatus;
+  classification: BiometricClassification;
   firstIn: string | null;
   lastOut: string | null;
-  /** Display only. Null unless BOTH boundaries exist. Never persisted. */
-  totalMinutes: number | null;
+  /** Elapsed minutes as computed by the backend. Null when not measurable. */
+  workedMinutes: number | null;
+  /** The contracted window's length, for the side-by-side comparison. */
+  scheduledMinutes: number | null;
+  reviewRequired: boolean;
 }
 
 /**
- * Turn one daily-summary row (or its absence) into the popover's four values.
+ * One daily-summary row (or its absence) as the popover's values.
  *
  * `undefined` means the API returned no row for that date, which is exactly how
- * "no biometric record" is represented - a day with no punches has no row.
+ * "no biometric record" is represented - a day with no punches has no row. That
+ * is an absence of evidence, so it is `no_record` and flagged for review; it is
+ * never presented as an absence from work.
  */
 export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
   if (!summary || !summary.first_in) {
-    return { status: "no_record", firstIn: null, lastOut: null, totalMinutes: null };
+    return {
+      classification: "no_record",
+      firstIn: null,
+      lastOut: null,
+      workedMinutes: null,
+      scheduledMinutes: summary?.scheduled_minutes ?? null,
+      reviewRequired: true,
+    };
   }
-  // An OUT exists only when the backend found a second surviving punch. The UI
-  // never re-derives it and never falls back to first_in.
-  const complete = summary.last_out !== null;
   return {
-    status: complete ? "complete" : "partial",
+    classification: summary.classification,
     firstIn: summary.first_in,
+    // An OUT exists only when the backend found a second surviving punch. The UI
+    // never re-derives it and never falls back to first_in or to the shift end.
     lastOut: summary.last_out,
-    totalMinutes: complete ? minutesBetween(summary.first_in, summary.last_out) : null,
+    workedMinutes: summary.worked_minutes,
+    scheduledMinutes: summary.scheduled_minutes,
+    reviewRequired: summary.review_required,
   };
 }
 
 /**
- * The one line shown at the bottom: `"Present · 8h 00m"`.
+ * The one line shown at the bottom: `"Present · 8h 30m"`.
  *
  * `attendanceLabel` is the official record's status when the day has one; it wins
- * over the biometric label. The duration is appended only when both boundaries
- * exist, so an incomplete day reads as a bare status rather than "· -".
+ * over the biometric label, because the record is the authoritative word for the
+ * day and observation must not overrule it. The duration is appended only when it
+ * was measurable, so an incomplete day reads as a bare status rather than "· -".
  */
 export function statusLine(
   detail: DayDetail,
   attendanceLabel?: string | null,
 ): string {
-  const label = attendanceLabel ?? STATUS_LABEL[detail.status];
-  if (detail.totalMinutes == null) return label;
-  return `${label} · ${formatDuration(detail.totalMinutes)}`;
-}
-
-/**
- * Whole minutes between two ISO instants, or null if either is unusable.
- *
- * Returns null rather than 0 for a negative span: the backend cannot produce one
- * (last_out is drawn from a sorted list), so a negative result means something is
- * wrong and showing "0h 00m" would hide it.
- */
-export function minutesBetween(
-  fromIso: string | null | undefined,
-  toIso: string | null | undefined,
-): number | null {
-  if (!fromIso || !toIso) return null;
-  const a = Date.parse(fromIso);
-  const b = Date.parse(toIso);
-  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return null;
-  return Math.floor((b - a) / 60000);
+  const label = attendanceLabel ?? CLASSIFICATION_LABEL[detail.classification];
+  if (detail.workedMinutes == null) return label;
+  return `${label} · ${formatDuration(detail.workedMinutes)}`;
 }
 
 /** `480` -> `"8h 00m"`. Display only - this is never a stored duration. */

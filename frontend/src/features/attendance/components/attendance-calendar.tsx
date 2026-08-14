@@ -329,10 +329,12 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
               <Clock className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="font-medium">{schedule?.office_name ?? "General"}</span>
             </div>
-            {/* Real office hours when the employee has an office; the previous
-                hardcoded placeholder only when they do not. */}
+            {/* Real office hours when the employee has an office; a placeholder
+                only when they do not. The backend applies its own documented
+                fallback in that case (biometric/constants.py), which is why no
+                duration is claimed here. */}
             <div className="tabular text-sm">
-              {shiftWindow ?? "09:00 – 17:30"}
+              {shiftWindow ?? "09:00 - 17:30"}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {schedule
@@ -341,7 +343,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                       ? ` · ${schedule.break_minutes}m lunch`
                       : ""
                   }`
-                : "Asia/Kolkata · 8h day · 30m lunch"}
+                : "Asia/Kolkata · no office assigned"}
             </div>
           </CardContent>
         </Card>

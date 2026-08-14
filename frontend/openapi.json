@@ -9176,7 +9176,7 @@
           "biometric"
         ],
         "summary": "List Daily Summary",
-        "description": "First IN / last OUT per mapped employee per attendance day (Asia/Kolkata).\n\nNOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies\nno punch direction in this deployment, so these are the earliest and latest\npunch of the day after re-scan collapsing - see `summary.py`. Nothing is\nwritten, no session or duration is computed, and `attendance_records` remains\nthe official source.\n\nUnlike the rest of this router this is NOT project_manager-only: an employee\nmust be able to see their own calendar. Scoping mirrors the attendance module\nexactly - a PM sees everyone, anyone else only themselves.",
+        "description": "First IN / last OUT per mapped employee per attendance day (Asia/Kolkata),\nwith the worked duration and a conservative classification.\n\nNOT an attendance record and NOT a device-reported IN/OUT. EasyTime supplies\nno punch direction in this deployment, so the boundaries are the earliest and\nlatest punch of the day after re-scan collapsing (`summary.py`), and the\nclassification only ever says `present` / `incomplete` / `needs_review` /\n`no_record` - never half_day, permission, leave or absent\n(`classification.py`). Nothing is written and `attendance_records` remains the\nofficial source.\n\nUnlike the rest of this router this is NOT project_manager-only: an employee\nmust be able to see their own calendar. Scoping mirrors the attendance module\nexactly - a PM sees everyone, anyone else only themselves.",
         "operationId": "list_daily_summary_api_v1_biometric_daily_summary_get",
         "security": [
           {
@@ -11929,6 +11929,80 @@
             },
             "type": "array",
             "title": "External Employee Codes"
+          },
+          "worked_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worked Minutes"
+          },
+          "scheduled_start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Start At"
+          },
+          "scheduled_end_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled End At"
+          },
+          "scheduled_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Minutes"
+          },
+          "shift_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shift Source"
+          },
+          "classification": {
+            "type": "string",
+            "title": "Classification",
+            "default": "no_record"
+          },
+          "review_required": {
+            "type": "boolean",
+            "title": "Review Required",
+            "default": true
+          },
+          "review_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Review Reasons"
           }
         },
         "type": "object",
@@ -11985,6 +12059,11 @@
                 "type": "null"
               }
             ]
+          },
+          "grace_minutes": {
+            "type": "integer",
+            "title": "Grace Minutes",
+            "default": 0
           }
         },
         "type": "object",
