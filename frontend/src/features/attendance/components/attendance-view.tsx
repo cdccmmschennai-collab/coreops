@@ -22,8 +22,8 @@ import { useUrlState } from "@/lib/use-url-state";
 import { HolidayManager } from "@/features/calendar/components/holiday-manager";
 
 import { AttendanceCalendar } from "./attendance-calendar";
-import { AttendanceHistory } from "./attendance-history";
 import { AttendanceKpis } from "./attendance-kpis";
+import { AttendanceRecords } from "./attendance-records";
 import { CorrectionsPreview } from "./corrections-preview";
 import { attendanceTabs, resolveTab, type TabKey } from "../tabs";
 
@@ -101,10 +101,16 @@ export function AttendanceView() {
         ) : (
           <EmptyState
             title="No personal calendar"
-            description="Your account isn't linked to an employee profile, so there's no personal attendance calendar. Use the Records tab to browse attendance."
+            description={
+              canManage
+                ? "Your account isn't linked to an employee profile, so there's no personal attendance calendar. Use the Records tab to review the team's day."
+                : "Your account isn't linked to an employee profile, so there's no personal attendance calendar. Ask your manager to link your employee record."
+            }
           />
         ))}
-      {tab === "history" && <AttendanceHistory />}
+      {/* Records = the PM daily review. Manager-only, and guarded here as well
+          as in the tab list so a hand-typed ?tab=history cannot reach it. */}
+      {tab === "history" && canManage && <AttendanceRecords />}
       {tab === "leave" && <LeaveTab />}
       {tab === "leave-balance" && canManage && <LeaveBalanceTab />}
       {features.attendanceCorrections && tab === "corrections" && <CorrectionsPreview />}

@@ -220,10 +220,14 @@ def classify_day(
                                               leave, a holiday, or a device that
                                               did not record them)
       first_in, no last_out  -> incomplete   (one sighting; no OUT is invented)
-      both, worked + grace
-        >= scheduled         -> present      (objectively a complete day)
-      both, anything else    -> needs_review (measured, not settled - and no
-                                              cause is attached to it)
+      both boundaries        -> present      (the device saw the whole day)
+      unusable shift config  -> needs_review (nothing to compare against)
+
+    COMPLETENESS, NOT DURATION, decides this. Two punches means the evidence is
+    whole, so the day is settled even when it falls short of the scheduled
+    window; the shortfall rides along as a context reason. Only a day the device
+    could NOT fully see - one punch, or none - is something a human has to
+    complete.
 
     `reasons` also collects observations that do not open a review by themselves
     (late first punch, early last punch, an assumed shift), because a reviewer
@@ -248,11 +252,14 @@ def classify_day(
     elif scheduled_minutes is None or minutes is None:
         # Measured, but with nothing trustworthy to measure it against.
         classification = CLASSIFICATION_NEEDS_REVIEW
-    elif minutes + grace_minutes >= scheduled_minutes:
-        classification = CLASSIFICATION_PRESENT
     else:
-        classification = CLASSIFICATION_NEEDS_REVIEW
-        reasons.append(REASON_SHORT_OF_SCHEDULED)
+        # BOTH boundaries exist, so the device saw the whole day: the record is
+        # complete and there is nothing a human can add to it. Duration no longer
+        # decides this (management decision 2026-08-14) - a day short of the
+        # scheduled window is still `present`, carrying the shortfall as context.
+        classification = CLASSIFICATION_PRESENT
+        if minutes + grace_minutes < scheduled_minutes:
+            reasons.append(REASON_SHORT_OF_SCHEDULED)
 
     # A broken or missing shift window is decisive for a two-punch day and
     # context for any other, so it is recorded either way.

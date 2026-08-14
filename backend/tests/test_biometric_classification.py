@@ -164,32 +164,41 @@ def test_1_a_full_scheduled_day_is_objectively_present():
     assert v.reasons == ()
 
 
-def test_2_a_slightly_late_arrival_is_measured_not_labelled_a_half_day():
+def test_2_a_slightly_late_arrival_is_complete_and_never_a_half_day():
     v = verdict(ist(9, 10), ist(17, 30))
     assert v.worked_minutes == 500  # 8h 20m
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
-    assert v.review_required is True
+    # Both punches exist, so the day is complete evidence and settled.
+    assert v.classification == CLASSIFICATION_PRESENT
+    assert v.review_required is False
+    # The shortfall is still REPORTED - it just no longer demands attention.
     assert REASON_SHORT_OF_SCHEDULED in v.reasons
     assert REASON_LATE_FIRST_PUNCH in v.reasons
-    # The cause of the missing 10 minutes is not in the punch stream.
+    # And a cause is still never invented from a duration.
     assert "half_day" not in v.reasons and "permission" not in v.reasons
 
 
-def test_3_a_slightly_early_departure_is_measured_not_labelled_a_half_day():
+def test_3_a_slightly_early_departure_is_complete_and_never_a_half_day():
     v = verdict(ist(9, 0), ist(17, 20))
     assert v.worked_minutes == 500  # 8h 20m
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
+    assert v.classification == CLASSIFICATION_PRESENT
+    assert v.review_required is False
     assert REASON_EARLY_LAST_PUNCH in v.reasons
     assert REASON_LATE_FIRST_PUNCH not in v.reasons
 
 
-def test_4_eight_hours_against_a_scheduled_eight_and_a_half_is_not_a_full_day():
-    """The whole point of the phase: two valid punches do not make a full day."""
+def test_4_eight_hours_against_a_scheduled_eight_and_a_half_is_settled():
+    """THE RULE CHANGE (2026-08-14): completeness settles a day, not duration.
+
+    Under Phase 7 this was `needs_review`. On real data that flagged four people
+    for being ~12 minutes short, which is noise. Two punches means the device saw
+    the whole day, so there is nothing a human can add.
+    """
     v = verdict(ist(9, 10), ist(17, 10))
     assert v.worked_minutes == 480
     assert v.scheduled_minutes == 510
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
-    assert v.review_required is True
+    assert v.classification == CLASSIFICATION_PRESENT
+    assert v.review_required is False
+    assert REASON_SHORT_OF_SCHEDULED in v.reasons  # reported, not blocking
 
 
 def test_5_a_single_punch_is_incomplete_and_invents_no_out():
@@ -230,7 +239,7 @@ def test_8_middle_punches_are_not_session_boundaries():
     assert v.first_in == ist(9, 10)
     assert v.last_out == ist(17, 10)
     assert v.worked_minutes == 480  # not 480 minus the 30-minute midday gap
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
+    assert v.classification == CLASSIFICATION_PRESENT
 
 
 def test_9_rescans_are_collapsed_by_the_phase_6_rule_before_any_measurement():
@@ -261,21 +270,33 @@ def test_12_two_punches_inside_the_dedup_window_are_one_event():
 
 
 def test_13_two_punches_beyond_the_dedup_window_both_survive():
-    """A two-minute day is a real (absurd) measurement, and is reported as one -
-    2 minutes against a scheduled 510, sent to review. Not rounded up, not
-    labelled, not discarded."""
+    """A two-minute day is a real (absurd) measurement and is reported as one.
+
+    Under the completeness rule it classifies as `present` with a shortfall note,
+    because two punches IS complete evidence. Worth knowing: the rule trusts the
+    device, so an absurd-but-complete day is not questioned. A duration floor
+    would be a separate, explicit policy decision.
+    """
     v = verdict(ist(9, 10), ist(9, 12))
     assert v.last_out == ist(9, 12)
     assert v.worked_minutes == 2
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
+    assert v.classification == CLASSIFICATION_PRESENT
+    assert REASON_SHORT_OF_SCHEDULED in v.reasons
 
 
-def test_14_an_afternoon_arrival_is_measured_and_left_for_review():
+def test_14_an_afternoon_arrival_is_complete_evidence():
+    """CONSEQUENCE OF THE RULE CHANGE, recorded deliberately.
+
+    13:05 -> 17:20 is 4h 15m against a 8h 30m window and is now `present`, not
+    `needs_review`, because both punches exist. If a half-day-sized shortfall
+    should come back to the PM, that needs an explicit duration floor - it is not
+    what the completeness rule does.
+    """
     v = verdict(ist(13, 5), ist(17, 20))
     assert v.worked_minutes == 255  # 4h 15m
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
-    assert v.review_required is True
-    # No half day, no permission, no leave - the cause is unknown.
+    assert v.classification == CLASSIFICATION_PRESENT
+    assert v.review_required is False
+    # Still no half day, no permission, no leave - a cause is never invented.
     assert set(v.reasons) <= {
         REASON_SHORT_OF_SCHEDULED,
         REASON_LATE_FIRST_PUNCH,
@@ -330,7 +351,7 @@ def test_16_the_ist_day_boundary_uses_the_days_own_scheduled_window():
     v = verdict(ist(0, 30), ist(1, 30))
     assert v.scheduled_start_at == ist(9, 0)
     assert v.worked_minutes == 60
-    assert v.classification == CLASSIFICATION_NEEDS_REVIEW
+    assert v.classification == CLASSIFICATION_PRESENT
 
 
 # ── the grace period, isolated ──────────────────────────────────────────────
@@ -339,24 +360,26 @@ def test_grace_is_zero_until_management_answers_o3():
     assert SHORTFALL_GRACE_MINUTES == 0
 
 
-def test_a_grace_period_would_settle_a_short_day_without_any_other_change():
-    """Proof that O-3 is a one-constant decision, not a redesign: the same 8h day
-    becomes `present` purely by supplying the grace management has not yet set."""
-    short = summarize_day([ist(9, 10), ist(17, 10)])
-    assert classify_day(short, day=DAY, shift=CHENNAI).classification == (
-        CLASSIFICATION_NEEDS_REVIEW
-    )
-    assert classify_day(
-        short, day=DAY, shift=CHENNAI, grace_minutes=30
-    ).classification == CLASSIFICATION_PRESENT
+def test_grace_now_controls_only_whether_the_shortfall_is_reported():
+    """Since completeness settles the day, grace no longer changes the verdict -
+    it decides whether the shortfall is worth mentioning at all."""
+    short = summarize_day([ist(9, 10), ist(17, 10)])  # 8h against 8h 30m
+    without = classify_day(short, day=DAY, shift=CHENNAI)
+    with_grace = classify_day(short, day=DAY, shift=CHENNAI, grace_minutes=30)
+
+    assert without.classification == CLASSIFICATION_PRESENT
+    assert with_grace.classification == CLASSIFICATION_PRESENT
+    assert REASON_SHORT_OF_SCHEDULED in without.reasons
+    assert REASON_SHORT_OF_SCHEDULED not in with_grace.reasons
 
 
-def test_exactly_at_the_grace_boundary_counts_as_complete():
+def test_exactly_at_the_grace_boundary_reports_no_shortfall():
     v = classify_day(
         summarize_day([ist(9, 10), ist(17, 30)]), day=DAY, shift=CHENNAI, grace_minutes=10
     )
     assert v.worked_minutes == 500
     assert v.classification == CLASSIFICATION_PRESENT
+    assert REASON_SHORT_OF_SCHEDULED not in v.reasons
 
 
 # ── the vocabulary itself ───────────────────────────────────────────────────
@@ -485,7 +508,7 @@ def test_the_endpoint_reports_a_complete_day_from_office_configuration(
     assert row["review_reasons"] == []
 
 
-def test_the_endpoint_sends_a_short_day_to_review_without_naming_a_cause(
+def test_the_endpoint_reports_a_short_day_as_complete_without_naming_a_cause(
     client, pm, punch, mapping, make_employee, chennai, db
 ):
     emp = _employee_at(db, make_employee, chennai, employee_code="EMP102")
@@ -495,8 +518,9 @@ def test_the_endpoint_sends_a_short_day_to_review_without_naming_a_cause(
 
     row = _summary(client, pm)["items"][0]
     assert row["worked_minutes"] == 480
-    assert row["classification"] == CLASSIFICATION_NEEDS_REVIEW
-    assert row["review_required"] is True
+    # Complete evidence: settled, with the shortfall reported as context.
+    assert row["classification"] == CLASSIFICATION_PRESENT
+    assert row["review_required"] is False
     assert REASON_SHORT_OF_SCHEDULED in row["review_reasons"]
     assert "half_day" not in row["classification"]
 
@@ -548,8 +572,9 @@ def test_an_employee_with_no_office_falls_back_and_says_so(
 def test_each_employee_is_compared_against_their_own_office_window(
     client, pm, punch, mapping, make_employee, chennai, db
 ):
-    """A 09:00 - 18:00 office is 540 minutes, so the identical punch pair that is
-    complete in Chennai is short there. No global constant flattens this."""
+    """A 09:00 - 18:00 office is 540 minutes, so the identical punch pair that
+    meets Chennai's window falls short there. No global constant flattens this -
+    the shortfall is reported per office even though both days are settled."""
     qatar = Office(
         name="Qatar P7",
         timezone="Asia/Kolkata",  # same zone: this test is about the WINDOW only
@@ -571,8 +596,11 @@ def test_each_employee_is_compared_against_their_own_office_window(
     rows = {r["employee_code"]: r for r in _summary(client, pm)["items"]}
     assert rows["EMP106"]["scheduled_minutes"] == 510
     assert rows["EMP106"]["classification"] == CLASSIFICATION_PRESENT
+    assert REASON_SHORT_OF_SCHEDULED not in rows["EMP106"]["review_reasons"]
     assert rows["EMP107"]["scheduled_minutes"] == 540
-    assert rows["EMP107"]["classification"] == CLASSIFICATION_NEEDS_REVIEW
+    assert rows["EMP107"]["classification"] == CLASSIFICATION_PRESENT
+    # Same punches, longer contracted day - only THIS office reports a shortfall.
+    assert REASON_SHORT_OF_SCHEDULED in rows["EMP107"]["review_reasons"]
 
 
 def test_the_page_declares_the_grace_period_it_applied(

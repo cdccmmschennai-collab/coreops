@@ -352,6 +352,94 @@ class DailySummaryPage(BaseModel):
     grace_minutes: int = SHORTFALL_GRACE_MINUTES
 
 
+# ── Phase 8: PM daily review (read-only) ────────────────────────────────────
+
+class DailyReviewRowOut(BaseModel):
+    """One employee's day, as the PM review screen needs it.
+
+    Deliberately NARROWER than `DailySummaryOut`: no punch counts, no punch
+    times, no external codes, no derivation slug. Those are evidence-inspection
+    and debugging fields; this row answers "is this day settled, and if not
+    why?", and shipping the rest would only invite a UI that displays it.
+
+    Every value here is computed by the same engine the calendar uses. The
+    frontend formats these numbers; it never recomputes them.
+    """
+
+    employee_id: uuid.UUID
+    employee_code: str | None = None
+    employee_name: str | None = None
+
+    first_in: datetime | None = None
+    last_out: datetime | None = None
+    worked_minutes: int | None = None
+
+    scheduled_start_at: datetime | None = None
+    scheduled_end_at: datetime | None = None
+    scheduled_minutes: int | None = None
+
+    classification: str
+    # True only when the punches could not settle the day AND no human has ruled
+    # on it yet. An official record clears this - that ruling IS the missing
+    # information.
+    review_required: bool
+    # Whether the PM may supply this boundary. False when the device already
+    # recorded it: biometric evidence is immutable and complete evidence cannot
+    # be improved, so only a missing punch is fillable by hand.
+    can_set_check_in: bool = False
+    can_set_check_out: bool = False
+    # Everything observed, most-decisive first - including context-only notes
+    # such as `first_punch_after_shift_start`.
+    review_reasons: list[str] = Field(default_factory=list)
+    # The subset that actually requires attention. Split server-side so the UI
+    # does not need its own copy of which reasons are blocking.
+    blocking_reasons: list[str] = Field(default_factory=list)
+
+    # The OFFICIAL record for this day, when a human has already ruled on it.
+    # Null means nobody has decided yet - NOT that the employee was absent. The
+    # biometric fields above are evidence and remain unchanged either way; this
+    # is the decision layered on top, and only the attendance module writes it.
+    attendance_record_id: uuid.UUID | None = None
+    attendance_status: str | None = None
+    attendance_check_in_at: datetime | None = None
+    attendance_check_out_at: datetime | None = None
+    # The reason the PM gave. Null when nobody explained the day.
+    attendance_note: str | None = None
+
+
+class DailyReviewCounts(BaseModel):
+    """The whole day, counted BEFORE any classification filter is applied.
+
+    Truthfully derivable from biometric evidence alone - which is why there is
+    no `leave`, `permission` or `half_day` here. Those need the approved-exception
+    data that Phase 9 integrates; inventing them from punch durations is exactly
+    the guess this module refuses to make.
+    """
+
+    employees: int = 0
+    review_required: int = 0
+    present: int = 0
+    incomplete: int = 0
+    needs_review: int = 0
+    no_record: int = 0
+
+
+class DailyReviewPage(BaseModel):
+    """One attendance day across every in-scope employee.
+
+    NOT an attendance ledger and not a decision: no row here has been approved,
+    finalized or written anywhere. `attendance_records` remains untouched and
+    remains the official source.
+    """
+
+    review_date: date
+    provider: str
+    items: list[DailyReviewRowOut]
+    # Rows AFTER filtering; `counts` describes the unfiltered day.
+    total: int
+    counts: DailyReviewCounts
+
+
 class SyncBatchOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

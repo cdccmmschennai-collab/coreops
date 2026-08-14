@@ -15,12 +15,67 @@ from sqlalchemy.orm import Session
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.attendance.schemas import AttendanceCreate, AttendanceUpdate
+from app.modules.audit.constants import AuditAction, EntityType
+from app.modules.audit.service import record_audit
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
 STANDARD_WORKDAY_MINUTES = 480  # 8 hours; anything beyond counts as overtime
+
+
+def _clean_note(value: str | None) -> str | None:
+    """Whitespace-only is no note. Keeps "  " out of the column so the UI can
+    treat NULL as the single "no reason given" case."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _audit_record(
+    db: Session,
+    *,
+    actor: User,
+    action: str,
+    record: AttendanceRecord,
+    note: str | None,
+    previous_status: AttendanceStatus | None,
+) -> None:
+    """Record who decided what a day means, and why. FLUSHES, never commits.
+
+    Attendance had no audit trail at all before this. It needs one precisely
+    BECAUSE biometric evidence is immutable: punches cannot change, so the only
+    way a day's official meaning changes is a human deciding it did, and that
+    decision should never be anonymous.
+
+    The PM's `note` is carried here rather than on the row. `attendance_records`
+    has no note column, and adding one is a migration - the reasoning behind a
+    change is also genuinely audit-shaped: it explains an event, not the current
+    state of the day.
+    """
+    details: dict = {
+        "employee_id": str(record.employee_id),
+        "attendance_date": record.attendance_date.isoformat(),
+        "status": record.status.value,
+        "check_in_at": record.check_in_at.isoformat() if record.check_in_at else None,
+        "check_out_at": record.check_out_at.isoformat() if record.check_out_at else None,
+        "total_minutes": record.total_minutes,
+    }
+    if previous_status is not None and previous_status != record.status:
+        details["previous_status"] = previous_status.value
+    if note and note.strip():
+        details["note"] = note.strip()
+
+    record_audit(
+        db,
+        action=action,
+        actor=actor,
+        entity_type=EntityType.ATTENDANCE_RECORD,
+        entity_id=record.id,
+        details=details,
+    )
 def _compute_minutes(
     check_in: datetime | None, check_out: datetime | None
 ) -> tuple[int, int]:
@@ -191,11 +246,21 @@ def create_attendance(db: Session, actor: User, data: AttendanceCreate) -> Atten
         check_out_at=data.check_out_at,
         total_minutes=total,
         overtime_minutes=overtime,
+        note=_clean_note(data.note),
         created_by=actor.id,
         updated_by=actor.id,
     )
     db.add(record)
     try:
+        db.flush()
+        _audit_record(
+            db,
+            actor=actor,
+            action=AuditAction.ATTENDANCE_RECORD_CREATE,
+            record=record,
+            note=data.note,
+            previous_status=None,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -209,6 +274,7 @@ def update_attendance(
 ) -> AttendanceRecord:
     record = _fetch(db, record_id)
     fields = data.model_dump(exclude_unset=True)
+    previous_status = record.status
 
     new_in = fields.get("check_in_at", record.check_in_at)
     new_out = fields.get("check_out_at", record.check_out_at)
@@ -221,10 +287,23 @@ def update_attendance(
         record.check_in_at = fields["check_in_at"]
     if "check_out_at" in fields:
         record.check_out_at = fields["check_out_at"]
+    # Only overwrite the stored reason when one was actually sent. A PATCH that
+    # changes the status must not silently erase the explanation already there.
+    if "note" in fields:
+        record.note = _clean_note(fields["note"])
 
     record.total_minutes, record.overtime_minutes = _compute_minutes(new_in, new_out)
     record.updated_by = actor.id
     db.add(record)
+    db.flush()
+    _audit_record(
+        db,
+        actor=actor,
+        action=AuditAction.ATTENDANCE_RECORD_UPDATE,
+        record=record,
+        note=data.note,
+        previous_status=previous_status,
+    )
     db.commit()
     db.refresh(record)
     return record
@@ -232,6 +311,14 @@ def update_attendance(
 
 def delete_attendance(db: Session, actor: User, record_id: uuid.UUID) -> None:
     record = _fetch(db, record_id)
+    _audit_record(
+        db,
+        actor=actor,
+        action=AuditAction.ATTENDANCE_RECORD_DELETE,
+        record=record,
+        note=None,
+        previous_status=record.status,
+    )
     db.delete(record)
     db.commit()
 
@@ -319,6 +406,9 @@ def bulk_save_attendance(
         .all()
     }
 
+    # (record, was_created, previous_status) for the audit pass below.
+    touched: list[tuple[AttendanceRecord, bool, AttendanceStatus | None]] = []
+
     for item in records:
         if (
             item.check_in_at is not None
@@ -330,6 +420,8 @@ def bulk_save_attendance(
             )
         total, overtime = _compute_minutes(item.check_in_at, item.check_out_at)
         record = existing.get(item.employee_id)
+        created = record is None
+        previous_status = None if created else record.status
         if record is None:
             record = AttendanceRecord(
                 employee_id=item.employee_id,
@@ -343,8 +435,26 @@ def bulk_save_attendance(
         record.total_minutes = total
         record.overtime_minutes = overtime
         record.updated_by = actor.id
+        touched.append((record, created, previous_status))
 
     try:
+        # Audited per employee-day, not per batch: one row here is one decision
+        # about one person, and "who marked me half-day" has to be answerable
+        # afterwards. Flushed first so an inserted record has its id.
+        db.flush()
+        for record, created, previous_status in touched:
+            _audit_record(
+                db,
+                actor=actor,
+                action=(
+                    AuditAction.ATTENDANCE_RECORD_CREATE
+                    if created
+                    else AuditAction.ATTENDANCE_RECORD_UPDATE
+                ),
+                record=record,
+                note=None,
+                previous_status=previous_status,
+            )
         db.commit()
     except IntegrityError:
         db.rollback()

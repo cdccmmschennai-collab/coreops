@@ -351,12 +351,14 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
 
       <AttendanceDayPopover
         anchor={selected?.anchor ?? null}
-        dateLabel={selected ? formatDayLabel(selected.iso) : ""}
+        title={selected ? formatDayLabel(selected.iso) : ""}
         summary={selected ? biometricByDate.get(selected.iso) : undefined}
-        schedule={schedule}
         attendanceLabel={
           selected ? (statusLabelFor(byDate.get(selected.iso)?.status) ?? null) : null
         }
+        // Why a manager set this day this way, in their words. This is how an
+        // employee finds out that their missing evening punch was accounted for.
+        reason={selected ? (byDate.get(selected.iso)?.note ?? null) : null}
         onClose={() => setSelected(null)}
       />
     </div>

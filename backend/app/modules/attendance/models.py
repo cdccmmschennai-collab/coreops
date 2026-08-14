@@ -16,6 +16,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -59,6 +60,10 @@ class AttendanceRecord(UUIDMixin, TimestampMixin, Base):
         ),
         nullable=False,
     )
+    # Why a human set this day the way they did (migration 0067). Nullable: most
+    # days need no explanation, and a day nobody explained must read as "no
+    # reason given" rather than as an empty string somebody typed.
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 

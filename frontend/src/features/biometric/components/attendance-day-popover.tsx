@@ -9,9 +9,9 @@ import {
   buildDayDetail,
   EMPTY_VALUE,
   formatDuration,
-  formatShiftWindow,
   statusLine,
   type BiometricClassification,
+  type DaySummaryLike,
 } from "../day-detail";
 import { formatISTTime } from "../mapping-format";
 import {
@@ -19,10 +19,12 @@ import {
   type AnchorRect,
   type PopoverPosition,
 } from "../popover-position";
-import type { DailySummary, SummarySchedule } from "../types";
-
 /**
- * A contextual macOS-style popover for one calendar day.
+ * A contextual macOS-style popover for one attendance day.
+ *
+ * Shared by the calendar (anchored to a day cell) and the PM review screen
+ * (anchored to a table row). Both pass the same `DaySummaryLike` shape, so there
+ * is one detail panel rather than two that drift apart.
  *
  * NOT a modal and NOT a drawer: no backdrop, no blur, no dimming. The calendar
  * stays fully visible and readable behind it, and a caret points back at the day
@@ -40,22 +42,29 @@ import type { DailySummary, SummarySchedule } from "../types";
  */
 export function AttendanceDayPopover({
   anchor,
-  dateLabel,
+  title,
+  subtitle,
   summary,
-  schedule,
   attendanceLabel,
+  reason,
   onClose,
 }: {
-  /** The day cell that opened this, or null when closed. */
+  /** The element that opened this (a calendar day, or a review row), or null. */
   anchor: HTMLElement | null;
-  dateLabel: string;
-  /** The row for this date, or undefined when the day has no punches. */
-  summary: DailySummary | undefined;
-  schedule: SummarySchedule | null;
+  /** The heading: the date on the calendar, the employee on the review screen. */
+  title: string;
+  /** Optional second line - the date, when the heading is an employee. */
+  subtitle?: string | null;
+  /** The row for this day, or undefined when there are no punches. */
+  summary: DaySummaryLike | undefined;
   /** The official attendance status label for the day, when a record exists. */
   attendanceLabel: string | null;
+  /** The reason a manager recorded for this day. Their words, not a system
+   *  slug - shown verbatim so the employee reads exactly what was written. */
+  reason?: string | null;
   onClose: () => void;
 }) {
+  const coreOpsTime = useCoreOpsClock();
   const cardRef = React.useRef<HTMLDivElement>(null);
   const [position, setPosition] = React.useState<PopoverPosition | null>(null);
   const [visible, setVisible] = React.useState(false);
@@ -143,7 +152,7 @@ export function AttendanceDayPopover({
     <div
       ref={cardRef}
       role="dialog"
-      aria-label={`Attendance for ${dateLabel}`}
+      aria-label={`Attendance for ${subtitle ? `${title}, ${subtitle}` : title}`}
       style={
         sheet
           ? undefined
@@ -183,14 +192,17 @@ export function AttendanceDayPopover({
       )}
 
       <div className="p-3.5">
-        <p className="font-serif text-sm font-semibold leading-tight">{dateLabel}</p>
+        <p className="font-serif text-sm font-semibold leading-tight">{title}</p>
+        {subtitle && (
+          <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
+        )}
 
         <div className="mt-3">
           <Micro>CoreOps time</Micro>
-          <p className="tabular mt-0.5 text-base font-semibold">
-            {formatShiftWindow(schedule?.shift_start, schedule?.shift_end) ??
-              EMPTY_VALUE}
-          </p>
+          {/* The live company clock, not the contracted window - the scheduled
+              length already has its own field below, and repeating it here said
+              the same thing twice. */}
+          <p className="tabular mt-0.5 text-base font-bold">{coreOpsTime}</p>
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-3 border-t border-border pt-3">
@@ -212,7 +224,7 @@ export function AttendanceDayPopover({
             </p>
           </div>
           <div>
-            <Micro>Duration</Micro>
+            <Micro>Worked</Micro>
             {/* Straight from the API. A missing OUT shows "-", never the
                 scheduled end standing in for a punch nobody made. */}
             <p
@@ -242,18 +254,56 @@ export function AttendanceDayPopover({
           </p>
         </div>
 
-        {/* Said out loud rather than implied by a colour: the biometric evidence
-            does not settle this day, and nothing has been decided from it. The
-            review itself is a later phase - this only reports the condition. */}
-        {detail.reviewRequired && (
-          <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-            Not settled by biometric data alone - awaiting review.
-          </p>
+        {/* The manager's own words for why this day reads the way it does. Only
+            shown when somebody actually wrote one - an unexplained day says
+            nothing rather than showing an empty heading. */}
+        {reason && (
+          <div className="mt-3 border-t border-border pt-3">
+            <Micro>Reason</Micro>
+            <p className="mt-0.5 whitespace-pre-line text-xs leading-snug">
+              {reason}
+            </p>
+          </div>
         )}
       </div>
     </div>,
     document.body,
   );
+}
+
+/**
+ * The current company wall clock, `HH:MM:SS` in Asia/Kolkata, ticking.
+ *
+ * Pinned to the office timezone rather than the viewer's, so a PM working from
+ * anywhere reads the same clock the office does. Seconds tick once a second -
+ * the point is that it visibly moves, which is what makes it read as a live
+ * clock rather than a static field. The interval is cleared on unmount, and the
+ * popover is short-lived, so this is a handful of renders.
+ *
+ * Rendered only after mount: the server and the browser are never in the same
+ * second, so painting a clock during SSR would guarantee a hydration mismatch.
+ * Until then it shows a dash rather than a wrong time.
+ */
+function useCoreOpsClock(): string {
+  const [now, setNow] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const read = () =>
+      setNow(
+        new Date().toLocaleTimeString("en-GB", {
+          timeZone: "Asia/Kolkata",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }),
+      );
+    read();
+    const id = window.setInterval(read, 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return now ?? EMPTY_VALUE;
 }
 
 /** Compact by design: this sits next to a day cell, not in a page column. */

@@ -9256,6 +9256,81 @@
         }
       }
     },
+    "/api/v1/biometric/daily-review": {
+      "get": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "List Daily Review",
+        "description": "One attendance day across every in-scope employee, for PM review.\n\nproject_manager ONLY - unlike `/daily-summary`, which an employee may call\nfor their own calendar. This one returns the whole roster, so it carries the\nsame authority as the rest of this admin router.\n\nRead-only and non-committal: it reports what the biometric evidence supports\nand which days a human still has to settle. Nothing is approved, finalized or\nwritten; `attendance_records` is untouched. An employee with no punches is\nreported as `no_record`, NEVER as absent - the cause could be approved leave,\na permission, official duty or a missed punch, and none of those are knowable\nfrom a punch stream (Phase 9 supplies them).",
+        "operationId": "list_daily_review_api_v1_biometric_daily_review_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Date"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "easytime",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "classification",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Classification"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyReviewPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/biometric/mappings/bulk": {
       "post": {
         "tags": [
@@ -10858,6 +10933,18 @@
               }
             ],
             "title": "Check Out At"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
           }
         },
         "type": "object",
@@ -10919,6 +11006,17 @@
           },
           "status": {
             "$ref": "#/components/schemas/AttendanceStatus"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
           },
           "created_at": {
             "type": "string",
@@ -11150,6 +11248,18 @@
               }
             ],
             "title": "Check Out At"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
           }
         },
         "type": "object",
@@ -11846,6 +11956,279 @@
         ],
         "title": "DailyBenchmarkRowOut",
         "description": "One row of 'My Alerts' / 'Team Benchmark Backlog' \u2014 a single day's\nactual/target/pending for one NUMERIC sub-activity, with pending > 0\n(a clean day doesn't show up in this list, though it still counts\ntoward the weekly productivity %). `sub_activity_name` is the \"Activity\nName\" shown in the UI examples (e.g. \"FMTL Rework\")."
+      },
+      "DailyReviewCounts": {
+        "properties": {
+          "employees": {
+            "type": "integer",
+            "title": "Employees",
+            "default": 0
+          },
+          "review_required": {
+            "type": "integer",
+            "title": "Review Required",
+            "default": 0
+          },
+          "present": {
+            "type": "integer",
+            "title": "Present",
+            "default": 0
+          },
+          "incomplete": {
+            "type": "integer",
+            "title": "Incomplete",
+            "default": 0
+          },
+          "needs_review": {
+            "type": "integer",
+            "title": "Needs Review",
+            "default": 0
+          },
+          "no_record": {
+            "type": "integer",
+            "title": "No Record",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "DailyReviewCounts",
+        "description": "The whole day, counted BEFORE any classification filter is applied.\n\nTruthfully derivable from biometric evidence alone - which is why there is\nno `leave`, `permission` or `half_day` here. Those need the approved-exception\ndata that Phase 9 integrates; inventing them from punch durations is exactly\nthe guess this module refuses to make."
+      },
+      "DailyReviewPage": {
+        "properties": {
+          "review_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Review Date"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DailyReviewRowOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/DailyReviewCounts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_date",
+          "provider",
+          "items",
+          "total",
+          "counts"
+        ],
+        "title": "DailyReviewPage",
+        "description": "One attendance day across every in-scope employee.\n\nNOT an attendance ledger and not a decision: no row here has been approved,\nfinalized or written anywhere. `attendance_records` remains untouched and\nremains the official source."
+      },
+      "DailyReviewRowOut": {
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "employee_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Code"
+          },
+          "employee_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Name"
+          },
+          "first_in": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First In"
+          },
+          "last_out": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Out"
+          },
+          "worked_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worked Minutes"
+          },
+          "scheduled_start_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Start At"
+          },
+          "scheduled_end_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled End At"
+          },
+          "scheduled_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Minutes"
+          },
+          "classification": {
+            "type": "string",
+            "title": "Classification"
+          },
+          "review_required": {
+            "type": "boolean",
+            "title": "Review Required"
+          },
+          "can_set_check_in": {
+            "type": "boolean",
+            "title": "Can Set Check In",
+            "default": false
+          },
+          "can_set_check_out": {
+            "type": "boolean",
+            "title": "Can Set Check Out",
+            "default": false
+          },
+          "review_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Review Reasons"
+          },
+          "blocking_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking Reasons"
+          },
+          "attendance_record_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendance Record Id"
+          },
+          "attendance_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendance Status"
+          },
+          "attendance_check_in_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendance Check In At"
+          },
+          "attendance_check_out_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendance Check Out At"
+          },
+          "attendance_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attendance Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "employee_id",
+          "classification",
+          "review_required"
+        ],
+        "title": "DailyReviewRowOut",
+        "description": "One employee's day, as the PM review screen needs it.\n\nDeliberately NARROWER than `DailySummaryOut`: no punch counts, no punch\ntimes, no external codes, no derivation slug. Those are evidence-inspection\nand debugging fields; this row answers \"is this day settled, and if not\nwhy?\", and shipping the rest would only invite a UI that displays it.\n\nEvery value here is computed by the same engine the calendar uses. The\nfrontend formats these numbers; it never recomputes them."
       },
       "DailySummaryOut": {
         "properties": {

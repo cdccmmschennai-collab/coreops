@@ -37,10 +37,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.modules.attendance.models import AttendanceRecord
 from app.modules.audit.constants import STATUS_FAILURE, AuditAction, EntityType
 from app.modules.audit.service import record_audit
 from app.modules.biometric.classification import Shift, classify_day
 from app.modules.biometric.constants import (
+    BLOCKING_REVIEW_REASONS,
+    CLASSIFICATIONS,
     BATCH_COMPLETED,
     BATCH_COMPLETED_WITH_ERRORS,
     BATCH_FAILED,
@@ -87,8 +90,8 @@ from app.modules.biometric.schemas import (
     PunchBatchResult,
     PunchIn,
 )
-from app.modules.biometric.summary import summarize_day
-from app.modules.employees.models import Employee
+from app.modules.biometric.summary import EMPTY_DAY, summarize_day
+from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.offices.models import Office
 from app.modules.users.models import User, UserRole
@@ -1153,6 +1156,226 @@ def _employee_shifts(
             source=SHIFT_SOURCE_OFFICE,
         )
         for emp_id, tz, shift_start, shift_end, break_minutes in rows
+    }
+
+
+def _review_employees(db: Session, *, on_date: date) -> list[tuple]:
+    """Everyone whose day should appear on the review for `on_date`. One query.
+
+    Scope rules, all read-only and all deliberate:
+      * soft-deleted employees are excluded outright;
+      * `exited` employees are excluded - they are not expected to punch, and a
+        permanent row of "No Record" for a leaver is noise, not review;
+      * `on_leave` employees ARE included. A long-term leave status is exactly
+        the context Phase 9 will supply; suppressing them here would hide a day
+        rather than explain it;
+      * anyone who had not joined yet on `on_date` is excluded, so a new hire
+        does not retroactively appear as missing attendance for last month.
+    """
+    return db.execute(
+        select(
+            Employee.id,
+            Employee.employee_code,
+            Employee.first_name,
+            Employee.last_name,
+        )
+        .where(
+            Employee.deleted_at.is_(None),
+            Employee.status != EmployeeStatus.exited,
+            or_(
+                Employee.date_of_joining.is_(None),
+                Employee.date_of_joining <= on_date,
+            ),
+        )
+        .order_by(Employee.employee_code)
+    ).all()
+
+
+def _punches_for_day(
+    db: Session, *, provider: str, on_date: date
+) -> dict[uuid.UUID, list[datetime]]:
+    """Punch instants for one attendance day, keyed by employee. One query.
+
+    Attribution joins `biometric_employee_mappings`, never
+    `biometric_punches.employee_id` - identical to `list_daily_summary`, and for
+    the same reason: every punch in the real backfill was stored before any
+    mapping existed, so reading the stored column would report an empty day
+    forever.
+
+    The day is bucketed in ATTENDANCE_TIMEZONE, so "14 August" means the IST date
+    a person would name.
+    """
+    local_day = cast(
+        func.timezone(settings.ATTENDANCE_TIMEZONE, BiometricPunch.punch_time), Date
+    )
+    rows = db.execute(
+        select(Employee.id, BiometricPunch.punch_time)
+        .select_from(BiometricPunch)
+        .join(
+            BiometricEmployeeMapping,
+            and_(
+                BiometricEmployeeMapping.provider == BiometricPunch.provider,
+                BiometricEmployeeMapping.external_employee_code
+                == BiometricPunch.external_employee_code,
+                BiometricEmployeeMapping.is_active.is_(True),
+            ),
+        )
+        .join(Employee, Employee.id == BiometricEmployeeMapping.employee_id)
+        .where(
+            BiometricPunch.provider == provider,
+            Employee.deleted_at.is_(None),
+            local_day == on_date,
+        )
+    ).all()
+
+    grouped: dict[uuid.UUID, list[datetime]] = {}
+    for employee_id, punch_time in rows:
+        grouped.setdefault(employee_id, []).append(punch_time)
+    return grouped
+
+
+def _official_records(
+    db: Session, *, on_date: date, employee_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, AttendanceRecord]:
+    """The OFFICIAL attendance record for the day, where one exists. One query.
+
+    Read-only from this module's point of view: biometric reports what the
+    devices saw, `attendance_records` holds what a human decided, and the review
+    screen shows both side by side. Nothing here writes that table - the PM does,
+    through the attendance module's own endpoints, which own its validation and
+    audit trail.
+    """
+    if not employee_ids:
+        return {}
+    rows = db.execute(
+        select(AttendanceRecord).where(
+            AttendanceRecord.attendance_date == on_date,
+            AttendanceRecord.employee_id.in_(employee_ids),
+        )
+    ).scalars()
+    return {r.employee_id: r for r in rows}
+
+
+def list_daily_review(
+    db: Session,
+    *,
+    provider: str,
+    on_date: date,
+    classification: str | None,
+) -> dict:
+    """One attendance day across every in-scope employee, for PM review.
+
+    THE DIFFERENCE FROM `list_daily_summary`, and why this is a separate read
+    rather than a flag on that one: the summary is EVIDENCE-SHAPED - it returns
+    the employee-days that have punches, over a date RANGE, scoped to the caller.
+    Review is ROSTER-SHAPED: one date, every employee who was expected, including
+    the ones with no punch at all. Those are different cardinalities (a month for
+    one person vs one day for everyone) and different questions, and forcing both
+    through one endpoint would have made the calendar's month query materialize
+    an employee x day grid it never wanted.
+
+    What is NOT duplicated: the boundary rule (`summarize_day`), the duration and
+    verdict (`classify_day`), the shift lookup (`_employee_shifts`) and the day
+    bucketing are the SAME code the summary uses. There is one calculation engine
+    and this is a second caller of it, not a second copy.
+
+    Read-only, absolutely: three SELECTs, no INSERT/UPDATE/DELETE, no
+    `attendance_records` row, no punch touched, and NO synthetic punch invented
+    for an employee who did not punch - a missing day is represented by an
+    in-memory `EMPTY_DAY`, which is why it can never reach the database.
+
+    Cost is three queries regardless of headcount: employees, the day's punches,
+    and the office shifts. No per-employee query, no N+1.
+
+    `counts` describes the WHOLE day and is computed before `classification`
+    filters `items`, so a PM looking at "Needs review" still sees how many of the
+    day's records that is out of.
+    """
+    employees = _review_employees(db, on_date=on_date)
+    employee_ids = {row[0] for row in employees}
+
+    punches = _punches_for_day(db, provider=provider, on_date=on_date)
+    shifts = _employee_shifts(db, employee_ids)
+    official = _official_records(db, on_date=on_date, employee_ids=employee_ids)
+    default_shift = Shift.default(timezone_name=settings.ATTENDANCE_TIMEZONE)
+
+    items: list[dict] = []
+    counts: dict[str, int] = {c: 0 for c in CLASSIFICATIONS}
+    review_required_count = 0
+
+    for employee_id, employee_code, first_name, last_name in employees:
+        times = punches.get(employee_id)
+        # No punches is an ABSENCE OF EVIDENCE, represented in memory only. It is
+        # never an absence from work and never a stored row.
+        day_summary = summarize_day(times) if times else EMPTY_DAY
+        verdict = classify_day(
+            day_summary,
+            day=on_date,
+            shift=shifts.get(employee_id) or default_shift,
+        )
+
+        counts[verdict.classification] = counts.get(verdict.classification, 0) + 1
+        record = official.get(employee_id)
+
+        # The official record is the SOURCE OF TRUTH for what a day means. Once a
+        # human has ruled on a day it leaves the queue, even if the punches alone
+        # could not settle it - that ruling is exactly the missing information.
+        review_required = verdict.review_required and record is None
+        if review_required:
+            review_required_count += 1
+
+        # Biometric evidence is immutable and complete evidence is not
+        # improvable, so the PM may supply a time ONLY where the device did not
+        # record one. Enforced in the UI from this flag rather than from the UI
+        # re-deriving it, so both ends agree on what "missing" means.
+        can_set_check_in = verdict.first_in is None
+        can_set_check_out = verdict.last_out is None
+
+        if classification is not None and verdict.classification != classification:
+            continue
+
+        items.append(
+            {
+                "employee_id": employee_id,
+                "employee_code": employee_code,
+                "employee_name": f"{first_name} {last_name}".strip(),
+                "first_in": verdict.first_in,
+                "last_out": verdict.last_out,
+                "worked_minutes": verdict.worked_minutes,
+                "scheduled_start_at": verdict.scheduled_start_at,
+                "scheduled_end_at": verdict.scheduled_end_at,
+                "scheduled_minutes": verdict.scheduled_minutes,
+                "classification": verdict.classification,
+                "review_required": review_required,
+                "can_set_check_in": can_set_check_in,
+                "can_set_check_out": can_set_check_out,
+                "review_reasons": list(verdict.reasons),
+                # The subset that actually demands attention. Split HERE because
+                # BLOCKING_REVIEW_REASONS already lives here - a frontend copy of
+                # that set would be a second policy that could drift.
+                "blocking_reasons": [
+                    r for r in verdict.reasons if r in BLOCKING_REVIEW_REASONS
+                ],
+                # The OFFICIAL record, when a human has already ruled on this day.
+                # Read from `attendance_records` - biometric never writes it.
+                "attendance_record_id": record.id if record else None,
+                "attendance_status": record.status.value if record else None,
+                "attendance_check_in_at": record.check_in_at if record else None,
+                "attendance_check_out_at": record.check_out_at if record else None,
+                "attendance_note": record.note if record else None,
+            }
+        )
+
+    return {
+        "review_date": on_date,
+        "provider": provider,
+        "items": items,
+        "total": len(items),
+        "counts": {
+            **counts,
+            "employees": len(employees),
+            "review_required": review_required_count,
+        },
     }
 
 

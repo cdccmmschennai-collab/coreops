@@ -134,15 +134,24 @@ REASON_SHIFT_TIMEZONE_INVALID = "shift_timezone_invalid"
 REASON_DEFAULT_SHIFT_ASSUMED = "default_shift_assumed"
 
 # Reasons that mean "a human must decide this day". The rest are OBSERVATIONS
-# that travel with the row for context and do not, on their own, open a review:
-# arriving at 09:10 and leaving at 17:40 is a complete scheduled day that happens
-# to have started late, and calling that unsettled would make the review queue
-# meaningless.
+# that travel with the row for context and do not, on their own, open a review.
+#
+# REASON_SHORT_OF_SCHEDULED IS DELIBERATELY NOT HERE (changed 2026-08-14, by
+# management decision). It was blocking in Phase 7, which meant an 8h 18m day
+# against a 8h 30m window went to review - and on real data that flagged four
+# people for being twelve minutes short, which is noise, not review. The rule is
+# now COMPLETENESS, not duration: two punches means the device saw the whole day
+# and there is nothing for a human to add. The shortfall is still REPORTED as
+# context so the information is not lost, it just no longer demands attention.
+#
+# Consequence, stated plainly: a 13:05 -> 17:20 day (4h 15m) is now `present`
+# with a "short of scheduled duration" note, not `needs_review`. If a floor is
+# wanted below which a short day DOES need review, that is a threshold decision -
+# see SHORTFALL_GRACE_MINUTES.
 BLOCKING_REVIEW_REASONS = frozenset(
     {
         REASON_NO_BIOMETRIC_RECORD,
         REASON_MISSING_SECOND_PUNCH,
-        REASON_SHORT_OF_SCHEDULED,
         REASON_SHIFT_UNKNOWN,
         REASON_UNSUPPORTED_SHIFT_WINDOW,
         REASON_SHIFT_TIMEZONE_INVALID,

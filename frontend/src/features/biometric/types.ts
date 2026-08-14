@@ -6,6 +6,12 @@
  * this module does not pretend otherwise.
  */
 
+// The classification vocabulary is declared once, in `day-detail.ts`, and reused
+// here - two copies of a status union eventually disagree.
+import type { BiometricClassification } from "./day-detail";
+
+export type { BiometricClassification };
+
 export const PROVIDER_EASYTIME = "easytime";
 
 export type CodeStatus = "mapped" | "unmapped";
@@ -104,12 +110,6 @@ export interface DailySummary {
  * (half day, leave, holiday), and a punch stream cannot supply one. A 6-hour day
  * is `needs_review`, never "half day".
  */
-export type BiometricClassification =
-  | "present"
-  | "incomplete"
-  | "needs_review"
-  | "no_record";
-
 export type ShiftSource = "office" | "default";
 
 /** The employee's contracted office hours - CoreOps' own data, not biometric.
@@ -138,6 +138,75 @@ export interface DailySummaryPage {
    *  `present`. Zero because the late-arrival grace period is an unanswered
    *  management question, not because zero is a rule. */
   grace_minutes: number;
+}
+
+/**
+ * One employee's day on the PM review screen (Phase 8).
+ *
+ * Narrower than `DailySummary` on purpose: no punch counts, no punch times, no
+ * derivation slug. This row answers "is this day settled, and if not why?" -
+ * evidence inspection is a different question and a different screen.
+ *
+ * A row with `classification: "no_record"` means no biometric evidence exists
+ * for that employee that day. It does NOT mean absent: the cause may be leave,
+ * a permission, official duty or a missed punch, none of which are knowable from
+ * punches. Phase 9 supplies that context.
+ */
+export interface DailyReviewRow {
+  employee_id: string;
+  employee_code: string | null;
+  employee_name: string | null;
+
+  first_in: string | null;
+  last_out: string | null;
+  worked_minutes: number | null;
+
+  scheduled_start_at: string | null;
+  scheduled_end_at: string | null;
+  scheduled_minutes: number | null;
+
+  classification: BiometricClassification;
+  /** True only when the punches could not settle the day AND nobody has ruled on
+   *  it. An official record clears it - that ruling is the missing information. */
+  review_required: boolean;
+  /** Whether the PM may supply this boundary. False when the device recorded it:
+   *  biometric evidence is immutable, so only a missing punch is fillable. */
+  can_set_check_in: boolean;
+  can_set_check_out: boolean;
+  /** Everything observed, including context-only notes. */
+  review_reasons: string[];
+  /** The subset that actually requires attention - what the UI shows. */
+  blocking_reasons: string[];
+
+  /** The OFFICIAL record, when a human has already ruled on this day. Null means
+   *  nobody has decided yet - not that the employee was absent. Written only by
+   *  the attendance module; biometric never touches it. */
+  attendance_record_id: string | null;
+  attendance_status: string | null;
+  attendance_check_in_at: string | null;
+  attendance_check_out_at: string | null;
+  /** The reason the PM gave. Null when nobody explained the day. */
+  attendance_note: string | null;
+}
+
+/** Counts for the WHOLE day, before any filter. No leave/permission/half-day:
+ *  those need approved-exception data that does not exist until Phase 9. */
+export interface DailyReviewCounts {
+  employees: number;
+  review_required: number;
+  present: number;
+  incomplete: number;
+  needs_review: number;
+  no_record: number;
+}
+
+export interface DailyReviewPage {
+  review_date: string;
+  provider: string;
+  items: DailyReviewRow[];
+  /** Rows after filtering; `counts` always describes the unfiltered day. */
+  total: number;
+  counts: DailyReviewCounts;
 }
 
 export interface EmployeeMapping {

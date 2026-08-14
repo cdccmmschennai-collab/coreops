@@ -15,6 +15,7 @@ class EntityType:
     ACTIVITY = "activity"
     BIOMETRIC_SYNC_BATCH = "biometric_sync_batch"
     BIOMETRIC_MAPPING = "biometric_employee_mapping"
+    ATTENDANCE_RECORD = "attendance_record"
 
 
 class AuditAction:
@@ -73,6 +74,15 @@ class AuditAction:
     BIOMETRIC_MAPPING_CREATED = "biometric.mapping.create"
     BIOMETRIC_MAPPING_CHANGED = "biometric.mapping.change"
     BIOMETRIC_MAPPING_DEACTIVATED = "biometric.mapping.deactivate"
+
+    # --- official attendance decisions (Tier B) ---
+    # A human overriding what a day means is exactly the kind of act an audit log
+    # exists for: biometric evidence is immutable, so the ONLY way a day's meaning
+    # changes is somebody deciding it did. `details` carries the previous and new
+    # status, the times, and the PM's note.
+    ATTENDANCE_RECORD_CREATE = "attendance.record.create"
+    ATTENDANCE_RECORD_UPDATE = "attendance.record.update"
+    ATTENDANCE_RECORD_DELETE = "attendance.record.delete"
 
 
 # Statuses

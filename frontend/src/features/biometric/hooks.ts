@@ -61,6 +61,31 @@ export function useDailySummary(params: {
   });
 }
 
+/**
+ * One attendance day across the whole roster, for PM review.
+ *
+ * `classification` is applied server-side, so switching the filter is a new
+ * query rather than a client-side re-filter - the row set and the day's counts
+ * then always come from the same source and cannot disagree.
+ */
+export function useDailyReview(params: {
+  date: string;
+  classification?: string;
+  enabled?: boolean;
+}) {
+  return useQuery({
+    queryKey: biometricKeys.dailyReview(params.date, params.classification ?? "all"),
+    queryFn: () =>
+      biometricApi.listDailyReview({
+        date: params.date,
+        classification: params.classification,
+      }),
+    enabled: params.enabled !== false && !!params.date,
+    // Punches arrive when the connector runs, not continuously.
+    staleTime: 60 * 1000,
+  });
+}
+
 /** Employee picker search. Opens with the first page of active employees, then
  *  narrows as the PM types. React Query cancels the superseded request. */
 export function useEmployeeSearch(q: string, enabled: boolean) {

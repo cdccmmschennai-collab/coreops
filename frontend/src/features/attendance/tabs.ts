@@ -37,15 +37,18 @@ export interface TabOptions {
 /**
  * The tabs to render, in display order.
  *
- * "Records" (key `history`) is the manual `attendance_records` list: filters, a
- * table, and edit/delete for a manager. It is NOT the biometric daily review -
- * that is a later phase and will arrive as its own tab rather than by quietly
- * re-pointing this one.
+ * "Records" (key `history`) is the PM's DAILY REVIEW: one date, every in-scope
+ * employee, their biometric evidence and whether the day is settled. It is a
+ * review surface, not the attendance ledger - nothing on it is approved or
+ * written. Manager-only, because it shows the whole roster.
  */
 export function attendanceTabs({ canManage, correctionsEnabled }: TabOptions): TabItem[] {
   return [
     { value: "calendar", label: "Calendar" },
-    { value: "history", label: "Records" },
+    // Records is the PM's daily review of the whole roster, so it is
+    // manager-only: an employee has no business reading everyone else's day.
+    // Their own attendance lives on the Calendar tab.
+    ...(canManage ? ([{ value: "history", label: "Records" }] as TabItem[]) : []),
     { value: "leave", label: "Leave" },
     // Leave Balance is a manager/admin-only maintenance view.
     ...(canManage ? ([{ value: "leave-balance", label: "Leave Balance" }] as TabItem[]) : []),

@@ -24,16 +24,19 @@ permission, leave or absent: biometric evidence carries no cause. See
 `classification.py`.
 """
 import uuid
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
 from app.modules.biometric import service
 from app.modules.biometric.constants import (
     BATCH_STATUSES,
+    CLASSIFICATIONS,
     CODE_STATUS_MAPPED,
     CODE_STATUS_UNMAPPED,
     PROVIDER_EASYTIME,
@@ -43,6 +46,7 @@ from app.modules.biometric.dependencies import ConnectorIdentity, require_connec
 from app.modules.biometric.schemas import (
     BulkMappingCreate,
     BulkMappingResult,
+    DailyReviewPage,
     DailySummaryOut,
     DailySummaryPage,
     EmployeeMappingCreate,
@@ -223,6 +227,57 @@ def list_daily_summary(
         date_to=date_to,
         schedule=SummarySchedule.model_validate(schedule) if schedule else None,
     )
+
+
+@admin_router.get("/daily-review", response_model=DailyReviewPage)
+def list_daily_review(
+    review_date: date = Query(alias="date"),
+    provider: str = Query(default=PROVIDER_EASYTIME),
+    classification: str | None = Query(default=None),
+    _: User = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> DailyReviewPage:
+    """One attendance day across every in-scope employee, for PM review.
+
+    project_manager ONLY - unlike `/daily-summary`, which an employee may call
+    for their own calendar. This one returns the whole roster, so it carries the
+    same authority as the rest of this admin router.
+
+    Read-only and non-committal: it reports what the biometric evidence supports
+    and which days a human still has to settle. Nothing is approved, finalized or
+    written; `attendance_records` is untouched. An employee with no punches is
+    reported as `no_record`, NEVER as absent - the cause could be approved leave,
+    a permission, official duty or a missed punch, and none of those are knowable
+    from a punch stream (Phase 9 supplies them).
+    """
+    normalized_provider = provider.strip().lower()
+    if normalized_provider not in SUPPORTED_PROVIDERS:
+        raise AppError(
+            "validation_error",
+            f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}.",
+            422,
+        )
+    if classification is not None and classification not in CLASSIFICATIONS:
+        raise AppError(
+            "validation_error",
+            f"classification must be one of {sorted(CLASSIFICATIONS)}.",
+            422,
+        )
+    # A future date has no evidence and never will yet: every row would read
+    # "No record", which looks like a company-wide absence rather than a date
+    # that has not happened. "Today" is judged in the attendance timezone, not
+    # the server's.
+    today_local = datetime.now(ZoneInfo(settings.ATTENDANCE_TIMEZONE)).date()
+    if review_date > today_local:
+        raise AppError("validation_error", "Date must not be in the future.", 422)
+
+    result = service.list_daily_review(
+        db,
+        provider=normalized_provider,
+        on_date=review_date,
+        classification=classification,
+    )
+    return DailyReviewPage.model_validate(result)
 
 
 @admin_router.post("/mappings/bulk", response_model=BulkMappingResult)

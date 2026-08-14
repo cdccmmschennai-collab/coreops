@@ -1,6 +1,7 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  DailyReviewPage,
   DailySummaryPage,
   EmployeeMapping,
   EmployeePage,
@@ -57,6 +58,22 @@ export const biometricApi = {
       to: params.to,
     });
     return api.get<DailySummaryPage>(`${BASE}/daily-summary?${sp.toString()}`);
+  },
+
+  /** One attendance day across every in-scope employee, for PM review.
+   *  project_manager-only and strictly read-only: nothing is approved,
+   *  finalized or written. */
+  listDailyReview: (params: {
+    date: string;
+    classification?: string;
+    provider?: string;
+  }) => {
+    const sp = new URLSearchParams({
+      provider: params.provider ?? PROVIDER_EASYTIME,
+      date: params.date,
+    });
+    if (params.classification) sp.set("classification", params.classification);
+    return api.get<DailyReviewPage>(`${BASE}/daily-review?${sp.toString()}`);
   },
 
   /** Server-side employee search for the picker. Active employees only, so a

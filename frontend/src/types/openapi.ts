@@ -2133,6 +2133,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/biometric/daily-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Daily Review
+         * @description One attendance day across every in-scope employee, for PM review.
+         *
+         *     project_manager ONLY - unlike `/daily-summary`, which an employee may call
+         *     for their own calendar. This one returns the whole roster, so it carries the
+         *     same authority as the rest of this admin router.
+         *
+         *     Read-only and non-committal: it reports what the biometric evidence supports
+         *     and which days a human still has to settle. Nothing is approved, finalized or
+         *     written; `attendance_records` is untouched. An employee with no punches is
+         *     reported as `no_record`, NEVER as absent - the cause could be approved leave,
+         *     a permission, official duty or a missed punch, and none of those are knowable
+         *     from a punch stream (Phase 9 supplies them).
+         */
+        get: operations["list_daily_review_api_v1_biometric_daily_review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/biometric/mappings/bulk": {
         parameters: {
             query?: never;
@@ -2743,6 +2774,8 @@ export interface components {
             check_in_at?: string | null;
             /** Check Out At */
             check_out_at?: string | null;
+            /** Note */
+            note?: string | null;
         };
         /** AttendanceOut */
         AttendanceOut: {
@@ -2770,6 +2803,8 @@ export interface components {
             /** Overtime Minutes */
             overtime_minutes: number;
             status: components["schemas"]["AttendanceStatus"];
+            /** Note */
+            note?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -2856,6 +2891,8 @@ export interface components {
             check_in_at?: string | null;
             /** Check Out At */
             check_out_at?: string | null;
+            /** Note */
+            note?: string | null;
         };
         /** AuditLogOut */
         AuditLogOut: {
@@ -3114,6 +3151,132 @@ export interface components {
             benchmark_unit: string | null;
             /** Benchmark Exception Code */
             benchmark_exception_code?: string | null;
+        };
+        /**
+         * DailyReviewCounts
+         * @description The whole day, counted BEFORE any classification filter is applied.
+         *
+         *     Truthfully derivable from biometric evidence alone - which is why there is
+         *     no `leave`, `permission` or `half_day` here. Those need the approved-exception
+         *     data that Phase 9 integrates; inventing them from punch durations is exactly
+         *     the guess this module refuses to make.
+         */
+        DailyReviewCounts: {
+            /**
+             * Employees
+             * @default 0
+             */
+            employees: number;
+            /**
+             * Review Required
+             * @default 0
+             */
+            review_required: number;
+            /**
+             * Present
+             * @default 0
+             */
+            present: number;
+            /**
+             * Incomplete
+             * @default 0
+             */
+            incomplete: number;
+            /**
+             * Needs Review
+             * @default 0
+             */
+            needs_review: number;
+            /**
+             * No Record
+             * @default 0
+             */
+            no_record: number;
+        };
+        /**
+         * DailyReviewPage
+         * @description One attendance day across every in-scope employee.
+         *
+         *     NOT an attendance ledger and not a decision: no row here has been approved,
+         *     finalized or written anywhere. `attendance_records` remains untouched and
+         *     remains the official source.
+         */
+        DailyReviewPage: {
+            /**
+             * Review Date
+             * Format: date
+             */
+            review_date: string;
+            /** Provider */
+            provider: string;
+            /** Items */
+            items: components["schemas"]["DailyReviewRowOut"][];
+            /** Total */
+            total: number;
+            counts: components["schemas"]["DailyReviewCounts"];
+        };
+        /**
+         * DailyReviewRowOut
+         * @description One employee's day, as the PM review screen needs it.
+         *
+         *     Deliberately NARROWER than `DailySummaryOut`: no punch counts, no punch
+         *     times, no external codes, no derivation slug. Those are evidence-inspection
+         *     and debugging fields; this row answers "is this day settled, and if not
+         *     why?", and shipping the rest would only invite a UI that displays it.
+         *
+         *     Every value here is computed by the same engine the calendar uses. The
+         *     frontend formats these numbers; it never recomputes them.
+         */
+        DailyReviewRowOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code?: string | null;
+            /** Employee Name */
+            employee_name?: string | null;
+            /** First In */
+            first_in?: string | null;
+            /** Last Out */
+            last_out?: string | null;
+            /** Worked Minutes */
+            worked_minutes?: number | null;
+            /** Scheduled Start At */
+            scheduled_start_at?: string | null;
+            /** Scheduled End At */
+            scheduled_end_at?: string | null;
+            /** Scheduled Minutes */
+            scheduled_minutes?: number | null;
+            /** Classification */
+            classification: string;
+            /** Review Required */
+            review_required: boolean;
+            /**
+             * Can Set Check In
+             * @default false
+             */
+            can_set_check_in: boolean;
+            /**
+             * Can Set Check Out
+             * @default false
+             */
+            can_set_check_out: boolean;
+            /** Review Reasons */
+            review_reasons?: string[];
+            /** Blocking Reasons */
+            blocking_reasons?: string[];
+            /** Attendance Record Id */
+            attendance_record_id?: string | null;
+            /** Attendance Status */
+            attendance_status?: string | null;
+            /** Attendance Check In At */
+            attendance_check_in_at?: string | null;
+            /** Attendance Check Out At */
+            attendance_check_out_at?: string | null;
+            /** Attendance Note */
+            attendance_note?: string | null;
         };
         /**
          * DailySummaryOut
@@ -11316,6 +11479,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DailySummaryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_daily_review_api_v1_biometric_daily_review_get: {
+        parameters: {
+            query: {
+                date: string;
+                provider?: string;
+                classification?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyReviewPage"];
                 };
             };
             /** @description Validation Error */

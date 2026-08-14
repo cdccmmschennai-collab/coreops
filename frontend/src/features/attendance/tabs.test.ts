@@ -29,16 +29,25 @@ test("the old History label is gone for every role and flag combination", () => 
 });
 
 test("the tab reads Records", () => {
-  assert.ok(labels(EMPLOYEE).includes("Records"));
-  const tab = attendanceTabs(EMPLOYEE).find((t) => t.label === "Records");
+  assert.ok(labels(MANAGER).includes("Records"));
+  const tab = attendanceTabs(MANAGER).find((t) => t.label === "Records");
   assert.equal(tab?.value, "history");
 });
 
 test("the URL key stays `history` so existing links keep working", () => {
   // /attendance?tab=history is bookmarkable and already in the wild. Renaming
   // the label must not 404 it into Calendar.
-  assert.equal(resolveTab("history", EMPLOYEE), "history");
-  assert.ok(allowedTabKeys(EMPLOYEE).includes("history"));
+  assert.equal(resolveTab("history", MANAGER), "history");
+  assert.ok(allowedTabKeys(MANAGER).includes("history"));
+});
+
+test("Records is manager-only - it shows the whole roster", () => {
+  // An employee has no business reading everyone else's attendance day; their
+  // own lives on the Calendar tab.
+  assert.ok(!labels(EMPLOYEE).includes("Records"));
+  assert.ok(!allowedTabKeys(EMPLOYEE).includes("history"));
+  // And it is not reachable by typing the key either.
+  assert.equal(resolveTab("history", EMPLOYEE), "calendar");
 });
 
 test("Records is not labelled as the biometric daily review", () => {
@@ -51,8 +60,8 @@ test("Records is not labelled as the biometric daily review", () => {
 
 // ── everything else must be untouched ──────────────────────────────────────
 
-test("the employee tab row is Calendar, Records, Leave, Holidays", () => {
-  assert.deepEqual(labels(EMPLOYEE), ["Calendar", "Records", "Leave", "Holidays"]);
+test("the employee tab row is Calendar, Leave, Holidays", () => {
+  assert.deepEqual(labels(EMPLOYEE), ["Calendar", "Leave", "Holidays"]);
 });
 
 test("a manager also sees Leave Balance, in place", () => {

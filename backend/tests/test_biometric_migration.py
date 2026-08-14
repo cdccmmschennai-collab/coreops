@@ -74,7 +74,12 @@ def test_revision_chains_onto_the_previous_head():
 
 
 def test_single_alembic_head():
-    """Exactly one head: no branch was introduced."""
+    """Exactly one head: no branch was introduced.
+
+    This file pins the BIOMETRIC revision (0066), which is no longer the head -
+    0067 chains onto it. What still has to hold is that there is exactly ONE
+    head and that 0066 is on the path to it, not that 0066 is the tip.
+    """
     revisions, downs = set(), set()
     for path in _VERSIONS.glob("*.py"):
         source = path.read_text(encoding="utf-8")
@@ -86,12 +91,23 @@ def test_single_alembic_head():
                 if value != "None":
                     downs.add(value)
     heads = revisions - downs
-    assert heads == {THIS_REVISION}, heads
+    assert len(heads) == 1, heads
+    # 0066 is superseded, so it must be somebody's down_revision.
+    assert THIS_REVISION in downs
 
 
-def test_database_is_stamped_at_this_revision(db):
+def test_database_is_stamped_at_or_after_this_revision(db):
+    """The test database has 0066 applied. It may be stamped later than 0066 -
+    migrations after it are other features' business, not this file's."""
     current = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert current == THIS_REVISION
+    applied = {
+        line.split("=", 1)[1].strip().strip('"')
+        for path in _VERSIONS.glob("*.py")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("revision: str = ")
+    }
+    assert current in applied
+    assert _table_exists(db, "biometric_punches")
 
 
 # ── schema shape ────────────────────────────────────────────────────────────
@@ -232,10 +248,16 @@ def test_status_check_rejects_an_unknown_status(db):
 
 # ── non-interference with the existing schema ───────────────────────────────
 
-def test_existing_attendance_schema_is_untouched(db):
-    """0066 is additive: attendance_records keeps exactly the shape it had."""
+def test_biometric_added_nothing_to_the_attendance_schema(db):
+    """0066 is additive: it left attendance_records alone.
+
+    `note` is here because of 0067 (a PM's reason for a decision), which is a
+    deliberate, separately-approved change - not biometric leaking into the
+    attendance table. Everything else is the original shape, and the guard below
+    still proves no punch/biometric column ever appeared here.
+    """
     cols = _columns(db, "attendance_records")
-    assert set(cols) == {
+    assert set(cols) - {"note"} == {
         "id",
         "employee_id",
         "attendance_date",

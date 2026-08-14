@@ -13,4 +13,8 @@ export const biometricKeys = {
   employeeSearch: (q: string) => [...biometricKeys.all, "employee-search", q] as const,
   dailySummary: (employeeId: string, from: string, to: string) =>
     [...biometricKeys.all, "daily-summary", employeeId, from, to] as const,
+  // PM daily review: one date, the whole roster. Keyed by the classification
+  // filter too, since that is applied server-side.
+  dailyReview: (date: string, classification: string) =>
+    [...biometricKeys.all, "daily-review", date, classification] as const,
 };
