@@ -1,15 +1,16 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Pencil } from "lucide-react";
 
+import { Pagination } from "@/components/data/pagination";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
 import { TableSkeleton } from "@/components/feedback/table-skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import {
   Select,
   SelectContent,
@@ -29,7 +30,6 @@ import { nowInIST } from "@/lib/ist";
 import { cn } from "@/lib/utils";
 import { useUrlState } from "@/lib/use-url-state";
 
-import { AttendanceDayPopover } from "@/features/biometric/components/attendance-day-popover";
 import { useDailyReview } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
 import {
@@ -50,6 +50,8 @@ import { RecordDecisionDialog } from "./record-decision-dialog";
 import { ATTENDANCE_STATUS_LABEL } from "../schemas";
 import type { AttendanceStatus } from "../types";
 
+const PAGE_SIZE = 15;
+
 /**
  * Records tab - the PM's daily attendance review (URL key `history`).
  *
@@ -64,43 +66,67 @@ import type { AttendanceStatus } from "../types";
  * What it deliberately does NOT say: that a no-record employee was absent, or
  * that a short day was a half day. Those need the approved leave / permission /
  * official-duty context that Phase 9 integrates.
+ *
+ * A row does not open the shared calendar popover: it navigates to a dedicated
+ * detail route instead (`/attendance/records/[employeeId]`), a stub until
+ * Phase 9B builds it out. Editing stays exactly the Phase 8 flow - the pencil
+ * button opens `RecordDecisionDialog` unchanged.
  */
 export function AttendanceRecords() {
+  const router = useRouter();
   const today = React.useMemo(() => isoInIST(nowInIST()), []);
-  // Date and filter live in the URL, so a review can be linked to and survives
-  // navigating away and back - the same pattern the rest of the app uses.
+  // Date, filter, search and page live in the URL, so a review can be linked
+  // to and survives navigating away and back - the same pattern the rest of
+  // the app uses.
   const [rawDate, setDate] = useUrlState("date", today);
   const [rawFilter, setFilter] = useUrlState("review", DEFAULT_REVIEW_FILTER);
+  const [rawQ, setRawQ] = useUrlState("q", "");
+  const [rawOffset, setRawOffset] = useUrlState("offset", "0");
 
   const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : today;
   const filter = isReviewFilter(rawFilter) ? rawFilter : DEFAULT_REVIEW_FILTER;
+  const offset = Math.max(0, Number(rawOffset) || 0);
 
-  const [selected, setSelected] = React.useState<{
-    employeeId: string;
-    anchor: HTMLElement;
-  } | null>(null);
+  // Debounced fetch text: the URL (rawQ) updates on every keystroke, but the
+  // request only fires 300ms after typing stops - the same pattern the
+  // biometric mapping tab uses for its search box.
+  const [q, setQ] = React.useState(rawQ);
+  React.useEffect(() => {
+    const t = setTimeout(() => setQ(rawQ.trim().toLowerCase()), 300);
+    return () => clearTimeout(t);
+  }, [rawQ]);
+
   // The row whose official record the PM is setting, or null.
   const [editing, setEditing] = React.useState<DailyReviewRow | null>(null);
 
-  // A row that is no longer on screen must not keep a popover pointing at it.
+  // Any change to what's being viewed starts back at page 1.
   React.useEffect(() => {
-    setSelected(null);
-  }, [date, filter]);
+    setRawOffset("0");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, filter, q]);
 
   const query = useDailyReview({
     date,
     classification: filterToClassification(filter),
+    q,
+    limit: PAGE_SIZE,
+    offset,
   });
 
   const rows = query.data?.items ?? [];
   const counts = query.data?.counts;
-  const openRow = rows.find((r) => r.employee_id === selected?.employeeId);
 
   const showRows = !query.isLoading && !query.isError && rows.length > 0;
   const showEmpty = !query.isLoading && !query.isError && rows.length === 0;
 
+  function openDetail(row: DailyReviewRow) {
+    router.push(`/attendance/records/${row.employee_id}?date=${date}`);
+  }
+
   return (
     <>
+      <h2 className="mb-3 text-lg font-semibold">Daily Attendance Review</h2>
+
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
           type="date"
@@ -110,8 +136,16 @@ export function AttendanceRecords() {
           onChange={(e) => e.target.value && setDate(e.target.value)}
           aria-label="Attendance date"
         />
+        <Input
+          type="search"
+          placeholder="Search by name or ID"
+          className="sm:w-56"
+          value={rawQ}
+          onChange={(e) => setRawQ(e.target.value)}
+          aria-label="Search employees"
+        />
         <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger className="sm:w-44" aria-label="Review filter">
+          <SelectTrigger className="sm:w-44" aria-label="Status filter">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -122,21 +156,30 @@ export function AttendanceRecords() {
             ))}
           </SelectContent>
         </Select>
-        <p className="text-sm text-muted-foreground sm:ml-1">
-          {formatReviewDate(date)}
-        </p>
       </div>
 
-      {/* Only what biometric evidence can truthfully support. There is no Leave,
-          Permission or Half day tile: that data does not exist yet, and a tile
-          reading "Leave 0" would be a claim, not a blank. */}
+      {/* Summary counts for the whole day - not just the current page or
+          search. Only what biometric evidence can truthfully support: there
+          is no Leave, Permission or Half day count here, since that data
+          does not exist yet and a count reading "Leave 0" would be a claim,
+          not a blank. */}
       {counts && (
-        <KpiGrid>
-          <Kpi label="Present" value={String(counts.present)} />
-          <Kpi label="Needs review" value={String(counts.needs_review)} />
-          <Kpi label="Incomplete" value={String(counts.incomplete)} />
-          <Kpi label="No record" value={String(counts.no_record)} />
-        </KpiGrid>
+        <div className="mb-4 rounded-lg border border-border bg-card px-4 py-3">
+          <p className="text-sm font-semibold">{formatReviewDate(date)}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            <span className="font-medium text-foreground tabular">{counts.present}</span>{" "}
+            {CLASSIFICATION_LABEL.present}
+            <span className="mx-1.5">·</span>
+            <span className="font-medium text-foreground tabular">{counts.needs_review}</span>{" "}
+            {CLASSIFICATION_LABEL.needs_review}
+            <span className="mx-1.5">·</span>
+            <span className="font-medium text-foreground tabular">{counts.incomplete}</span>{" "}
+            {CLASSIFICATION_LABEL.incomplete}
+            <span className="mx-1.5">·</span>
+            <span className="font-medium text-foreground tabular">{counts.no_record}</span>{" "}
+            {CLASSIFICATION_LABEL.no_record}
+          </p>
+        </div>
       )}
 
       <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -147,13 +190,14 @@ export function AttendanceRecords() {
               <TableHead className="w-24">First IN</TableHead>
               <TableHead className="w-24">Last OUT</TableHead>
               <TableHead className="w-24">Worked</TableHead>
+              <TableHead className="w-32">Biometric</TableHead>
               <TableHead className="w-32">Status</TableHead>
               <TableHead>Reason</TableHead>
-              <TableHead className="w-36">Official</TableHead>
+              <TableHead className="w-16 text-right">Action</TableHead>
             </TableRow>
           </TableHeader>
 
-          {query.isLoading && <TableSkeleton cols={7} />}
+          {query.isLoading && <TableSkeleton cols={8} />}
 
           {showRows && (
             <TableBody>
@@ -162,17 +206,8 @@ export function AttendanceRecords() {
                 return (
                   <TableRow
                     key={r.employee_id}
-                    className={cn(
-                      "cursor-pointer",
-                      r.employee_id === selected?.employeeId && "bg-accent/40",
-                    )}
-                    onClick={(e) =>
-                      setSelected((prev) =>
-                        prev?.employeeId === r.employee_id
-                          ? null
-                          : { employeeId: r.employee_id, anchor: e.currentTarget },
-                      )
-                    }
+                    className={cn("cursor-pointer")}
+                    onClick={() => openDetail(r)}
                   >
                     <TableCell className="font-medium">
                       {r.employee_name || EMPTY}
@@ -194,38 +229,46 @@ export function AttendanceRecords() {
                     <TableCell className="tabular">
                       {formatWorked(r.worked_minutes)}
                     </TableCell>
+                    {/* RAW BIOMETRIC EVIDENCE: the conservative verdict the punch
+                        stream alone supports. */}
                     <TableCell>
                       <Badge variant={CLASSIFICATION_VARIANT[r.classification]} dot>
                         {CLASSIFICATION_LABEL[r.classification]}
                       </Badge>
                     </TableCell>
+                    {/* FINAL ATTENDANCE STATUS: the PM's official decision, when
+                        one exists. Distinct column from Biometric on purpose - a
+                        settled punch record and a human ruling are not the same
+                        fact. */}
+                    <TableCell>
+                      {r.attendance_status ? (
+                        <Badge variant="outline">
+                          {ATTENDANCE_STATUS_LABEL[
+                            r.attendance_status as AttendanceStatus
+                          ] ?? r.attendance_status}
+                        </Badge>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">{EMPTY}</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {reason ?? EMPTY}
                     </TableCell>
-                    {/* The human decision, and the way to make or change one.
-                        Click is stopped so editing never also opens the
-                        read-only popover behind the dialog. */}
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-1.5">
-                        {r.attendance_status ? (
-                          <Badge variant="outline">
-                            {ATTENDANCE_STATUS_LABEL[
-                              r.attendance_status as AttendanceStatus
-                            ] ?? r.attendance_status}
-                          </Badge>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">{EMPTY}</span>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          aria-label={`Set attendance for ${r.employee_name ?? "employee"}`}
-                          onClick={() => setEditing(r)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+                    {/* Click is stopped so editing never also triggers the row's
+                        navigation to the detail route. */}
+                    <TableCell
+                      className="text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        aria-label={`Set attendance for ${r.employee_name ?? "employee"}`}
+                        onClick={() => setEditing(r)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 );
@@ -254,25 +297,15 @@ export function AttendanceRecords() {
             }
           />
         )}
+        {showRows && query.data && (
+          <Pagination
+            total={query.data.total}
+            limit={query.data.limit}
+            offset={query.data.offset}
+            onPageChange={(next) => setRawOffset(String(next))}
+          />
+        )}
       </div>
-
-      <AttendanceDayPopover
-        anchor={selected?.anchor ?? null}
-        title={openRow?.employee_name || ""}
-        subtitle={formatReviewDate(date)}
-        summary={openRow as DaySummaryShape | undefined}
-        // The official decision wins the status word once one exists, exactly as
-        // it does on the employee's own calendar.
-        attendanceLabel={
-          openRow?.attendance_status
-            ? (ATTENDANCE_STATUS_LABEL[
-                openRow.attendance_status as AttendanceStatus
-              ] ?? openRow.attendance_status)
-            : null
-        }
-        reason={openRow?.attendance_note ?? null}
-        onClose={() => setSelected(null)}
-      />
 
       <RecordDecisionDialog
         row={editing}
@@ -287,17 +320,6 @@ export function AttendanceRecords() {
     </>
   );
 }
-
-/** What the shared popover needs. A review row already satisfies it. */
-type DaySummaryShape = Pick<
-  DailyReviewRow,
-  | "first_in"
-  | "last_out"
-  | "worked_minutes"
-  | "scheduled_minutes"
-  | "classification"
-  | "review_required"
->;
 
 /** Today's date in Asia/Kolkata as `YYYY-MM-DD`. Never a UTC date: at 02:00 IST
  *  the UTC date is still yesterday, which would open the wrong day. */

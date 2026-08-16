@@ -435,8 +435,12 @@ class DailyReviewPage(BaseModel):
     review_date: date
     provider: str
     items: list[DailyReviewRowOut]
-    # Rows AFTER filtering; `counts` describes the unfiltered day.
+    # Rows AFTER filtering AND before pagination; `counts` describes the
+    # unfiltered day. Frontend pagination math (`total`/`limit`/`offset`)
+    # matches every other paginated list in this API.
     total: int
+    limit: int
+    offset: int
     counts: DailyReviewCounts
 
 

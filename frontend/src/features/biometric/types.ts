@@ -204,8 +204,11 @@ export interface DailyReviewPage {
   review_date: string;
   provider: string;
   items: DailyReviewRow[];
-  /** Rows after filtering; `counts` always describes the unfiltered day. */
+  /** Rows after filtering and pagination; `counts` always describes the
+   *  unfiltered day. */
   total: number;
+  limit: number;
+  offset: number;
   counts: DailyReviewCounts;
 }
 

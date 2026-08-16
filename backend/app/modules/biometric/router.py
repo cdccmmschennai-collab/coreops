@@ -234,6 +234,9 @@ def list_daily_review(
     review_date: date = Query(alias="date"),
     provider: str = Query(default=PROVIDER_EASYTIME),
     classification: str | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=15, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     _: User = Depends(require_manager),
     db: Session = Depends(get_db),
 ) -> DailyReviewPage:
@@ -276,6 +279,9 @@ def list_daily_review(
         provider=normalized_provider,
         on_date=review_date,
         classification=classification,
+        q=q,
+        limit=limit,
+        offset=offset,
     )
     return DailyReviewPage.model_validate(result)
 

@@ -1,9 +1,8 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { CalendarOff, Download, Plus } from "lucide-react";
+import { CalendarOff, Download } from "lucide-react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
@@ -65,14 +64,6 @@ export function AttendanceView() {
         <Button variant="secondary" onClick={() => setLeaveDialogOpen(true)}>
           <CalendarOff className="h-4 w-4" />
           Request Leave
-        </Button>
-      )}
-      {canManage && (
-        <Button asChild>
-          <Link href="/attendance/new">
-            <Plus className="h-4 w-4" />
-            Record attendance
-          </Link>
         </Button>
       )}
     </>

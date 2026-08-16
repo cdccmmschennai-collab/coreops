@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, CalendarX2, ClipboardList, ListPlus } from "lucide-react";
+import { ArrowRight, CalendarOff, CalendarX2, ListPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -190,11 +190,6 @@ export function ProjectManagerDashboard() {
                       {leaveCancellationCount}
                     </Badge>
                   )}
-                </Link>
-              </Button>
-              <Button asChild className="justify-start" variant="secondary">
-                <Link href="/attendance/new">
-                  <ClipboardList className="h-4 w-4" /> Record attendance
                 </Link>
               </Button>
             </div>

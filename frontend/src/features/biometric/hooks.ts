@@ -71,18 +71,32 @@ export function useDailySummary(params: {
 export function useDailyReview(params: {
   date: string;
   classification?: string;
+  q?: string;
+  limit: number;
+  offset: number;
   enabled?: boolean;
 }) {
   return useQuery({
-    queryKey: biometricKeys.dailyReview(params.date, params.classification ?? "all"),
+    queryKey: biometricKeys.dailyReview(
+      params.date,
+      params.classification ?? "all",
+      params.q ?? "",
+      params.limit,
+      params.offset,
+    ),
     queryFn: () =>
       biometricApi.listDailyReview({
         date: params.date,
         classification: params.classification,
+        q: params.q,
+        limit: params.limit,
+        offset: params.offset,
       }),
     enabled: params.enabled !== false && !!params.date,
     // Punches arrive when the connector runs, not continuously.
     staleTime: 60 * 1000,
+    // Keeps the table from flashing to a skeleton on every keystroke/page turn.
+    placeholderData: (prev) => prev,
   });
 }
 

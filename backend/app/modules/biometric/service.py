@@ -1262,6 +1262,9 @@ def list_daily_review(
     provider: str,
     on_date: date,
     classification: str | None,
+    q: str | None = None,
+    limit: int = 15,
+    offset: int = 0,
 ) -> dict:
     """One attendance day across every in-scope employee, for PM review.
 
@@ -1290,9 +1293,15 @@ def list_daily_review(
     `counts` describes the WHOLE day and is computed before `classification`
     filters `items`, so a PM looking at "Needs review" still sees how many of the
     day's records that is out of.
+
+    `q`, `limit` and `offset` filter and paginate `items` ONLY - exactly like
+    `classification` already does. `counts` always describes the whole day
+    before any of the three are applied, so the compact summary never lies
+    about what the current page or search happens to show.
     """
     employees = _review_employees(db, on_date=on_date)
     employee_ids = {row[0] for row in employees}
+    normalized_q = q.strip().lower() if q and q.strip() else None
 
     punches = _punches_for_day(db, provider=provider, on_date=on_date)
     shifts = _employee_shifts(db, employee_ids)
@@ -1334,6 +1343,12 @@ def list_daily_review(
         if classification is not None and verdict.classification != classification:
             continue
 
+        if normalized_q:
+            name = f"{first_name} {last_name}".strip().lower()
+            code = (employee_code or "").lower()
+            if normalized_q not in name and normalized_q not in code:
+                continue
+
         items.append(
             {
                 "employee_id": employee_id,
@@ -1369,8 +1384,10 @@ def list_daily_review(
     return {
         "review_date": on_date,
         "provider": provider,
-        "items": items,
+        "items": items[offset : offset + limit],
         "total": len(items),
+        "limit": limit,
+        "offset": offset,
         "counts": {
             **counts,
             "employees": len(employees),

@@ -17,11 +17,11 @@ export type { BiometricClassification };
 
 /** The filter chips, in the order the PM sees them. */
 export const REVIEW_FILTERS = [
-  { value: "needs_review", label: "Needs review" },
   { value: "all", label: "All" },
   { value: "present", label: "Present" },
-  { value: "incomplete", label: "Incomplete" },
-  { value: "no_record", label: "No record" },
+  { value: "needs_review", label: "Needs review" },
+  { value: "incomplete", label: "Punch missing" },
+  { value: "no_record", label: "No punch" },
 ] as const;
 
 export type ReviewFilter = (typeof REVIEW_FILTERS)[number]["value"];
@@ -46,9 +46,9 @@ export function filterToClassification(filter: ReviewFilter): string | undefined
 
 export const CLASSIFICATION_LABEL: Record<BiometricClassification, string> = {
   present: "Present",
-  incomplete: "Incomplete",
+  incomplete: "Punch missing",
   needs_review: "Needs review",
-  no_record: "No record",
+  no_record: "No punch",
 };
 
 /**

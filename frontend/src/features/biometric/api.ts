@@ -62,17 +62,24 @@ export const biometricApi = {
 
   /** One attendance day across every in-scope employee, for PM review.
    *  project_manager-only and strictly read-only: nothing is approved,
-   *  finalized or written. */
+   *  finalized or written. Server-side search and pagination - the client
+   *  never filters or slices a roster it was not sent. */
   listDailyReview: (params: {
     date: string;
     classification?: string;
+    q?: string;
+    limit: number;
+    offset: number;
     provider?: string;
   }) => {
     const sp = new URLSearchParams({
       provider: params.provider ?? PROVIDER_EASYTIME,
       date: params.date,
+      limit: String(params.limit),
+      offset: String(params.offset),
     });
     if (params.classification) sp.set("classification", params.classification);
+    if (params.q?.trim()) sp.set("q", params.q.trim());
     return api.get<DailyReviewPage>(`${BASE}/daily-review?${sp.toString()}`);
   },
 
