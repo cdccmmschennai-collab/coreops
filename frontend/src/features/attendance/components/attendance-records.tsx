@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
 
 import { Pagination } from "@/components/data/pagination";
@@ -30,6 +31,7 @@ import { nowInIST } from "@/lib/ist";
 import { cn } from "@/lib/utils";
 import { useUrlState } from "@/lib/use-url-state";
 
+import { biometricKeys } from "@/features/biometric/keys";
 import { useDailyReview } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
 import {
@@ -74,6 +76,7 @@ const PAGE_SIZE = 15;
  */
 export function AttendanceRecords() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const today = React.useMemo(() => isoInIST(nowInIST()), []);
   // Date, filter, search and page live in the URL, so a review can be linked
   // to and survives navigating away and back - the same pattern the rest of
@@ -322,9 +325,13 @@ export function AttendanceRecords() {
         date={date}
         onClose={() => {
           setEditing(null);
-          // The saved decision changes this row, and the attendance mutation
-          // only invalidates attendance queries - the review is a different key.
-          void query.refetch();
+          // The saved decision also changes the employee's Calendar (Phase
+          // 9C reads the same merge, under biometricKeys) and the detail
+          // route, if either is open elsewhere - not just this table's own
+          // query. Same broad-invalidation pattern the mapping tab and the
+          // detail page already use, rather than a narrower refetch here and
+          // a different one there.
+          void queryClient.invalidateQueries({ queryKey: biometricKeys.all });
         }}
       />
     </>

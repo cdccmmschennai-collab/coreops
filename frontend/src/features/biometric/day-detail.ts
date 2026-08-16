@@ -38,6 +38,10 @@ export const CLASSIFICATION_LABEL: Record<BiometricClassification, string> = {
 export interface DaySummaryLike {
   first_in: string | null;
   last_out: string | null;
+  /** "device" | "pm" | null - which value first_in/last_out came from. See
+   *  the backend's `_merge_boundary`. Never affects `classification` below. */
+  first_in_source?: "device" | "pm" | null;
+  last_out_source?: "device" | "pm" | null;
   worked_minutes: number | null;
   scheduled_minutes: number | null;
   classification: BiometricClassification;
@@ -48,6 +52,8 @@ export interface DayDetail {
   classification: BiometricClassification;
   firstIn: string | null;
   lastOut: string | null;
+  firstInSource: "device" | "pm" | null;
+  lastOutSource: "device" | "pm" | null;
   /** Elapsed minutes as computed by the backend. Null when not measurable. */
   workedMinutes: number | null;
   /** The contracted window's length, for the side-by-side comparison. */
@@ -58,17 +64,25 @@ export interface DayDetail {
 /**
  * One daily-summary row (or its absence) as the popover's values.
  *
- * `undefined` means the API returned no row for that date, which is exactly how
- * "no biometric record" is represented - a day with no punches has no row. That
- * is an absence of evidence, so it is `no_record` and flagged for review; it is
- * never presented as an absence from work.
+ * `undefined` means the API returned no row for that date - genuinely nothing
+ * to show (no punch, no PM decision either). A day the PM HAS decided (Phase
+ * 9C) always has a row, even with zero punches, so `firstIn`/`lastOut` below
+ * are the FINALIZED result - device evidence first, a PM-entered time only
+ * where the device recorded none - while `classification` stays evidence-only
+ * and un-merged: a PM-decided Present day can still be biometrically
+ * `no_record`, exactly as the Records screen shows it.
  */
 export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
   if (!summary || !summary.first_in) {
+    // A missing (or first_in-less) row is unambiguously no_record and needs
+    // review, regardless of anything else a caller's fixture might claim -
+    // the same defensive rule this branch has always enforced.
     return {
       classification: "no_record",
       firstIn: null,
       lastOut: null,
+      firstInSource: null,
+      lastOutSource: null,
       workedMinutes: null,
       scheduledMinutes: summary?.scheduled_minutes ?? null,
       reviewRequired: true,
@@ -77,13 +91,29 @@ export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
   return {
     classification: summary.classification,
     firstIn: summary.first_in,
-    // An OUT exists only when the backend found a second surviving punch. The UI
-    // never re-derives it and never falls back to first_in or to the shift end.
+    // An OUT exists only when the backend found a second surviving punch OR a
+    // PM entered one. The UI never re-derives it and never falls back to
+    // first_in or to the shift end.
     lastOut: summary.last_out,
+    firstInSource: summary.first_in_source ?? null,
+    lastOutSource: summary.last_out_source ?? null,
     workedMinutes: summary.worked_minutes,
     scheduledMinutes: summary.scheduled_minutes,
     reviewRequired: summary.review_required,
   };
+}
+
+/**
+ * "Biometric" when both boundaries are device evidence, "PM entered" when
+ * both were supplied by hand, "Biometric + PM entered" when mixed, or a
+ * plain dash when neither boundary exists yet.
+ */
+export function sourceLabel(detail: Pick<DayDetail, "firstInSource" | "lastOutSource">): string {
+  const sources = new Set([detail.firstInSource, detail.lastOutSource].filter(Boolean));
+  if (sources.size === 0) return EMPTY_VALUE;
+  if (sources.has("device") && sources.has("pm")) return "Biometric + PM entered";
+  if (sources.has("device")) return "Biometric";
+  return "PM entered";
 }
 
 /**

@@ -52,15 +52,24 @@ const STATUS: Record<StatusKey, { cell: string; text: string; dot: string; label
  *   - a missing OUT renders as "--:--", not as a guessed time
  *   - the title spells out what the two numbers actually are, since EasyTime
  *     reports no IN/OUT direction and these are boundary punches
+ *
+ * Deliberately reads `punch_times`/`kept_count` - the RAW, un-merged device
+ * evidence - never `summary.first_in`/`last_out` (Phase 9C: those are the
+ * FINALIZED result and may include a PM-entered time). This is the one place
+ * on the calendar with a Fingerprint icon, so it must never show a PM-entered
+ * time as if the device recorded it.
  */
 function BiometricTimes({ summary }: { summary: DailySummary }) {
-  if (!summary.first_in) return null;
+  if (summary.kept_count === 0) return null;
+
+  const firstPunch = summary.punch_times[0];
+  const lastPunch = summary.kept_count >= 2 ? summary.punch_times[summary.punch_times.length - 1] : null;
 
   const collapsed = summary.kept_count < summary.punch_count;
   const title =
-    `First punch ${formatISTTime(summary.first_in)}, ` +
-    (summary.last_out
-      ? `last punch ${formatISTTime(summary.last_out)}`
+    `First punch ${formatISTTime(firstPunch)}, ` +
+    (lastPunch
+      ? `last punch ${formatISTTime(lastPunch)}`
       : "no second punch recorded") +
     ` (IST). ${summary.punch_count} punch${summary.punch_count === 1 ? "" : "es"}` +
     (collapsed ? `, ${summary.kept_count} after removing repeat scans` : "") +
@@ -72,10 +81,10 @@ function BiometricTimes({ summary }: { summary: DailySummary }) {
       title={title}
     >
       <Fingerprint className="h-2.5 w-2.5 shrink-0" aria-hidden />
-      <span>{formatISTTime(summary.first_in)}</span>
+      <span>{formatISTTime(firstPunch)}</span>
       <span aria-hidden>-</span>
-      <span className={cn(!summary.last_out && "opacity-60")}>
-        {formatISTTime(summary.last_out)}
+      <span className={cn(!lastPunch && "opacity-60")}>
+        {formatISTTime(lastPunch)}
       </span>
     </div>
   );

@@ -262,16 +262,21 @@ class BulkMappingResult(BaseModel):
 # ── Phase 6: daily biometric summary (read-only, shadow) ────────────────────
 
 class DailySummaryOut(BaseModel):
-    """One employee, one attendance day: the outer boundary of their punches.
+    """One employee, one attendance day: the FINALIZED result, for the
+    employee's own Calendar.
 
-    `first_in` / `last_out` are the earliest and latest punch of the day after
-    re-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does
-    not provide (see `summary.py`). They are deliberately not named
-    check_in/check_out: this is observation, and `attendance_records` remains the
-    official source.
+    `first_in` / `last_out` are the earliest/latest punch of the day after
+    re-scan collapsing (see `summary.py`), merged with the official
+    `attendance_records` decision where the device recorded nothing - the SAME
+    merge `_review_row` performs for the PM Records/detail screens (Phase 9C):
+    device evidence always wins, a PM-entered time only fills a boundary the
+    device left empty. `first_in_source`/`last_out_source` say which case this
+    was. `attendance_records` remains the one place a human decision is
+    written; nothing here writes it.
 
-    `last_out` is null when only one punch survives collapsing. One sighting
-    cannot be both an arrival and a departure, and an OUT is never invented.
+    `last_out` is null when only one punch survives collapsing AND no official
+    check-out exists either. One device sighting alone cannot be both an
+    arrival and a departure, and an OUT is never invented.
     """
 
     employee_id: uuid.UUID
@@ -281,6 +286,12 @@ class DailySummaryOut(BaseModel):
     summary_date: date
     first_in: datetime | None = None
     last_out: datetime | None = None
+    # "device" | "pm" | null - which value first_in/last_out came from. See
+    # service._merge_boundary. Pure biometric evidence (punch_count, kept_count,
+    # punch_times below) is NEVER affected by this - only the finalized display
+    # boundary is.
+    first_in_source: str | None = None
+    last_out_source: str | None = None
     # Debugging: raw punches for the day, and how many survived collapsing.
     punch_count: int = 0
     kept_count: int = 0

@@ -74,6 +74,12 @@ export interface DailySummary {
   summary_date: string;
   first_in: string | null;
   last_out: string | null;
+  /** "device" | "pm" | null - which value first_in/last_out came from. A
+   *  PM-entered time only ever fills a boundary the device left empty; see
+   *  the backend's `_merge_boundary`. Pure biometric evidence (punch_count,
+   *  kept_count, punch_times below) is never affected by this. */
+  first_in_source: "device" | "pm" | null;
+  last_out_source: "device" | "pm" | null;
   /** Raw punches for the day, and how many survived collapsing. Debugging. */
   punch_count: number;
   kept_count: number;

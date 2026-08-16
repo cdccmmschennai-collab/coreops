@@ -1278,6 +1278,25 @@ def _official_records(
     return {r.employee_id: r for r in rows}
 
 
+def _official_records_for_employee(
+    db: Session, *, employee_id: uuid.UUID, date_from: date, date_to: date
+) -> dict[date, AttendanceRecord]:
+    """The OFFICIAL attendance record per day, for ONE employee across a range.
+
+    Mirrors `_official_records` (one day, many employees) - this is the one
+    employee, many days shape the Phase 9C calendar summary needs. Same
+    read-only guarantee: nothing here writes `attendance_records`.
+    """
+    rows = db.execute(
+        select(AttendanceRecord).where(
+            AttendanceRecord.employee_id == employee_id,
+            AttendanceRecord.attendance_date >= date_from,
+            AttendanceRecord.attendance_date <= date_to,
+        )
+    ).scalars()
+    return {r.attendance_date: r for r in rows}
+
+
 def _merge_boundary(
     device_value: datetime | None, pm_value: datetime | None
 ) -> tuple[datetime | None, str | None]:
@@ -1663,6 +1682,35 @@ def list_daily_summary(
         bucket["_times"].append(punch_time)
         bucket["_codes"].add(ext_code)
 
+    # Phase 9C: the FINALIZED result also needs a day that has an official
+    # decision but NO biometric punch at all (a PM-entered day) - today that
+    # day is entirely absent from `grouped`, which is why the employee
+    # Calendar showed nothing for it. Single-employee only: this is the only
+    # shape the calendar ever requests, and merging a roster-wide call would
+    # need a different, unwanted design.
+    official: dict[date, AttendanceRecord] = {}
+    if employee_id is not None:
+        official = _official_records_for_employee(
+            db, employee_id=employee_id, date_from=date_from, date_to=date_to
+        )
+        employee_row: Employee | None = None
+        for record_date in official:
+            key = (employee_id, record_date)
+            if key in grouped:
+                continue
+            if employee_row is None:
+                employee_row = db.get(Employee, employee_id)
+                if employee_row is None:
+                    break
+            grouped[key] = {
+                "employee_id": employee_id,
+                "employee_code": employee_row.employee_code,
+                "employee_name": f"{employee_row.first_name} {employee_row.last_name}".strip(),
+                "summary_date": record_date,
+                "_times": [],
+                "_codes": set(),
+            }
+
     # Phase 7 needs each employee's contracted window. Resolved once for the whole
     # page rather than per row: a month of days for one employee is one query, not
     # thirty.
@@ -1681,11 +1729,28 @@ def list_daily_summary(
             shift=shifts.get(bucket["employee_id"])
             or Shift.default(timezone_name=settings.ATTENDANCE_TIMEZONE),
         )
+        record = official.get(bucket["summary_date"])
+        # THE SAME merge `_review_row` uses for the PM Records/detail screens -
+        # device evidence wins, a PM-entered time only fills a boundary the
+        # device did not record. `classification` stays evidence-only: a
+        # PM-entered Present day is still biometrically `no_record`, exactly
+        # as the Records screen already shows it.
+        first_in, first_in_source = _merge_boundary(
+            verdict.first_in, record.check_in_at if record else None
+        )
+        last_out, last_out_source = _merge_boundary(
+            verdict.last_out, record.check_out_at if record else None
+        )
         items.append(
             {
                 **bucket,
-                "first_in": day_summary.first_in,
-                "last_out": day_summary.last_out,
+                "first_in": first_in,
+                "last_out": last_out,
+                "first_in_source": first_in_source,
+                "last_out_source": last_out_source,
+                # Pure device evidence, never merged - the Calendar's compact
+                # under-cell indicator uses these, not first_in/last_out, so it
+                # never implies a PM-entered time came from the device.
                 "punch_count": day_summary.punch_count,
                 "kept_count": day_summary.kept_count,
                 # The punches the boundary was taken from, for human review.
@@ -1693,13 +1758,16 @@ def list_daily_summary(
                 # More than one code here means two device codes map to the same
                 # employee - worth seeing rather than silently merging.
                 "external_employee_codes": sorted(codes),
-                "worked_minutes": verdict.worked_minutes,
+                "worked_minutes": worked_minutes(first_in, last_out),
                 "scheduled_start_at": verdict.scheduled_start_at,
                 "scheduled_end_at": verdict.scheduled_end_at,
                 "scheduled_minutes": verdict.scheduled_minutes,
                 "shift_source": verdict.shift_source,
                 "classification": verdict.classification,
-                "review_required": verdict.review_required,
+                # Same rule `_review_row` uses: once a human has ruled on a day
+                # it leaves the review queue, even if the punches alone could
+                # not settle it - that ruling is exactly the missing piece.
+                "review_required": verdict.review_required and record is None,
                 "review_reasons": list(verdict.reasons),
             }
         )
