@@ -22,4 +22,7 @@ export const biometricKeys = {
     limit: number,
     offset: number,
   ) => [...biometricKeys.all, "daily-review", date, classification, q, limit, offset] as const,
+  // Phase 9B detail screen: one employee, one day.
+  dailyReviewDetail: (employeeId: string, date: string) =>
+    [...biometricKeys.all, "daily-review-detail", employeeId, date] as const,
 };

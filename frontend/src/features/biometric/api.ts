@@ -1,6 +1,7 @@
 import { api } from "@/lib/api-client";
 
 import type {
+  AttendanceDayDetail,
   DailyReviewPage,
   DailySummaryPage,
   EmployeeMapping,
@@ -81,6 +82,22 @@ export const biometricApi = {
     if (params.classification) sp.set("classification", params.classification);
     if (params.q?.trim()) sp.set("q", params.q.trim());
     return api.get<DailyReviewPage>(`${BASE}/daily-review?${sp.toString()}`);
+  },
+
+  /** One employee, one day - the Phase 9B PM detail screen. project_manager-
+   *  only and strictly read-only. */
+  getDailyReviewDetail: (params: {
+    employeeId: string;
+    date: string;
+    provider?: string;
+  }) => {
+    const sp = new URLSearchParams({
+      provider: params.provider ?? PROVIDER_EASYTIME,
+      date: params.date,
+    });
+    return api.get<AttendanceDayDetail>(
+      `${BASE}/daily-review/${params.employeeId}?${sp.toString()}`,
+    );
   },
 
   /** Server-side employee search for the picker. Active employees only, so a

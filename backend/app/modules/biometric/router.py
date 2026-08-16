@@ -46,6 +46,7 @@ from app.modules.biometric.dependencies import ConnectorIdentity, require_connec
 from app.modules.biometric.schemas import (
     BulkMappingCreate,
     BulkMappingResult,
+    DailyReviewDetailOut,
     DailyReviewPage,
     DailySummaryOut,
     DailySummaryPage,
@@ -284,6 +285,37 @@ def list_daily_review(
         offset=offset,
     )
     return DailyReviewPage.model_validate(result)
+
+
+@admin_router.get("/daily-review/{employee_id}", response_model=DailyReviewDetailOut)
+def get_daily_review_detail(
+    employee_id: uuid.UUID,
+    review_date: date = Query(alias="date"),
+    provider: str = Query(default=PROVIDER_EASYTIME),
+    _: User = Depends(require_manager),
+    db: Session = Depends(get_db),
+) -> DailyReviewDetailOut:
+    """One employee, one day - the Phase 9B PM detail screen.
+
+    project_manager ONLY, exactly like `/daily-review`. Read-only: reports
+    what the biometric evidence and the official record (if any) say; writes
+    nothing.
+    """
+    normalized_provider = provider.strip().lower()
+    if normalized_provider not in SUPPORTED_PROVIDERS:
+        raise AppError(
+            "validation_error",
+            f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}.",
+            422,
+        )
+    today_local = datetime.now(ZoneInfo(settings.ATTENDANCE_TIMEZONE)).date()
+    if review_date > today_local:
+        raise AppError("validation_error", "Date must not be in the future.", 422)
+
+    result = service.get_daily_review_detail(
+        db, provider=normalized_provider, on_date=review_date, employee_id=employee_id
+    )
+    return DailyReviewDetailOut.model_validate(result)
 
 
 @admin_router.post("/mappings/bulk", response_model=BulkMappingResult)

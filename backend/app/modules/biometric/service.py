@@ -40,10 +40,20 @@ from app.core.config import settings
 from app.modules.attendance.models import AttendanceRecord
 from app.modules.audit.constants import STATUS_FAILURE, AuditAction, EntityType
 from app.modules.audit.service import record_audit
-from app.modules.biometric.classification import Shift, classify_day
+from app.modules.biometric.classification import (
+    DayClassification,
+    Shift,
+    classify_day,
+    worked_minutes,
+)
 from app.modules.biometric.constants import (
     BLOCKING_REVIEW_REASONS,
     CLASSIFICATIONS,
+    PUNCH_ROLE_FIRST_IN,
+    PUNCH_ROLE_LAST_OUT,
+    PUNCH_ROLE_PUNCH,
+    SOURCE_DEVICE,
+    SOURCE_PM,
     BATCH_COMPLETED,
     BATCH_COMPLETED_WITH_ERRORS,
     BATCH_FAILED,
@@ -1192,7 +1202,11 @@ def _review_employees(db: Session, *, on_date: date) -> list[tuple]:
 
 
 def _punches_for_day(
-    db: Session, *, provider: str, on_date: date
+    db: Session,
+    *,
+    provider: str,
+    on_date: date,
+    employee_ids: set[uuid.UUID] | None = None,
 ) -> dict[uuid.UUID, list[datetime]]:
     """Punch instants for one attendance day, keyed by employee. One query.
 
@@ -1204,10 +1218,22 @@ def _punches_for_day(
 
     The day is bucketed in ATTENDANCE_TIMEZONE, so "14 August" means the IST date
     a person would name.
+
+    `employee_ids`, when given, narrows to those employees only - used by the
+    Phase 9B single-employee detail screen so it does not scan the whole
+    roster's punches for one person. `None` (the roster view's call) scans the
+    whole day exactly as before.
     """
     local_day = cast(
         func.timezone(settings.ATTENDANCE_TIMEZONE, BiometricPunch.punch_time), Date
     )
+    conditions = [
+        BiometricPunch.provider == provider,
+        Employee.deleted_at.is_(None),
+        local_day == on_date,
+    ]
+    if employee_ids is not None:
+        conditions.append(Employee.id.in_(employee_ids))
     rows = db.execute(
         select(Employee.id, BiometricPunch.punch_time)
         .select_from(BiometricPunch)
@@ -1221,11 +1247,7 @@ def _punches_for_day(
             ),
         )
         .join(Employee, Employee.id == BiometricEmployeeMapping.employee_id)
-        .where(
-            BiometricPunch.provider == provider,
-            Employee.deleted_at.is_(None),
-            local_day == on_date,
-        )
+        .where(*conditions)
     ).all()
 
     grouped: dict[uuid.UUID, list[datetime]] = {}
@@ -1254,6 +1276,81 @@ def _official_records(
         )
     ).scalars()
     return {r.employee_id: r for r in rows}
+
+
+def _merge_boundary(
+    device_value: datetime | None, pm_value: datetime | None
+) -> tuple[datetime | None, str | None]:
+    """Device evidence always wins. A PM-entered time fills a boundary the
+    device did not record; a boundary the device DID record can never be
+    displaced by a value copied from `attendance_records`, even if the two
+    disagree. Returns (value, source), source is SOURCE_DEVICE / SOURCE_PM /
+    None.
+    """
+    if device_value is not None:
+        return device_value, SOURCE_DEVICE
+    if pm_value is not None:
+        return pm_value, SOURCE_PM
+    return None, None
+
+
+def _review_row(
+    *,
+    employee_id: uuid.UUID,
+    employee_code: str | None,
+    employee_name: str,
+    verdict: DayClassification,
+    record: AttendanceRecord | None,
+) -> dict:
+    """One employee-day, as both the roster view and the detail view need it.
+
+    THE SINGLE PLACE the evidence/decision merge happens, so `list_daily_review`
+    (one call per roster employee) and `get_daily_review_detail` (one call, one
+    employee) can never drift apart on what "Records must show the saved
+    decision" means.
+
+    `classification`/`review_reasons`/`blocking_reasons` describe BIOMETRIC
+    EVIDENCE ONLY and are never touched by a PM decision - a `no_record` day
+    stays `no_record` even once the PM has entered a full day, because the
+    device still saw nothing that day. `first_in`/`last_out`/`worked_minutes`
+    are the DISPLAY boundary: the device's value first, the official record's
+    value only where the device recorded none.
+    """
+    first_in, first_in_source = _merge_boundary(
+        verdict.first_in, record.check_in_at if record else None
+    )
+    last_out, last_out_source = _merge_boundary(
+        verdict.last_out, record.check_out_at if record else None
+    )
+
+    return {
+        "employee_id": employee_id,
+        "employee_code": employee_code,
+        "employee_name": employee_name,
+        "first_in": first_in,
+        "last_out": last_out,
+        "worked_minutes": worked_minutes(first_in, last_out),
+        "first_in_source": first_in_source,
+        "last_out_source": last_out_source,
+        "scheduled_start_at": verdict.scheduled_start_at,
+        "scheduled_end_at": verdict.scheduled_end_at,
+        "scheduled_minutes": verdict.scheduled_minutes,
+        # Evidence-only. See docstring above - never derived from `record`.
+        "classification": verdict.classification,
+        "review_required": verdict.review_required and record is None,
+        # Biometric evidence is immutable and complete evidence cannot be
+        # improved, so the PM may supply a time ONLY where the DEVICE (not the
+        # official record) did not record one.
+        "can_set_check_in": verdict.first_in is None,
+        "can_set_check_out": verdict.last_out is None,
+        "review_reasons": list(verdict.reasons),
+        "blocking_reasons": [r for r in verdict.reasons if r in BLOCKING_REVIEW_REASONS],
+        "attendance_record_id": record.id if record else None,
+        "attendance_status": record.status.value if record else None,
+        "attendance_check_in_at": record.check_in_at if record else None,
+        "attendance_check_out_at": record.check_out_at if record else None,
+        "attendance_note": record.note if record else None,
+    }
 
 
 def list_daily_review(
@@ -1325,61 +1422,27 @@ def list_daily_review(
 
         counts[verdict.classification] = counts.get(verdict.classification, 0) + 1
         record = official.get(employee_id)
+        row = _review_row(
+            employee_id=employee_id,
+            employee_code=employee_code,
+            employee_name=f"{first_name} {last_name}".strip(),
+            verdict=verdict,
+            record=record,
+        )
 
-        # The official record is the SOURCE OF TRUTH for what a day means. Once a
-        # human has ruled on a day it leaves the queue, even if the punches alone
-        # could not settle it - that ruling is exactly the missing information.
-        review_required = verdict.review_required and record is None
-        if review_required:
+        if row["review_required"]:
             review_required_count += 1
-
-        # Biometric evidence is immutable and complete evidence is not
-        # improvable, so the PM may supply a time ONLY where the device did not
-        # record one. Enforced in the UI from this flag rather than from the UI
-        # re-deriving it, so both ends agree on what "missing" means.
-        can_set_check_in = verdict.first_in is None
-        can_set_check_out = verdict.last_out is None
 
         if classification is not None and verdict.classification != classification:
             continue
 
         if normalized_q:
-            name = f"{first_name} {last_name}".strip().lower()
+            name = row["employee_name"].lower()
             code = (employee_code or "").lower()
             if normalized_q not in name and normalized_q not in code:
                 continue
 
-        items.append(
-            {
-                "employee_id": employee_id,
-                "employee_code": employee_code,
-                "employee_name": f"{first_name} {last_name}".strip(),
-                "first_in": verdict.first_in,
-                "last_out": verdict.last_out,
-                "worked_minutes": verdict.worked_minutes,
-                "scheduled_start_at": verdict.scheduled_start_at,
-                "scheduled_end_at": verdict.scheduled_end_at,
-                "scheduled_minutes": verdict.scheduled_minutes,
-                "classification": verdict.classification,
-                "review_required": review_required,
-                "can_set_check_in": can_set_check_in,
-                "can_set_check_out": can_set_check_out,
-                "review_reasons": list(verdict.reasons),
-                # The subset that actually demands attention. Split HERE because
-                # BLOCKING_REVIEW_REASONS already lives here - a frontend copy of
-                # that set would be a second policy that could drift.
-                "blocking_reasons": [
-                    r for r in verdict.reasons if r in BLOCKING_REVIEW_REASONS
-                ],
-                # The OFFICIAL record, when a human has already ruled on this day.
-                # Read from `attendance_records` - biometric never writes it.
-                "attendance_record_id": record.id if record else None,
-                "attendance_status": record.status.value if record else None,
-                "attendance_check_in_at": record.check_in_at if record else None,
-                "attendance_check_out_at": record.check_out_at if record else None,
-                "attendance_note": record.note if record else None,
-            }
-        )
+        items.append(row)
 
     return {
         "review_date": on_date,
@@ -1393,6 +1456,65 @@ def list_daily_review(
             "employees": len(employees),
             "review_required": review_required_count,
         },
+    }
+
+
+def get_daily_review_detail(
+    db: Session, *, provider: str, on_date: date, employee_id: uuid.UUID
+) -> dict:
+    """One employee, one day - the Phase 9B PM detail screen.
+
+    Calls the SAME per-row computation `list_daily_review` uses for every
+    roster employee (`_review_row`), for exactly one, plus the full surviving
+    punch list `DailyReviewRowOut` deliberately omits (see its docstring - it
+    is evidence-narrow by design; this endpoint is where evidence inspection
+    belongs). Read-only, exactly like the roster view: no attendance_records
+    write, no punch touched, no synthetic punch invented.
+    """
+    employee = db.get(Employee, employee_id)
+    if employee is None or employee.deleted_at is not None:
+        raise AppError("not_found", "Employee not found.", 404)
+
+    times = _punches_for_day(
+        db, provider=provider, on_date=on_date, employee_ids={employee_id}
+    ).get(employee_id) or []
+    day_summary = summarize_day(times) if times else EMPTY_DAY
+    shift = _employee_shifts(db, {employee_id}).get(employee_id) or Shift.default(
+        timezone_name=settings.ATTENDANCE_TIMEZONE
+    )
+    verdict = classify_day(day_summary, day=on_date, shift=shift)
+    record = _official_records(db, on_date=on_date, employee_ids={employee_id}).get(
+        employee_id
+    )
+
+    row = _review_row(
+        employee_id=employee.id,
+        employee_code=employee.employee_code,
+        employee_name=f"{employee.first_name} {employee.last_name}".strip(),
+        verdict=verdict,
+        record=record,
+    )
+
+    kept = day_summary.kept
+    punches = []
+    for i, punch_time in enumerate(kept):
+        if i == 0:
+            role = PUNCH_ROLE_FIRST_IN
+        elif i == len(kept) - 1 and len(kept) >= 2:
+            role = PUNCH_ROLE_LAST_OUT
+        else:
+            role = PUNCH_ROLE_PUNCH
+        # Every row here comes straight from biometric_punches (via
+        # summarize_day's dedup) - it is ALWAYS device evidence. A PM-entered
+        # boundary lives only in `row` (attendance_check_in_at/out), never
+        # here - no synthetic punch is invented.
+        punches.append({"punch_time": punch_time, "role": role, "source": SOURCE_DEVICE})
+
+    return {
+        "review_date": on_date,
+        "provider": provider,
+        "row": row,
+        "punches": punches,
     }
 
 

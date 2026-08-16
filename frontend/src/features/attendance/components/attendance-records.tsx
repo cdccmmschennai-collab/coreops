@@ -120,7 +120,14 @@ export function AttendanceRecords() {
   const showEmpty = !query.isLoading && !query.isError && rows.length === 0;
 
   function openDetail(row: DailyReviewRow) {
-    router.push(`/attendance/records/${row.employee_id}?date=${date}`);
+    // Carry the whole view state through, not just the date - otherwise
+    // "← Records" lands back on the default filter and a row that just left
+    // "Needs review" (because the PM resolved it) looks like it vanished.
+    const sp = new URLSearchParams({ date });
+    if (filter !== DEFAULT_REVIEW_FILTER) sp.set("review", filter);
+    if (rawQ) sp.set("q", rawQ);
+    if (offset > 0) sp.set("offset", String(offset));
+    router.push(`/attendance/records/${row.employee_id}?${sp.toString()}`);
   }
 
   return (
@@ -252,7 +259,10 @@ export function AttendanceRecords() {
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {reason ?? EMPTY}
+                      {/* Once a PM has decided the day, their stated reason is
+                          the useful one to show - the evidence gap that used
+                          to block review is no longer what the row is about. */}
+                      {r.attendance_note?.trim() || reason || EMPTY}
                     </TableCell>
                     {/* Click is stopped so editing never also triggers the row's
                         navigation to the detail route. */}

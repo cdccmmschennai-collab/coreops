@@ -278,3 +278,20 @@ RAW_UPLOAD_TIME_TEXT_KEY = "_upload_time_text"
 # so a connector token can never be mistaken for (or fall back to) a user JWT,
 # and never a query parameter so it stays out of access logs and referrers.
 CONNECTOR_TOKEN_HEADER = "X-CoreOps-Connector-Token"
+
+
+# ── Phase 9B: PM decision reflection + detail page ──────────────────────────
+# Whether a displayed IN/OUT boundary came from the device or was supplied by
+# a PM where the device recorded none. Device evidence always wins - see
+# service._merge_boundary. Biometric evidence itself is never written by a PM;
+# this labels the DISPLAYED first_in/last_out only.
+SOURCE_DEVICE = "device"
+SOURCE_PM = "pm"
+
+# The role a punch plays on the detail page's evidence list. Only the first
+# and last surviving punch of the day carry a boundary role - intermediate
+# punches are shown as context, never treated as a paired session (EasyTime
+# reports no punch direction in this deployment; see summary.py).
+PUNCH_ROLE_FIRST_IN = "first_in"
+PUNCH_ROLE_LAST_OUT = "last_out"
+PUNCH_ROLE_PUNCH = "punch"

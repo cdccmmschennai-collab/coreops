@@ -100,6 +100,24 @@ export function useDailyReview(params: {
   });
 }
 
+/** One employee, one day - the Phase 9B PM detail screen. */
+export function useDailyReviewDetail(params: {
+  employeeId: string;
+  date: string;
+  enabled?: boolean;
+}) {
+  return useQuery({
+    queryKey: biometricKeys.dailyReviewDetail(params.employeeId, params.date),
+    queryFn: () =>
+      biometricApi.getDailyReviewDetail({
+        employeeId: params.employeeId,
+        date: params.date,
+      }),
+    enabled: params.enabled !== false && !!params.employeeId && !!params.date,
+    staleTime: 60 * 1000,
+  });
+}
+
 /** Employee picker search. Opens with the first page of active employees, then
  *  narrows as the PM types. React Query cancels the superseded request. */
 export function useEmployeeSearch(q: string, enabled: boolean) {

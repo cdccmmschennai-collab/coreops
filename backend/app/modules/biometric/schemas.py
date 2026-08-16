@@ -373,6 +373,11 @@ class DailyReviewRowOut(BaseModel):
     first_in: datetime | None = None
     last_out: datetime | None = None
     worked_minutes: int | None = None
+    # "device" | "pm" | null - which value this DISPLAYED boundary came from.
+    # A PM-entered time only ever fills a boundary the device did not record;
+    # see service._merge_boundary. Biometric evidence itself is unaffected.
+    first_in_source: str | None = None
+    last_out_source: str | None = None
 
     scheduled_start_at: datetime | None = None
     scheduled_end_at: datetime | None = None
@@ -442,6 +447,37 @@ class DailyReviewPage(BaseModel):
     limit: int
     offset: int
     counts: DailyReviewCounts
+
+
+# ── Phase 9B: single-employee detail screen ─────────────────────────────────
+
+class PunchEntryOut(BaseModel):
+    """One surviving (post-dedup) punch on the detail page's evidence list.
+
+    Always `source="device"` - nothing here is ever PM-entered. A PM-supplied
+    boundary the device did not record lives on `row.attendance_check_in_at` /
+    `row.attendance_check_out_at`, never as a row in this list: no synthetic
+    punch is invented (see the module docstring).
+    """
+
+    punch_time: datetime
+    # first_in | last_out | punch. Only the first and last surviving punch of
+    # the day carry a boundary role - see PUNCH_ROLE_* in constants.py.
+    role: str
+    source: str = "device"
+
+
+class DailyReviewDetailOut(BaseModel):
+    """One employee, one day - the Phase 9B PM detail screen.
+
+    `row` is the exact same shape `DailyReviewPage.items` uses, so the two
+    screens can never disagree about what a saved decision looks like.
+    """
+
+    review_date: date
+    provider: str
+    row: DailyReviewRowOut
+    punches: list[PunchEntryOut]
 
 
 class SyncBatchOut(BaseModel):

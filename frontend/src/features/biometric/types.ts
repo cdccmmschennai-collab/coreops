@@ -160,6 +160,11 @@ export interface DailyReviewRow {
   first_in: string | null;
   last_out: string | null;
   worked_minutes: number | null;
+  /** "device" | "pm" | null - which value this DISPLAYED boundary came from.
+   *  A PM-entered time only ever fills a boundary the device did not record;
+   *  biometric evidence itself is unaffected. */
+  first_in_source: "device" | "pm" | null;
+  last_out_source: "device" | "pm" | null;
 
   scheduled_start_at: string | null;
   scheduled_end_at: string | null;
@@ -210,6 +215,23 @@ export interface DailyReviewPage {
   limit: number;
   offset: number;
   counts: DailyReviewCounts;
+}
+
+export interface PunchEntry {
+  punch_time: string;
+  /** Only the first and last surviving punch of the day carry a boundary
+   *  role; everything between is context, never a paired session. */
+  role: "first_in" | "last_out" | "punch";
+  /** Always "device" - a PM-entered boundary is never a punch row; see
+   *  AttendanceDayDetail.row instead. */
+  source: "device";
+}
+
+export interface AttendanceDayDetail {
+  review_date: string;
+  provider: string;
+  row: DailyReviewRow;
+  punches: PunchEntry[];
 }
 
 export interface EmployeeMapping {
