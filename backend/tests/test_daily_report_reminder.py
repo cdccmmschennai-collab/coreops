@@ -1,105 +1,196 @@
-"""Unit tests for the Daily Report Reminder — pure logic, no database.
+"""Tests for the Daily Report Reminder.
 
-Covers the working-day window (weekend skipping), the PM-exclusion rule, and
-template / CSV rendering. The data collection against the DB is exercised via the
-/debug endpoints and the dispatcher's own logging, per the phased testing plan.
+The reminder checks exactly ONE date: the immediately previous working day.
+Covered here: the previous-working-day resolution (weekends + company calendar),
+the "only that one date" collection rule, the PM-exclusion rule, and the
+template / CSV rendering.
 """
 import csv
 import io
-import re
 import uuid
-from datetime import date, datetime
+from datetime import date
 
 from app.notifications.email_service import EmailSendError
 from app.reminders.daily_report.dispatcher import run_daily_report_reminders
 from app.reminders.daily_report.service import (
-    DEFAULT_LOOKBACK_WORKING_DAYS,
     DailyReportReminderService,
     MissingEmployee,
-    MissingReportDay,
     PMReminder,
 )
 from app.reminders.daily_report.template import render_daily_report_reminder
 
-
-def test_working_day_window_skips_weekends():
-    svc = DailyReportReminderService()
-    # Monday 2026-07-06 -> previous 3 working days must exclude Sat/Sun.
-    window = svc.working_day_window(date(2026, 7, 6))
-    assert len(window) == DEFAULT_LOOKBACK_WORKING_DAYS
-    assert window == [
-        date(2026, 7, 3),   # Fri
-        date(2026, 7, 2),   # Thu
-        date(2026, 7, 1),   # Wed
-    ]
-    # Most-recent first, strictly before the reference day, no weekends.
-    assert window == sorted(window, reverse=True)
-    assert all(d.weekday() < 5 for d in window)
-    assert max(window) < date(2026, 7, 6)
+# Calendar anchors (2026): 10 Aug is a Monday, so 12 Aug is a Wednesday and
+# 13 Aug a Thursday — the dates used in the approved specification.
+_MON = date(2026, 8, 10)
+_TUE = date(2026, 8, 11)
+_WED = date(2026, 8, 12)
+_THU = date(2026, 8, 13)
+_PREV_FRI = date(2026, 8, 7)
+_PREV_SAT = date(2026, 8, 8)
+_PREV_SUN = date(2026, 8, 9)
 
 
-def test_working_day_window_skips_weekend_when_reference_is_after_weekend():
-    svc = DailyReportReminderService()
-    # Monday reference: the 3 prior working days skip Sat/Sun entirely.
-    window = svc.working_day_window(date(2026, 7, 6))
-    assert date(2026, 7, 4) not in window  # Sat
-    assert date(2026, 7, 5) not in window  # Sun
+# --- previous working day: pure calendar arithmetic -------------------------
 
 
-def _reminder() -> PMReminder:
+def test_calendar_anchors_are_the_weekdays_the_spec_assumes():
+    """Guards every date constant below against an off-by-one year change."""
+    assert _MON.weekday() == 0
+    assert _WED.weekday() == 2
+    assert _THU.weekday() == 3
+    assert _PREV_FRI.weekday() == 4
+    assert _PREV_SAT.weekday() == 5
+    assert _PREV_SUN.weekday() == 6
+
+
+def test_is_working_day_baseline_is_mon_to_fri():
+    from app.modules.calendar.working_days import is_working_day
+
+    empty: set = set()
+    assert is_working_day(_WED, non_working=empty, working_overrides=empty)
+    assert is_working_day(_PREV_FRI, non_working=empty, working_overrides=empty)
+    assert not is_working_day(_PREV_SAT, non_working=empty, working_overrides=empty)
+    assert not is_working_day(_PREV_SUN, non_working=empty, working_overrides=empty)
+
+
+def test_is_working_day_honours_holidays_and_working_day_overrides():
+    from app.modules.calendar.working_days import is_working_day
+
+    # A declared holiday closes an otherwise normal weekday.
+    assert not is_working_day(_WED, non_working={_WED}, working_overrides=set())
+    # A declared working day opens a Saturday...
+    assert is_working_day(_PREV_SAT, non_working=set(), working_overrides={_PREV_SAT})
+    # ...and wins even if the same date also carries a holiday entry.
+    assert is_working_day(_WED, non_working={_WED}, working_overrides={_WED})
+
+
+# --- previous working day: against the real calendar table ------------------
+
+
+def _make_calendar_event(db, *, event_date, event_type, title="Test"):
+    from app.modules.calendar.models import CalendarEvent, CalendarEventType
+
+    ev = CalendarEvent(
+        event_date=event_date,
+        title=title,
+        event_type=CalendarEventType(event_type),
+    )
+    db.add(ev)
+    db.commit()
+    db.refresh(ev)
+    return ev
+
+
+def _target(db, today):
+    return DailyReportReminderService().target_date(db, today)
+
+
+def test_target_date_on_a_normal_weekday_is_yesterday(db):
+    """Thursday 13 Aug -> Wednesday 12 Aug, exactly as specified."""
+    assert _target(db, _THU) == _WED
+
+
+def test_target_date_on_monday_is_the_previous_friday(db):
+    assert _target(db, _MON) == _PREV_FRI
+
+
+def test_target_date_from_a_weekend_skips_back_to_friday(db):
+    """The weekend itself is never a target."""
+    assert _target(db, _PREV_SUN) == _PREV_FRI   # run on Sunday
+    assert _target(db, _PREV_SAT) == _PREV_FRI   # run on Saturday
+
+
+def test_target_date_skips_a_configured_holiday(db):
+    """A company-calendar holiday on the previous day is skipped."""
+    _make_calendar_event(db, event_date=_WED, event_type="holiday", title="Festival")
+    assert _target(db, _THU) == _TUE
+
+
+def test_target_date_skips_consecutive_non_working_days(db):
+    """Holiday + cdc_holiday back to back, then the weekend."""
+    _make_calendar_event(db, event_date=_WED, event_type="holiday")
+    _make_calendar_event(db, event_date=_TUE, event_type="cdc_holiday")
+    _make_calendar_event(db, event_date=_MON, event_type="natural_hazard")
+    assert _target(db, _THU) == _PREV_FRI
+
+
+def test_target_date_uses_a_declared_working_saturday(db):
+    """A `working_day` entry opens a normally-off day, so Monday targets it."""
+    _make_calendar_event(db, event_date=_PREV_SAT, event_type="working_day")
+    assert _target(db, _MON) == _PREV_SAT
+
+
+def test_informational_events_do_not_close_the_office(db):
+    """`event` is informational; it must not shift the target date."""
+    _make_calendar_event(db, event_date=_WED, event_type="event", title="Town hall")
+    assert _target(db, _THU) == _WED
+
+
+def test_target_date_is_none_when_no_working_day_is_within_the_bound(db):
+    """A misconfigured calendar bails out instead of looping forever."""
+    from datetime import timedelta
+
+    for offset in range(1, 6):
+        _make_calendar_event(
+            db, event_date=_THU - timedelta(days=offset), event_type="holiday"
+        )
+    svc = DailyReportReminderService(max_lookback_days=5)
+    assert svc.target_date(db, _THU) is None
+    assert svc.collect(db, today=_THU) == []
+
+
+# --- template / CSV rendering ----------------------------------------------
+
+
+def _reminder(report_date: date = _WED) -> PMReminder:
     return PMReminder(
         pm_id=uuid.uuid4(),
         pm_name="Alex",
         pm_email="alex@example.com",
+        report_date=report_date,
         employees_checked=3,
-        days=[
-            MissingReportDay(
-                report_date=date(2026, 7, 3),
-                employees=[
-                    MissingEmployee(uuid.uuid4(), "John", "EMP002"),
-                    MissingEmployee(uuid.uuid4(), "David", "EMP001"),
-                ],
-            ),
-            MissingReportDay(
-                report_date=date(2026, 7, 2),
-                employees=[MissingEmployee(uuid.uuid4(), "David", "EMP001")],
-            ),
+        employees=[
+            MissingEmployee(uuid.uuid4(), "David", "EMP001"),
+            MissingEmployee(uuid.uuid4(), "John", "EMP002"),
         ],
     )
 
 
-def test_subject_contains_the_generated_date():
-    rendered = render_daily_report_reminder(
-        _reminder(), now=datetime(2026, 7, 9, 17, 15)
-    )
-    assert rendered.subject == "CoreOps | Outstanding Daily Reports | 09 Jul 2026"
+def test_subject_uses_the_target_date_not_today():
+    rendered = render_daily_report_reminder(_reminder())
+    assert rendered.subject == "CoreOps • Outstanding Daily Reports • 12 Aug 2026"
 
 
-def test_template_text_layout_has_four_columns_and_summary():
-    rendered = render_daily_report_reminder(
-        _reminder(), now=datetime(2026, 7, 6, 9, 30)
-    )
-    text = rendered.text_body
-    assert text.startswith("CoreOps\nDaily Reporting Compliance")
+def test_template_text_layout_matches_the_approved_body():
+    text = render_daily_report_reminder(_reminder()).text_body
+    assert text.startswith("CoreOps\nOutstanding Daily Reports")
     assert "Hello Alex," in text
     assert (
-        "The following employees have outstanding daily work reports as of "
-        "06 Jul 2026, 09:30 AM IST." in text
+        "The following employees have not submitted their daily work report "
+        "for 12 Aug 2026." in text
     )
-    # The same four columns as the HTML and the CSV.
-    for header in ("Employee ID", "Employee Name", "Missing Days", "Missing Report Dates"):
-        assert header in text
-    # Code and name are separate cells, not "EMP001 David". Cells are padded to
-    # the column width, so match the pipes rather than exact spacing.
-    assert "EMP001 David" not in text
-    assert re.search(r"\|\s*EMP001\s*\|\s*David\s*\|\s*2\s*\|", text)
-    assert re.search(r"\|\s*EMP002\s*\|\s*John\s*\|\s*1\s*\|", text)
-    assert "02 Jul • 03 Jul" in text  # David's two dates, bullet-separated
-    assert text.index("David") < text.index("John")  # sorted by name
     assert "Employees with Missing Reports: 2" in text
-    assert "Total Missing Report Days: 3" in text
-    assert "attached as a CSV file" in text
+    for header in ("Employee ID & Name", "Missing Report Date"):
+        assert header in text
+    assert "EMP001 - David" in text
+    assert "EMP002 - John" in text
+    assert text.index("David") < text.index("John")  # sorted by name
+    assert (
+        "Please follow up with the respective employees and ask them to submit "
+        "their pending report." in text
+    )
     assert text.rstrip().endswith("Automated notification - please do not reply.")
+
+
+def test_only_one_date_ever_appears_per_employee():
+    """One date is checked, so no row can carry a second missing-date value."""
+    rendered = render_daily_report_reminder(_reminder())
+    for body in (rendered.text_body, rendered.html_body):
+        assert body.count("12 Aug 2026") == 3  # intro line + one cell per employee
+        assert "11 Aug 2026" not in body
+        assert "•" not in body                  # the old multi-date separator
+    rows = _csv_rows(rendered.csv_bytes)
+    assert [r["Missing Report Date"] for r in rows] == ["12 Aug 2026", "12 Aug 2026"]
 
 
 def test_plain_text_fallback_has_no_html_css_or_urls():
@@ -109,21 +200,14 @@ def test_plain_text_fallback_has_no_html_css_or_urls():
 
 
 def test_template_html_columns_summary_and_greeting():
-    html = render_daily_report_reminder(
-        _reminder(), now=datetime(2026, 7, 6, 9, 30)
-    ).html_body
+    html = render_daily_report_reminder(_reminder()).html_body
     assert "Hello Alex" in html
-    assert "Daily Reporting Compliance" in html
-    for header in ("Employee ID", "Employee Name", "Missing Days", "Missing Report Dates"):
-        assert header in html
-    # Employee code and name land in separate cells.
-    assert '>EMP001</td><td style="' in html.replace("\n", "")
-    assert ">David</td>" in html and ">John</td>" in html
-    # Dates bullet-separated, not stuck together.
-    assert "02 Jul • 03 Jul" in html
-    assert "02 Jul03 Jul" not in html
+    assert "Outstanding Daily Reports" in html
+    assert "Employee ID &amp; Name" in html
+    assert "Missing Report Date" in html
+    assert ">EMP001 - David</td>" in html
+    assert ">EMP002 - John</td>" in html
     assert "Employees with Missing Reports: <strong>2</strong>" in html
-    assert "Total Missing Report Days: <strong>3</strong>" in html
     assert "Automated notification - please do not reply." in html
 
 
@@ -151,14 +235,8 @@ def test_template_html_is_outlook_safe_constrained_table_layout():
         assert banned not in html
 
 
-def test_missing_days_count_matches_the_dates_listed():
-    rendered = render_daily_report_reminder(_reminder())
-    rows = _csv_rows(rendered.csv_bytes)
-    by_code = {r["Employee ID"]: r for r in rows}
-    assert by_code["EMP001"]["Missing Days"] == "2"   # David: 02 + 03 Jul
-    assert by_code["EMP002"]["Missing Days"] == "1"   # John: 03 Jul
-    for row in rows:
-        assert int(row["Missing Days"]) == len(row["Missing Report Dates"].split(","))
+def test_total_missing_counts_the_employees_on_the_target_day():
+    assert _reminder().total_missing == 2
 
 
 # --- CSV attachment ---------------------------------------------------------
@@ -170,30 +248,23 @@ def _csv_rows(csv_bytes: bytes) -> list[dict]:
     return list(csv.DictReader(io.StringIO(text)))
 
 
-def test_csv_filename_uses_the_generated_date():
-    rendered = render_daily_report_reminder(
-        _reminder(), now=datetime(2026, 7, 9, 17, 15)
-    )
-    assert rendered.csv_filename == "coreops_outstanding_reports_2026-07-09.csv"
+def test_csv_filename_uses_the_target_date():
+    rendered = render_daily_report_reminder(_reminder())
+    assert rendered.csv_filename == "coreops_outstanding_reports_2026-08-12.csv"
 
 
 def test_csv_is_valid_comma_separated_content_with_bom_and_crlf():
-    rendered = render_daily_report_reminder(_reminder())
-    raw = rendered.csv_bytes
-    # Excel needs the BOM to decode UTF-8 (the bullet in the HTML body, non-ASCII
-    # employee names) instead of falling back to the local ANSI code page.
+    raw = render_daily_report_reminder(_reminder()).csv_bytes
+    # Excel needs the BOM to decode UTF-8 (non-ASCII employee names) instead of
+    # falling back to the local ANSI code page.
     assert raw.startswith(b"\xef\xbb\xbf")
     assert b"\r\n" in raw
     text = raw.decode("utf-8-sig")
-    assert text.splitlines()[0] == (
-        "Employee ID,Employee Name,Missing Days,Missing Report Dates"
-    )
+    assert text.splitlines()[0] == "Employee ID,Employee Name,Missing Report Date"
     rows = _csv_rows(raw)
     assert len(rows) == 2
     assert [r["Employee ID"] for r in rows] == ["EMP001", "EMP002"]
-    # Multiple dates stay in ONE quoted cell, comma-separated.
-    assert '"02 Jul, 03 Jul"' in text
-    assert rows[0]["Missing Report Dates"] == "02 Jul, 03 Jul"
+    assert rows[0]["Employee Name"] == "David"
 
 
 def test_csv_contains_only_the_recipient_pms_employees():
@@ -201,23 +272,14 @@ def test_csv_contains_only_the_recipient_pms_employees():
         pm_id=uuid.uuid4(),
         pm_name="Alex",
         pm_email="alex@example.com",
+        report_date=_WED,
         employees_checked=1,
-        days=[
-            MissingReportDay(
-                report_date=date(2026, 7, 3),
-                employees=[MissingEmployee(uuid.uuid4(), "David", "EMP001")],
-            )
-        ],
+        employees=[MissingEmployee(uuid.uuid4(), "David", "EMP001")],
     )
     rows = _csv_rows(render_daily_report_reminder(mine).csv_bytes)
     assert [r["Employee Name"] for r in rows] == ["David"]
     # An employee from another PM's group ("John"/EMP002) never leaks in.
-    assert all("John" not in r["Employee Name"] for r in rows)
     assert all(r["Employee ID"] != "EMP002" for r in rows)
-
-
-def test_total_missing_counts_all_employees_across_days():
-    assert _reminder().total_missing == 3
 
 
 # --- Failure isolation: one bad recipient must not stop the others ----------
@@ -228,13 +290,9 @@ def _pm(email: str) -> PMReminder:
         pm_id=uuid.uuid4(),
         pm_name=email.split("@")[0],
         pm_email=email,
+        report_date=_WED,
         employees_checked=1,
-        days=[
-            MissingReportDay(
-                report_date=date(2026, 7, 3),
-                employees=[MissingEmployee(uuid.uuid4(), "John")],
-            )
-        ],
+        employees=[MissingEmployee(uuid.uuid4(), "John", "EMP002")],
     )
 
 
@@ -317,7 +375,24 @@ def test_one_invalid_recipient_does_not_block_the_others():
     assert all(o.email_sent and o.error is None for o in good)
 
 
-# --- PM exclusion (data layer, against the real DB) -------------------------
+def test_no_missing_employees_sends_no_email():
+    """The existing no-email behaviour is unchanged: nothing to chase, nothing
+    collected, nothing sent."""
+    email = _StubEmailService(bad_recipient=None)
+
+    result = run_daily_report_reminders(
+        db=object(), email_service=email, service=_StubService([])
+    )
+
+    assert email.sent_to == []
+    assert result.pms_with_missing == 0
+    assert result.emails_sent == 0
+    assert result.emails_skipped == 0
+    assert result.emails_failed == 0
+    assert result.total_missing == 0
+
+
+# --- collection against the real DB ----------------------------------------
 
 
 def _make_pm_user(db, email: str):
@@ -349,6 +424,147 @@ def _make_reporting_employee(db, *, code, first_name, pm_id, user_id=None):
     db.commit()
     db.refresh(emp)
     return emp
+
+
+def _make_report(db, *, employee_id, report_date, status):
+    from app.modules.work_reports.models import DailyWorkReport
+
+    report = DailyWorkReport(
+        employee_id=employee_id, report_date=report_date, status=status
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+def _collect(db, today=_THU):
+    return DailyReportReminderService().collect(db, today=today)
+
+
+def _missing_codes(reminders) -> set:
+    return {e.code for r in reminders for e in r.employees}
+
+
+# -- eligibility -------------------------------------------------------------
+
+
+def test_employee_missing_the_previous_working_day_is_included(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+
+    reminders = _collect(db)
+    assert len(reminders) == 1
+    assert reminders[0].report_date == _WED
+    assert _missing_codes(reminders) == {"EMP001"}
+
+
+def test_employee_who_submitted_the_previous_working_day_is_not_included(db):
+    """Even though the employee never filed for 11 Aug or 10 Aug, only 12 Aug is
+    checked — so they must not appear in the 13 Aug reminder."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_report(
+        db, employee_id=emp.id, report_date=_WED, status=WorkReportStatus.submitted
+    )
+
+    assert _collect(db) == []
+
+
+def test_older_missing_days_are_never_chased(db):
+    """David missed 11 Aug but filed 12 Aug -> excluded. Erin missed 12 Aug ->
+    included, and only for 12 Aug."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    david = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_reporting_employee(db, code="EMP004", first_name="Erin", pm_id=pm.id)
+    _make_report(
+        db, employee_id=david.id, report_date=_WED, status=WorkReportStatus.submitted
+    )
+
+    reminders = _collect(db)
+    assert _missing_codes(reminders) == {"EMP004"}
+    assert reminders[0].report_date == _WED
+    assert reminders[0].total_missing == 1
+
+
+def test_granted_report_satisfies_the_target_day(db):
+    """A report reopened for editing (status granted) is still recorded."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_report(
+        db, employee_id=emp.id, report_date=_WED, status=WorkReportStatus.granted
+    )
+
+    assert _collect(db) == []
+
+
+def test_draft_report_does_not_satisfy_the_target_day(db):
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_report(
+        db, employee_id=emp.id, report_date=_WED, status=WorkReportStatus.draft
+    )
+
+    assert _missing_codes(_collect(db)) == {"EMP001"}
+
+
+def test_collection_follows_the_calendar_when_the_previous_day_is_a_holiday(db):
+    """12 Aug is a declared holiday, so 13 Aug chases 11 Aug instead."""
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    _make_calendar_event(db, event_date=_WED, event_type="holiday", title="Festival")
+    david = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_reporting_employee(db, code="EMP004", first_name="Erin", pm_id=pm.id)
+    # David filed for the holiday but not for the real target day.
+    _make_report(
+        db, employee_id=david.id, report_date=_WED, status=WorkReportStatus.submitted
+    )
+
+    reminders = _collect(db)
+    assert reminders[0].report_date == _TUE
+    assert _missing_codes(reminders) == {"EMP001", "EMP004"}
+
+
+def test_monday_run_chases_the_previous_friday(db):
+    from app.modules.work_reports.models import WorkReportStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    david = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_reporting_employee(db, code="EMP004", first_name="Erin", pm_id=pm.id)
+    _make_report(
+        db, employee_id=david.id, report_date=_PREV_FRI, status=WorkReportStatus.submitted
+    )
+
+    reminders = _collect(db, today=_MON)
+    assert reminders[0].report_date == _PREV_FRI
+    assert _missing_codes(reminders) == {"EMP004"}
+
+
+def test_employee_who_had_not_joined_yet_is_not_chased(db):
+    from app.modules.employees.models import Employee
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    db.execute(
+        Employee.__table__.update()
+        .where(Employee.id == emp.id)
+        .values(date_of_joining=date(2026, 8, 13))
+    )
+    db.commit()
+
+    assert _collect(db) == []
+
+
+# -- PM exclusion (data layer) ----------------------------------------------
 
 
 def test_pm_employees_are_excluded_from_rows_and_totals(db):
@@ -383,18 +599,18 @@ def test_pm_employees_are_excluded_from_rows_and_totals(db):
     )
     _make_reporting_employee(db, code="EMP004", first_name="Erin", pm_id=pm.id)
 
-    # Nobody submitted anything, so every checked employee owes the full window.
-    reminders = DailyReportReminderService().collect(db, today=date(2026, 7, 6))
+    # Nobody submitted anything, so every checked employee owes the target day.
+    reminders = _collect(db)
     assert len(reminders) == 1
     reminder = reminders[0]
 
-    names = {e.name for day in reminder.days for e in day.employees}
+    names = {e.name for e in reminder.employees}
     assert "Bob Test" not in names                    # the PM is gone
-    assert {"David Test", "Carol Test", "Erin Test"} <= names
+    assert {"David Test", "Carol Test", "Erin Test"} == names
 
     # 4 employees report to Alex, but only 3 are counted / rowed / totalled.
     assert reminder.employees_checked == 3
-    assert reminder.total_missing == 3 * DEFAULT_LOOKBACK_WORKING_DAYS
+    assert reminder.total_missing == 3
 
     rendered = render_daily_report_reminder(reminder)
     assert "EMP002" not in rendered.html_body
@@ -411,9 +627,10 @@ def test_pm_remains_a_recipient_for_their_reporting_employees(db):
     )
     _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
 
-    reminders = DailyReportReminderService().collect(db, today=date(2026, 7, 6))
+    reminders = _collect(db)
     assert [r.pm_email for r in reminders] == ["alex@example.com"]
     assert reminders[0].employees_checked == 1
+    assert _missing_codes(reminders) == {"EMP001"}
 
 
 def test_pm_with_only_pm_reports_gets_no_email(db):
@@ -424,154 +641,10 @@ def test_pm_with_only_pm_reports_gets_no_email(db):
         db, code="EMP002", first_name="Bob", pm_id=pm.id, user_id=junior.id
     )
 
-    assert DailyReportReminderService().collect(db, today=date(2026, 7, 6)) == []
+    assert _collect(db) == []
 
 
-# --- Recorded-status rule: submitted OR granted satisfies a day; drafts and
-# --- task-completion state never do (against the real DB) ------------------
-
-
-def _make_report(db, *, employee_id, report_date, status):
-    from app.modules.work_reports.models import DailyWorkReport
-
-    report = DailyWorkReport(
-        employee_id=employee_id, report_date=report_date, status=status
-    )
-    db.add(report)
-    db.commit()
-    db.refresh(report)
-    return report
-
-
-def _make_two_day_task_item(db, *, employee_id, started_on, target_days=2, completed_on=None):
-    """An open (or completed) TASK_BASED WorkItem spanning `target_days`.
-
-    The reminder must never consult this: it exists only to prove that an
-    in-flight multi-day task neither auto-satisfies a later day nor is required
-    for an earlier submitted day to count.
-    """
-    from app.modules.activity_master.models import ActivityMaster
-    from app.modules.projects.models import Project, ProjectStatus
-    from app.modules.work_reports.models import WorkItem
-    from app.modules.work_reports.work_items import compute_due_date
-
-    project = Project(
-        code=f"PRJ-{uuid.uuid4().hex[:8]}", name="Task Project", status=ProjectStatus.planning
-    )
-    sub_activity = ActivityMaster(
-        name="Two-day task", level="sub_activity", benchmark_type="TASK_BASED"
-    )
-    db.add_all([project, sub_activity])
-    db.commit()
-    db.refresh(project)
-    db.refresh(sub_activity)
-
-    item = WorkItem(
-        employee_id=employee_id,
-        project_id=project.id,
-        sub_activity_id=sub_activity.id,
-        started_on=started_on,
-        target_days=target_days,
-        due_date=compute_due_date(started_on, target_days),
-        completed_on=completed_on,
-    )
-    db.add(item)
-    db.commit()
-    db.refresh(item)
-    return item
-
-
-def _missing_dates_for(reminders, employee_id) -> set:
-    return {
-        day.report_date
-        for r in reminders
-        for day in r.days
-        for e in day.employees
-        if e.employee_id == employee_id
-    }
-
-
-# Monday reference -> window is Fri 03 / Thu 02 / Wed 01 Jul 2026.
-_TODAY = date(2026, 7, 6)
-_DAY1 = date(2026, 7, 1)   # task start
-_DAY2 = date(2026, 7, 2)   # task due date
-_DAY3 = date(2026, 7, 3)   # unrelated working day
-
-
-def _collect(db):
-    return DailyReportReminderService().collect(db, today=_TODAY)
-
-
-def test_submitted_day1_of_open_two_day_task_is_not_missing_for_day1(db):
-    """Day 1 submitted, task not marked complete (WorkItem open, completed_on
-    NULL): Day 1 is recorded. Day 2, with no continuation report, is missing."""
-    from app.modules.work_reports.models import WorkReportStatus
-
-    pm = _make_pm_user(db, "alex@example.com")
-    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
-    _make_two_day_task_item(db, employee_id=emp.id, started_on=_DAY1)
-    _make_report(db, employee_id=emp.id, report_date=_DAY1, status=WorkReportStatus.submitted)
-
-    missing = _missing_dates_for(_collect(db), emp.id)
-    assert _DAY1 not in missing            # submitted, despite the open task
-    assert _DAY2 in missing                # no continuation report yet
-    assert _DAY3 in missing                # unrelated day, never reported
-
-
-def test_any_submitted_report_on_day2_records_day2_regardless_of_activity(db):
-    """Day 2 is recorded by ANY submitted report, whether it continues the open
-    two-day task or logs a completely different activity. The reminder never
-    inspects the activity, the WorkItem, or the completion checkbox — a Day 2
-    report is not mandatory to be a continuation of Day 1's task."""
-    from app.modules.work_reports.models import WorkReportStatus
-
-    pm = _make_pm_user(db, "alex@example.com")
-    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
-    # Day 1's two-day task stays open (completed_on NULL) the whole time.
-    _make_two_day_task_item(db, employee_id=emp.id, started_on=_DAY1)
-    _make_report(db, employee_id=emp.id, report_date=_DAY1, status=WorkReportStatus.submitted)
-    # Day 2: a submitted report for a *different* activity — still records Day 2.
-    _make_report(db, employee_id=emp.id, report_date=_DAY2, status=WorkReportStatus.submitted)
-
-    missing = _missing_dates_for(_collect(db), emp.id)
-    assert _DAY1 not in missing
-    assert _DAY2 not in missing            # any submitted report records the day
-    assert _DAY3 in missing
-
-
-def test_granted_report_satisfies_its_date(db):
-    """A report reopened for editing (status granted) is still recorded."""
-    from app.modules.work_reports.models import WorkReportStatus
-
-    pm = _make_pm_user(db, "alex@example.com")
-    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
-    _make_report(db, employee_id=emp.id, report_date=_DAY2, status=WorkReportStatus.granted)
-
-    missing = _missing_dates_for(_collect(db), emp.id)
-    assert _DAY2 not in missing
-    assert missing == {_DAY1, _DAY3}
-
-
-def test_draft_report_does_not_satisfy_its_date(db):
-    """A draft is not a recorded report; the day stays missing."""
-    from app.modules.work_reports.models import WorkReportStatus
-
-    pm = _make_pm_user(db, "alex@example.com")
-    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
-    _make_report(db, employee_id=emp.id, report_date=_DAY2, status=WorkReportStatus.draft)
-
-    missing = _missing_dates_for(_collect(db), emp.id)
-    assert _DAY2 in missing
-    assert missing == {_DAY1, _DAY2, _DAY3}
-
-
-def test_unreported_working_days_all_remain_missing(db):
-    """Baseline: with no reports at all, every window day is chased."""
-    pm = _make_pm_user(db, "alex@example.com")
-    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
-
-    missing = _missing_dates_for(_collect(db), emp.id)
-    assert missing == {_DAY1, _DAY2, _DAY3}
+# --- Celery task ------------------------------------------------------------
 
 
 def test_celery_task_returns_summary_even_when_a_recipient_fails(monkeypatch):
