@@ -16,6 +16,7 @@ class EntityType:
     BIOMETRIC_SYNC_BATCH = "biometric_sync_batch"
     BIOMETRIC_MAPPING = "biometric_employee_mapping"
     ATTENDANCE_RECORD = "attendance_record"
+    LEAVE_REQUEST = "leave_request"
 
 
 class AuditAction:
@@ -83,6 +84,20 @@ class AuditAction:
     ATTENDANCE_RECORD_CREATE = "attendance.record.create"
     ATTENDANCE_RECORD_UPDATE = "attendance.record.update"
     ATTENDANCE_RECORD_DELETE = "attendance.record.delete"
+
+    # --- leave decisions (Tier B, Phase 10) ---
+    # An approval moves real state: it marks calendar days Leave and draws down a
+    # balance. Before Phase 10 the only trace of a decision was the denormalised
+    # `manager_id` / `manager_comment` on the row itself, which records WHO but
+    # not WHAT CHANGED and is overwritten by the next decision. These rows carry
+    # the day count, the dates and the balance movement, so a leave decision can
+    # be reconstructed after the request row has moved on.
+    LEAVE_REQUEST_APPROVE = "leave.request.approve"
+    LEAVE_REQUEST_REJECT = "leave.request.reject"
+    LEAVE_REQUEST_CANCEL = "leave.request.cancel"
+    LEAVE_CANCELLATION_REQUEST = "leave.cancellation.request"
+    LEAVE_CANCELLATION_APPROVE = "leave.cancellation.approve"
+    LEAVE_CANCELLATION_REJECT = "leave.cancellation.reject"
 
 
 # Statuses

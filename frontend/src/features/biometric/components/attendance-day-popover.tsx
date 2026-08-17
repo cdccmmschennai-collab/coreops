@@ -9,7 +9,6 @@ import {
   buildDayDetail,
   EMPTY_VALUE,
   formatDuration,
-  sourceLabel,
   statusLine,
   type BiometricClassification,
   type DaySummaryLike,
@@ -241,15 +240,6 @@ export function AttendanceDayPopover({
             <Micro>Scheduled</Micro>
             <p className="tabular mt-0.5 text-sm font-semibold text-muted-foreground">
               {formatDuration(detail.scheduledMinutes)}
-            </p>
-          </div>
-          {/* Which of First IN/Last OUT is device evidence vs a PM-entered
-              completion - never implied, always said. A PM-entered time is
-              never shown as if the device recorded it. */}
-          <div className="col-span-2">
-            <Micro>Source</Micro>
-            <p className="mt-0.5 text-sm font-semibold text-muted-foreground">
-              {sourceLabel(detail)}
             </p>
           </div>
         </div>

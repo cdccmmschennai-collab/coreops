@@ -18,19 +18,42 @@ Every status change re-reads its row under `SELECT ... FOR UPDATE` before
 checking the status, so a concurrent approve/cancel pair resolves to exactly
 one winner rather than both seeing `pending`.
 
-Cancellation never touches attendance or leave balances: both are maintained by
-hand in CoreOps, so the manager reviews them separately after the decision.
+PHASE 10: AN APPROVAL NOW MOVES REAL STATE
+==========================================
+Approving leave marks each working day of the range `leave` in
+`attendance_records` and draws the same number of days out of the employee's
+leave balance; cancelling an approved leave reverses both. That is a deliberate
+change from the earlier behaviour, where attendance and balances were maintained
+entirely by hand and a leave decision changed nothing outside this table - an
+approved leave simply never reached the employee's calendar, which is what
+Phase 10 exists to fix.
+
+All of it lives in `leave/effects.py`, which owns the day-counting rule, the
+skip-don't-overwrite rule and the balance movement. Nothing in this file writes
+to those tables directly, and every decision flushes its effect inside the same
+transaction as the status change, so a leave is never approved without its days
+being marked.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
+from app.modules.audit.constants import AuditAction, EntityType
+from app.modules.audit.service import record_audit
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
+from app.modules.leave.effects import (
+    apply_leave_approved,
+    available_balance,
+    deducts_balance,
+    plan_leave_days,
+    reverse_leave_approved,
+)
 from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
@@ -135,6 +158,79 @@ def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str
     _push(db, emp.user_id, type_, title, message, entity_id, target_url)
 
 
+def _audit_decision(
+    db: Session,
+    *,
+    actor: User,
+    action: str,
+    req: LeaveRequest,
+    comment: str | None = None,
+    effect=None,
+) -> None:
+    """Record one leave decision centrally. FLUSHES, never commits.
+
+    Goes through the same `record_audit` every other CoreOps module uses, so
+    leave decisions land in the existing Settings audit trail and its filters
+    rather than in a second log of their own. The details carry what the request
+    row cannot: the day count actually marked, the days skipped, and the balance
+    movement - facts the next decision would otherwise overwrite.
+    """
+    details: dict = {
+        "leave_request_id": str(req.id),
+        "employee_id": str(req.employee_id),
+        "leave_type": req.leave_type.value,
+        "start_date": req.start_date.isoformat(),
+        "end_date": req.end_date.isoformat(),
+        "status": req.status.value,
+    }
+    if comment and comment.strip():
+        details["comment"] = comment.strip()
+    if effect is not None:
+        details["days_marked"] = effect.day_count
+        if effect.skipped:
+            details["days_skipped"] = [d.isoformat() for d in effect.skipped]
+        if effect.balance_before is not None:
+            details["balance_before"] = str(effect.balance_before)
+            details["balance_after"] = str(effect.balance_after)
+
+    record_audit(
+        db,
+        action=action,
+        actor=actor,
+        entity_type=EntityType.LEAVE_REQUEST,
+        entity_id=req.id,
+        details=details,
+    )
+
+
+def _effect_sentence(effect, req: LeaveRequest) -> str:
+    """The balance movement, appended to the employee's notification.
+
+    Only stated when something actually moved - an unpaid leave, or an approval
+    where every day already had an official record, says nothing rather than
+    reporting a deduction of zero.
+    """
+    if effect.balance_before is None or not effect.day_count:
+        return ""
+    days = effect.day_count
+    word = "day" if days == 1 else "days"
+    return (
+        f" {days} {word} deducted from your leave balance "
+        f"({effect.balance_before:g} to {effect.balance_after:g})."
+    )
+
+
+def _restored_sentence(effect) -> str:
+    if effect.balance_before is None or not effect.day_count:
+        return ""
+    days = effect.day_count
+    word = "day" if days == 1 else "days"
+    return (
+        f" {days} {word} restored to your leave balance "
+        f"({effect.balance_before:g} to {effect.balance_after:g})."
+    )
+
+
 def _team_ids(manager_employee_id: uuid.UUID):
     return select(Employee.id).where(
         Employee.manager_id == manager_employee_id, Employee.deleted_at.is_(None)
@@ -164,8 +260,71 @@ def _assert_can_read(db: Session, actor: User, req: LeaveRequest) -> None:
 
 
 def _assert_can_review(db: Session, actor: User, req: LeaveRequest | None = None) -> None:
+    """Who may rule on a leave request - enforced here, in the backend, on every
+    decision path. The frontend hides the buttons; this is what actually stops it.
+
+    NOBODY REVIEWS THEIR OWN LEAVE, including a project manager. The role check
+    alone is not enough: project managers are employees too and file their own
+    requests, so without the second check a PM could approve their own leave and
+    grant themselves the balance. `req` is therefore passed on every decision
+    path - approve, reject, and both cancellation decisions - because approving
+    the withdrawal of your own leave is the same self-review problem.
+    """
     if actor.role != UserRole.project_manager:
         raise AppError("forbidden", "Only project managers can review leave requests.", 403)
+    if req is None:
+        return
+    me = _current_employee(db, actor)
+    if me is not None and req.employee_id == me.id:
+        raise AppError(
+            "forbidden",
+            "You can't review your own leave request - another project manager "
+            "has to decide it.",
+            403,
+        )
+
+
+# Statuses that still represent a live claim on the employee's dates. A rejected
+# or cancelled request is not an absence any more, so it never blocks a new one.
+_ACTIVE_LEAVE_STATUSES = (
+    LeaveStatus.pending,
+    LeaveStatus.approved,
+    LeaveStatus.cancellation_requested,
+)
+
+
+def _assert_no_overlap(
+    db: Session,
+    employee_id: uuid.UUID,
+    start_date: date,
+    end_date: date,
+    *,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """Reject a request whose dates already have a live request on them.
+
+    Covers the exact-duplicate case and every partial overlap with it: two ranges
+    intersect exactly when each starts on or before the other ends. Without this
+    an employee could file the same week five times, and each approval would
+    deduct the balance again.
+    """
+    stmt = select(LeaveRequest).where(
+        LeaveRequest.employee_id == employee_id,
+        LeaveRequest.status.in_(_ACTIVE_LEAVE_STATUSES),
+        LeaveRequest.start_date <= end_date,
+        LeaveRequest.end_date >= start_date,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(LeaveRequest.id != exclude_id)
+    clash = db.execute(stmt.order_by(LeaveRequest.start_date).limit(1)).scalar_one_or_none()
+    if clash is None:
+        return
+    raise AppError(
+        "validation_error",
+        f"You already have a {clash.status.value.replace('_', ' ')} leave request "
+        f"covering {_period(clash)}.",
+        422,
+    )
 
 
 def _fetch(db: Session, req_id: uuid.UUID) -> LeaveRequest:
@@ -265,6 +424,7 @@ def create_leave_request(
             "leave for a day you've already attended.",
             422,
         )
+    _assert_no_overlap(db, me.id, data.start_date, data.end_date)
 
     req = LeaveRequest(
         employee_id=me.id,
@@ -313,6 +473,7 @@ def update_leave_request(
             "leave for a day you've already attended.",
             422,
         )
+    _assert_no_overlap(db, me.id, new_start, new_end, exclude_id=req.id)
 
     for key, value in fields.items():
         setattr(req, key, value)
@@ -341,6 +502,11 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
     req.status = LeaveStatus.cancelled
     req.updated_by = actor.id
     db.add(req)
+    # A pending request never marked a day or moved a balance, so cancelling it
+    # has nothing to reverse (section 12D).
+    _audit_decision(
+        db, actor=actor, action=AuditAction.LEAVE_REQUEST_CANCEL, req=req
+    )
     db.commit()
     db.refresh(req)
     _notify_manager(
@@ -392,6 +558,11 @@ def request_leave_cancellation(
     req.status = LeaveStatus.cancellation_requested
     req.updated_by = actor.id
     db.add(req)
+    # The leave is still active until a manager decides, so nothing is reversed
+    # here - the days stay marked and the balance stays deducted.
+    _audit_decision(
+        db, actor=actor, action=AuditAction.LEAVE_CANCELLATION_REQUEST, req=req
+    )
     db.commit()
     db.refresh(req)
     _notify_manager(
@@ -411,11 +582,13 @@ def approve_leave_cancellation(
     """cancellation_requested -> cancelled. The manager's approval cancels the
     leave outright; there is no second step for the employee.
 
-    Deliberately writes nothing to attendance or leave balances — both are
-    manually maintained, and the UI tells the manager to review attendance.
+    PHASE 10: this now REVERSES what the approval did - the leave days come off
+    the calendar and the deducted balance goes back. Only days that still look
+    exactly like an approval wrote them are removed, so a day the PM has since
+    re-decided keeps that decision and is not refunded (see effects.py).
     """
-    _assert_can_review(db, actor)
     req = _fetch_locked(db, req_id)
+    _assert_can_review(db, actor, req)
     if req.status != LeaveStatus.cancellation_requested:
         raise AppError(
             "conflict", "This cancellation request has already been processed.", 409
@@ -424,12 +597,22 @@ def approve_leave_cancellation(
     req.status = LeaveStatus.cancelled
     req.updated_by = actor.id
     db.add(req)
+
+    effect = reverse_leave_approved(db, actor, req)
+    _audit_decision(
+        db,
+        actor=actor,
+        action=AuditAction.LEAVE_CANCELLATION_APPROVE,
+        req=req,
+        effect=effect,
+    )
     db.commit()
     db.refresh(req)
     _notify_employee(
         db, req.employee_id, "leave_cancellation_approved",
         "Your leave cancellation was approved",
-        f"Your leave cancellation request for {_period(req)} was approved.",
+        f"Your leave cancellation request for {_period(req)} was approved."
+        + _restored_sentence(effect),
         req.id,
         f"/attendance?tab=leave&id={req.id}",
     )
@@ -441,8 +624,8 @@ def reject_leave_cancellation(
 ) -> LeaveRequest:
     """cancellation_requested -> approved. The original approval is untouched:
     manager_id and manager_comment still record who granted the leave."""
-    _assert_can_review(db, actor)
     req = _fetch_locked(db, req_id)
+    _assert_can_review(db, actor, req)
     if req.status != LeaveStatus.cancellation_requested:
         raise AppError(
             "conflict", "This cancellation request has already been processed.", 409
@@ -451,6 +634,11 @@ def reject_leave_cancellation(
     req.status = LeaveStatus.approved
     req.updated_by = actor.id
     db.add(req)
+    # The leave stands, so its days stay marked and its balance stays deducted -
+    # nothing to apply and nothing to reverse.
+    _audit_decision(
+        db, actor=actor, action=AuditAction.LEAVE_CANCELLATION_REJECT, req=req
+    )
     db.commit()
     db.refresh(req)
     _notify_employee(
@@ -558,18 +746,46 @@ def approve_leave_request(
             422,
         )
 
+    # Sized against exactly the days that will really be marked - working days
+    # only, minus any day that already carries an official decision - so the
+    # check and the deduction can never disagree about what this request costs.
+    to_mark, _skipped = plan_leave_days(db, req)
+    if deducts_balance(req.leave_type) and to_mark:
+        available = available_balance(db, req.employee_id)
+        if Decimal(len(to_mark)) > available:
+            raise AppError(
+                "validation_error",
+                f"Insufficient leave balance: {len(to_mark)} day(s) requested, "
+                f"{available:g} available. Reject the request, or have it refiled "
+                "as unpaid leave.",
+                422,
+            )
+
     reviewer = _current_employee(db, actor)
     req.status = LeaveStatus.approved
     req.manager_id = reviewer.id if reviewer else None
     req.manager_comment = data.comment
     req.updated_by = actor.id
     db.add(req)
+
+    # Marks the calendar and moves the balance in THIS transaction, so the
+    # request can never be left approved with its days unmarked.
+    effect = apply_leave_approved(db, actor, req)
+    _audit_decision(
+        db,
+        actor=actor,
+        action=AuditAction.LEAVE_REQUEST_APPROVE,
+        req=req,
+        comment=data.comment,
+        effect=effect,
+    )
     db.commit()
     db.refresh(req)
     _notify_employee(
         db, req.employee_id, "leave_approved",
         "Your leave request was approved",
-        f"Your leave request ({req.start_date} to {req.end_date}) has been approved.",
+        f"Your leave request ({req.start_date} to {req.end_date}) has been approved."
+        + _effect_sentence(effect, req),
         req.id,
         f"/attendance?tab=leave&id={req.id}",
     )
@@ -590,6 +806,14 @@ def reject_leave_request(
     req.manager_comment = data.comment
     req.updated_by = actor.id
     db.add(req)
+    # No effect is applied: a rejected request marks no day and moves no balance.
+    _audit_decision(
+        db,
+        actor=actor,
+        action=AuditAction.LEAVE_REQUEST_REJECT,
+        req=req,
+        comment=data.comment,
+    )
     db.commit()
     db.refresh(req)
     _notify_employee(

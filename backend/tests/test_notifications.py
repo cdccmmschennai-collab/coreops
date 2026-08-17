@@ -178,9 +178,18 @@ def test_leave_submitted_notifies_manager(
 
 
 def test_leave_approved_notifies_employee(
-    client, make_user, make_employee, make_leave_request, login
+    client, make_user, make_employee, make_leave_request, login, db
 ):
+    from decimal import Decimal
+
+    from app.modules.leave_balances.models import EmployeeLeaveBalance
+
     mgr_u, emp_u, mgr_e, emp_e = _setup_leave_actors(make_user, make_employee)
+    # Phase 10: approval draws down the balance and refuses when there isn't
+    # enough. This test is about the notification, so fund the employee first.
+    db.add(EmployeeLeaveBalance(employee_id=emp_e.id,
+                                available_leave=Decimal("30.00")))
+    db.commit()
     req = make_leave_request(employee_id=emp_e.id,
                              start_date=date.today() + timedelta(days=3),
                              end_date=date.today() + timedelta(days=5))

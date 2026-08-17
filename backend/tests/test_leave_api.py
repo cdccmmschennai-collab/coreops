@@ -1,8 +1,24 @@
-﻿"""API tests for the leave module: CRUD, workflow, and RBAC."""
+﻿"""API tests for the leave module: CRUD, workflow, and RBAC.
+
+These cover who may do what. Since Phase 10 an approval also draws down the
+employee's leave balance and is refused when there isn't enough, so the approval
+tests below call `_fund` first - they are asserting authorization, and an
+unfunded employee would fail them for an unrelated reason. The balance rule
+itself is covered in `test_leave_phase10.py`.
+"""
 from datetime import date, timedelta
+from decimal import Decimal
 
 from app.modules.leave.models import LeaveStatus, LeaveType
+from app.modules.leave_balances.models import EmployeeLeaveBalance
 from app.modules.users.models import UserRole
+
+
+def _fund(db, employee_id, days: str = "30.00"):
+    """Give an employee enough balance for an approval to be about RBAC."""
+    db.add(EmployeeLeaveBalance(employee_id=employee_id,
+                                available_leave=Decimal(days)))
+    db.commit()
 
 
 def _payload(**overrides):
@@ -145,11 +161,12 @@ def test_cannot_cancel_approved(client, make_user, make_employee, make_leave_req
 
 # ---------- approve / reject ----------
 
-def test_manager_approves_team_request(client, make_user, make_employee, make_leave_request, login):
+def test_manager_approves_team_request(client, make_user, make_employee, make_leave_request, login, db):
     mu = make_user("mgr@x.com", role=UserRole.project_manager)
     me = make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="EMP", user_id=eu.id, manager_id=me.id)
+    _fund(db, emp.id)
     req = make_leave_request(employee_id=emp.id, start_date=date.today() + timedelta(days=3),
                               end_date=date.today() + timedelta(days=5))
     h = login("mgr@x.com")
@@ -175,12 +192,13 @@ def test_manager_rejects_team_request(client, make_user, make_employee, make_lea
     assert res.json()["status"] == "rejected"
 
 
-def test_project_manager_can_approve_any_leave(client, make_user, make_employee, make_leave_request, login):
+def test_project_manager_can_approve_any_leave(client, make_user, make_employee, make_leave_request, login, db):
     mu = make_user("mgr@x.com", role=UserRole.project_manager)
     make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
     other_emp = make_employee(employee_code="EMP")  # no manager_id set
     _ = eu
+    _fund(db, other_emp.id)
     req = make_leave_request(employee_id=other_emp.id, start_date=date.today() + timedelta(days=3),
                               end_date=date.today() + timedelta(days=5))
     h = login("mgr@x.com")
@@ -212,9 +230,10 @@ def test_double_approve_422(client, make_user, make_employee, make_leave_request
     assert res.status_code == 422
 
 
-def test_admin_can_approve_any(client, make_user, make_employee, make_leave_request, login):
+def test_admin_can_approve_any(client, make_user, make_employee, make_leave_request, login, db):
     eu = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(employee_code="E1", user_id=eu.id)
+    _fund(db, emp.id)
     req = make_leave_request(employee_id=emp.id, start_date=date.today() + timedelta(days=1),
                               end_date=date.today() + timedelta(days=2))
     make_user("adm@x.com", role=UserRole.project_manager)

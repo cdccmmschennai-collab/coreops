@@ -5,19 +5,23 @@ Two paths:
   approved -> cancellation_requested        employee, leave that hasn't ended
   cancellation_requested -> cancelled|approved   project manager decides
 
-Attendance and leave balances are maintained by hand in CoreOps, so the tests
-here also pin what cancellation must NOT do to them.
+Since Phase 10, cancelling an APPROVED leave reverses what its approval did: the
+leave days come off the calendar and the deducted balance goes back. The tests
+here pin the limits of that reversal - a day a human has since ruled on is never
+removed, and leave that was never approved through the API (so never deducted)
+is never credited. The forward direction lives in `test_leave_phase10.py`.
 
     docker exec wms-backend-1 pytest tests/test_leave_cancellation.py
 """
 import threading
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave_balances.models import EmployeeLeaveBalance
 from app.modules.notifications.models import Notification
 from app.modules.users.models import UserRole
 
@@ -187,7 +191,12 @@ def test_concurrent_approve_and_cancel_produce_one_winner(client, login, pending
 # ---------- the existing workflow still works -------------------------------
 
 def test_manager_approval_and_rejection_still_work(client, login, make_leave_request,
-                                                   team):
+                                                   team, db):
+    # Phase 10: approval draws down the balance, so an unfunded employee would
+    # fail this on the balance guard rather than on the workflow it is testing.
+    db.add(EmployeeLeaveBalance(employee_id=team["employee"].id,
+                                available_leave=Decimal("30.00")))
+    db.commit()
     mgr_h = login("mgr@x.com")
     to_approve = make_leave_request(employee_id=team["employee"].id,
                                     start_date=NEXT_WEEK, end_date=NEXT_WEEK)
@@ -429,25 +438,44 @@ def test_concurrent_cancellation_decisions_produce_one_winner(client, login, app
 # What cancellation must NOT touch
 # ======================================================================
 
-def test_cancellation_never_modifies_attendance(client, login, approved, team,
-                                                make_attendance, db):
-    marked_leave = make_attendance(employee_id=team["employee"].id,
-                                   attendance_date=NEXT_WEEK,
-                                   status=AttendanceStatus.leave)
+def test_cancellation_preserves_a_day_the_pm_decided(client, login, approved, team,
+                                                     make_attendance, db):
+    """PHASE 10 changed what cancellation does to attendance.
+
+    It used to touch nothing at all, because attendance was maintained entirely
+    by hand. Now that an APPROVAL marks the leave days, cancelling has to unmark
+    them - but only the ones that still look exactly like an approval wrote them.
+    A day a human has since ruled on is still never touched, which is what this
+    test now pins. `test_leave_phase10.py` covers the removal side.
+    """
     marked_present = make_attendance(employee_id=team["employee"].id,
                                      attendance_date=NEXT_WEEK + timedelta(days=1),
                                      status=AttendanceStatus.present)
+    # A leave day carrying a time is a human's entry, not an approval's.
+    edited_leave = make_attendance(
+        employee_id=team["employee"].id,
+        attendance_date=NEXT_WEEK,
+        status=AttendanceStatus.leave,
+        check_in_at=datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc),
+    )
 
     _request_cancellation(client, login, approved.id)
     client.post(f"{API}/{approved.id}/approve-cancellation", headers=login("mgr@x.com"))
 
     db.expire_all()
-    assert db.get(AttendanceRecord, marked_leave.id).status == AttendanceStatus.leave
+    assert db.get(AttendanceRecord, edited_leave.id).status == AttendanceStatus.leave
     assert db.get(AttendanceRecord, marked_present.id).status == AttendanceStatus.present
     assert db.query(AttendanceRecord).count() == 2
 
 
-def test_cancellation_never_modifies_leave_balance(client, login, approved, team, db):
+def test_cancellation_restores_nothing_for_leave_approved_before_phase_10(
+    client, login, approved, team, db
+):
+    """The `approved` fixture writes its row straight to the database, so no
+    approval ever ran and no balance was ever deducted - exactly the shape of
+    leave approved before Phase 10 existed. Reversal is defined as "restore what
+    was actually removed", so there is nothing to remove and nothing to credit.
+    """
     from app.modules.leave_balances.models import (
         EmployeeLeaveBalance,
         EmployeeLeaveBalanceHistory,

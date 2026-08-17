@@ -104,19 +104,6 @@ export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
 }
 
 /**
- * "Biometric" when both boundaries are device evidence, "PM entered" when
- * both were supplied by hand, "Biometric + PM entered" when mixed, or a
- * plain dash when neither boundary exists yet.
- */
-export function sourceLabel(detail: Pick<DayDetail, "firstInSource" | "lastOutSource">): string {
-  const sources = new Set([detail.firstInSource, detail.lastOutSource].filter(Boolean));
-  if (sources.size === 0) return EMPTY_VALUE;
-  if (sources.has("device") && sources.has("pm")) return "Biometric + PM entered";
-  if (sources.has("device")) return "Biometric";
-  return "PM entered";
-}
-
-/**
  * The one line shown at the bottom: `"Present · 8h 30m"`.
  *
  * `attendanceLabel` is the official record's status when the day has one; it wins
