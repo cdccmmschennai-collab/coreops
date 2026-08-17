@@ -6,9 +6,10 @@ export interface KpiProps {
   label: string;
   value: string;
   delta?: { dir: "up" | "down"; text: string };
-  /** Optional control rendered under the value — for a tile that is also an
-   *  entry point, e.g. Permission Remaining's Request button. Omitted by every
-   *  other tile, which renders exactly as before. */
+  /** Optional control rendered inline with the value, right-aligned on the
+   *  same row — for a tile that is also an entry point, e.g. Permission
+   *  Remaining's Request button. Omitted by every other tile, which renders
+   *  exactly as before (the value alone fills the row). */
   action?: React.ReactNode;
 }
 
@@ -17,10 +18,12 @@ export function Kpi({ label, value, delta, action }: KpiProps) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 whitespace-nowrap text-[28px] font-semibold leading-none tracking-tight tabular">
-        {value}
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <div className="whitespace-nowrap text-[28px] font-semibold leading-none tracking-tight tabular">
+          {value}
+        </div>
+        {action}
       </div>
-      {action && <div className="mt-2">{action}</div>}
       {delta && (
         <div
           className={cn(

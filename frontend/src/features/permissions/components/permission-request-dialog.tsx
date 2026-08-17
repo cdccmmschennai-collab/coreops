@@ -202,30 +202,29 @@ export function PermissionRequestDialog({ onClose }: Props) {
             </p>
           )}
 
-          {/* Sits between the balance preview and the footer: it answers the
-              question the preview raises ("where did my hours go?") without
-              competing with Submit.
+          {/* Same footer row as Cancel/Submit, left-aligned against them on the
+              right: it answers the question the balance preview raises ("where
+              did my hours go?") without competing with Submit for primacy.
 
               type="button" is essential - inside a <form>, a bare <button>
               defaults to type="submit" and this would file the request instead of
               navigating. It must never submit or modify the draft. */}
-          <div>
+          <div className="flex items-center justify-between gap-2 pt-1">
             <button
               type="button"
               onClick={openHistory}
-              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              className="text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
               History
             </button>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-1">
-            <Button type="button" variant="ghost" onClick={onClose} disabled={create.isPending}>
-              Cancel
-            </Button>
-            <Button type="submit" loading={create.isPending}>
-              Submit
-            </Button>
+            <div className="flex gap-2">
+              <Button type="button" variant="ghost" onClick={onClose} disabled={create.isPending}>
+                Cancel
+              </Button>
+              <Button type="submit" loading={create.isPending}>
+                Submit
+              </Button>
+            </div>
           </div>
         </form>
       </Form>
