@@ -4,31 +4,25 @@ Responsibility (only): turn structured reminder data into a clean message. No
 SMTP, no queries, no business rules.
 
 Layout goals:
-  * Employee ID and Employee Name are separate columns, followed by a Missing
-    Days count and the dates themselves.
-  * Missing dates are separated by a visible bullet (" • ") so Outlook never runs
-    them together, even when it strips the cell styling.
+  * Exactly one date is reported on — the previous working day — so every row
+    carries the same single "Missing Report Date". There is no missing-days
+    count and no multi-date cell.
   * The HTML is Outlook-safe: tables + inline CSS only, no flexbox, no grid, no
     external stylesheets, no JavaScript, no SVG, no banner artwork.
-  * The plain-text fallback carries the same four columns and summary.
+  * The plain-text fallback carries the same columns and summary.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from app.core.config import settings
 from app.reminders.daily_report.csv_report import build_csv, csv_filename
 from app.reminders.daily_report.service import PMReminder
 
-_DATE_FMT = "%d %b"                     # -> "06 Jul"
-_SUBJECT_DATE_FMT = "%d %b %Y"          # -> "09 Jul 2026"
-_STAMP_FMT = "%d %b %Y, %I:%M %p IST"   # -> "09 Jul 2026, 05:15 PM IST"
-_DATE_SEP = " • "                       # bullet, keeps dates visibly separated
-
-# India observes no DST, so a fixed +05:30 offset is exact and avoids depending
-# on the tzdata package being present in the worker image.
-IST = timezone(timedelta(hours=5, minutes=30), "IST")
+_DATE_FMT = "%d %b %Y"          # -> "12 Aug 2026"
+_SUBJECT_SEP = " • "       # bullet, matches the approved subject format
+_CODE_NAME_SEP = " - "          # "EMP219 - ASKAR ALI K"
 
 
 @dataclass(frozen=True)
@@ -40,80 +34,68 @@ class RenderedEmail:
     csv_bytes: bytes
 
 
-def render_daily_report_reminder(
-    reminder: PMReminder, *, now: datetime | None = None
-) -> RenderedEmail:
+def render_daily_report_reminder(reminder: PMReminder) -> RenderedEmail:
     product = settings.PRODUCT_NAME
-    now = now or datetime.now(IST)
-    today = now.date()
+    target = reminder.report_date
+    target_label = target.strftime(_DATE_FMT)
     # Address the PM by the name on their own record; each PM gets their own email.
     greeting = f"Hello {reminder.pm_name}"
     rows = _employee_rows(reminder)
-    stamp = now.strftime(_STAMP_FMT)
 
     return RenderedEmail(
-        subject=f"{product} | Outstanding Daily Reports | {today.strftime(_SUBJECT_DATE_FMT)}",
-        html_body=_render_html(rows, reminder, product, greeting, stamp),
-        text_body=_render_text(rows, reminder, product, greeting, stamp),
-        csv_filename=csv_filename(today),
-        csv_bytes=build_csv(rows, date_fmt=_DATE_FMT),
+        subject=_SUBJECT_SEP.join(
+            [product, "Outstanding Daily Reports", target_label]
+        ),
+        html_body=_render_html(rows, product, greeting, target_label),
+        text_body=_render_text(rows, product, greeting, target_label),
+        csv_filename=csv_filename(target),
+        csv_bytes=build_csv(rows, report_date=target, date_fmt=_DATE_FMT),
     )
 
 
-def _employee_rows(reminder: PMReminder) -> list[tuple[str, str, int, list[date]]]:
-    """Re-pivot (date -> employees) into one presentational row per employee.
+def _employee_rows(reminder: PMReminder) -> list[tuple[str, str]]:
+    """One presentational ``(code, name)`` row per employee, sorted by name.
 
-    Collection logic is unchanged; this is presentation-only. Returns
-    ``(code, name, missing_days, dates)`` sorted by employee name, each row's
-    dates ascending. The HTML, the text fallback and the CSV are all built from
-    this one list, so they cannot disagree.
+    The HTML, the text fallback and the CSV are all built from this one list, so
+    they cannot disagree. The date is the same for every row and lives on the
+    reminder itself.
     """
-    by_key: dict[tuple[str, str], list[date]] = {}
-    for day in reminder.days:
-        for emp in day.employees:
-            by_key.setdefault((emp.code, emp.name), []).append(day.report_date)
-
-    rows = [
-        (code, name, len(dates), sorted(dates))
-        for (code, name), dates in by_key.items()
-    ]
+    rows = [(emp.code, emp.name) for emp in reminder.employees]
     rows.sort(key=lambda r: r[1].lower())
     return rows
 
 
-def _pretty_dates(dates: list[date]) -> str:
-    return _DATE_SEP.join(d.strftime(_DATE_FMT) for d in dates)
+def _code_and_name(code: str, name: str) -> str:
+    return f"{code}{_CODE_NAME_SEP}{name}" if code else name
 
 
 # -- plain-text fallback -----------------------------------------------------
 
 
 def _render_text(
-    rows: list[tuple[str, str, int, list[date]]],
-    reminder: PMReminder,
+    rows: list[tuple[str, str]],
     product: str,
     greeting: str,
-    stamp: str,
+    target_label: str,
 ) -> str:
     lines = [
         product,
-        "Daily Reporting Compliance",
+        "Outstanding Daily Reports",
         "",
         f"{greeting},",
         "",
-        f"The following employees have outstanding daily work reports as of {stamp}.",
+        "The following employees have not submitted their daily work report "
+        f"for {target_label}.",
         "",
-        "Summary:",
-        f"  Employees with Missing Reports: {len(rows)}",
-        f"  Total Missing Report Days: {reminder.total_missing}",
+        f"Employees with Missing Reports: {len(rows)}",
         "",
-        _text_table(rows),
+        _text_table(rows, target_label),
         "",
         "The detailed list is attached as a CSV file and can be opened directly "
         "in Microsoft Excel.",
         "",
         "Please follow up with the respective employees and ask them to submit "
-        "the pending reports.",
+        "their pending report.",
         "",
         "Regards,",
         product,
@@ -123,27 +105,18 @@ def _render_text(
     return "\n".join(lines)
 
 
-def _text_table(rows: list[tuple[str, str, int, list[date]]]) -> str:
-    """Draw an ASCII box table with the same four columns as the HTML."""
-    headers = ("Employee ID", "Employee Name", "Missing Days", "Missing Report Dates")
-    cells = [
-        (code, name, str(missing_days), _pretty_dates(dates))
-        for code, name, missing_days, dates in rows
+def _text_table(rows: list[tuple[str, str]], target_label: str) -> str:
+    """Two padded columns under a dashed rule."""
+    headers = ("Employee ID & Name", "Missing Report Date")
+    cells = [(_code_and_name(code, name), target_label) for code, name in rows]
+    first_width = max([len(headers[0])] + [len(c[0]) for c in cells])
+    gap = "    "
+
+    out = [
+        headers[0].ljust(first_width) + gap + headers[1],
+        "-" * (first_width + len(gap) + len(headers[1])),
     ]
-    widths = [
-        max([len(headers[i])] + [len(row[i]) for row in cells]) for i in range(4)
-    ]
-
-    def border(fill: str) -> str:
-        return "+" + "+".join(fill * (w + 2) for w in widths) + "+"
-
-    def line(values: tuple[str, ...]) -> str:
-        return "| " + " | ".join(v.ljust(widths[i]) for i, v in enumerate(values)) + " |"
-
-    out = [border("-"), line(headers), border("=")]
-    for row in cells:
-        out.append(line(row))
-        out.append(border("-"))
+    out.extend(left.ljust(first_width) + gap + right for left, right in cells)
     return "\n".join(out)
 
 
@@ -151,11 +124,10 @@ def _text_table(rows: list[tuple[str, str, int, list[date]]]) -> str:
 
 
 def _render_html(
-    rows: list[tuple[str, str, int, list[date]]],
-    reminder: PMReminder,
+    rows: list[tuple[str, str]],
     product: str,
     greeting: str,
-    stamp: str,
+    target_label: str,
 ) -> str:
     """Table-based, inline-CSS-only layout.
 
@@ -171,16 +143,13 @@ def _render_html(
         "vertical-align:top;word-break:break-word;"
     )
     head_cell = f"{cell}background:#f2f2f2;font-weight:bold;"
-    num_cell = f"{cell}text-align:center;"
 
     body_rows = "".join(
         f"<tr>"
-        f'<td style="{cell}">{_escape(code)}</td>'
-        f'<td style="{cell}">{_escape(name)}</td>'
-        f'<td style="{num_cell}">{missing_days}</td>'
-        f'<td style="{cell}">{_escape(_pretty_dates(dates))}</td>'
+        f'<td style="{cell}">{_escape(_code_and_name(code, name))}</td>'
+        f'<td style="{cell}">{_escape(target_label)}</td>'
         f"</tr>"
-        for code, name, missing_days, dates in rows
+        for code, name in rows
     )
 
     return f"""\
@@ -193,23 +162,19 @@ def _render_html(
           <tr>
             <td style="padding:20px;color:#1f2328;font-size:13px;line-height:1.45;font-family:{font};">
               <div style="font-size:13px;color:#57606a;font-weight:bold;">{_escape(product)}</div>
-              <div style="font-size:17px;font-weight:bold;color:#1f2328;padding:2px 0 14px;">Daily Reporting Compliance</div>
+              <div style="font-size:17px;font-weight:bold;color:#1f2328;padding:2px 0 14px;">Outstanding Daily Reports</div>
               <p style="margin:0 0 10px;">{_escape(greeting)},</p>
-              <p style="margin:0 0 14px;">The following employees have outstanding daily work reports as of {_escape(stamp)}.</p>
-              <p style="margin:0 0 4px;font-weight:bold;">Summary:</p>
-              <p style="margin:0 0 2px;">Employees with Missing Reports: <strong>{len(rows)}</strong></p>
-              <p style="margin:0 0 14px;">Total Missing Report Days: <strong>{reminder.total_missing}</strong></p>
+              <p style="margin:0 0 14px;">The following employees have not submitted their daily work report for {_escape(target_label)}.</p>
+              <p style="margin:0 0 14px;">Employees with Missing Reports: <strong>{len(rows)}</strong></p>
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;font-size:13px;color:#1f2328;font-family:{font};">
                 <tr>
-                  <th width="14%" style="{head_cell}">Employee ID</th>
-                  <th width="30%" style="{head_cell}">Employee Name</th>
-                  <th width="12%" style="{head_cell}text-align:center;">Missing Days</th>
-                  <th width="44%" style="{head_cell}">Missing Report Dates</th>
+                  <th width="60%" style="{head_cell}">Employee ID &amp; Name</th>
+                  <th width="40%" style="{head_cell}">Missing Report Date</th>
                 </tr>
                 {body_rows}
               </table>
               <p style="margin:16px 0 0;">The detailed list is attached as a CSV file and can be opened directly in Microsoft Excel.</p>
-              <p style="margin:10px 0 0;">Please follow up with the respective employees and ask them to submit the pending reports.</p>
+              <p style="margin:10px 0 0;">Please follow up with the respective employees and ask them to submit their pending report.</p>
               <p style="margin:18px 0 0;">Regards,<br>{_escape(product)}</p>
               <p style="margin:18px 0 0;padding:10px 0 0;border-top:1px solid #e1e4e8;font-size:11px;color:#6a737d;">Automated notification - please do not reply.</p>
             </td>

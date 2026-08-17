@@ -64,13 +64,9 @@ def missing_reports(db: Session = Depends(get_db)) -> dict:
                 "pm_email": r.pm_email,
                 "employees_checked": r.employees_checked,
                 "total_missing": r.total_missing,
-                "days": [
-                    {
-                        "date": day.report_date.isoformat(),
-                        "employees": [e.name for e in day.employees],
-                    }
-                    for day in r.days
-                ],
+                # One date only: the previous working day.
+                "report_date": r.report_date.isoformat(),
+                "employees": [e.name for e in r.employees],
             }
             for r in reminders
         ],

@@ -1,18 +1,22 @@
 """DailyReportReminderService — produces missing-report data per PM.
 
-Responsibility (only): decide *who owes which reports* and return structured
-data. It performs no SMTP, no HTML rendering, and no email decisions.
+Responsibility (only): decide *who owes the report* and return structured data.
+It performs no SMTP, no HTML rendering, and no email decisions.
 
 Business rules:
 
-  * A day "requires a report" for an employee if it is a working day (Mon-Fri)
-    in the lookback window, on or after the employee's ``date_of_joining``. This
-    does *not* depend on attendance being recorded.
-  * A report "satisfies" a day once it is **submitted** or **granted** (a report
-    reopened for editing is still a recorded report; drafts never satisfy a day).
-    Task/benchmark completion state is irrelevant — only that a report exists.
-  * The lookback is the previous N working days (Mon-Fri), strictly before today,
-    default 3.
+  * Exactly ONE date is ever checked: the **immediately previous working day**
+    relative to ``today``. Weekends and company-calendar non-working days are
+    skipped (see ``app.modules.calendar.working_days``), so a Monday run targets
+    the previous Friday, and a run the day after a holiday targets the last day
+    the office was actually open. Older gaps are never chased: an employee who
+    missed two days ago but filed for the target day does not appear.
+  * That day "requires a report" for an employee if it is on or after their
+    ``date_of_joining``. This does *not* depend on attendance being recorded.
+  * A report "satisfies" the day once it is **submitted** or **granted** (a
+    report reopened for editing is still a recorded report; drafts never satisfy
+    the day). Task/benchmark completion state is irrelevant — only that a report
+    exists.
 
 Only employees currently assigned to a PM (``employees.reporting_pm_id``) are
 considered, and only active PMs / active employees.
@@ -25,18 +29,23 @@ report to them.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.modules.calendar.working_days import (
+    DEFAULT_MAX_LOOKBACK_DAYS,
+    previous_working_day,
+)
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus
 
-DEFAULT_LOOKBACK_WORKING_DAYS = 3
+logger = logging.getLogger("coreops.reminders.daily_report")
 
 
 @dataclass(frozen=True)
@@ -48,58 +57,57 @@ class MissingEmployee:
 
 
 @dataclass(frozen=True)
-class MissingReportDay:
-    """One date and the employees who did not submit for it."""
-
-    report_date: date
-    employees: list[MissingEmployee]
-
-
-@dataclass(frozen=True)
 class PMReminder:
-    """Everything the template/dispatcher needs for a single PM's email."""
+    """Everything the template/dispatcher needs for a single PM's email.
+
+    ``report_date`` is the one previous working day the run checked; every
+    employee in ``employees`` is missing that single date, so an employee can
+    never carry more than one missing-date value.
+    """
 
     pm_id: uuid.UUID
     pm_name: str
     pm_email: str
-    # Number of active employees assigned to this PM that were examined.
+    report_date: date
+    # Number of active, report-owing employees assigned to this PM that were examined.
     employees_checked: int = 0
-    # Most-recent date first (matches the "03 Jul / 02 Jul / 01 Jul" layout).
-    days: list[MissingReportDay] = field(default_factory=list)
+    # Sorted by employee name.
+    employees: list[MissingEmployee] = field(default_factory=list)
 
     @property
     def total_missing(self) -> int:
-        return sum(len(d.employees) for d in self.days)
+        return len(self.employees)
 
 
 class DailyReportReminderService:
     """Collects per-PM missing-report reminders. Stateless; inject the session."""
 
-    def __init__(self, lookback_working_days: int = DEFAULT_LOOKBACK_WORKING_DAYS) -> None:
-        self.lookback_working_days = lookback_working_days
+    def __init__(self, max_lookback_days: int = DEFAULT_MAX_LOOKBACK_DAYS) -> None:
+        # Only a safety bound on the backwards walk for the previous working day;
+        # it is not a lookback window. Exactly one date is ever reported on.
+        self.max_lookback_days = max_lookback_days
 
-    def working_day_window(self, today: date) -> list[date]:
-        """The previous ``lookback`` working days (Mon-Fri), strictly before today.
+    def target_date(self, db: Session, today: date) -> date | None:
+        """The single date this run chases: the previous working day.
 
-        Returned most-recent first. This is the set of days a report is owed for;
-        the per-employee joining-date clamp narrows it further.
+        ``None`` when the calendar declares no working day within the safety
+        bound, in which case the run reports nothing.
         """
-        days: list[date] = []
-        cursor = today - timedelta(days=1)
-        while len(days) < self.lookback_working_days:
-            if cursor.weekday() < 5:  # Mon..Fri
-                days.append(cursor)
-            cursor -= timedelta(days=1)
-        return days
+        return previous_working_day(
+            db, today, max_lookback_days=self.max_lookback_days
+        )
 
     def collect(self, db: Session, *, today: date | None = None) -> list[PMReminder]:
         """Return one PMReminder per PM that has at least one missing report."""
         today = today or date.today()
-        window = self.working_day_window(today)
-        if not window:
+        target = self.target_date(db, today)
+        if target is None:
+            logger.warning(
+                "reminder.no_working_day today=%s lookback_days=%d",
+                today,
+                self.max_lookback_days,
+            )
             return []
-        window_start, window_end = window[-1], window[0]
-        window_set = set(window)
 
         pms = self._active_pms(db)
         if not pms:
@@ -110,24 +118,23 @@ class DailyReportReminderService:
         if not all_employee_ids:
             return []
 
-        recorded = self._recorded_dates(db, all_employee_ids, window_start, window_end)
+        reported = self._employees_with_report(db, all_employee_ids, target)
         pm_names = self._pm_display_names(db, pms)
 
         reminders: list[PMReminder] = []
         for pm in pms:
             pm_employees = employees_by_pm.get(pm.id, [])
-            days = self._missing_days_for_pm(
-                pm_employees, recorded, window_set
-            )
-            if not days:
+            missing = self._missing_employees(pm_employees, reported, target)
+            if not missing:
                 continue
             reminders.append(
                 PMReminder(
                     pm_id=pm.id,
                     pm_name=pm_names[pm.id],
                     pm_email=pm.email,
+                    report_date=target,
                     employees_checked=len(pm_employees),
-                    days=days,
+                    employees=missing,
                 )
             )
         return reminders
@@ -169,14 +176,10 @@ class DailyReportReminderService:
             grouped.setdefault(emp.reporting_pm_id, []).append(emp)
         return grouped
 
-    def _recorded_dates(
-        self,
-        db: Session,
-        employee_ids: list[uuid.UUID],
-        date_from: date,
-        date_to: date,
-    ) -> dict[uuid.UUID, set[date]]:
-        """Dates each employee has a recorded report for, in the window.
+    def _employees_with_report(
+        self, db: Session, employee_ids: list[uuid.UUID], target: date
+    ) -> set[uuid.UUID]:
+        """Employees who have a recorded report for the target date.
 
         A report counts as recorded once it is ``submitted`` or ``granted`` (a
         report the Project Head reopened for editing is still a recorded report).
@@ -184,19 +187,15 @@ class DailyReportReminderService:
         that a report row exists for the date.
         """
         rows = db.execute(
-            select(DailyWorkReport.employee_id, DailyWorkReport.report_date).where(
+            select(DailyWorkReport.employee_id).where(
                 DailyWorkReport.employee_id.in_(employee_ids),
                 DailyWorkReport.status.in_(
                     [WorkReportStatus.submitted, WorkReportStatus.granted]
                 ),
-                DailyWorkReport.report_date >= date_from,
-                DailyWorkReport.report_date <= date_to,
+                DailyWorkReport.report_date == target,
             )
-        ).all()
-        result: dict[uuid.UUID, set[date]] = {}
-        for emp_id, d in rows:
-            result.setdefault(emp_id, set()).add(d)
-        return result
+        ).scalars()
+        return set(rows)
 
     def _pm_display_names(
         self, db: Session, pms: list[User]
@@ -221,37 +220,26 @@ class DailyReportReminderService:
     # -- grouping ------------------------------------------------------------
 
     @staticmethod
-    def _owed_days(emp: Employee, window: set[date]) -> set[date]:
-        """Working days in the window the employee owes a report for.
+    def _owes_report(emp: Employee, target: date) -> bool:
+        """Whether the employee owed a report on the target day.
 
-        Every working day counts (attendance is no longer required); days strictly
-        before the employee's joining date are excluded. A missing joining date is
-        treated as "no clamp" (the whole window is owed).
+        A day strictly before the employee's joining date is not owed. A missing
+        joining date is treated as "no clamp".
         """
-        joining = emp.date_of_joining
-        if joining is None:
-            return set(window)
-        return {d for d in window if d >= joining}
+        return emp.date_of_joining is None or target >= emp.date_of_joining
 
-    def _missing_days_for_pm(
+    def _missing_employees(
         self,
         employees: list[Employee],
-        recorded: dict[uuid.UUID, set[date]],
-        window: set[date],
-    ) -> list[MissingReportDay]:
-        by_date: dict[date, list[MissingEmployee]] = {}
-        for emp in employees:
-            missing = self._owed_days(emp, window) - recorded.get(emp.id, set())
-            for d in missing:
-                by_date.setdefault(d, []).append(
-                    MissingEmployee(
-                        employee_id=emp.id,
-                        name=emp.full_name,
-                        code=emp.employee_code,
-                    )
-                )
-        days: list[MissingReportDay] = []
-        for d in sorted(by_date, reverse=True):  # most recent first
-            employees_for_day = sorted(by_date[d], key=lambda e: e.name.lower())
-            days.append(MissingReportDay(report_date=d, employees=employees_for_day))
-        return days
+        reported: set[uuid.UUID],
+        target: date,
+    ) -> list[MissingEmployee]:
+        missing = [
+            MissingEmployee(
+                employee_id=emp.id, name=emp.full_name, code=emp.employee_code
+            )
+            for emp in employees
+            if self._owes_report(emp, target) and emp.id not in reported
+        ]
+        missing.sort(key=lambda e: e.name.lower())
+        return missing
