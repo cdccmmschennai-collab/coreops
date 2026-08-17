@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, CalendarX2, ListPlus } from "lucide-react";
+import { ArrowRight, CalendarOff, CalendarX2, Clock, ListPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { PerformanceTable } from "@/features/employee-performance/components/performance-table";
 import { useActivityRequestPendingCount } from "@/features/activity-requests/hooks";
 import { useLeaveList } from "@/features/leave/hooks";
+import { usePermissionList } from "@/features/permissions/hooks";
 import { useAllDeliverables } from "@/features/project-deliverables/hooks";
 import { DeliverableStatusBadge } from "@/features/project-deliverables/components/status-badge";
 import type { Deliverable } from "@/features/project-deliverables/types";
@@ -56,6 +57,11 @@ export function ProjectManagerDashboard() {
     offset: 0,
   });
   const leaveCancellationCount = leaveCancellations.data?.total ?? 0;
+
+  // Pending 1h/2h permission requests. A separate decision from leave (a
+  // different allowance, a different guard), so a separate shortcut and count.
+  const pendingPermission = usePermissionList({ status: "pending", limit: 1, offset: 0 });
+  const pendingPermissionCount = pendingPermission.data?.total ?? 0;
 
   // Pending activity requests awaiting the PM's decision — drives the card badge.
   const activityRequestCount = useActivityRequestPendingCount();
@@ -188,6 +194,19 @@ export function ProjectManagerDashboard() {
                   {leaveCancellationCount > 0 && (
                     <Badge variant="info" className="ml-auto">
                       {leaveCancellationCount}
+                    </Badge>
+                  )}
+                </Link>
+              </Button>
+              <Button asChild className="justify-start" variant="secondary">
+                {/* Straight to the existing permission queue with its filter
+                    already applied - no separate PM permission page exists, and
+                    none is needed. Clock: hours off, not days. */}
+                <Link href="/attendance?tab=leave&queue=permission">
+                  <Clock className="h-4 w-4" /> Pending permission requests
+                  {pendingPermissionCount > 0 && (
+                    <Badge variant="warning" className="ml-auto">
+                      {pendingPermissionCount}
                     </Badge>
                   )}
                 </Link>

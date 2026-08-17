@@ -6,16 +6,21 @@ export interface KpiProps {
   label: string;
   value: string;
   delta?: { dir: "up" | "down"; text: string };
+  /** Optional control rendered under the value — for a tile that is also an
+   *  entry point, e.g. Permission Remaining's Request button. Omitted by every
+   *  other tile, which renders exactly as before. */
+  action?: React.ReactNode;
 }
 
 /** KPI tile — label, big tabular value, optional delta. Matches app.css `.kpi`. */
-export function Kpi({ label, value, delta }: KpiProps) {
+export function Kpi({ label, value, delta, action }: KpiProps) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 whitespace-nowrap text-[28px] font-semibold leading-none tracking-tight tabular">
         {value}
       </div>
+      {action && <div className="mt-2">{action}</div>}
       {delta && (
         <div
           className={cn(

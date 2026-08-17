@@ -2,6 +2,7 @@
 
 import { Kpi, KpiGrid } from "@/components/ui/kpi";
 import { useMyLeaveBalance } from "@/features/leave-balances/hooks";
+import { PermissionRemainingKpi } from "@/features/permissions/components/permission-remaining-kpi";
 import { nowInIST } from "@/lib/ist";
 
 import { useAttendanceList } from "../hooks";
@@ -28,14 +29,18 @@ export function AttendanceKpis({ employeeId }: { employeeId: string }) {
 
   const present = items.filter((r) => r.status === "present").length;
   const leave = items.filter((r) => r.status === "leave").length;
-  const absent = items.filter((r) => r.status === "absent").length;
 
   return (
     <KpiGrid>
       <Kpi label="Present this month" value={`${present}d`} />
       <Kpi label="Leave taken" value={`${leave}d`} />
       <Kpi label="Available Leave" value={`${available}d`} />
-      <Kpi label="Absent" value={`${absent}d`} />
+      {/* Replaces the former "Absent" tile (Phase 11). Absent days were a count
+          of what went wrong; permission hours are something the employee acts
+          on, which is why the Request entry point lives in this tile and nowhere
+          else. It brings its own balance query - the current-month figure comes
+          from the server, not from the attendance rows above. */}
+      <PermissionRemainingKpi />
     </KpiGrid>
   );
 }

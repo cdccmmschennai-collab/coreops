@@ -188,7 +188,11 @@ export function canRequestLeaveCancellation(
 
 // ---------- PM leave queues (inner tabs of the Leave tab) -------------------
 
-export const LEAVE_QUEUES = ["pending", "cancellation", "all"] as const;
+// `permission` is the 1h/2h permission queue (Phase 11). It lives here rather
+// than as another Attendance tab because a permission is a smaller absence than
+// leave, not a different kind of thing - and adding a top-level nav item for it
+// was explicitly out of scope.
+export const LEAVE_QUEUES = ["pending", "cancellation", "permission", "all"] as const;
 
 export type LeaveQueue = (typeof LEAVE_QUEUES)[number];
 

@@ -30,6 +30,7 @@ from app.modules.employees.router import router as employees_router
 from app.modules.leave.router import router as leave_router
 from app.modules.leave_balances.router import router as leave_balances_router
 from app.modules.offices.router import router as offices_router
+from app.modules.permissions.router import router as permissions_router
 from app.modules.plants.router import router as plants_router
 from app.modules.projects.router import router as projects_router
 from app.modules.users.router import router as users_router
@@ -95,6 +96,9 @@ def create_app() -> FastAPI:
     app.include_router(offices_router, prefix=settings.API_V1_PREFIX)
     app.include_router(leave_router, prefix=settings.API_V1_PREFIX)
     app.include_router(leave_balances_router, prefix=settings.API_V1_PREFIX)
+    # Permission (Phase 11) = 1h/2h of sanctioned absence inside a working day,
+    # against a 4h monthly allowance. Not RBAC.
+    app.include_router(permissions_router, prefix=settings.API_V1_PREFIX)
     app.include_router(calendar_router, prefix=settings.API_V1_PREFIX)
     app.include_router(notifications_router, prefix=settings.API_V1_PREFIX)
     app.include_router(activity_types_router, prefix=settings.API_V1_PREFIX)

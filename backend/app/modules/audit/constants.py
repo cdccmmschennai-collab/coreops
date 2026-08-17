@@ -17,6 +17,7 @@ class EntityType:
     BIOMETRIC_MAPPING = "biometric_employee_mapping"
     ATTENDANCE_RECORD = "attendance_record"
     LEAVE_REQUEST = "leave_request"
+    PERMISSION_REQUEST = "permission_request"
 
 
 class AuditAction:
@@ -98,6 +99,18 @@ class AuditAction:
     LEAVE_CANCELLATION_REQUEST = "leave.cancellation.request"
     LEAVE_CANCELLATION_APPROVE = "leave.cancellation.approve"
     LEAVE_CANCELLATION_REJECT = "leave.cancellation.reject"
+
+    # --- permission decisions (Tier B, Phase 11, migration 0068) ---
+    # A permission is 1-2 hours drawn from a 4h monthly allowance that is DERIVED
+    # from these rows rather than stored, so the audit trail is the only place the
+    # movement is written down: `details` carries the hours, the month, and the
+    # remaining figure before and after. Submission is audited too (leave does not
+    # audit its own) because a permission has no separate approval artefact to
+    # reconstruct the original ask from.
+    PERMISSION_REQUEST_SUBMIT = "permission.request.submit"
+    PERMISSION_REQUEST_APPROVE = "permission.request.approve"
+    PERMISSION_REQUEST_REJECT = "permission.request.reject"
+    PERMISSION_REQUEST_CANCEL = "permission.request.cancel"
 
 
 # Statuses

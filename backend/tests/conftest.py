@@ -28,6 +28,10 @@ from app.modules.attendance.models import AttendanceRecord, AttendanceStatus  # 
 from app.modules.employees.models import Employee, EmployeeStatus  # noqa: E402
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType  # noqa: E402
 from app.modules.offices.models import Office  # noqa: E402
+from app.modules.permissions.models import (  # noqa: E402
+    PermissionRequest,
+    PermissionStatus,
+)
 from app.modules.projects.models import (  # noqa: E402
     Project,
     ProjectMember,
@@ -64,7 +68,7 @@ def _clean_state():
             text(
                 "TRUNCATE TABLE audit_logs, notifications, tasks, work_report_tasks, "
                 "work_report_periods, work_items, daily_work_reports, "
-                "attendance_records, leave_requests, "
+                "attendance_records, leave_requests, permission_requests, "
                 "biometric_punches, biometric_sync_batches, "
                 "biometric_employee_mappings, "
                 "project_managers, project_members, projects, company_calendar_events, "
@@ -291,6 +295,36 @@ def make_leave_request(db):
             leave_type=leave_type,
             start_date=start_date,
             end_date=end_date,
+            reason=reason,
+            status=status,
+            manager_id=manager_id,
+            created_by=created_by,
+            updated_by=created_by,
+        )
+        db.add(req)
+        db.commit()
+        db.refresh(req)
+        return req
+
+    return _make
+
+
+@pytest.fixture()
+def make_permission_request(db):
+    def _make(
+        *,
+        employee_id,
+        permission_date,
+        duration_hours: int = 1,
+        reason: str | None = "Test reason",
+        status: PermissionStatus = PermissionStatus.pending,
+        manager_id=None,
+        created_by=None,
+    ) -> PermissionRequest:
+        req = PermissionRequest(
+            employee_id=employee_id,
+            permission_date=permission_date,
+            duration_hours=duration_hours,
             reason=reason,
             status=status,
             manager_id=manager_id,

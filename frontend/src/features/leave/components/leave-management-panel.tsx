@@ -1,6 +1,8 @@
 "use client";
 
 import { Tabs } from "@/components/ui/tabs";
+import { PermissionReviewPanel } from "@/features/permissions/components/permission-review-panel";
+import { usePermissionList } from "@/features/permissions/hooks";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { useLeaveList } from "../hooks";
@@ -27,6 +29,8 @@ export function LeaveManagementPanel({ employeeId }: Props) {
     useLeaveList({ status: "pending", limit: 1, offset: 0 }).data?.total ?? 0;
   const cancellationCount =
     useLeaveList({ status: "cancellation_requested", limit: 1, offset: 0 }).data?.total ?? 0;
+  const permissionCount =
+    usePermissionList({ status: "pending", limit: 1, offset: 0 }).data?.total ?? 0;
 
   return (
     <div className="space-y-4">
@@ -44,6 +48,12 @@ export function LeaveManagementPanel({ employeeId }: Props) {
             count: cancellationCount || undefined,
             countVariant: "info",
           },
+          {
+            value: "permission",
+            label: "Permission requests",
+            count: permissionCount || undefined,
+            countVariant: "warning",
+          },
           { value: "all", label: "All leave" },
         ]}
         value={queue}
@@ -52,6 +62,7 @@ export function LeaveManagementPanel({ employeeId }: Props) {
 
       {queue === "pending" && <LeaveReviewPanel employeeId={employeeId} />}
       {queue === "cancellation" && <LeaveCancellationReviewPanel />}
+      {queue === "permission" && <PermissionReviewPanel />}
       {queue === "all" && <AdminLeaveList />}
     </div>
   );
