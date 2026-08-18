@@ -11,9 +11,12 @@ import { cn } from "@/lib/utils";
 
 import { AttendanceDayPopover } from "@/features/biometric/components/attendance-day-popover";
 import {
+  buildDayDetail,
   formatPermission,
   formatShiftWindow,
+  resolveDayStatus,
   statusWithPermission,
+  type ResolvedDayStatus,
 } from "@/features/biometric/day-detail";
 import { useDailySummary } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
@@ -188,6 +191,50 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     return map;
   }, [eventsQuery.data]);
 
+  /**
+   * The one status resolution for a date, shared by the grid and the popover.
+   *
+   * Both the cell below and `AttendanceDayPopover` at the bottom of this file
+   * read THIS - there is no second status calculation for the calendar. A day
+   * the device fully recorded but nobody has ruled on used to render as an empty
+   * cell whose popover said "Present"; it now says Present in both places,
+   * because both places are asking the same function.
+   *
+   * The `officialStatus` handed to the resolver is unchanged from what the cell
+   * has always computed - the attendance record first, then the office
+   * calendar's own holiday / weekend derivation with a declared working day
+   * overriding both - so every day that already had a status keeps exactly the
+   * one it had. Biometric evidence only ever fills a day that resolved to
+   * nothing.
+   */
+  const statusFor = React.useCallback(
+    (iso: string): ResolvedDayStatus<StatusKey> | null => {
+      const [y, m, d] = iso.split("-").map(Number);
+      const officialStatus: StatusKey | undefined =
+        byDate.get(iso)?.status ??
+        // Read by truthiness, exactly as the cell has always read these two maps
+        // - a titleless event must keep behaving the way it did.
+        (workingByDate.get(iso)
+          ? undefined
+          : offByDate.get(iso)
+            ? "holiday"
+            : isWeekend(y, m - 1, d)
+              ? "weekend"
+              : undefined);
+      return resolveDayStatus<StatusKey>(
+        officialStatus,
+        // The same `buildDayDetail` the popover calls, on the same row - so the
+        // defensive "a row without a first_in is no_record" rule applies
+        // identically on both sides and cannot drift.
+        buildDayDetail(biometricByDate.get(iso)),
+      );
+    },
+    [byDate, workingByDate, offByDate, biometricByDate],
+  );
+
+  /** The open day's status - the very same value its cell rendered. */
+  const selectedStatus = selected ? statusFor(selected.iso) : null;
+
   const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
 
   const total = daysInMonth(view.y, view.m);
@@ -253,16 +300,10 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                 const workingTitle = workingByDate.get(iso);
                 // A declared working day overrides weekends and holidays — the
                 // office is open, so the day renders as a normal working day.
-                const status: StatusKey | undefined =
-                  record?.status ??
-                  (workingTitle
-                    ? undefined
-                    : holidayTitle
-                      ? "holiday"
-                      : isWeekend(view.y, view.m, day)
-                        ? "weekend"
-                        : undefined);
-                const s = status ? STATUS[status] : null;
+                // That precedence lives in `statusFor`, which the popover reads
+                // too; nothing here decides a status on its own.
+                const resolved = statusFor(iso);
+                const s = resolved ? STATUS[resolved.key] : null;
                 const isToday = iso === todayIso;
                 return (
                   <button
@@ -313,7 +354,19 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                         cell's colour still comes from the attendance status
                         alone, so a permission changes no day's classification. */}
                     {s && (
-                      <div className={cn("mt-auto flex items-center gap-1.5 text-[11px] font-medium", s.text)}>
+                      <div
+                        className={cn("mt-auto flex items-center gap-1.5 text-[11px] font-medium", s.text)}
+                        // Same indicator either way - the day IS Present, and a
+                        // second Present style would suggest two kinds of it.
+                        // The provenance is stated on hover instead, because a
+                        // day nobody has ruled on is still a day nobody has
+                        // ruled on, and the cell must not imply otherwise.
+                        title={
+                          resolved?.source === "biometric"
+                            ? "From the biometric record. No manager entry for this day yet."
+                            : undefined
+                        }
+                      >
                         <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
                         {statusWithPermission(s.label, bio?.permission_hours)}
                       </div>
@@ -398,9 +451,11 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
         anchor={selected?.anchor ?? null}
         title={selected ? formatDayLabel(selected.iso) : ""}
         summary={selected ? biometricByDate.get(selected.iso) : undefined}
-        attendanceLabel={
-          selected ? (statusLabelFor(byDate.get(selected.iso)?.status) ?? null) : null
-        }
+        // The SAME resolution the cell rendered, so the panel can never contradict
+        // the day that opened it. When it resolves to nothing the popover keeps
+        // its own fallback and names the classification ("Incomplete", "No
+        // biometric record") - an unsettled day is described, never given a status.
+        attendanceLabel={selectedStatus ? STATUS[selectedStatus.key].label : null}
         // Why a manager set this day this way, in their words. This is how an
         // employee finds out that their missing evening punch was accounted for.
         reason={selected ? (byDate.get(selected.iso)?.note ?? null) : null}
@@ -408,13 +463,6 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
       />
     </div>
   );
-}
-
-/** The official attendance status label for a day, when a record exists. It wins
- *  over the biometric label in the popover - observation never overrules the
- *  record. Reuses the STATUS map the calendar already renders. */
-function statusLabelFor(status: AttendanceStatus | undefined): string | undefined {
-  return status ? STATUS[status]?.label : undefined;
 }
 
 /** `"2026-07-29"` -> `"Wednesday, 29 July 2026"`. Parsed as a plain calendar date

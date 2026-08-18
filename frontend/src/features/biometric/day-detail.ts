@@ -116,6 +116,52 @@ export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
   };
 }
 
+/** Where the status a day is displayed with actually came from. */
+export type DayStatusSource = "record" | "biometric";
+
+export interface ResolvedDayStatus<K extends string = string> {
+  /** The status key to render with - an attendance status, never a slug of its
+   *  own, so a caller's existing colour/label table covers it unchanged. */
+  key: K;
+  source: DayStatusSource;
+}
+
+/**
+ * The ONE status a day resolves to, for every surface that shows that day.
+ *
+ * This exists because the calendar grid and the day popover were answering
+ * "what is this day?" separately: the cell read only the official attendance
+ * record, while the popover fell back to the biometric classification when no
+ * record existed. A fully-punched day nobody had ruled on therefore rendered as
+ * a BLANK cell that opened a panel reading "Present · 8h 44m". Both now call
+ * this, so the grid cannot disagree with the panel it opens.
+ *
+ * Precedence, and why:
+ *
+ *   1. `officialStatus` - a human's ruling (the attendance record) or the
+ *      office calendar's own derivation (holiday, weekend). It wins outright:
+ *      observation never overrules the record, which is the rule the whole
+ *      biometric module is built on.
+ *   2. a `present` classification - the device saw BOTH ends of the day, so the
+ *      evidence is complete and settles it on its own.
+ *   3. nothing.
+ *
+ * `incomplete`, `needs_review` and `no_record` deliberately resolve to nothing.
+ * Each of those means the evidence did NOT settle the day, and promoting one to
+ * a status would be exactly the invented cause `classification.py` refuses to
+ * produce - a one-punch day is a person seen once, not a person present.
+ */
+export function resolveDayStatus<K extends string>(
+  officialStatus: K | null | undefined,
+  detail: DayDetail,
+): ResolvedDayStatus<K | "present"> | null {
+  if (officialStatus) return { key: officialStatus, source: "record" };
+  if (detail.classification === "present") {
+    return { key: "present", source: "biometric" };
+  }
+  return null;
+}
+
 /**
  * `2` -> `"2hr"`. Null when there is no approved permission for the day.
  *

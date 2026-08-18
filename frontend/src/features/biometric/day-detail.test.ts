@@ -9,6 +9,7 @@ import {
   formatDuration,
   formatShiftTime,
   formatShiftWindow,
+  resolveDayStatus,
   statusLine,
   type DaySummaryLike,
 } from "./day-detail.ts";
@@ -129,6 +130,53 @@ test("an existing attendance status overrides the biometric label", () => {
 test("a null attendance label falls back to the biometric label", () => {
   assert.equal(statusLine(buildDayDetail(PRESENT), null), "Present · 8h 30m");
   assert.equal(statusLine(buildDayDetail(PRESENT), undefined), "Present · 8h 30m");
+});
+
+// ── one status for the cell and the panel ──────────────────────────────────
+
+/** Friday 7 August 2026 as reported: 09:10 -> 17:54 IST, 8h 44m against a
+ *  scheduled 8h 30m, fully punched, and nobody has entered a record for it. */
+const AUG_7: DaySummaryLike = {
+  first_in: "2026-08-07T03:40:00+00:00",
+  last_out: "2026-08-07T12:24:00+00:00",
+  worked_minutes: 524,
+  scheduled_minutes: 510,
+  classification: "present",
+  review_required: false,
+};
+
+test("a fully-punched day with no record still resolves to Present", () => {
+  // The reported bug: this day rendered as an EMPTY calendar cell whose popover
+  // read "Present · 8h 44m". Both now read the same resolution.
+  const resolved = resolveDayStatus(null, buildDayDetail(AUG_7));
+  assert.deepEqual(resolved, { key: "present", source: "biometric" });
+  assert.equal(statusLine(buildDayDetail(AUG_7)), "Present · 8h 44m");
+});
+
+test("the official record always outranks the biometric evidence", () => {
+  for (const status of ["absent", "half_day", "leave", "comp_off", "holiday", "weekend"]) {
+    assert.deepEqual(resolveDayStatus(status, buildDayDetail(AUG_7)), {
+      key: status,
+      source: "record",
+    });
+  }
+});
+
+test("an unsettled day resolves to no status at all", () => {
+  // Incomplete / needs review / no record each mean the evidence did NOT settle
+  // the day. None of them may become a status - that would invent a cause.
+  for (const summary of [ONE_PUNCH, SHORT, undefined]) {
+    assert.equal(resolveDayStatus(null, buildDayDetail(summary)), null);
+  }
+  assert.equal(resolveDayStatus(undefined, buildDayDetail(undefined)), null);
+});
+
+test("a row without a first_in cannot resolve to Present", () => {
+  // buildDayDetail downgrades it to no_record, and the resolver follows - the
+  // calendar and the popover apply that defensive rule identically.
+  const detail = buildDayDetail({ ...AUG_7, first_in: null });
+  assert.equal(detail.classification, "no_record");
+  assert.equal(resolveDayStatus(null, detail), null);
 });
 
 test("formatDuration handles the edges", () => {
