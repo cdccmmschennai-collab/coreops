@@ -6,9 +6,20 @@ new state: every value is derived live from attendance_records +
 daily_work_reports.
 
 Definitions used throughout:
-  - a day "requires a report" for an employee if they have an attendance record
-    that day with a *worked* status (present / half_day). absent / leave /
-    holiday / weekend never require a report.
+  - a day "requires a report" for an employee if they worked it. Two things can
+    establish that, and either is enough:
+      * an attendance record with a *worked* status (present / half_day), i.e.
+        a human ruled on the day; or
+      * biometric punches the device settled as `present` - a full punch pair
+        against the contracted shift, which is the same verdict the employee's
+        own attendance calendar paints Present.
+    absent / leave / holiday / weekend never require a report.
+
+    The biometric half matters because most Present days are never typed in by
+    anyone: the day is Present on screen purely because the person badged in and
+    out. Reading only attendance_records meant those employees were invisible to
+    compliance - no logout prompt, no banner, no pending day - which is exactly
+    backwards, since they are the ones who definitely came to work.
   - a report "exists" for (employee, date) only once it is **submitted** — a
     draft does not satisfy compliance.
   - "previous working day" lookback is bounded by the report submission window
@@ -21,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
+from app.modules.biometric.service import settled_present_days
 from app.modules.employees.service import _current_employee
 from app.modules.users.models import User
 from app.modules.work_reports.models import (
@@ -46,18 +58,44 @@ def _first_of_previous_month(today: date) -> date:
     return first_of_this.replace(month=first_of_this.month - 1)
 
 
-def _worked_attendance_dates(
+def _attendance_statuses(
     db: Session, employee_id: uuid.UUID, *, date_from: date, date_to: date
-) -> set[date]:
+) -> dict[date, AttendanceStatus]:
+    """Every day in the window a human has ruled on, and how. One query.
+
+    The whole map rather than just the worked days, because "nobody has ruled on
+    this day" and "somebody ruled it leave" are different answers and only the
+    first one may fall through to the biometric evidence.
+    """
     rows = db.execute(
-        select(AttendanceRecord.attendance_date).where(
+        select(AttendanceRecord.attendance_date, AttendanceRecord.status).where(
             AttendanceRecord.employee_id == employee_id,
-            AttendanceRecord.status.in_(WORKED_STATUSES),
             AttendanceRecord.attendance_date >= date_from,
             AttendanceRecord.attendance_date <= date_to,
         )
-    ).scalars().all()
-    return set(rows)
+    ).all()
+    return {day: status for day, status in rows}
+
+
+def _biometric_present_dates(
+    db: Session, employee_id: uuid.UUID, *, date_from: date, date_to: date
+) -> set[date]:
+    """Days in the window the DEVICE settled as a full day's attendance.
+
+    Delegates to `biometric.settled_present_days`, the same helper the leave
+    guard uses and the same boundary + classification rules the employee's
+    calendar renders. Compliance owns no verdict of its own: a day counted here
+    is a day the employee is looking at marked Present.
+
+    Only `present` counts. `incomplete` (one punch) and `needs_review` mean the
+    evidence did not settle the day, and demanding a work report on the strength
+    of a single unpaired swipe would be a guess about whether they stayed.
+    """
+    return set(
+        settled_present_days(
+            db, employee_id=employee_id, date_from=date_from, date_to=date_to
+        )
+    )
 
 
 def _submitted_report_dates(
@@ -110,22 +148,29 @@ def _reported_work_fraction(
 
 
 def _attendance_work_fraction(
-    db: Session, employee_id: uuid.UUID, day: date
+    status: AttendanceStatus | None, *, biometric_present: bool
 ) -> float | None:
-    """Work fraction the attendance record implies: present 1.0, half_day 0.5,
-    anything else (or no record) None. Attendance does not record WHICH half
-    was worked — callers may only compare magnitudes, never halves."""
-    status = db.execute(
-        select(AttendanceRecord.status).where(
-            AttendanceRecord.employee_id == employee_id,
-            AttendanceRecord.attendance_date == day,
-        )
-    ).scalar_one_or_none()
+    """Work fraction the day implies: present 1.0, half_day 0.5, else None.
+    Attendance does not record WHICH half was worked — callers may only compare
+    magnitudes, never halves.
+
+    Pure, and reading the status the caller already has rather than re-querying
+    for a row it just loaded.
+
+    A human's ruling is final either way: an explicit leave / absent / holiday
+    returns None even when the device saw punches, because that ruling is the
+    answer to "was this a working day" and observation does not overrule it.
+    Only a day nobody has ruled on falls through to the device, where a settled
+    `present` is a whole day - the device cannot express a half day, so this
+    never returns 0.5 on biometric grounds.
+    """
     if status == AttendanceStatus.present:
         return 1.0
     if status == AttendanceStatus.half_day:
         return 0.5
-    return None
+    if status is not None:
+        return None
+    return 1.0 if biometric_present else None
 
 
 def employee_compliance(db: Session, actor: User) -> dict:
@@ -145,7 +190,17 @@ def employee_compliance(db: Session, actor: User) -> dict:
         }
 
     window_start = _first_of_previous_month(today)
-    worked = _worked_attendance_dates(db, me.id, date_from=window_start, date_to=today)
+    statuses = _attendance_statuses(db, me.id, date_from=window_start, date_to=today)
+    biometric = _biometric_present_dates(
+        db, me.id, date_from=window_start, date_to=today
+    )
+    # A day is worked if a human said so, OR if nobody said anything and the
+    # device settled it as Present. The `not in statuses` half is what keeps a
+    # ruling authoritative: a day marked leave stays leave even with punches on
+    # it, so an approved absence never starts demanding a work report.
+    worked = {d for d, s in statuses.items() if s in WORKED_STATUSES} | {
+        d for d in biometric if d not in statuses
+    }
     submitted = _submitted_report_dates(db, me.id, date_from=window_start, date_to=today)
 
     # Previous working days (strictly before today) with attendance but no
@@ -156,7 +211,9 @@ def employee_compliance(db: Session, actor: User) -> dict:
     # date-level requirement above, but a report whose working fraction doesn't
     # match what attendance implies is flagged as possibly incomplete.
     reported_fraction = _reported_work_fraction(db, me.id, today)
-    attendance_fraction = _attendance_work_fraction(db, me.id, today)
+    attendance_fraction = _attendance_work_fraction(
+        statuses.get(today), biometric_present=today in biometric
+    )
     mismatch = (
         reported_fraction is not None
         and attendance_fraction is not None
