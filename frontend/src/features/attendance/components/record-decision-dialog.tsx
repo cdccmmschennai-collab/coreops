@@ -21,7 +21,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { formatISTTime } from "@/features/biometric/mapping-format";
+import {
+  formatISTTime,
+  istTimeInputValue,
+} from "@/features/biometric/mapping-format";
 import { formatWorked } from "@/features/biometric/review";
 import type { DailyReviewRow } from "@/features/biometric/types";
 
@@ -235,11 +238,13 @@ function timeOrDash(iso: string | null): string {
   return iso ? formatISTTime(iso) : "-";
 }
 
-/** An ISO instant as `HH:MM` for a `<input type="time">`, in office time. */
+/** An ISO instant as `HH:MM` for a `<input type="time">`, in office time.
+ *
+ *  Deliberately NOT `formatISTTime`: that renders the 12-hour clock the UI
+ *  displays ("05:30 PM"), which a time input rejects outright and silently
+ *  blanks. The input is a machine value; only what a person reads is 12-hour. */
 function toTimeInput(iso: string | null): string {
-  if (!iso) return "";
-  const t = formatISTTime(iso);
-  return /^\d{2}:\d{2}$/.test(t) ? t : "";
+  return istTimeInputValue(iso);
 }
 
 /**

@@ -324,6 +324,14 @@ class DailySummaryOut(BaseModel):
     # on its own (first_punch_after_shift_start).
     review_reasons: list[str] = Field(default_factory=list)
 
+    # ── Phase 12: approved permission for this employee-day (joined, not derived)
+    # APPROVED permission hours (1 or 2) held for this date, or null when there
+    # are none. Read from `permission_requests` and shown BESIDE the day - it is
+    # an additional attendance attribute, never a status, never a leave, and
+    # never a punch. Every biometric field above is untouched by it: the times,
+    # the counts and `worked_minutes` remain exactly the device evidence.
+    permission_hours: int | None = None
+
 
 class SummarySchedule(BaseModel):
     """The employee's contracted office hours - CoreOps' own data, not biometric.
@@ -421,6 +429,13 @@ class DailyReviewRowOut(BaseModel):
     attendance_check_out_at: datetime | None = None
     # The reason the PM gave. Null when nobody explained the day.
     attendance_note: str | None = None
+
+    # Phase 12. APPROVED permission hours (1 or 2) for this employee-day, or
+    # null. An ATTRIBUTE of the day, joined from `permission_requests` - it does
+    # not change `attendance_status`, `classification` or any boundary above,
+    # and a permission is never presented as leave. Pending, rejected and
+    # cancelled requests are not reported here at all.
+    permission_hours: int | None = None
 
 
 class DailyReviewCounts(BaseModel):

@@ -242,6 +242,10 @@ export function AttendanceDayPopover({
               {formatDuration(detail.scheduledMinutes)}
             </p>
           </div>
+          {/* NO Permission field here, deliberately. The status line below
+              already reads "Present | 1hr · 6h 35m", and a separate Permission
+              row said the same thing twice in a 232px card. The four values in
+              this grid are the ones the permission does NOT change. */}
         </div>
 
         <div className="mt-3 flex items-center gap-2 border-t border-border pt-3">
@@ -290,13 +294,25 @@ function useCoreOpsClock(): string {
   React.useEffect(() => {
     const read = () =>
       setNow(
-        new Date().toLocaleTimeString("en-GB", {
-          timeZone: "Asia/Kolkata",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-          hour12: false,
-        }),
+        // Read on the 24-hour clock (stable across engines), rendered on the
+        // 12-hour one CoreOps uses everywhere. `en-GB`'s own 12-hour output
+        // varies by ICU version in case and padding, which a ticking clock
+        // would show off once a second.
+        (() => {
+          const [hh, mm, ss] = new Date()
+            .toLocaleTimeString("en-GB", {
+              timeZone: "Asia/Kolkata",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+              hour12: false,
+            })
+            .split(":");
+          const hour = Number(hh) % 24;
+          const period = hour < 12 ? "AM" : "PM";
+          const h12 = hour % 12 === 0 ? 12 : hour % 12;
+          return `${String(h12).padStart(2, "0")}:${mm}:${ss} ${period}`;
+        })(),
       );
     read();
     const id = window.setInterval(read, 1000);

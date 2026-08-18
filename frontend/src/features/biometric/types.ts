@@ -106,6 +106,12 @@ export interface DailySummary {
    *  (`short_of_scheduled_duration`), some are context that does not open a
    *  review on its own (`first_punch_after_shift_start`). */
   review_reasons: string[];
+
+  /** Phase 12. APPROVED permission hours (1 or 2) for this employee-day, or
+   *  null. Joined from `permission_requests`, never derived from punches, and
+   *  an input to nothing above: the times, counts and `worked_minutes` are the
+   *  same values they would be with no permission at all. */
+  permission_hours: number | null;
 }
 
 /**
@@ -198,6 +204,11 @@ export interface DailyReviewRow {
   attendance_check_out_at: string | null;
   /** The reason the PM gave. Null when nobody explained the day. */
   attendance_note: string | null;
+
+  /** Phase 12. APPROVED permission hours for this employee-day, or null. An
+   *  attendance ATTRIBUTE shown beside `attendance_status` - it never replaces
+   *  it, and it is never rendered as leave. */
+  permission_hours: number | null;
 }
 
 /** Counts for the WHOLE day, before any filter. No leave/permission/half-day:

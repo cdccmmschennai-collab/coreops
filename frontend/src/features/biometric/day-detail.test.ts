@@ -146,10 +146,12 @@ test("formatDuration handles the edges", () => {
 
 test("formatShiftTime reads a bare local TIME without shifting it", () => {
   // 09:30 contracted must stay 09:30 - not 15:00 via a timezone conversion.
-  assert.equal(formatShiftTime("09:30:00"), "09:30");
-  assert.equal(formatShiftTime("17:30:00"), "17:30");
-  assert.equal(formatShiftTime("00:00:00"), "00:00");
-  assert.equal(formatShiftTime("9:05"), "09:05");
+  // Read as digits (never through a timezone), rendered on the 12-hour clock.
+  assert.equal(formatShiftTime("09:30:00"), "09:30 AM");
+  assert.equal(formatShiftTime("17:30:00"), "05:30 PM");
+  assert.equal(formatShiftTime("00:00:00"), "12:00 AM");
+  assert.equal(formatShiftTime("12:00:00"), "12:00 PM");
+  assert.equal(formatShiftTime("9:05"), "09:05 AM");
 });
 
 test("formatShiftTime rejects nonsense", () => {
@@ -161,7 +163,7 @@ test("formatShiftTime rejects nonsense", () => {
 });
 
 test("formatShiftWindow needs both ends", () => {
-  assert.equal(formatShiftWindow("09:00:00", "17:30:00"), "09:00 - 17:30");
+  assert.equal(formatShiftWindow("09:00:00", "17:30:00"), "09:00 AM - 05:30 PM");
   assert.equal(formatShiftWindow("09:30:00", null), null);
   assert.equal(formatShiftWindow(null, "17:30:00"), null);
   assert.equal(formatShiftWindow("banana", "17:30:00"), null);

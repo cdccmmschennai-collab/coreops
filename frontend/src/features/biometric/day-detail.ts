@@ -46,6 +46,11 @@ export interface DaySummaryLike {
   scheduled_minutes: number | null;
   classification: BiometricClassification;
   review_required: boolean;
+  /** Phase 12. APPROVED permission hours (1 or 2) held for this date, or null.
+   *  An additional attendance ATTRIBUTE joined from `permission_requests` - it
+   *  is not a status, not a leave, and it never alters the biometric fields
+   *  above. Pending, rejected and cancelled requests never appear here. */
+  permission_hours?: number | null;
 }
 
 export interface DayDetail {
@@ -59,6 +64,8 @@ export interface DayDetail {
   /** The contracted window's length, for the side-by-side comparison. */
   scheduledMinutes: number | null;
   reviewRequired: boolean;
+  /** Approved permission hours for the day, or null. Presentation only. */
+  permissionHours: number | null;
 }
 
 /**
@@ -86,6 +93,11 @@ export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
       workedMinutes: null,
       scheduledMinutes: summary?.scheduled_minutes ?? null,
       reviewRequired: true,
+      // Carried through even here. An approved permission is a fact about the
+      // DATE, not about the punches: a day with no biometric record can still
+      // hold one, and hiding it would make the employee think it was lost.
+      // Nothing is invented in exchange - the times above stay null.
+      permissionHours: summary?.permission_hours ?? null,
     };
   }
   return {
@@ -100,24 +112,67 @@ export function buildDayDetail(summary: DaySummaryLike | undefined): DayDetail {
     workedMinutes: summary.worked_minutes,
     scheduledMinutes: summary.scheduled_minutes,
     reviewRequired: summary.review_required,
+    permissionHours: summary.permission_hours ?? null,
   };
 }
 
 /**
- * The one line shown at the bottom: `"Present · 8h 30m"`.
+ * `2` -> `"2hr"`. Null when there is no approved permission for the day.
+ *
+ * `hr` singular for both 1 and 2, because that is the company's own shorthand -
+ * "1hr", "2hr" - and it is what Phase 11's request UI already says.
+ *
+ * Only ever reached with an APPROVED value: pending, rejected and cancelled
+ * requests are filtered out server-side and never arrive here at all.
+ */
+export function formatPermission(hours: number | null | undefined): string | null {
+  if (hours == null || !Number.isFinite(hours) || hours <= 0) return null;
+  return `${hours}hr`;
+}
+
+/**
+ * `"Present"` + 2 -> `"Present | 2hr"`.
+ *
+ * The permission is APPENDED, never substituted: the day's own status is still
+ * the first thing read, and a permission does not become an attendance status
+ * of its own. With no permission the label comes back untouched, so every
+ * existing day renders exactly as it did.
+ *
+ * With no status label at all (a day nobody has ruled on) it reads
+ * `"Permission 2hr"` rather than a bare `"| 2hr"` - a suffix with nothing in
+ * front of it is not a sentence, and the hours must still be visible.
+ */
+export function statusWithPermission(
+  label: string | null | undefined,
+  hours: number | null | undefined,
+): string | null {
+  const permission = formatPermission(hours);
+  if (!label) return permission ? `Permission ${permission}` : null;
+  return permission ? `${label} | ${permission}` : label;
+}
+
+/**
+ * The one line shown at the bottom: `"Present · 8h 30m"`, or with an approved
+ * permission `"Present | 2hr · 16h 17m"`.
  *
  * `attendanceLabel` is the official record's status when the day has one; it wins
  * over the biometric label, because the record is the authoritative word for the
  * day and observation must not overrule it. The duration is appended only when it
  * was measurable, so an incomplete day reads as a bare status rather than "· -".
+ *
+ * Phase 12: the permission sits between the status and the duration, because it
+ * qualifies the STATUS ("present, with two sanctioned hours") rather than the
+ * measurement. The duration stays the biometric worked total, untouched - a 2hr
+ * permission does not shorten `16h 17m`.
  */
 export function statusLine(
   detail: DayDetail,
   attendanceLabel?: string | null,
 ): string {
   const label = attendanceLabel ?? CLASSIFICATION_LABEL[detail.classification];
-  if (detail.workedMinutes == null) return label;
-  return `${label} · ${formatDuration(detail.workedMinutes)}`;
+  const head = statusWithPermission(label, detail.permissionHours) ?? label;
+  if (detail.workedMinutes == null) return head;
+  return `${head} · ${formatDuration(detail.workedMinutes)}`;
 }
 
 /** `480` -> `"8h 00m"`. Display only - this is never a stored duration. */
@@ -132,11 +187,15 @@ export function formatDuration(minutes: number | null | undefined): string {
 export const EMPTY_VALUE = "-";
 
 /**
- * An office `shift_start` / `shift_end` (`"09:30:00"`) as `"09:30"`.
+ * An office `shift_start` / `shift_end` (`"09:30:00"`) as `"09:30 AM"`.
  *
  * These are plain local TIME values with no date and no zone, so they are read as
  * digits and never pushed through a timezone conversion - doing that would shift a
  * contracted 09:30 by whatever offset the runtime guessed.
+ *
+ * Rendered on the 12-hour clock like every other time in CoreOps (2026-08-18);
+ * the same conversion `mapping-format.to12Hour` performs, restated here only
+ * because this file is deliberately import-free for the host-Node harness.
  */
 export function formatShiftTime(value: string | null | undefined): string {
   if (!value) return EMPTY_VALUE;
@@ -145,10 +204,12 @@ export function formatShiftTime(value: string | null | undefined): string {
   const hours = Number(match[1]);
   const minutes = match[2];
   if (hours > 23 || Number(minutes) > 59) return EMPTY_VALUE;
-  return `${String(hours).padStart(2, "0")}:${minutes}`;
+  const period = hours < 12 ? "AM" : "PM";
+  const h12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${String(h12).padStart(2, "0")}:${minutes} ${period}`;
 }
 
-/** `"09:00:00"`, `"17:30:00"` -> `"09:00 - 17:30"`. */
+/** `"09:00:00"`, `"17:30:00"` -> `"09:00 AM - 05:30 PM"`. */
 export function formatShiftWindow(
   start: string | null | undefined,
   end: string | null | undefined,

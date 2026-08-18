@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { biometricKeys } from "@/features/biometric/keys";
+import { formatPermission, statusWithPermission } from "@/features/biometric/day-detail";
 import { useDailyReview } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
 import {
@@ -250,13 +251,24 @@ export function AttendanceRecords() {
                         one exists. Distinct column from Biometric on purpose - a
                         settled punch record and a human ruling are not the same
                         fact. */}
+                    {/* Phase 12: an approved permission is appended here -
+                        "Present | 2hr". It never replaces the status and is
+                        never shown as Leave; a day with no decision but a
+                        permission still reports the hours rather than a dash. */}
                     <TableCell>
                       {r.attendance_status ? (
                         <Badge variant="outline">
-                          {ATTENDANCE_STATUS_LABEL[
-                            r.attendance_status as AttendanceStatus
-                          ] ?? r.attendance_status}
+                          {statusWithPermission(
+                            ATTENDANCE_STATUS_LABEL[
+                              r.attendance_status as AttendanceStatus
+                            ] ?? r.attendance_status,
+                            r.permission_hours,
+                          )}
                         </Badge>
+                      ) : r.permission_hours != null ? (
+                        <span className="text-sm text-muted-foreground">
+                          Permission {formatPermission(r.permission_hours)}
+                        </span>
                       ) : (
                         <span className="text-sm text-muted-foreground">{EMPTY}</span>
                       )}

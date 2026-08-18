@@ -11,6 +11,12 @@ duration and a conservative classification, both delegated to pure modules
 (`summary.py`, `classification.py`) and neither stored: no punch, mapping or
 attendance record is written by a read.
 
+Phase 12 adds ONE joined attribute to the read paths: `permission_hours`, the
+APPROVED permission an employee holds for that date (`permissions.attendance_link`).
+It is presentation only. No punch, boundary, `worked_minutes`, classification or
+`attendance_records` status is derived from it, changed by it, or aware of it -
+`present` stays `present` and the hours sit beside it.
+
 No EasyTime HTTP client lives here. The backend only ever sees the normalized
 payload the office-side connector POSTs; talking to EasyTime is
 `connectors/easytime`'s job and always will be.
@@ -104,6 +110,11 @@ from app.modules.biometric.summary import EMPTY_DAY, summarize_day
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.offices.models import Office
+from app.modules.permissions.attendance_link import (
+    approved_hours_by_employee_date,
+    approved_hours_for_employee,
+    approved_hours_on_date,
+)
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
@@ -1320,6 +1331,7 @@ def _review_row(
     employee_name: str,
     verdict: DayClassification,
     record: AttendanceRecord | None,
+    permission_hours: int | None = None,
 ) -> dict:
     """One employee-day, as both the roster view and the detail view need it.
 
@@ -1334,6 +1346,13 @@ def _review_row(
     device still saw nothing that day. `first_in`/`last_out`/`worked_minutes`
     are the DISPLAY boundary: the device's value first, the official record's
     value only where the device recorded none.
+
+    `permission_hours` (Phase 12) is carried through UNUSED by every calculation
+    here. An approved permission is an additional attribute of the day, not an
+    input to it: it does not shift a boundary, does not change `worked_minutes`,
+    does not touch `classification` and does not settle `review_required`. The
+    caller supplies it already resolved (`permissions.attendance_link`), and it
+    is attached at the very end so no rule above can accidentally read it.
     """
     first_in, first_in_source = _merge_boundary(
         verdict.first_in, record.check_in_at if record else None
@@ -1369,6 +1388,9 @@ def _review_row(
         "attendance_check_in_at": record.check_in_at if record else None,
         "attendance_check_out_at": record.check_out_at if record else None,
         "attendance_note": record.note if record else None,
+        # Phase 12. Joined, never derived - and deliberately the last key here,
+        # after every value that was computed from evidence.
+        "permission_hours": permission_hours,
     }
 
 
@@ -1422,6 +1444,10 @@ def list_daily_review(
     punches = _punches_for_day(db, provider=provider, on_date=on_date)
     shifts = _employee_shifts(db, employee_ids)
     official = _official_records(db, on_date=on_date, employee_ids=employee_ids)
+    # Phase 12: APPROVED permission for this date, one query for the whole
+    # roster. It is attached to each row and affects no calculation - see
+    # `_review_row`. Employees with none are simply absent from the dict.
+    permissions = approved_hours_on_date(db, employee_ids=employee_ids, on_date=on_date)
     default_shift = Shift.default(timezone_name=settings.ATTENDANCE_TIMEZONE)
 
     items: list[dict] = []
@@ -1447,6 +1473,7 @@ def list_daily_review(
             employee_name=f"{first_name} {last_name}".strip(),
             verdict=verdict,
             record=record,
+            permission_hours=permissions.get(employee_id),
         )
 
         if row["review_required"]:
@@ -1505,6 +1532,11 @@ def get_daily_review_detail(
     record = _official_records(db, on_date=on_date, employee_ids={employee_id}).get(
         employee_id
     )
+    # Phase 12: the same joined attribute the roster view shows, so a PM reading
+    # one employee's day sees the permission without opening Permission Requests.
+    permission_hours = approved_hours_on_date(
+        db, employee_ids={employee_id}, on_date=on_date
+    ).get(employee_id)
 
     row = _review_row(
         employee_id=employee.id,
@@ -1512,6 +1544,7 @@ def get_daily_review_detail(
         employee_name=f"{employee.first_name} {employee.last_name}".strip(),
         verdict=verdict,
         record=record,
+        permission_hours=permission_hours,
     )
 
     kept = day_summary.kept
@@ -1688,13 +1721,24 @@ def list_daily_summary(
     # Calendar showed nothing for it. Single-employee only: this is the only
     # shape the calendar ever requests, and merging a roster-wide call would
     # need a different, unwanted design.
+    #
+    # Phase 12 extends the SAME argument to an approved permission: a day whose
+    # only fact is "this employee holds 2 approved hours" must not be silently
+    # missing from the calendar either. Seeding it invents NOTHING - the row
+    # carries no punches, no boundary and no worked duration, exactly like the
+    # PM-decided day above with no times entered.
     official: dict[date, AttendanceRecord] = {}
+    permissions: dict[tuple[uuid.UUID, date], int] = {}
     if employee_id is not None:
         official = _official_records_for_employee(
             db, employee_id=employee_id, date_from=date_from, date_to=date_to
         )
+        permission_days = approved_hours_for_employee(
+            db, employee_id=employee_id, date_from=date_from, date_to=date_to
+        )
+        permissions = {(employee_id, day): hours for day, hours in permission_days.items()}
         employee_row: Employee | None = None
-        for record_date in official:
+        for record_date in sorted({*official, *permission_days}):
             key = (employee_id, record_date)
             if key in grouped:
                 continue
@@ -1710,6 +1754,16 @@ def list_daily_summary(
                 "_times": [],
                 "_codes": set(),
             }
+    elif grouped:
+        # Roster-wide read (PM only). Nothing is seeded here - this shape is
+        # evidence-driven and a permission is attached to the days it already
+        # returns, never used to conjure an employee-day into it.
+        permissions = approved_hours_by_employee_date(
+            db,
+            employee_ids={emp_id for emp_id, _day in grouped},
+            date_from=date_from,
+            date_to=date_to,
+        )
 
     # Phase 7 needs each employee's contracted window. Resolved once for the whole
     # page rather than per row: a month of days for one employee is one query, not
@@ -1769,6 +1823,12 @@ def list_daily_summary(
                 # not settle it - that ruling is exactly the missing piece.
                 "review_required": verdict.review_required and record is None,
                 "review_reasons": list(verdict.reasons),
+                # Phase 12. Joined from `permission_requests`, approved only,
+                # and an input to nothing above it: every biometric value in
+                # this row is byte-for-byte what it was without a permission.
+                "permission_hours": permissions.get(
+                    (bucket["employee_id"], bucket["summary_date"])
+                ),
             }
         )
 

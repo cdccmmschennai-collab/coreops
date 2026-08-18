@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { nowInIST } from "@/lib/ist";
 
 import { biometricKeys } from "@/features/biometric/keys";
+import { formatPermission } from "@/features/biometric/day-detail";
 import { useDailyReviewDetail } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
 import {
@@ -179,6 +180,20 @@ function AttendanceRecordDetail() {
                       : "No decision yet"}
                   </p>
                 </div>
+                {/* Phase 12. Only when an APPROVED permission exists for this
+                    date, so the PM can see why the day carries a permission
+                    indicator without opening Permission Requests. Read-only:
+                    there is no approve/reject control here - approval remains
+                    the Permission Requests workflow. The biometric punches
+                    below and the boundaries above are unaffected by it. */}
+                {row.permission_hours != null && (
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Permission
+                    </p>
+                    <p className="mt-0.5">{formatPermission(row.permission_hours)}</p>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     Reason

@@ -10,7 +10,11 @@ import { nowInIST } from "@/lib/ist";
 import { cn } from "@/lib/utils";
 
 import { AttendanceDayPopover } from "@/features/biometric/components/attendance-day-popover";
-import { formatShiftWindow } from "@/features/biometric/day-detail";
+import {
+  formatPermission,
+  formatShiftWindow,
+  statusWithPermission,
+} from "@/features/biometric/day-detail";
 import { useDailySummary } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
 import type { DailySummary } from "@/features/biometric/types";
@@ -42,6 +46,22 @@ const STATUS: Record<StatusKey, { cell: string; text: string; dot: string; label
   holiday:  { cell: "bg-violet-50",  text: "text-violet-700",  dot: "bg-violet-500",  label: "Holiday" },
   weekend:  { cell: "bg-slate-50",   text: "text-muted-foreground", dot: "bg-slate-300", label: "Weekend" },
 };
+
+/**
+ * Whether the calendar cell shows its biometric punch line.
+ *
+ * OFF since 2026-08-18. The punches currently in the database are backfill/test
+ * data, and a cell reading "09:18 AM - 05:53 PM" presents them as this
+ * employee's real attendance. Until the live device feed is connected, the cell
+ * shows the date and the official status only.
+ *
+ * This hides a PRESENTATION, nothing else. No punch is deleted, no query is
+ * removed, and `BiometricTimes` below is untouched: the same
+ * `useDailySummary` data still drives the day popover, the Records screens and
+ * the permission indicator. Flip this one constant to `true` when the real
+ * punches arrive and the line returns exactly as it was.
+ */
+const SHOW_CALENDAR_PUNCH_TIMES = false;
 
 /**
  * First and last biometric punch for one day, inside the existing calendar cell.
@@ -286,11 +306,27 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                         {workingTitle}
                       </p>
                     )}
-                    {bio && <BiometricTimes summary={bio} />}
+                    {SHOW_CALENDAR_PUNCH_TIMES && bio && <BiometricTimes summary={bio} />}
+                    {/* Phase 12: an approved permission is APPENDED to the
+                        day's own status - "Present | 1hr" - never substituted
+                        for it. The biometric line above is untouched, and the
+                        cell's colour still comes from the attendance status
+                        alone, so a permission changes no day's classification. */}
                     {s && (
                       <div className={cn("mt-auto flex items-center gap-1.5 text-[11px] font-medium", s.text)}>
                         <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
-                        {s.label}
+                        {statusWithPermission(s.label, bio?.permission_hours)}
+                      </div>
+                    )}
+                    {/* A permission on a day nobody has ruled on yet. Without
+                        this the hours would silently vanish from the calendar
+                        until a PM entered a status, and the employee would have
+                        no way to see their permission was applied. Same quiet
+                        line shape; a neutral dot, because it states no verdict. */}
+                    {!s && bio?.permission_hours != null && (
+                      <div className="mt-auto flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                        Permission {formatPermission(bio.permission_hours)}
                       </div>
                     )}
                     {workingTitle && !record && (
@@ -343,7 +379,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
                 fallback in that case (biometric/constants.py), which is why no
                 duration is claimed here. */}
             <div className="tabular text-sm">
-              {shiftWindow ?? "09:00 - 17:30"}
+              {shiftWindow ?? "09:00 AM - 05:30 PM"}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               {schedule
