@@ -72,6 +72,7 @@ from app.modules.biometric.constants import (
     BULK_REMAP_NOT_ALLOWED,
     BULK_SKIPPED,
     BULK_UNCHANGED,
+    CLASSIFICATION_PRESENT,
     CODE_STATUS_MAPPED,
     CODE_STATUS_UNMAPPED,
     ERROR_ALL_RECORDS_INVALID,
@@ -88,6 +89,7 @@ from app.modules.biometric.constants import (
     MAX_RAW_PAYLOAD_KEYS,
     MAX_RAW_PAYLOAD_VALUE_LEN,
     PII_KEYS,
+    PROVIDER_EASYTIME,
     RAW_PUNCH_TIME_TEXT_KEY,
     RAW_UPLOAD_TIME_TEXT_KEY,
     SECRET_KEY_MARKERS,
@@ -1212,42 +1214,33 @@ def _review_employees(db: Session, *, on_date: date) -> list[tuple]:
     ).all()
 
 
-def _punches_for_day(
-    db: Session,
-    *,
-    provider: str,
-    on_date: date,
-    employee_ids: set[uuid.UUID] | None = None,
-) -> dict[uuid.UUID, list[datetime]]:
-    """Punch instants for one attendance day, keyed by employee. One query.
+def _attendance_day():
+    """A punch's attendance day as a DATE, in ATTENDANCE_TIMEZONE.
 
-    Attribution joins `biometric_employee_mappings`, never
-    `biometric_punches.employee_id` - identical to `list_daily_summary`, and for
-    the same reason: every punch in the real backfill was stored before any
-    mapping existed, so reading the stored column would report an empty day
-    forever.
-
-    The day is bucketed in ATTENDANCE_TIMEZONE, so "14 August" means the IST date
-    a person would name.
-
-    `employee_ids`, when given, narrows to those employees only - used by the
-    Phase 9B single-employee detail screen so it does not scan the whole
-    roster's punches for one person. `None` (the roster view's call) scans the
-    whole day exactly as before.
+    `timezone(zone, timestamptz)` yields the naive local wall clock; cast to date
+    that is the IST day a person would name, so a 01:00 IST punch belongs to the
+    date they would call it rather than to the UTC date.
     """
-    local_day = cast(
+    return cast(
         func.timezone(settings.ATTENDANCE_TIMEZONE, BiometricPunch.punch_time), Date
     )
-    conditions = [
-        BiometricPunch.provider == provider,
-        Employee.deleted_at.is_(None),
-        local_day == on_date,
-    ]
-    if employee_ids is not None:
-        conditions.append(Employee.id.in_(employee_ids))
-    rows = db.execute(
-        select(Employee.id, BiometricPunch.punch_time)
-        .select_from(BiometricPunch)
+
+
+def _attributed_punches(stmt, *, provider: str):
+    """Attach the punch -> active mapping -> employee join to a select.
+
+    THE attribution rule, in one place rather than restated at every read: a
+    punch belongs to whoever `biometric_employee_mappings` says owns its device
+    code, NEVER to `biometric_punches.employee_id`. Every punch in the production
+    backfill was stored with that column NULL because it arrived before any
+    mapping existed, so reading it would report an empty calendar forever - and a
+    mapping created today has to apply to punches stored last month, with no
+    punch rewritten.
+
+    Soft-deleted employees are dropped here too, so no caller can forget to.
+    """
+    return (
+        stmt.select_from(BiometricPunch)
         .join(
             BiometricEmployeeMapping,
             and_(
@@ -1258,11 +1251,35 @@ def _punches_for_day(
             ),
         )
         .join(Employee, Employee.id == BiometricEmployeeMapping.employee_id)
-        .where(*conditions)
-    ).all()
+        .where(
+            BiometricPunch.provider == provider,
+            Employee.deleted_at.is_(None),
+        )
+    )
+
+
+def _punches_for_day(
+    db: Session,
+    *,
+    provider: str,
+    on_date: date,
+    employee_ids: set[uuid.UUID] | None = None,
+) -> dict[uuid.UUID, list[datetime]]:
+    """Punch instants for one attendance day, keyed by employee. One query.
+
+    `employee_ids`, when given, narrows to those employees only - used by the
+    Phase 9B single-employee detail screen so it does not scan the whole
+    roster's punches for one person. `None` (the roster view's call) scans the
+    whole day exactly as before.
+    """
+    stmt = _attributed_punches(
+        select(Employee.id, BiometricPunch.punch_time), provider=provider
+    ).where(_attendance_day() == on_date)
+    if employee_ids is not None:
+        stmt = stmt.where(Employee.id.in_(employee_ids))
 
     grouped: dict[uuid.UUID, list[datetime]] = {}
-    for employee_id, punch_time in rows:
+    for employee_id, punch_time in db.execute(stmt):
         grouped.setdefault(employee_id, []).append(punch_time)
     return grouped
 
@@ -1657,13 +1674,8 @@ def list_daily_summary(
             422,
         )
 
-    # The punch's attendance day, in local terms. `timezone(zone, timestamptz)`
-    # yields the naive local wall clock, which cast to date is the IST day.
-    local_day = cast(
-        func.timezone(settings.ATTENDANCE_TIMEZONE, BiometricPunch.punch_time), Date
-    ).label("summary_date")
-
-    stmt = (
+    local_day = _attendance_day().label("summary_date")
+    stmt = _attributed_punches(
         select(
             Employee.id,
             Employee.employee_code,
@@ -1672,28 +1684,12 @@ def list_daily_summary(
             local_day,
             BiometricPunch.punch_time,
             BiometricPunch.external_employee_code,
-        )
-        .select_from(BiometricPunch)
-        .join(
-            BiometricEmployeeMapping,
-            and_(
-                BiometricEmployeeMapping.provider == BiometricPunch.provider,
-                BiometricEmployeeMapping.external_employee_code
-                == BiometricPunch.external_employee_code,
-                BiometricEmployeeMapping.is_active.is_(True),
-            ),
-        )
-        .join(Employee, Employee.id == BiometricEmployeeMapping.employee_id)
-        .where(
-            BiometricPunch.provider == provider,
-            Employee.deleted_at.is_(None),
-            local_day >= date_from,
-            local_day <= date_to,
-        )
-        .order_by(Employee.employee_code, local_day, BiometricPunch.punch_time)
-    )
+        ),
+        provider=provider,
+    ).where(local_day >= date_from, local_day <= date_to)
     if employee_id is not None:
         stmt = stmt.where(Employee.id == employee_id)
+    stmt = stmt.order_by(Employee.employee_code, local_day, BiometricPunch.punch_time)
 
     # Group in Python so the boundary rule lives in one pure, tested place
     # (summary.py) rather than being restated in SQL.
@@ -1835,6 +1831,77 @@ def list_daily_summary(
     items.sort(key=lambda i: (i["summary_date"], i["employee_code"] or ""))
     schedule = _employee_schedule(db, employee_id) if employee_id is not None else None
     return items, schedule
+
+
+def settled_present_days(
+    db: Session,
+    *,
+    employee_id: uuid.UUID,
+    date_from: date,
+    date_to: date,
+    provider: str = PROVIDER_EASYTIME,
+) -> dict[date, DayClassification]:
+    """The days in a range the DEVICE settled as `present` for one employee.
+
+    Answers exactly one question - "did the device see this person work a whole
+    day?" - for policy code that must not let a contradicting decision be
+    recorded. Today's caller is the leave guard: an employee whose punches settle
+    a day as present cannot request leave for it, and a manager cannot approve
+    one (`leave/service.py`).
+
+    NOT A SECOND CALCULATION. Same mapping-joined punch query, same
+    `summarize_day` boundary rule and same `classify_day` verdict that
+    `list_daily_summary` returns to the calendar, so a day this function calls
+    present is byte-for-byte the day the employee is looking at when they file.
+    A day it stays silent about is a day the calendar shows no Present for.
+
+    EVIDENCE ONLY, DELIBERATELY. `classify_day` runs on the raw device boundary
+    with NO `_merge_boundary` step, so a PM-entered time never makes a day count
+    as settled here. The block must rest on what the device recorded, not on
+    another human's entry - that entry lands in `attendance_records`, which the
+    caller checks separately and reports in its own words.
+
+    Only `present` is returned. `incomplete`, `needs_review` and `no_record` mean
+    the evidence did NOT settle the day, and blocking leave on an unsettled day
+    would be exactly the invented cause `classification.py` refuses to produce: a
+    single 09:15 punch is a person seen once, which is no reason to refuse them
+    leave.
+
+    No actor and no scope check on purpose: this is an internal policy read, not
+    an API surface, and it is never routed. The caller has already authorized the
+    action it is validating, and it reads one employee whose own request is in
+    hand. Read-only - it writes nothing and stores no verdict.
+    """
+    if date_to < date_from:
+        return {}
+
+    local_day = _attendance_day()
+    stmt = _attributed_punches(
+        select(local_day, BiometricPunch.punch_time), provider=provider
+    ).where(
+        Employee.id == employee_id,
+        local_day >= date_from,
+        local_day <= date_to,
+    )
+
+    by_day: dict[date, list[datetime]] = {}
+    for day, punch_time in db.execute(stmt):
+        by_day.setdefault(day, []).append(punch_time)
+    if not by_day:
+        # No punches, so no shift lookup and no classification work at all - the
+        # common case for a leave filed days ahead of time.
+        return {}
+
+    shift = _employee_shifts(db, {employee_id}).get(employee_id) or Shift.default(
+        timezone_name=settings.ATTENDANCE_TIMEZONE
+    )
+
+    settled: dict[date, DayClassification] = {}
+    for day, times in by_day.items():
+        verdict = classify_day(summarize_day(times), day=day, shift=shift)
+        if verdict.classification == CLASSIFICATION_PRESENT:
+            settled[day] = verdict
+    return settled
 
 
 # ── Phase 5: reviewed bulk import ───────────────────────────────────────────

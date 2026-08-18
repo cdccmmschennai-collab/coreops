@@ -1,18 +1,18 @@
-"""Leave Request service: RBAC-scoped reads + employee writes + manager review.
+﻿"""Leave Request service: RBAC-scoped reads + employee writes + manager review.
 
 RBAC:
-  admin    full access — list all, approve/reject any
+  admin    full access â€” list all, approve/reject any
   manager  list own + team (direct reports); approve/reject team requests
   employee list own requests; create/update/cancel own pending
 
 Workflow:
-  pending  → approved   (manager/admin)
-  pending  → rejected   (manager/admin, comment optional)
-  pending  → cancelled  (employee, own pending only)
-  approved → cancellation_requested  (employee, own leave that hasn't ended)
-  cancellation_requested → cancelled (manager approves the withdrawal)
-  cancellation_requested → approved  (manager keeps the leave)
-  rejected → (re-open by editing → back to pending? No: employee must create new)
+  pending  â†’ approved   (manager/admin)
+  pending  â†’ rejected   (manager/admin, comment optional)
+  pending  â†’ cancelled  (employee, own pending only)
+  approved â†’ cancellation_requested  (employee, own leave that hasn't ended)
+  cancellation_requested â†’ cancelled (manager approves the withdrawal)
+  cancellation_requested â†’ approved  (manager keeps the leave)
+  rejected â†’ (re-open by editing â†’ back to pending? No: employee must create new)
 
 Every status change re-reads its row under `SELECT ... FOR UPDATE` before
 checking the status, so a concurrent approve/cancel pair resolves to exactly
@@ -45,12 +45,15 @@ from sqlalchemy.orm import Session
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
+from app.modules.biometric.classification import DayClassification
+from app.modules.biometric.service import settled_present_days
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.effects import (
     apply_leave_approved,
     available_balance,
     deducts_balance,
+    leave_working_days,
     plan_leave_days,
     reverse_leave_approved,
 )
@@ -77,7 +80,7 @@ DELIVERABLE_IMPACT_WINDOW = timedelta(days=2)
 BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
 
 
-# Attendance statuses that mean the employee actually worked that day — you
+# Attendance statuses that mean the employee actually worked that day â€” you
 # can't take (or be granted) leave for a day you've already attended.
 _WORKED_ATTENDANCE = (AttendanceStatus.present, AttendanceStatus.half_day)
 
@@ -107,7 +110,7 @@ def _worked_attendance_dates(
     db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
 ) -> list[date]:
     """Dates in [start_date, end_date] where the employee is marked present /
-    working — the days a leave request must not cover."""
+    working â€” the days a leave request must not cover."""
     return list(
         db.execute(
             select(AttendanceRecord.attendance_date)
@@ -124,6 +127,114 @@ def _worked_attendance_dates(
 
 def _format_dates(dates: list[date]) -> str:
     return ", ".join(d.isoformat() for d in dates)
+
+
+def _biometric_present_days(
+    db: Session, employee_id: uuid.UUID, days: list[date]
+) -> dict[date, DayClassification]:
+    """Which of `days` the DEVICE settled as a full day's attendance.
+
+    The second half of "you can't take leave for a day you worked". The check
+    above it reads `attendance_records` - a human's ruling. This one reads the
+    biometric evidence for the days that carry NO ruling yet, which is the gap
+    that let a fully-punched day be approved as leave: nobody had marked it, so
+    nothing objected, and the day ended up recorded as Leave with the punches
+    still sitting under it.
+
+    The caller passes the days the leave would actually CLAIM, never the raw
+    range: a punch on a Sunday or a company holiday inside a range costs the
+    employee nothing and marks nothing, so it must not refuse their week.
+
+    The verdict comes from `biometric.settled_present_days`, which runs the same
+    boundary and classification rules the employee's own calendar renders. Only a
+    `present` day counts: one punch, or a day the shift could not be compared
+    against, is unsettled, and refusing leave on unsettled evidence would be a
+    guess.
+    """
+    if not days:
+        return {}
+    settled = settled_present_days(
+        db, employee_id=employee_id, date_from=min(days), date_to=max(days)
+    )
+    wanted = set(days)
+    return {day: verdict for day, verdict in settled.items() if day in wanted}
+
+
+def _format_present_days(settled: dict[date, DayClassification]) -> str:
+    """`"12 August 2026 (09:10 AM - 05:54 PM)"`, so the employee can check it.
+
+    The punch window is named rather than just the date: a bare "you were present
+    on 12 August" is unarguable-with, while the two times let someone recognise
+    the day - or see immediately that the device recorded somebody else's finger.
+    """
+    parts: list[str] = []
+    for day in sorted(settled):
+        verdict = settled[day]
+        window = ""
+        first_in, last_out = verdict.first_in, verdict.last_out
+        if first_in is not None and last_out is not None:
+            window = (
+                f" ({first_in.astimezone(BUSINESS_TZ):%I:%M %p}"
+                f" - {last_out.astimezone(BUSINESS_TZ):%I:%M %p})"
+            )
+        parts.append(f"{_long_date(day)}{window}")
+    return ", ".join(parts)
+
+
+def _assert_not_biometrically_present(
+    db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
+) -> None:
+    """Refuse a leave range covering a day the device settled as a full day.
+
+    Raised at create and at edit, and again at approval by
+    `_assert_approvable_against_biometric` - the evidence can arrive between the
+    two, and the day must not be marked Leave on the strength of a check that ran
+    before the punches synced.
+
+    The employee is told which day and which punch window, because the only
+    honest way out of this block is to correct the record: if the device is
+    wrong, that is a biometric review, not a leave request.
+    """
+    settled = _biometric_present_days(
+        db, employee_id, leave_working_days(db, start_date, end_date)
+    )
+    if not settled:
+        return
+    raise AppError(
+        "validation_error",
+        f"The biometric record shows you were present on "
+        f"{_format_present_days(settled)} - you can't request leave for a day the "
+        "device recorded a full day's attendance. Ask your manager to correct the "
+        "attendance record first if this is wrong.",
+        422,
+    )
+
+
+def _assert_approvable_against_biometric(
+    db: Session, employee_id: uuid.UUID, days: list[date]
+) -> None:
+    """The same block, in the manager's words, at the moment of approval.
+
+    Separate from the employee-facing message on purpose: a PM reading their
+    review queue needs to know what to DO with the request, and the answer is
+    reject it - approving would write a Leave day directly on top of a day the
+    device says the person worked.
+
+    `days` is what the approval is actually about to mark, reusing the plan the
+    caller already computed. A day that already carries somebody's ruling is not
+    checked here: the approval will not touch it, so no Leave row can land on top
+    of its punches.
+    """
+    settled = _biometric_present_days(db, employee_id, days)
+    if not settled:
+        return
+    raise AppError(
+        "validation_error",
+        f"The biometric record shows this employee was present on "
+        f"{_format_present_days(settled)}; their leave can't be approved. Reject "
+        "the request, or correct the attendance record first.",
+        422,
+    )
 
 
 def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
@@ -338,7 +449,7 @@ def _fetch_locked(db: Session, req_id: uuid.UUID) -> LeaveRequest:
     """Load the request with `SELECT ... FOR UPDATE`.
 
     The lock is held until the surrounding commit, so a second writer racing on
-    the same request blocks here and then re-reads the status the winner wrote —
+    the same request blocks here and then re-reads the status the winner wrote â€”
     which its own status check then rejects. Callers must therefore lock BEFORE
     validating status, never after.
     """
@@ -424,6 +535,7 @@ def create_leave_request(
             "leave for a day you've already attended.",
             422,
         )
+    _assert_not_biometrically_present(db, me.id, data.start_date, data.end_date)
     _assert_no_overlap(db, me.id, data.start_date, data.end_date)
 
     req = LeaveRequest(
@@ -473,6 +585,7 @@ def update_leave_request(
             "leave for a day you've already attended.",
             422,
         )
+    _assert_not_biometrically_present(db, me.id, new_start, new_end)
     _assert_no_overlap(db, me.id, new_start, new_end, exclude_id=req.id)
 
     for key, value in fields.items():
@@ -526,7 +639,7 @@ def request_leave_cancellation(
 ) -> LeaveRequest:
     """approved -> cancellation_requested, by the employee who filed it.
 
-    The leave stays active until a manager decides — this only puts it in their
+    The leave stays active until a manager decides â€” this only puts it in their
     queue. Leave that has already finished is out of scope: there is nothing
     left to withdraw, and correcting the record is an attendance job.
     """
@@ -665,7 +778,7 @@ def attendance_summaries(
     dates, summarised to a single word for the cancellation queue.
 
     Two bulk queries for the whole displayed page (no per-row querying), and it
-    runs outside the cancellation transaction — it never writes.
+    runs outside the cancellation transaction â€” it never writes.
     """
     _assert_can_review(db, actor)
     if not data.leave_request_ids:
@@ -682,7 +795,7 @@ def attendance_summaries(
         return []
 
     # Bound the scan to the widest window across all displayed rows, then bucket
-    # in Python — one query rather than one per leave request.
+    # in Python â€” one query rather than one per leave request.
     lo = min(r.start_date for r in reqs)
     hi = max(r.end_date for r in reqs)
     rows = db.execute(
@@ -750,6 +863,15 @@ def approve_leave_request(
     # only, minus any day that already carries an official decision - so the
     # check and the deduction can never disagree about what this request costs.
     to_mark, _skipped = plan_leave_days(db, req)
+
+    # The same refusal on biometric grounds, against that same day list.
+    # Re-checked here and not only at create: punches sync in from the office
+    # connector on their own schedule, so a request filed on Monday morning can
+    # still be in the queue when Monday's own punches arrive. Approving then
+    # would write Leave over a day the device had, by that point, settled as
+    # worked.
+    _assert_approvable_against_biometric(db, req.employee_id, to_mark)
+
     if deducts_balance(req.leave_type) and to_mark:
         available = available_balance(db, req.employee_id)
         if Decimal(len(to_mark)) > available:
@@ -833,10 +955,10 @@ def deliverable_impacts(
     db: Session, actor: User, leave_request_ids: list[uuid.UUID]
 ) -> list[LeaveDeliverableImpactOut]:
     """For the given leave requests, find Planned deliverables whose target
-    date falls within ±2 days of the requested leave, on projects the
+    date falls within Â±2 days of the requested leave, on projects the
     requesting employee is assigned to.
 
-    Informational only — never blocks approval. Computed in a handful of bulk
+    Informational only â€” never blocks approval. Computed in a handful of bulk
     queries for the whole displayed page (no per-row querying).
     """
     from app.modules.project_deliverables.models import (
@@ -853,7 +975,7 @@ def deliverable_impacts(
         return []
 
     # A cancelled request is no longer an absence, so it can no longer clash
-    # with a deliverable — drop it before any conflict work is done.
+    # with a deliverable â€” drop it before any conflict work is done.
     reqs = (
         db.execute(
             select(LeaveRequest).where(
@@ -869,7 +991,7 @@ def deliverable_impacts(
 
     employee_ids = {r.employee_id for r in reqs}
 
-    # employee → set of project ids they belong to
+    # employee â†’ set of project ids they belong to
     member_rows = db.execute(
         select(ProjectMember.employee_id, ProjectMember.project_id).where(
             ProjectMember.employee_id.in_(employee_ids)
@@ -952,3 +1074,4 @@ def deliverable_impacts(
                 LeaveDeliverableImpactOut(leave_request_id=r.id, conflicts=conflicts)
             )
     return items
+
