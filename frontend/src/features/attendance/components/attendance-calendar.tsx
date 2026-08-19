@@ -11,10 +11,8 @@ import { cn } from "@/lib/utils";
 
 import { AttendanceDayPopover } from "@/features/biometric/components/attendance-day-popover";
 import {
-  buildDayDetail,
   formatPermission,
   formatShiftWindow,
-  resolveDayStatus,
   statusWithPermission,
   type ResolvedDayStatus,
 } from "@/features/biometric/day-detail";
@@ -22,8 +20,8 @@ import { useDailySummary } from "@/features/biometric/hooks";
 import { formatISTTime } from "@/features/biometric/mapping-format";
 import type { DailySummary } from "@/features/biometric/types";
 import { useCalendarEvents } from "@/features/calendar/hooks";
-import { isOffEvent } from "@/features/calendar/types";
 
+import { calendarDayMaps, resolveAttendanceDay } from "../day-status";
 import { useAttendanceList } from "../hooks";
 import {
   DOW,
@@ -173,23 +171,14 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
     schedule?.shift_end ?? null,
   );
 
-  // Office-closing events (holiday / CDC holiday / natural hazard) keyed by date.
-  const offByDate = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const ev of eventsQuery.data?.items ?? []) {
-      if (isOffEvent(ev.event_type)) map.set(ev.event_date, ev.title);
-    }
-    return map;
-  }, [eventsQuery.data]);
-
-  // "Office open on a normally-off day" overrides, keyed by date.
-  const workingByDate = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const ev of eventsQuery.data?.items ?? []) {
-      if (ev.event_type === "working_day") map.set(ev.event_date, ev.title);
-    }
-    return map;
-  }, [eventsQuery.data]);
+  // Office-closing events (holiday / CDC holiday / natural hazard) and
+  // "office open on a normally-off day" overrides, keyed by date. Built by the
+  // shared `calendarDayMaps` so the "Present this month" card reads these
+  // entries exactly the way the grid does.
+  const { off: offByDate, working: workingByDate } = React.useMemo(
+    () => calendarDayMaps(eventsQuery.data?.items ?? []),
+    [eventsQuery.data],
+  );
 
   /**
    * The one status resolution for a date, shared by the grid and the popover.
@@ -200,34 +189,30 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
    * cell whose popover said "Present"; it now says Present in both places,
    * because both places are asking the same function.
    *
-   * The `officialStatus` handed to the resolver is unchanged from what the cell
-   * has always computed - the attendance record first, then the office
-   * calendar's own holiday / weekend derivation with a declared working day
-   * overriding both - so every day that already had a status keeps exactly the
-   * one it had. Biometric evidence only ever fills a day that resolved to
-   * nothing.
+   * The order itself lives in `day-status.ts` rather than inline here, because
+   * the "Present this month" card has to resolve a day the same way this grid
+   * does: attendance record, then biometric `present`, then the company
+   * calendar (a declared working day, an office-closing entry, the weekend).
+   *
+   * A punched day therefore reads Present even on a 2nd Saturday, a holiday or
+   * a hazard day, with no PM action - the calendar entry decides only the days
+   * nobody punched, and its title still prints in the cell as context.
    */
   const statusFor = React.useCallback(
     (iso: string): ResolvedDayStatus<StatusKey> | null => {
       const [y, m, d] = iso.split("-").map(Number);
-      const officialStatus: StatusKey | undefined =
-        byDate.get(iso)?.status ??
+      return resolveAttendanceDay({
+        recordStatus: byDate.get(iso)?.status,
         // Read by truthiness, exactly as the cell has always read these two maps
         // - a titleless event must keep behaving the way it did.
-        (workingByDate.get(iso)
-          ? undefined
-          : offByDate.get(iso)
-            ? "holiday"
-            : isWeekend(y, m - 1, d)
-              ? "weekend"
-              : undefined);
-      return resolveDayStatus<StatusKey>(
-        officialStatus,
+        declaredWorking: Boolean(workingByDate.get(iso)),
+        officeClosed: Boolean(offByDate.get(iso)),
+        weekend: isWeekend(y, m - 1, d),
         // The same `buildDayDetail` the popover calls, on the same row - so the
         // defensive "a row without a first_in is no_record" rule applies
         // identically on both sides and cannot drift.
-        buildDayDetail(biometricByDate.get(iso)),
-      );
+        summary: biometricByDate.get(iso),
+      });
     },
     [byDate, workingByDate, offByDate, biometricByDate],
   );

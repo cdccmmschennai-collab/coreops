@@ -138,13 +138,19 @@ export interface ResolvedDayStatus<K extends string = string> {
  *
  * Precedence, and why:
  *
- *   1. `officialStatus` - a human's ruling (the attendance record) or the
- *      office calendar's own derivation (holiday, weekend). It wins outright:
- *      observation never overrules the record, which is the rule the whole
- *      biometric module is built on.
+ *   1. `officialStatus` - a human's ruling, the attendance record. It wins
+ *      outright: observation never overrules the record, which is the rule the
+ *      whole biometric module is built on.
  *   2. a `present` classification - the device saw BOTH ends of the day, so the
  *      evidence is complete and settles it on its own.
  *   3. nothing.
+ *
+ * Since 2026-08-19 the office calendar's own derivation (holiday, weekend) is
+ * NOT passed as `officialStatus` any more. A valid punch means the employee was
+ * here whether or not the office expected to be open, so the calendar is
+ * consulted only for the days this function leaves unresolved - see
+ * `attendance/day-status.ts`, which owns that order. This function's own rule
+ * is unchanged.
  *
  * `incomplete`, `needs_review` and `no_record` deliberately resolve to nothing.
  * Each of those means the evidence did NOT settle the day, and promoting one to
