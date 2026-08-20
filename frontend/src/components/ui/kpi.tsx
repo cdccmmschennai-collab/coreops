@@ -14,20 +14,27 @@ export interface KpiProps {
   /** Optional quiet line under the value — only for something the reader must
    *  act on, in practice "we couldn't load this". NOT for explaining a normal
    *  state: a tile that is simply showing a past month, or has no figure to
-   *  show, says so with its label and its value. It occupies a slot the tile
-   *  reserves either way, so showing or hiding it never resizes the card. */
+   *  show, says so with its label and its value. It is the one thing allowed to
+   *  make the tile taller than its 80px floor, which is why it is reserved for
+   *  a failure rather than spent on an ordinary state. */
   hint?: React.ReactNode;
 }
 
 /**
  * KPI tile — label, big tabular value, optional inline action.
  *
- * THE TILE IS A FIXED SIZE. Height is set here and never derived from the
- * content, so a row of tiles keeps the same shape as the reader steps between
- * months: a hint appearing, a value going from "4h" to "-", a Request button
- * turning into History — none of it moves the card or nudges the calendar
- * below it. The value row takes the slack (`flex-1`), so the footnote slot is
- * simply empty when there is nothing to put in it rather than absent.
+ * THE TILE IS 80px TALL - the height it has always been, which is exactly
+ * `p-4` + the label line + `mt-1` + the 28px value. It is a FLOOR (`min-h-20`),
+ * not a fixed height: the ordinary tile, with or without an action button, is
+ * that 80px and nothing else, and only the error hint - a state the reader is
+ * meant to notice - is allowed to add a line. Because the tiles are grid items
+ * they stretch together, so that one hint never leaves a single card taller
+ * than the three beside it.
+ *
+ * A hardcoded `h-[104px]` used to sit here, reserving a footnote slot in every
+ * tile whether or not it had a footnote. That is what made the row visibly
+ * bigger than the design; the slot is now taken only when something occupies
+ * it. The value row still takes the slack (`flex-1`).
  *
  * The label is one line, truncated with the full text in a tooltip. A two-line
  * label was the other thing that made the row jump, and "Available Leave ·
@@ -35,7 +42,7 @@ export interface KpiProps {
  */
 export function Kpi({ label, value, delta, action, hint }: KpiProps) {
   return (
-    <div className="flex h-[104px] flex-col overflow-hidden rounded-lg border border-border bg-card p-4">
+    <div className="flex min-h-20 flex-col overflow-hidden rounded-lg border border-border bg-card p-4">
       <div className="truncate text-xs text-muted-foreground" title={label}>
         {label}
       </div>
@@ -48,7 +55,7 @@ export function Kpi({ label, value, delta, action, hint }: KpiProps) {
       {delta && (
         <div
           className={cn(
-            "inline-flex items-center gap-1 text-xs",
+            "mt-1.5 inline-flex items-center gap-1 text-xs",
             delta.dir === "up" ? "text-success" : "text-destructive",
           )}
         >
