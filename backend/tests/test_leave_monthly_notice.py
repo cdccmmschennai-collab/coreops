@@ -621,3 +621,61 @@ def test_the_business_timezone_is_asia_kolkata():
     """The constant the month boundary hangs on. If this changes, every month
     key in the system moves."""
     assert lb_service.BUSINESS_TZ == ZoneInfo("Asia/Kolkata")
+
+
+# ======================================================================
+# 18. The scheduler's job is to TELL, never to ACCRUE
+# ======================================================================
+
+def test_beat_carries_the_notification_and_no_leave_accrual_task():
+    """The only leave-related thing on the schedule is the notification.
+
+    Guards the line this design rests on: if an "add the monthly leave" task
+    ever appears on beat, leave would be granted by a process that can run
+    twice, miss a month, or run against a stale balance - and the ledger's
+    guarantees would quietly stop being guarantees.
+    """
+    from app.core.celery_app import (
+        DAILY_REPORT_REMINDER_TASK,
+        LEAVE_BALANCE_NOTICE_TASK,
+        celery_app,
+    )
+
+    scheduled = {
+        name: entry["task"]
+        for name, entry in celery_app.conf.beat_schedule.items()
+    }
+    assert scheduled == {
+        "daily-report-reminder": DAILY_REPORT_REMINDER_TASK,
+        "monthly-leave-balance-notice": LEAVE_BALANCE_NOTICE_TASK,
+    }
+
+
+def test_leave_accrues_with_no_scheduler_and_the_job_never_moves_a_balance(
+    db, make_staff, make_leave_allocation
+):
+    """Two halves of the same rule.
+
+    FIRST: no Celery worker and no beat exist in this process, nothing is
+    enqueued, and August/September/October still accrue 2, 4, 6 - because
+    accrual is a fold performed on read, not something a scheduler does. Stop
+    the scheduler in production and the balances are unaffected; only the
+    monthly message stops arriving.
+
+    SECOND: running the notification job does not change the figure it reports.
+    It reads the ledger and writes a `notifications` row - nothing else - so the
+    balance before the run, after the run, and after a second run is one number.
+    """
+    emp = make_staff()
+    make_leave_allocation(employee_id=emp.id, effective_from=AUG, monthly_days=2)
+
+    assert _closing(db, emp.id, AUG) == Decimal("2.00")
+    assert _closing(db, emp.id, SEP) == Decimal("4.00")
+    assert _closing(db, emp.id, OCT) == Decimal("6.00")
+
+    run_monthly_leave_balance_notices(db=db, month=SEP)
+    run_monthly_leave_balance_notices(db=db, month=SEP)
+
+    assert _closing(db, emp.id, AUG) == Decimal("2.00")
+    assert _closing(db, emp.id, SEP) == Decimal("4.00")
+    assert _closing(db, emp.id, OCT) == Decimal("6.00")
