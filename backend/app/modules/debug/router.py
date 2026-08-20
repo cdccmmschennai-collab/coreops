@@ -3,6 +3,8 @@
   POST /debug/send-test-email   send a one-off test email (verify SMTP)
   GET  /debug/missing-reports   preview reminder data as JSON (verify grouping)
   POST /debug/send-reminders    run the reminder dispatcher immediately
+  POST /debug/send-leave-balance-notices
+                                run the monthly leave balance notice immediately
 
 All routes require the project_manager role and are only mounted when
 ENABLE_DEBUG_ENDPOINTS=true.
@@ -19,6 +21,7 @@ from app.modules.users.models import UserRole
 from app.notifications.email_service import EmailSendError, EmailService
 from app.reminders.daily_report.dispatcher import run_daily_report_reminders
 from app.reminders.daily_report.service import DailyReportReminderService
+from app.reminders.leave_balance.dispatcher import run_monthly_leave_balance_notices
 from app.shared.errors import AppError
 
 router = APIRouter(
@@ -88,6 +91,34 @@ def send_reminders(db: Session = Depends(get_db)) -> dict:
                 "employees_checked": o.employees_checked,
                 "missing_found": o.missing_found,
                 "email_sent": o.email_sent,
+                "error": o.error,
+            }
+            for o in result.outcomes
+        ],
+    }
+
+
+@router.post("/send-leave-balance-notices")
+def send_leave_balance_notices(db: Session = Depends(get_db)) -> dict:
+    """Run the monthly leave balance notice for the current business month now.
+
+    Safe to call repeatedly - the job is idempotent per (employee, month), so a
+    second call reports everyone under `already_sent` and writes nothing.
+    """
+    result = run_monthly_leave_balance_notices(db=db)
+    return {
+        "month": result.month.isoformat(),
+        "eligible": result.eligible,
+        "sent": result.sent,
+        "already_sent": result.already_sent,
+        "skipped_no_ledger": result.skipped_no_ledger,
+        "failed": result.failed,
+        "outcomes": [
+            {
+                "employee_name": o.employee_name,
+                "balance": float(o.balance) if o.balance is not None else None,
+                "sent": o.sent,
+                "already_sent": o.already_sent,
                 "error": o.error,
             }
             for o in result.outcomes

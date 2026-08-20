@@ -10,6 +10,13 @@ Run:
 
 The reminder fires once daily at 09:30 Asia/Kolkata (see ScheduleSettings); the
 hour/minute are overridable via environment.
+
+The monthly leave balance notice is registered on the SAME beat - CoreOps has one
+scheduler and this phase did not add a second. It is also fired DAILY rather than
+on the 1st: the job is idempotent per (employee, month), so the first run of a
+month sends and the rest of the month is a no-op, while a worker that was down on
+the 1st still delivers on the 2nd. See
+`app/reminders/leave_balance/dispatcher.py`.
 """
 from __future__ import annotations
 
@@ -21,6 +28,7 @@ from app.core.config import settings
 
 BUSINESS_TIMEZONE = "Asia/Kolkata"
 DAILY_REPORT_REMINDER_TASK = "coreops.reminders.send_daily_report_reminders"
+LEAVE_BALANCE_NOTICE_TASK = "coreops.reminders.send_monthly_leave_balance_notices"
 
 
 class ScheduleSettings(BaseSettings):
@@ -40,26 +48,47 @@ class ScheduleSettings(BaseSettings):
     REMINDER_HOUR: int = 9
     REMINDER_MINUTE: int = 30
 
+    # The monthly leave balance notice. Its own flag and its own time, so it can
+    # be turned off or moved without touching the daily report reminder.
+    LEAVE_BALANCE_NOTICE_ENABLED: bool = True
+    LEAVE_BALANCE_NOTICE_HOUR: int = 8
+    LEAVE_BALANCE_NOTICE_MINUTE: int = 0
+
 
 schedule_settings = ScheduleSettings()
 
 
 def _build_schedule() -> dict:
-    if not schedule_settings.REMINDER_SCHEDULE_ENABLED:
-        return {}
-    # Once daily at REMINDER_HOUR:REMINDER_MINUTE. Beat interprets this crontab in
-    # celery_app.conf.timezone (= BUSINESS_TIMEZONE, Asia/Kolkata), so the default
-    # 9/30 means 09:30 IST regardless of the server's local timezone.
-    cron = crontab(
-        hour=schedule_settings.REMINDER_HOUR,
-        minute=schedule_settings.REMINDER_MINUTE,
-    )
-    return {
-        "daily-report-reminder": {
+    """The beat entries, each behind its own flag.
+
+    Every crontab here is interpreted in celery_app.conf.timezone
+    (= BUSINESS_TIMEZONE, Asia/Kolkata), so the hours below mean IST regardless of
+    the server's local timezone.
+    """
+    schedule: dict = {}
+
+    if schedule_settings.REMINDER_SCHEDULE_ENABLED:
+        # Once daily at REMINDER_HOUR:REMINDER_MINUTE (default 09:30 IST).
+        schedule["daily-report-reminder"] = {
             "task": DAILY_REPORT_REMINDER_TASK,
-            "schedule": cron,
+            "schedule": crontab(
+                hour=schedule_settings.REMINDER_HOUR,
+                minute=schedule_settings.REMINDER_MINUTE,
+            ),
         }
-    }
+
+    if schedule_settings.LEAVE_BALANCE_NOTICE_ENABLED:
+        # Daily, not monthly - the task is idempotent per (employee, month), so
+        # this sends once per employee per month and self-heals a missed 1st.
+        schedule["monthly-leave-balance-notice"] = {
+            "task": LEAVE_BALANCE_NOTICE_TASK,
+            "schedule": crontab(
+                hour=schedule_settings.LEAVE_BALANCE_NOTICE_HOUR,
+                minute=schedule_settings.LEAVE_BALANCE_NOTICE_MINUTE,
+            ),
+        }
+
+    return schedule
 
 
 celery_app = Celery(

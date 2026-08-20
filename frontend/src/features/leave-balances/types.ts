@@ -1,8 +1,32 @@
+/**
+ * Leave balances, as the Phase 3 ledger reports them.
+ *
+ * EVERY FIGURE HERE IS A MONTH FIGURE. The server derives
+ * `closing = carry_forward + allocation + adjustment - consumed` per calendar
+ * month and sends the whole working, never a stored total. The frontend adds
+ * nothing to it: there is no `previous + allocation` arithmetic anywhere in this
+ * feature, because a second calculation is a second answer.
+ *
+ * `month` is always the first of the month, `YYYY-MM-DD`, and is echoed on every
+ * response so a client can prove which month it is showing.
+ */
 export interface LeaveBalance {
   employee_id: string;
   employee_code: string;
   employee_name: string;
+  /** The month this whole row describes (first of the month). */
+  month: string;
+  /** The month's closing balance - the "Available Leave" figure. */
   available_leave: number;
+  /** The `Leave/month` in force for this month (0 when none is configured). */
+  monthly_allocation: number;
+  carry_forward: number;
+  adjustment: number;
+  consumed: number;
+  /** False when the month precedes this employee's ledger. NOT a zero balance:
+   *  there is no balance to state, and the UI shows "-". */
+  in_ledger: boolean;
+  ledger_start_month: string | null;
   last_updated: string | null;
 }
 
@@ -11,17 +35,54 @@ export interface LeaveBalancePage {
   total: number;
   limit: number;
   offset: number;
+  /** The month the server resolved the request to. */
+  month: string;
 }
 
 export interface MyLeaveBalance {
   employee_id: string;
+  month: string;
   available_leave: number;
+  monthly_allocation: number;
+  carry_forward: number;
+  adjustment: number;
+  consumed: number;
+  in_ledger: boolean;
+  ledger_start_month: string | null;
   last_updated: string | null;
 }
 
+/** The PM correction. Still the TARGET balance the manager wants - the backend
+ *  turns it into a signed adjustment so the monthly allocation underneath
+ *  survives. The frontend must NOT compute the delta. */
 export interface LeaveBalanceUpdateBody {
   available_leave: number;
   reason: string;
+  /** Which month the correction belongs to (first of the month). Omitted means
+   *  the current Chennai business month, resolved server-side. */
+  month?: string;
+}
+
+/** `Leave/month`, effective-dated. Writing a new effective month leaves earlier
+ *  months on the rate they were on - which is what stops a rate change from
+ *  silently rewriting history. */
+export interface LeaveAllocationUpdateBody {
+  monthly_days: number;
+  /** Must be a first-of-month; the API rejects anything else rather than
+   *  quietly truncating it. */
+  effective_from: string;
+  note?: string | null;
+}
+
+export interface LeaveAllocation {
+  id: string;
+  employee_id: string;
+  effective_from: string;
+  monthly_days: number;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface LeaveBalanceHistory {
@@ -47,6 +108,26 @@ export type SortDir = "asc" | "desc";
 export interface LeaveBalanceListParams {
   q?: string;
   sort_dir?: SortDir;
+  /** Any date in the month to report; omitted asks for the current business
+   *  month. The tab always sends the 1st. */
+  month?: string;
   limit: number;
   offset: number;
+}
+
+// ---------- pure helpers ----------------------------------------------------
+
+/** How a balance figure prints: `1.5`, `-2`, `0` - and `-` for a month that
+ *  precedes the employee's ledger, which is not the same as zero.
+ *
+ *  Zero and negative balances print exactly as they are. Nothing in this module
+ *  hides or blocks them; the leave approval guard on the server is the only
+ *  thing that decides what a balance forbids. */
+export function formatBalance(
+  value: number,
+  inLedger = true,
+): string {
+  if (!inLedger) return "-";
+  // Trims a trailing ".00"/".50" to "1"/"1.5" without touching a real integer.
+  return String(Number(value.toFixed(2)));
 }

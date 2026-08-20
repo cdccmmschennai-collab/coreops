@@ -58,6 +58,14 @@ export interface PermissionBalance {
   allowance_hours: number;
   approved_hours: number;
   remaining_hours: number;
+  /** Whether this is the month running now, on the Chennai business calendar. */
+  is_current_month: boolean;
+  /** Whether a NEW request may be filed against this month. False once the month
+   *  has ended: the allowance does not carry forward, so there is nothing left
+   *  to spend. The figures stay true and readable either way - a closed month is
+   *  history, not a hidden month. The refusal is enforced server-side; this only
+   *  lets the UI avoid offering an action that would be refused. */
+  requests_allowed: boolean;
 }
 
 /** This request's place in its month, computed server-side.

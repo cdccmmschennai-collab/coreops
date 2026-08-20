@@ -31,9 +31,8 @@ import {
   isoDate,
   isWeekend,
   monthRange,
-  nextMonth,
-  prevMonth,
 } from "../month";
+import { parseMonthKey, shiftMonthKey } from "../selected-month";
 import type { Attendance, AttendanceStatus } from "../types";
 
 type StatusKey = AttendanceStatus;
@@ -111,9 +110,34 @@ function BiometricTimes({ summary }: { summary: DailySummary }) {
   );
 }
 
-export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
+interface Props {
+  employeeId: string;
+  /** The month to draw, as `YYYY-MM-01`. Owned by `AttendanceView` so the KPI
+   *  cards above the tabs describe the very same month this grid shows. */
+  month: string;
+  /** The current business month - what the "Today" button returns to. */
+  currentMonth: string;
+  onMonthChange: (month: string) => void;
+}
+
+/** The month grid. It still owns the ONLY month control on the page (Previous /
+ *  Today / Next in its header); what changed is that the control now sets page
+ *  state instead of a private `useState`, so everything month-scoped moves
+ *  together. */
+export function AttendanceCalendar({
+  employeeId,
+  month,
+  currentMonth,
+  onMonthChange,
+}: Props) {
   const today = React.useMemo(() => nowInIST(), []);
-  const [view, setView] = React.useState({ y: today.getFullYear(), m: today.getMonth() });
+  // The controlled month, in the `{y, m}` shape the grid arithmetic wants. The
+  // `??` arm is unreachable in practice - `AttendanceView` normalises the value
+  // before it gets here - and exists so a bad prop cannot crash the grid.
+  const view = React.useMemo(
+    () => parseMonthKey(month) ?? { y: today.getFullYear(), m: today.getMonth() },
+    [month, today],
+  );
   // The open day, plus the cell element the popover anchors to. Held here (not in
   // the URL) so opening a day cannot navigate, and the month view never resets.
   const [selected, setSelected] = React.useState<{
@@ -242,14 +266,14 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
               variant="ghost"
               size="icon"
               aria-label="Previous month"
-              onClick={() => setView(prevMonth(view.y, view.m))}
+              onClick={() => onMonthChange(shiftMonthKey(month, -1))}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setView({ y: today.getFullYear(), m: today.getMonth() })}
+              onClick={() => onMonthChange(currentMonth)}
             >
               Today
             </Button>
@@ -257,7 +281,7 @@ export function AttendanceCalendar({ employeeId }: { employeeId: string }) {
               variant="ghost"
               size="icon"
               aria-label="Next month"
-              onClick={() => setView(nextMonth(view.y, view.m))}
+              onClick={() => onMonthChange(shiftMonthKey(month, 1))}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>

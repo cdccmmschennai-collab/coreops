@@ -24,6 +24,7 @@ import { AttendanceCalendar } from "./attendance-calendar";
 import { AttendanceKpis } from "./attendance-kpis";
 import { AttendanceRecords } from "./attendance-records";
 import { CorrectionsPreview } from "./corrections-preview";
+import { businessMonthKey, normalizeMonthKey } from "../selected-month";
 import { attendanceTabs, resolveTab, type TabKey } from "../tabs";
 
 export function AttendanceView() {
@@ -35,6 +36,27 @@ export function AttendanceView() {
   // tabs and returning to the page keeps the same tab.
   const [rawTab, setTab] = useUrlState("tab", "calendar");
   const [leaveDialogOpen, setLeaveDialogOpen] = React.useState(false);
+
+  /**
+   * THE SELECTED MONTH - one value for the whole page.
+   *
+   * It used to live inside `AttendanceCalendar` while the KPI cards read the
+   * clock, so the tiles said September while the grid drew August. The calendar's
+   * own Prev/Today/Next controls still drive it (there is no second selector);
+   * they now set state that the cards read too.
+   *
+   * In the URL (`att_month`) for the same reason the tab is: going into a day, a
+   * leave request or a permission detail and pressing Back returns to the month
+   * you were reading. `useUrlState` strips the parameter whenever it equals the
+   * fallback, so a bare /attendance is the current month by construction.
+   *
+   * `currentMonth` is resolved ONCE per mount from the Chennai business calendar,
+   * so "is this the current month" cannot flicker mid-session.
+   */
+  const currentMonth = React.useMemo(() => businessMonthKey(), []);
+  const [rawMonth, setMonth] = useUrlState("att_month", currentMonth);
+  // A hand-typed ?att_month=banana must not send nonsense to four APIs.
+  const month = normalizeMonthKey(rawMonth, currentMonth);
 
   // Deep-link: /attendance?leave=request opens the Request Leave dialog
   // (used by the employee dashboard "Leave request" quick action).
@@ -77,7 +99,13 @@ export function AttendanceView() {
         actions={actions}
       />
 
-      {employeeId && <AttendanceKpis employeeId={employeeId} />}
+      {employeeId && (
+        <AttendanceKpis
+          employeeId={employeeId}
+          month={month}
+          currentMonth={currentMonth}
+        />
+      )}
 
       <Tabs
         className="mb-4"
@@ -88,7 +116,12 @@ export function AttendanceView() {
 
       {tab === "calendar" &&
         (employeeId ? (
-          <AttendanceCalendar employeeId={employeeId} />
+          <AttendanceCalendar
+            employeeId={employeeId}
+            month={month}
+            currentMonth={currentMonth}
+            onMonthChange={setMonth}
+          />
         ) : (
           <EmptyState
             title="No personal calendar"
@@ -103,7 +136,11 @@ export function AttendanceView() {
           as in the tab list so a hand-typed ?tab=history cannot reach it. */}
       {tab === "history" && canManage && <AttendanceRecords />}
       {tab === "leave" && <LeaveTab />}
-      {tab === "leave-balance" && canManage && <LeaveBalanceTab />}
+      {/* Same selected month as the cards and the grid: the balances a manager
+          reads here are the ones the employee sees on their own tiles. */}
+      {tab === "leave-balance" && canManage && (
+        <LeaveBalanceTab month={month} currentMonth={currentMonth} />
+      )}
       {features.attendanceCorrections && tab === "corrections" && <CorrectionsPreview />}
       {tab === "holidays" && <HolidayManager />}
 
