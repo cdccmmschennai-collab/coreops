@@ -59,6 +59,14 @@ class PermissionBalanceOut(BaseModel):
     allowance_hours: int
     approved_hours: int
     remaining_hours: int
+    # Whether this is the month running now, on the Chennai business calendar.
+    is_current_month: bool = True
+    # Whether a NEW request may be filed against this month. False once the month
+    # has ended: the allowance does not carry forward, so there is nothing left to
+    # spend. The figures above stay true and readable either way - a closed month
+    # is history, not a hidden month. The refusal is enforced in the service; this
+    # only lets a client avoid offering an action that would be refused.
+    requests_allowed: bool = True
 
 
 class PermissionRequestBalanceOut(BaseModel):

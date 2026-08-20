@@ -6,16 +6,29 @@ single readable rule rather than something spread across the service.
 
 WHAT AN APPROVAL DOES
 =====================
-1. Writes one `attendance_records` row per WORKING day of the range, with
-   `status = leave` and NO check-in/check-out times.
-2. Deducts that same number of days from `employee_leave_balances`, and writes
-   the immutable `EmployeeLeaveBalanceHistory` row the balance module already
-   requires of every mutation.
+It writes one `attendance_records` row per WORKING day of the range, with
+`status = leave` and NO check-in/check-out times.
 
-Cancelling an approved leave reverses both, and reversal is defined so it can
-never over-restore: the balance goes back up by exactly the number of attendance
-rows actually removed, so a day the PM has since re-decided is neither removed
-nor refunded.
+That is the whole of it, and the deduction comes free with it.
+
+PHASE 3: THE DEDUCTION IS THE DAY
+=================================
+This module used to do a second thing - subtract the day count from
+`employee_leave_balances` and write a history row for the movement. It no longer
+touches any balance, because there is no longer a stored one to touch:
+`leave_balances/ledger.py` derives the balance, and counts these very rows as the
+month's consumption. Marking the day IS the deduction.
+
+Cancelling an approved leave therefore restores exactly what it took, without
+any restoring code: `reverse_leave_approved` deletes the rows, and the ledger
+stops counting them. Over-restoring is impossible for the same reason it always
+was - only rows that still look exactly like an approval's are removed - and now
+also because there is no figure to add back to. Cancelling twice credits nothing
+twice: the second pass finds nothing left to delete.
+
+`LeaveEffect.balance_before/after` survive as a read-only RECORD of the movement,
+taken from the ledger either side of the write, for the audit row and the
+employee's notification. Neither decides anything.
 
 WHY attendance_records AND NOT A NEW TABLE
 ==========================================
@@ -69,10 +82,7 @@ from app.modules.calendar.working_days import (
     load_calendar_overrides,
 )
 from app.modules.leave.models import LeaveRequest, LeaveType
-from app.modules.leave_balances.models import (
-    EmployeeLeaveBalance,
-    EmployeeLeaveBalanceHistory,
-)
+from app.modules.leave_balances import ledger
 from app.modules.users.models import User
 
 # Leave types that draw down `employee_leave_balances.available_leave`.
@@ -194,71 +204,24 @@ def plan_leave_days(
 
 # ---------- balance ---------------------------------------------------------
 
-def _locked_balance(
-    db: Session, employee_id: uuid.UUID
-) -> EmployeeLeaveBalance | None:
-    """The balance row under `SELECT ... FOR UPDATE`.
+def _balance_on(db: Session, employee_id: uuid.UUID, day: date) -> Decimal:
+    """The employee's leave balance for `day`'s month, from the ledger.
 
-    Two leave requests for the same employee approved concurrently lock the same
-    balance row here, so the second reads the value the first wrote instead of
-    both deducting from the same starting figure.
+    READ-ONLY, and used only to RECORD what a decision did - never to decide
+    anything. The figure goes into the audit row and into the sentence the
+    employee's notification ends with ("3 days deducted ... (10 to 7)"), both of
+    which would otherwise lose the movement now that nothing stores it.
+
+    The same `spendable_on` the approval guard weighed the request against, so
+    the "before" in the notification is the very number the decision was made on
+    rather than a second opinion taken from a different month.
+
+    Phase 3 removed the stored counter this module used to move. Consumption is
+    the `leave` attendance rows written below, and the ledger counts them - so
+    the deduction happens by writing the day, not by adjusting a number, and the
+    two can no longer disagree.
     """
-    return db.execute(
-        select(EmployeeLeaveBalance)
-        .where(EmployeeLeaveBalance.employee_id == employee_id)
-        .with_for_update()
-    ).scalar_one_or_none()
-
-
-def available_balance(db: Session, employee_id: uuid.UUID) -> Decimal:
-    """Current available leave. A missing row reads as zero, exactly as the
-    leave-balance module's own read endpoint reports it."""
-    bal = db.execute(
-        select(EmployeeLeaveBalance).where(
-            EmployeeLeaveBalance.employee_id == employee_id
-        )
-    ).scalar_one_or_none()
-    return bal.available_leave if bal else Decimal("0")
-
-
-def _move_balance(
-    db: Session,
-    *,
-    actor: User,
-    employee_id: uuid.UUID,
-    delta: Decimal,
-    reason: str,
-) -> tuple[Decimal, Decimal]:
-    """Apply `delta` to the balance and write the mandatory history row.
-
-    Goes through the same two tables `leave_balances.set_balance` writes, so the
-    manager's Leave Balance tab and its history show an automatic movement in
-    exactly the same shape as a manual edit. FLUSHES only - the caller commits,
-    so the balance moves atomically with the status change that caused it.
-    """
-    bal = _locked_balance(db, employee_id)
-    old_value = bal.available_leave if bal else None
-    base = old_value if old_value is not None else Decimal("0")
-    new_value = (base + delta).quantize(Decimal("0.01"))
-
-    if bal is None:
-        bal = EmployeeLeaveBalance(employee_id=employee_id, available_leave=new_value)
-        db.add(bal)
-    else:
-        bal.available_leave = new_value
-        db.add(bal)
-
-    db.add(
-        EmployeeLeaveBalanceHistory(
-            employee_id=employee_id,
-            old_balance=old_value,
-            new_balance=new_value,
-            reason=reason,
-            updated_by=actor.id,
-        )
-    )
-    db.flush()
-    return base, new_value
+    return ledger.spendable_on(db, employee_id, day)
 
 
 def _long_date(value: date) -> str:
@@ -270,10 +233,6 @@ def _period(req: LeaveRequest) -> str:
     if req.start_date == req.end_date:
         return start
     return f"{start} - {_long_date(req.end_date)}"
-
-
-def _days_word(count: int) -> str:
-    return "day" if count == 1 else "days"
 
 
 # ---------- apply / reverse -------------------------------------------------
@@ -290,6 +249,17 @@ def apply_leave_approved(
     """
     to_mark, skipped = plan_leave_days(db, req)
     effect = LeaveEffect(days=list(to_mark), skipped=list(skipped))
+
+    # Read before the days are written, so the pair recorded below is the real
+    # movement. Only for types that draw on the pool - an unpaid approval moves
+    # nothing and must not claim to.
+    deducting = deducts_balance(req.leave_type)
+    charged_month_day = to_mark[-1] if to_mark else None
+    before = (
+        _balance_on(db, req.employee_id, charged_month_day)
+        if (charged_month_day is not None and deducting)
+        else None
+    )
 
     for day in to_mark:
         record = AttendanceRecord(
@@ -327,18 +297,11 @@ def apply_leave_approved(
             },
         )
 
-    if to_mark and deducts_balance(req.leave_type):
-        before, after = _move_balance(
-            db,
-            actor=actor,
-            employee_id=req.employee_id,
-            delta=-Decimal(len(to_mark)),
-            reason=(
-                f"Leave approved: {len(to_mark)} {_days_word(len(to_mark))} "
-                f"({req.leave_type.value}, {_period(req)})"
-            ),
-        )
-        effect.balance_before, effect.balance_after = before, after
+    if before is not None:
+        # The days are already flushed, so the ledger now counts them: the
+        # deduction IS the rows above. Nothing here writes a balance.
+        effect.balance_before = before
+        effect.balance_after = _balance_on(db, req.employee_id, charged_month_day)
 
     return effect
 
@@ -359,6 +322,16 @@ def reverse_leave_approved(
     """
     working = leave_working_days(db, req.start_date, req.end_date)
     existing = _existing_records(db, req.employee_id, working)
+
+    deducting = deducts_balance(req.leave_type)
+    # Read against the same month the approval charged - the last working day of
+    # the range - so the restore is reported in the month it actually happens in.
+    charged_month_day = working[-1] if working else None
+    before = (
+        _balance_on(db, req.employee_id, charged_month_day)
+        if (charged_month_day is not None and deducting)
+        else None
+    )
 
     removed: list[date] = []
     kept: list[date] = []
@@ -394,18 +367,12 @@ def reverse_leave_approved(
     db.flush()
     effect = LeaveEffect(days=removed, skipped=kept)
 
-    if removed and deducts_balance(req.leave_type):
-        before, after = _move_balance(
-            db,
-            actor=actor,
-            employee_id=req.employee_id,
-            delta=Decimal(len(removed)),
-            reason=(
-                f"Approved leave cancelled: {len(removed)} "
-                f"{_days_word(len(removed))} restored "
-                f"({req.leave_type.value}, {_period(req)})"
-            ),
-        )
-        effect.balance_before, effect.balance_after = before, after
+    if removed and before is not None:
+        # The rows are gone, so the ledger has already stopped counting them.
+        # The restore is exact BY CONSTRUCTION - it is the number of rows
+        # actually deleted - and cancelling twice cannot restore twice, because
+        # the second pass finds nothing left to delete.
+        effect.balance_before = before
+        effect.balance_after = _balance_on(db, req.employee_id, charged_month_day)
 
     return effect

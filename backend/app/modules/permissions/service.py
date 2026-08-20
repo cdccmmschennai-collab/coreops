@@ -61,6 +61,7 @@ from app.modules.permissions.balance import (
     hours_word,
     lock_month,
     month_bounds,
+    month_has_closed,
 )
 from app.modules.permissions.models import PermissionRequest, PermissionStatus
 from app.modules.permissions.schemas import (
@@ -288,6 +289,35 @@ def _assert_working_day(db: Session, value: date) -> None:
         )
 
 
+def _assert_month_open(value: date) -> None:
+    """Refuse a NEW request for a month that has already ended.
+
+    A permission allowance is monthly and does not carry forward, so once August
+    is over there is no August allowance left to draw on - filing against it
+    would be asking to spend hours that ceased to exist at midnight on the 31st.
+
+    Only CREATION is blocked. August stays fully readable: its history, its
+    figures and its already-approved requests are unchanged, and a manager can
+    still approve, reject or cancel a request that was filed while the month was
+    open - correcting a past decision is not the same as making a new one.
+
+    Enforced here rather than by hiding a button, so a direct API call is refused
+    too. A FUTURE month is deliberately untouched: filing ahead has always
+    worked and this phase introduces no future-month policy.
+    """
+    today = _today()
+    if not month_has_closed(value, today):
+        return
+    raise AppError(
+        "validation_error",
+        f"{_month_name(value)} has ended, so a new permission request can't be "
+        f"created for {_long_date(value)}. Permission hours don't carry forward - "
+        f"you can still view {_month_name(value)}, and request permission for "
+        f"{_month_name(today)}.",
+        422,
+    )
+
+
 def _assert_no_active_request(
     db: Session,
     employee_id: uuid.UUID,
@@ -505,7 +535,8 @@ def permission_history(
     the same bounds computed once, here.
     """
     subject = _history_subject(db, actor, employee_id)
-    month_ref = month_of or _today()
+    today = _today()
+    month_ref = month_of or today
     start, end = month_bounds(month_ref)
 
     rows, total = list_permission_requests(
@@ -519,7 +550,7 @@ def permission_history(
         offset=offset,
         order_by="permission_date",
     )
-    balance = balance_for(db, subject.id, month_ref)
+    balance = balance_for(db, subject.id, month_ref, today)
     return PermissionHistoryOut(
         employee_id=subject.id,
         month=start,
@@ -529,6 +560,8 @@ def permission_history(
             allowance_hours=balance.allowance_hours,
             approved_hours=balance.approved_hours,
             remaining_hours=balance.remaining_hours,
+            is_current_month=balance.is_current_month,
+            requests_allowed=balance.requests_allowed,
         ),
         items=[PermissionRequestOut.model_validate(r) for r in rows],
         total=total,
@@ -540,9 +573,14 @@ def my_balance(db: Session, actor: User, month_of: date | None = None) -> Permis
 
     "Current" is the Chennai business month, so the KPI does not flip a day early
     for anyone reading it just after midnight IST.
+
+    The returned balance also says whether that month can still be requested
+    against, so the attendance page can show a historical month's figures without
+    offering an action the backend would refuse.
     """
     me = _author_employee(db, actor)
-    return balance_for(db, me.id, month_of or _today())
+    today = _today()
+    return balance_for(db, me.id, month_of or today, today)
 
 
 def employee_balance(
@@ -553,7 +591,8 @@ def employee_balance(
         raise AppError(
             "forbidden", "Only project managers can read another employee's balance.", 403
         )
-    return balance_for(db, employee_id, month_of or _today())
+    today = _today()
+    return balance_for(db, employee_id, month_of or today, today)
 
 
 # ---------- employee writes ------------------------------------------------
@@ -574,6 +613,9 @@ def create_permission_request(
         raise AppError(
             "validation_error", "A permission must be either 1 hour or 2 hours.", 422
         )
+    # Checked before the working-day rule: "August is over" is a better answer
+    # than "16 August was a Sunday" for somebody who has navigated back a month.
+    _assert_month_open(data.permission_date)
     _assert_working_day(db, data.permission_date)
     _assert_no_active_request(db, me.id, data.permission_date)
 

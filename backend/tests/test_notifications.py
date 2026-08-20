@@ -182,13 +182,19 @@ def test_leave_approved_notifies_employee(
 ):
     from decimal import Decimal
 
-    from app.modules.leave_balances.models import EmployeeLeaveBalance
+    from app.modules.leave_balances import ledger
+    from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 
     mgr_u, emp_u, mgr_e, emp_e = _setup_leave_actors(make_user, make_employee)
     # Phase 10: approval draws down the balance and refuses when there isn't
-    # enough. This test is about the notification, so fund the employee first.
-    db.add(EmployeeLeaveBalance(employee_id=emp_e.id,
-                                available_leave=Decimal("30.00")))
+    # enough. This test is about the notification, so fund the employee first -
+    # since Phase 3 that means an opening adjustment, not a stored balance.
+    db.add(EmployeeLeaveAdjustment(
+        employee_id=emp_e.id,
+        effective_month=ledger.month_start(date.today()),
+        days=Decimal("30.00"),
+        reason="Opening balance",
+    ))
     db.commit()
     req = make_leave_request(employee_id=emp_e.id,
                              start_date=date.today() + timedelta(days=3),

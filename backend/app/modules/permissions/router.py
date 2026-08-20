@@ -47,6 +47,8 @@ def _balance_out(balance) -> PermissionBalanceOut:
         allowance_hours=balance.allowance_hours,
         approved_hours=balance.approved_hours,
         remaining_hours=balance.remaining_hours,
+        is_current_month=balance.is_current_month,
+        requests_allowed=balance.requests_allowed,
     )
 
 

@@ -25,7 +25,8 @@ import pytest
 from app.modules.biometric.models import BiometricEmployeeMapping, BiometricPunch
 from app.modules.biometric.service import settled_present_days
 from app.modules.leave.models import LeaveRequest, LeaveStatus
-from app.modules.leave_balances.models import EmployeeLeaveBalance
+from app.modules.leave_balances import ledger
+from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 from app.modules.users.models import UserRole
 
 API = "/api/v1/leave-requests"
@@ -208,8 +209,11 @@ def test_approval_still_works_on_a_day_with_no_settled_punches(
     """The guard must not become a blanket refusal - a clean day still approves,
     and still marks the calendar."""
     db.add(
-        EmployeeLeaveBalance(
-            employee_id=team["employee"].id, available_leave=Decimal("10.00")
+        EmployeeLeaveAdjustment(
+            employee_id=team["employee"].id,
+            effective_month=ledger.month_start(MON),
+            days=Decimal("10.00"),
+            reason="Opening balance",
         )
     )
     db.commit()

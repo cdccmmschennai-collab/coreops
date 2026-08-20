@@ -21,7 +21,8 @@ import pytest
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.leave.models import LeaveRequest, LeaveStatus
-from app.modules.leave_balances.models import EmployeeLeaveBalance
+from app.modules.leave_balances import ledger
+from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 from app.modules.notifications.models import Notification
 from app.modules.users.models import UserRole
 
@@ -194,8 +195,13 @@ def test_manager_approval_and_rejection_still_work(client, login, make_leave_req
                                                    team, db):
     # Phase 10: approval draws down the balance, so an unfunded employee would
     # fail this on the balance guard rather than on the workflow it is testing.
-    db.add(EmployeeLeaveBalance(employee_id=team["employee"].id,
-                                available_leave=Decimal("30.00")))
+    # Phase 3: funded by an opening adjustment, since there is no stored balance.
+    db.add(EmployeeLeaveAdjustment(
+        employee_id=team["employee"].id,
+        effective_month=ledger.month_start(date.today()),
+        days=Decimal("30.00"),
+        reason="Opening balance",
+    ))
     db.commit()
     mgr_h = login("mgr@x.com")
     to_approve = make_leave_request(employee_id=team["employee"].id,
@@ -476,23 +482,22 @@ def test_cancellation_restores_nothing_for_leave_approved_before_phase_10(
     leave approved before Phase 10 existed. Reversal is defined as "restore what
     was actually removed", so there is nothing to remove and nothing to credit.
     """
-    from app.modules.leave_balances.models import (
-        EmployeeLeaveBalance,
-        EmployeeLeaveBalanceHistory,
-    )
+    from app.modules.leave_balances.models import EmployeeLeaveBalanceHistory
 
-    db.add(EmployeeLeaveBalance(employee_id=team["employee"].id,
-                                available_leave=Decimal("12.50")))
+    db.add(EmployeeLeaveAdjustment(
+        employee_id=team["employee"].id,
+        effective_month=ledger.month_start(date.today()),
+        days=Decimal("12.50"),
+        reason="Opening balance",
+    ))
     db.commit()
+    month = ledger.month_start(approved.end_date)
 
     _request_cancellation(client, login, approved.id)
     client.post(f"{API}/{approved.id}/approve-cancellation", headers=login("mgr@x.com"))
 
     db.expire_all()
-    bal = db.query(EmployeeLeaveBalance).filter_by(
-        employee_id=team["employee"].id
-    ).one()
-    assert bal.available_leave == Decimal("12.50")
+    assert ledger.closing_balance(db, team["employee"].id, month) == Decimal("12.50")
     assert db.query(EmployeeLeaveBalanceHistory).count() == 0
 
 

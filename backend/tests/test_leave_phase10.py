@@ -18,16 +18,18 @@ import pytest
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
-from app.modules.leave_balances.models import (
-    EmployeeLeaveBalance,
-    EmployeeLeaveBalanceHistory,
-)
+from app.modules.leave_balances import ledger
+from app.modules.leave_balances.models import EmployeeLeaveBalanceHistory
 from app.modules.users.models import UserRole
 
 API = "/api/v1/leave-requests"
 
 # A Monday far enough out that nothing collides with "today".
 MON = date(2027, 3, 1)
+# The ledger month every date in this file falls in. Opening balances are posted
+# here and derived balances are read here, so the fixture and the assertions are
+# talking about the same month.
+MONTH = date(2027, 3, 1)
 TUE = MON + timedelta(days=1)
 WED = MON + timedelta(days=2)
 FRI = MON + timedelta(days=4)
@@ -48,19 +50,34 @@ def team(make_user, make_employee):
 
 
 @pytest.fixture()
-def fund(db, team):
+def fund(team, make_leave_adjustment):
+    """Give the employee an opening balance in the month these tests operate in.
+
+    Phase 3: there is no stored balance to write any more. An opening balance is
+    an adjustment posted to a month, which is also exactly what migration 0069
+    did for every existing employee - so these tests exercise the real shape of
+    a funded employee rather than a fixture-only one.
+    """
+
     def _fund(value="10.00", employee_id=None):
-        db.add(EmployeeLeaveBalance(
+        make_leave_adjustment(
             employee_id=employee_id or team["employee"].id,
-            available_leave=Decimal(value),
-        ))
-        db.commit()
+            effective_month=MONTH,
+            days=value,
+            reason="Opening balance",
+        )
+
     return _fund
 
 
 def _balance(db, employee_id) -> Decimal:
-    row = db.query(EmployeeLeaveBalance).filter_by(employee_id=employee_id).one_or_none()
-    return row.available_leave if row else Decimal("0")
+    """The DERIVED balance for the month these tests operate in.
+
+    Phase 3 made this a fold over allocations, adjustments and the `leave`
+    attendance rows - so an approval shows up here because it MARKED DAYS, not
+    because anything wrote a number.
+    """
+    return ledger.closing_balance(db, employee_id, MONTH)
 
 
 def _days(db, employee_id):
@@ -123,9 +140,11 @@ def test_approval_deducts_balance_and_marks_the_calendar(
         assert (row.check_in_at, row.check_out_at, row.total_minutes) == (None, None, 0)
 
     assert _balance(db, team["employee"].id) == Decimal("7.00")
-    entry = db.query(EmployeeLeaveBalanceHistory).one()
-    assert (entry.old_balance, entry.new_balance) == (Decimal("10.00"), Decimal("7.00"))
-    assert "Leave approved" in entry.reason
+    # Phase 3: the deduction IS the three rows above. No balance was written, so
+    # the PM-correction history stays empty - an approval is not a manual edit,
+    # and it is audited in `audit_logs` instead (see the audit test below, which
+    # still asserts the balance movement was recorded).
+    assert db.query(EmployeeLeaveBalanceHistory).count() == 0
 
 
 def test_weekends_are_neither_marked_nor_charged(
@@ -213,19 +232,32 @@ def test_cancelling_pending_costs_nothing_and_cancelling_approved_restores(
     assert _days(db, team["employee"].id) == []
 
 
-def test_cancellation_never_removes_or_refunds_a_day_the_pm_re_decided(
+def test_cancellation_never_removes_a_day_the_pm_re_decided(
     client, login, team, fund, make_leave_request, db
 ):
-    """The narrow-removal rule. Restoring exactly what was removed is what makes
-    over-refunding impossible."""
+    """The narrow-removal rule, and what deriving the balance fixed underneath it.
+
+    A PM overrules one day of an approved leave: the employee actually worked the
+    Tuesday. Cancelling the leave afterwards must not delete that ruling.
+
+    THE BALANCE NOW SELF-CORRECTS, and this is a deliberate Phase 3 change. Under
+    the old stored counter the approval subtracted 3, the PM's edit subtracted
+    nothing (it did not know about balances), and the cancellation added back only
+    the 2 rows it removed - leaving the employee permanently 1 day short, with
+    nothing on the calendar to justify the charge. That was exactly the mutable
+    drift the ledger removes: consumption is the `leave` rows that exist, so the
+    moment Tuesday becomes `present` it stops costing anything, and cancelling the
+    rest returns the employee to where they started.
+    """
     fund("10.00")
     req = make_leave_request(
         employee_id=team["employee"].id, start_date=MON, end_date=WED
     )
     _approve(client, login, req.id)
+    db.expire_all()
+    assert _balance(db, team["employee"].id) == Decimal("7.00")
 
     # The PM decides the employee actually worked the Tuesday.
-    db.expire_all()
     tuesday = db.query(AttendanceRecord).filter_by(
         employee_id=team["employee"].id, attendance_date=TUE
     ).one()
@@ -233,13 +265,18 @@ def test_cancellation_never_removes_or_refunds_a_day_the_pm_re_decided(
     tuesday.check_in_at = datetime(2027, 3, 2, 9, 0, tzinfo=timezone.utc)
     db.commit()
 
+    # A worked day is not a leave day, so it stops consuming immediately - no
+    # cancellation, no correction and no job needed.
+    db.expire_all()
+    assert _balance(db, team["employee"].id) == Decimal("8.00")
+
     client.post(f"{API}/{req.id}/request-cancellation", headers=login("emp@x.com"))
     client.post(f"{API}/{req.id}/approve-cancellation", headers=login("mgr@x.com"))
 
     db.expire_all()
+    # The PM's ruling survives: only the two untouched leave rows were removed.
     assert _days(db, team["employee"].id) == [(TUE, AttendanceStatus.present)]
-    # Two bare leave days removed, so exactly two restored - not three.
-    assert _balance(db, team["employee"].id) == Decimal("9.00")
+    assert _balance(db, team["employee"].id) == Decimal("10.00")
 
 
 def test_rejecting_a_cancellation_keeps_the_leave_and_the_deduction(

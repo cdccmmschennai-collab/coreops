@@ -340,6 +340,65 @@ def make_permission_request(db):
 
 
 @pytest.fixture()
+def make_leave_allocation(db):
+    """Give an employee a `Leave/month` from a given month onwards.
+
+    `effective_from` must be the first of a month - the same rule the DB check
+    constraint enforces - so a test cannot accidentally assert on an allocation
+    the application could never have created.
+    """
+
+    def _make(*, employee_id, effective_from, monthly_days, note=None, created_by=None):
+        from decimal import Decimal as _D
+
+        from app.modules.leave_balances.models import EmployeeLeaveAllocation
+
+        row = EmployeeLeaveAllocation(
+            employee_id=employee_id,
+            effective_from=effective_from,
+            monthly_days=_D(str(monthly_days)),
+            note=note,
+            created_by=created_by,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+
+    return _make
+
+
+@pytest.fixture()
+def make_leave_adjustment(db):
+    """Post a signed one-off correction (or an opening balance) to one month.
+
+    This is how a test seeds a starting balance now that the ledger derives every
+    figure: there is no balance row to write. `days` is a DELTA and may be
+    negative.
+    """
+
+    def _make(*, employee_id, effective_month, days, reason="Test adjustment",
+              created_by=None):
+        from decimal import Decimal as _D
+
+        from app.modules.leave_balances.models import EmployeeLeaveAdjustment
+
+        row = EmployeeLeaveAdjustment(
+            employee_id=employee_id,
+            effective_month=effective_month,
+            days=_D(str(days)),
+            reason=reason,
+            created_by=created_by,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row
+
+    return _make
+
+
+@pytest.fixture()
 def make_attendance(db):
     def _make(
         *,

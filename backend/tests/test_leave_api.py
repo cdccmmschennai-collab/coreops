@@ -10,14 +10,27 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 from app.modules.leave.models import LeaveStatus, LeaveType
-from app.modules.leave_balances.models import EmployeeLeaveBalance
+from app.modules.leave_balances import ledger
+from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 from app.modules.users.models import UserRole
 
 
 def _fund(db, employee_id, days: str = "30.00"):
-    """Give an employee enough balance for an approval to be about RBAC."""
-    db.add(EmployeeLeaveBalance(employee_id=employee_id,
-                                available_leave=Decimal(days)))
+    """Give an employee enough balance for an approval to be about RBAC.
+
+    Posted as an opening adjustment in the CURRENT month - the same shape
+    migration 0069 gave every existing employee. The ledger carries it forward,
+    so it also covers the leave dates below, which sit a week out and may fall in
+    the following month.
+    """
+    db.add(
+        EmployeeLeaveAdjustment(
+            employee_id=employee_id,
+            effective_month=ledger.month_start(date.today()),
+            days=Decimal(days),
+            reason="Opening balance",
+        )
+    )
     db.commit()
 
 

@@ -18,6 +18,12 @@ makes the Phase 11 rules true by construction rather than by maintenance:
   month end    nothing carries forward - each month sums only its own rows, so
                an unused August hour cannot become a fifth September hour
 
+The other side of "nothing carries forward" is that a finished month has nothing
+left to spend, so a NEW request cannot be filed against it - `month_has_closed`
+below states that rule and `service._assert_month_open` enforces it. Reading a
+closed month is untouched: its figures are still derived the same way and its
+history is still fully visible.
+
 WHICH MONTH A REQUEST BELONGS TO
 ================================
 The month of `permission_date` - the business day the employee is actually absent
@@ -69,6 +75,22 @@ def month_bounds(value: date) -> tuple[date, date]:
     return date(value.year, value.month, 1), date(value.year, value.month, last)
 
 
+def month_has_closed(value: date, today: date) -> bool:
+    """Whether `value` falls in a calendar month EARLIER than `today`'s.
+
+    Pure, so the rule can be reasoned about without a clock or a database. The
+    comparison is month-to-month, not date-to-date: 3 August is not closed on
+    20 August, because the month it belongs to is still running, but every August
+    date is closed on 1 September.
+
+    A month's permission allowance exists to be spent inside that month, and it
+    does not carry forward - so once the month is over there is nothing left to
+    ask for. `today` must be the Chennai business date (see `service._today`), or
+    the boundary would move for anyone filing just after midnight IST.
+    """
+    return (value.year, value.month) < (today.year, today.month)
+
+
 @dataclass(frozen=True)
 class PermissionBalance:
     """One employee's permission standing for one calendar month."""
@@ -77,6 +99,12 @@ class PermissionBalance:
     month: date  # first day of the month, so the month is unambiguous on the wire
     allowance_hours: int
     approved_hours: int
+    # Whether this month is the one running NOW, on the business calendar.
+    is_current_month: bool = True
+    # Whether a NEW request may be filed against this month. A closed month is
+    # still fully readable - the figures above stay true - it just cannot be
+    # spent from any more.
+    requests_allowed: bool = True
 
     @property
     def remaining_hours(self) -> int:
@@ -101,15 +129,29 @@ def approved_hours(db: Session, employee_id: uuid.UUID, month_of: date) -> int:
 
 
 def balance_for(
-    db: Session, employee_id: uuid.UUID, month_of: date
+    db: Session, employee_id: uuid.UUID, month_of: date, today: date | None = None
 ) -> PermissionBalance:
-    """The employee's permission balance for the month containing `month_of`."""
+    """The employee's permission balance for the month containing `month_of`.
+
+    `today` (the Chennai business date) decides only the two reporting flags; the
+    hours themselves are the same whichever month is asked about, because each
+    month sums its own rows and nothing carries forward. Passing it is how the
+    caller says "and tell me whether this month can still be spent from" - the
+    refusal itself lives in `service.create_permission_request`, not here.
+    """
     start, _end = month_bounds(month_of)
+    closed = month_has_closed(start, today) if today is not None else False
     return PermissionBalance(
         employee_id=employee_id,
         month=start,
         allowance_hours=MONTHLY_ALLOWANCE_HOURS,
         approved_hours=approved_hours(db, employee_id, month_of),
+        is_current_month=(
+            today is not None and (start.year, start.month) == (today.year, today.month)
+        ),
+        # A future month is not closed: filing ahead has always been allowed, and
+        # Phase 3 adds no future-month policy.
+        requests_allowed=not closed,
     )
 
 
