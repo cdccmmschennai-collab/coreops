@@ -251,8 +251,11 @@ def test_excel_and_json_preview_match(client, login, scenario):
         str(c.value) for ws in wb.worksheets for row in ws.iter_rows()
         for c in row if c.value is not None
     }
-    assert "FMTL Sub" in cells
-    assert "MTL Sub" not in cells
+    # The export uppercases every text cell (display only — the JSON preview
+    # above still carries the stored casing). The scope assertion is unchanged:
+    # the led sub-activity is present, the unled one is not.
+    assert "FMTL SUB" in cells
+    assert "MTL SUB" not in cells
 
 
 # ---- lifecycle / mixed roles -----------------------------------------------

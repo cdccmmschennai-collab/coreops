@@ -33,12 +33,21 @@ test("Pages and Records sit immediately after Spares", () => {
   assert.equal(labels[labels.indexOf("Pages") + 1], "Records");
 });
 
+/** One activity cell; only the counts under test need naming at the call site. */
+function cell(counts: Partial<ActivityCell>): ActivityCell {
+  return {
+    day_part: "full_day", period_status: null,
+    project_code: "P1", activity_type: "A", sub_activity_type: "S",
+    tags: 1, docs: 2, bom: 3, spares: 4, pages: 0, records: 0,
+    benchmark_type: null, benchmark_value: null, benchmark_unit: null,
+    ...counts,
+  };
+}
+
 test("sumCount adds a key across a day's activities", () => {
   const acts: ActivityCell[] = [
-    { project_code: "P1", activity_type: "A", sub_activity_type: "S",
-      tags: 1, docs: 2, bom: 3, spares: 4, pages: 10, records: 5 },
-    { project_code: "P1", activity_type: "A", sub_activity_type: "S",
-      tags: 1, docs: 2, bom: 3, spares: 4, pages: 15, records: 7 },
+    cell({ pages: 10, records: 5 }),
+    cell({ pages: 15, records: 7 }),
   ];
   assert.equal(sumCount(acts, "pages"), 25);
   assert.equal(sumCount(acts, "records"), 12);

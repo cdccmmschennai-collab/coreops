@@ -5,8 +5,11 @@ Excel export, in the exact column order the four legacy counts already use:
 
 The service (build_activity_rows / build_activity_groups) already produced the
 two values; the gap this proves closed is the ActivityCell schema surfacing them
-and the export._BLOCK carrying two extra columns. Nothing about the separate
+and the export carrying two extra count columns. Nothing about the separate
 28-column Benchmark export is touched here.
+
+The sheet is one row per activity (see test_pm_activity_report_layout.py); this
+file only pins where the six count columns sit within that row.
 """
 from datetime import date
 
@@ -135,17 +138,21 @@ def test_export_header_order_places_pages_records_after_spares():
     wb = openpyxl.load_workbook(export.build_workbook([_sample_row()], max_activities=1))
     ws = wb.active
     headers = [c.value for c in ws[1]]
-    # First activity block: Employee, Date, Day Status, then the block labels.
-    assert headers[:3] == ["Employee ID & Name", "Date", "Day Status"]
-    assert headers[3:12] == [
-        "Project Code", "Activity Type", "Sub Activity Type",
-        "No. of Tags", "No. of Docs", "No. of BOM HEADER", "No. of Spares",
-        "No. of Pages", "No. of Records",
+    # One row per activity: identity columns, then the activity's own columns.
+    assert headers[:8] == [
+        "EMPLOYEE ID & NAME", "DATE", "DAY", "DAY STATUS", "HALF",
+        "PROJECT CODE", "ACTIVITY TYPE", "SUB ACTIVITY TYPE",
     ]
-    # Pages/Records land immediately after Spares and before the final Remarks.
-    assert headers.index("No. of Pages") == headers.index("No. of Spares") + 1
-    assert headers.index("No. of Records") == headers.index("No. of Pages") + 1
-    assert headers[-1] == "Day Remarks"
+    assert headers[8:14] == [
+        "NO. OF TAGS", "NO. OF DOCS", "NO. OF BOM HEADER", "NO. OF SPARES",
+        "NO. OF PAGES", "NO. OF RECORDS",
+    ]
+    # Pages/Records land immediately after Spares, before Benchmark + Remarks.
+    assert headers.index("NO. OF PAGES") == headers.index("NO. OF SPARES") + 1
+    assert headers.index("NO. OF RECORDS") == headers.index("NO. OF PAGES") + 1
+    assert headers[-2:] == ["BENCHMARK", "DAY REMARKS"]
+    # No numbered repeats survive — that is the whole point of the new layout.
+    assert not [h for h in headers if h and h.rstrip().endswith(" 2")]
 
 
 def test_export_writes_pages_records_values_without_shifting_remarks():
@@ -158,14 +165,15 @@ def test_export_writes_pages_records_values_without_shifting_remarks():
     def val(label):
         return data[header_to_col[label] - 1].value
 
-    assert val("No. of Tags") == 1
-    assert val("No. of Docs") == 2
-    assert val("No. of BOM HEADER") == 3
-    assert val("No. of Spares") == 4
-    assert val("No. of Pages") == 40
-    assert val("No. of Records") == 25
-    # The remark stayed in the remarks column — no off-by-two shift.
-    assert val("Day Remarks") == "the day remark"
+    assert val("NO. OF TAGS") == 1
+    assert val("NO. OF DOCS") == 2
+    assert val("NO. OF BOM HEADER") == 3
+    assert val("NO. OF SPARES") == 4
+    assert val("NO. OF PAGES") == 40
+    assert val("NO. OF RECORDS") == 25
+    # The remark stayed in the remarks column — no off-by-two shift. Uppercased
+    # like every other text cell in the sheet; the stored remark is untouched.
+    assert val("DAY REMARKS") == "THE DAY REMARK"
 
 
 def test_export_zeroes_missing_pages_records():
@@ -177,5 +185,5 @@ def test_export_zeroes_missing_pages_records():
     ws = wb.active
     header_to_col = {c.value: c.column for c in ws[1]}
     data = ws[2]
-    assert data[header_to_col["No. of Pages"] - 1].value == 0
-    assert data[header_to_col["No. of Records"] - 1].value == 0
+    assert data[header_to_col["NO. OF PAGES"] - 1].value == 0
+    assert data[header_to_col["NO. OF RECORDS"] - 1].value == 0

@@ -1,9 +1,9 @@
 // Daily count columns for the PM Weekly Activity Report preview — summed across
 // the day's activities (the per-activity breakdown lives only in the Excel
-// export's dynamic columns). Order is a contract shared with the Excel export
-// (export.py _BLOCK): Tags | Docs | BOM | Spares | Pages | Records, sitting
-// after Activity Summary and before Remarks. Exported (and unit-tested in
-// columns.test.ts) so the order can never silently drift.
+// export's own per-activity rows). Order is a contract shared with the Excel
+// export (export.py _COUNT_COLUMNS): Tags | Docs | BOM | Spares | Pages |
+// Records, sitting after Activity Summary and before Remarks. Exported (and
+// unit-tested in columns.test.ts) so the order can never silently drift.
 
 import type { ActivityCell } from "./types";
 

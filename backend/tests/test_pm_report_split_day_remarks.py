@@ -205,8 +205,11 @@ def test_excel_day_remarks_cell_holds_combined_text_and_wraps():
     wb = openpyxl.load_workbook(export.build_workbook([row], max_activities=1))
     ws = wb.active
     header_to_col = {c.value: c.column for c in ws[1]}
-    cell = ws.cell(row=2, column=header_to_col["Day Remarks"])
-    assert cell.value == COMBINED
+    cell = ws.cell(row=2, column=header_to_col["DAY REMARKS"])
+    # Uppercased on the way into the cell (export-only); both labelled halves and
+    # the newline between them survive intact.
+    assert cell.value == COMBINED.upper()
     assert "\n" in cell.value
+    assert "FIRST HALF" in cell.value and "SECOND HALF" in cell.value
     assert cell.alignment.wrap_text is True
     assert cell.alignment.vertical == "top"
