@@ -160,6 +160,8 @@ export function ProductionStatusReportDialog({
                         // Remarks gets real room; everything else stays compact.
                         col.key === "remarks" && "min-w-[20rem]",
                         col.key === "activity" && "min-w-[12rem]",
+                        // Now carries project + plant + revision in one cell.
+                        col.key === "projectPlant" && "min-w-[16rem]",
                       )}
                     >
                       {col.label}
@@ -173,11 +175,11 @@ export function ProductionStatusReportDialog({
                     <TableCell className="text-right tabular align-top">
                       {r.serial}
                     </TableCell>
+                    {/* Project, Maintenance Plant and revision in one cell -
+                        exactly the string the Excel's PROJECT / PLANT column
+                        carries, because both read the same backend field. */}
                     <TableCell className="whitespace-nowrap font-mono align-top">
                       {r.projectPlant}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap font-medium align-top">
-                      {r.revision}
                     </TableCell>
                     <TableCell className="align-top">{r.activity}</TableCell>
                     <TableCell className="align-top">

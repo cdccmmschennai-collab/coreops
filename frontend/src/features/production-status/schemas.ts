@@ -25,6 +25,10 @@ export const ACTIVITY_REQUIRED_ERROR = "Select an activity";
 export const productionStatusFormSchema = z.object({
   revision: z.string().trim().min(1, REVISION_REQUIRED_ERROR).max(50),
   activity_id: z.string().min(1, ACTIVITY_REQUIRED_ERROR),
+  // OPTIONAL - deliberately no `.min(1)`. A project whose Planning Plant has no
+  // Maintenance Plants has none to offer, and the form must not be blocked by
+  // that. "" means "none selected" and is sent as null.
+  maintenance_plant_id: z.string(),
   status: z.enum(PRODUCTION_STATUS_VALUES),
   tag_count: z.string(),
   doc_count: z.string(),
@@ -45,6 +49,7 @@ export type ProductionStatusFormValues = z.infer<typeof productionStatusFormSche
 export const EMPTY_PRODUCTION_STATUS_FORM: ProductionStatusFormValues = {
   revision: "",
   activity_id: "",
+  maintenance_plant_id: "",
   status: "in_progress",
   tag_count: "",
   doc_count: "",
@@ -79,6 +84,9 @@ export function toProductionStatusBody(
   return {
     revision: v.revision.trim(),
     activity_id: v.activity_id,
+    // "" -> null. The API takes a plant id or nothing; it never receives an
+    // empty string, and it never infers a plant when none was chosen.
+    maintenance_plant_id: orNull(v.maintenance_plant_id),
     status: v.status,
     tag_count: toCount(v.tag_count),
     doc_count: toCount(v.doc_count),
@@ -92,12 +100,13 @@ export function toProductionStatusBody(
 /**
  * What the form keeps after a successful save.
  *
- * Revision and activity stay: recording several updates against the same
- * revision/activity in one sitting is the normal case, and clearing them would
- * make the common path the most tedious one. Everything the user asserted about
- * THIS update - counts, completion date, remarks - is cleared, so the next save
- * can never inherit numbers from the last one. Status is left as chosen because
- * it is the thing most likely to be repeated or deliberately advanced.
+ * Revision, activity and Maintenance Plant stay: recording several updates
+ * against the same revision/activity/plant in one sitting is the normal case,
+ * and clearing them would make the common path the most tedious one. Everything
+ * the user asserted about THIS update - counts, completion date, remarks - is
+ * cleared, so the next save can never inherit numbers from the last one. Status
+ * is left as chosen because it is the thing most likely to be repeated or
+ * deliberately advanced.
  */
 export function resetAfterSave(
   v: ProductionStatusFormValues,
@@ -106,6 +115,7 @@ export function resetAfterSave(
     ...EMPTY_PRODUCTION_STATUS_FORM,
     revision: v.revision.trim(),
     activity_id: v.activity_id,
+    maintenance_plant_id: v.maintenance_plant_id,
     status: v.status,
   };
 }

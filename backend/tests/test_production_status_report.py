@@ -31,11 +31,13 @@ from io import BytesIO
 
 import openpyxl
 import pytest
+from sqlalchemy import text
 
 from app.modules.activity_master import service as am_svc
 from app.modules.activity_master.schemas import ActivityCreate
 from app.modules.plants.models import MaintenancePlant, PlanningPlant
 from app.modules.production_status import service as ps_svc
+from app.modules.production_status.models import ProjectProductionStatus
 from app.modules.production_status.schemas import ProductionStatusCreate
 from app.modules.projects import service as proj_svc
 from app.modules.projects.models import ProjectStatus
@@ -46,6 +48,16 @@ from app.shared.errors import AppError
 
 REPORT_URL = "/api/v1/production-status/report"
 XLSX_URL = "/api/v1/production-status/report.xlsx"
+
+# The workbook's columns, 1-based, so a column move is a one-line change here
+# instead of a hunt through magic numbers. There is deliberately no REVISION
+# column: the revision lives inside PROJECT / PLANT.
+_COLUMNS = [
+    "S.NO", "PROJECT / PLANT", "ACTIVITY", "PROJECT STATUS",
+    "TAG", "DOC", "SPARES", "CRS",
+    "COMPLETED ON", "REMARKS", "BY",
+]
+_COL = {label: idx for idx, label in enumerate(_COLUMNS, start=1)}
 
 
 # --- helpers ---------------------------------------------------------------
@@ -88,11 +100,17 @@ def _find(report, *, project_code, revision, activity):
 def scene(db, make_user, make_employee, make_project):
     """Two projects, so "cumulative" is actually exercised.
 
-      pm        project_manager - the only role the report serves
-      project_a code GC-A, Head = head_u, activities TAG ESTIMATION + MTL
-      project_b code GC-B, Head = head_b_u, activity MTL
-      lead_u    Lead of TAG ESTIMATION on project_a
-      emp_u     plain contributor on project_a
+      pm         project_manager - the only role the report serves
+      project_a  code GC-A, Head = head_u, activities TAG ESTIMATION + MTL,
+                 Planning Plant 2300 (KAHM / KAHN)
+      project_b  code GC-B, Head = head_b_u, activity MTL, same Planning Plant
+      lead_u     Lead of both activities on project_a
+      tag_lead_u Lead of TAG ESTIMATION ONLY, on project_a - the narrow case
+      emp_u      plain contributor on project_a
+
+    Plants mirror the real master data: one Planning Plant with two Maintenance
+    Plants, plus one belonging to a DIFFERENT Planning Plant so "does not belong
+    to this project" can actually be tested.
     """
     class S:
         pass
@@ -100,8 +118,30 @@ def scene(db, make_user, make_employee, make_project):
     s = S()
     s.pm = make_user("pm@x.com", role=UserRole.project_manager)
 
+    # --- plant master data ------------------------------------------------
+    s.planning = PlanningPlant(code="2300", description="Dukhan Planning Plant")
+    s.other_planning = PlanningPlant(code="1200", description="Doha Planning Plant")
+    db.add_all([s.planning, s.other_planning])
+    db.flush()
+    s.kahm = MaintenancePlant(
+        code="KAHM", description="Kahma Main", planning_plant_id=s.planning.id
+    )
+    s.kahn = MaintenancePlant(
+        code="KAHN", description="Kahma North", planning_plant_id=s.planning.id
+    )
+    # Belongs to another Planning Plant, so this project may never use it.
+    s.foreign_plant = MaintenancePlant(
+        code="GSMD", description="General Services",
+        planning_plant_id=s.other_planning.id,
+    )
+    db.add_all([s.kahm, s.kahn, s.foreign_plant])
+    db.flush()
+
     s.project_a = make_project(code="GC-A", name="Alpha", status=ProjectStatus.active)
     s.project_b = make_project(code="GC-B", name="Bravo", status=ProjectStatus.active)
+    s.project_a.planning_plant_id = s.planning.id
+    s.project_b.planning_plant_id = s.planning.id
+    db.commit()
 
     s.head_u = make_user("head@x.com", role=UserRole.employee)
     s.head_e = make_employee(employee_code="H-1", first_name="Hema",
@@ -135,6 +175,24 @@ def scene(db, make_user, make_employee, make_project):
     proj_svc.assign_activity_member(
         db, s.pm, s.project_a.id, s.tag_est.id,
         ActivityMemberCreate(employee_id=s.emp_e.id, role="contributor"),
+    )
+
+    # A contributor on BOTH activities who leads neither of them at first, then
+    # takes the Lead of TAG ESTIMATION alone - the narrow-authority case the
+    # Head must NOT be reduced to. (lead_u above already holds both Leads, so a
+    # separate person is needed to test "one activity only".)
+    s.tag_lead_u = make_user("taglead@x.com", role=UserRole.employee)
+    s.tag_lead_e = make_employee(
+        employee_code="L-9", first_name="Divya", last_name="Raman",
+        user_id=s.tag_lead_u.id,
+    )
+    # Hand the TAG ESTIMATION lead over: an activity has exactly one Lead.
+    proj_svc.remove_activity_member(
+        db, s.pm, s.project_a.id, s.tag_est.id, s.lead_e.id
+    )
+    proj_svc.assign_activity_member(
+        db, s.pm, s.project_a.id, s.tag_est.id,
+        ActivityMemberCreate(employee_id=s.tag_lead_e.id, role="lead"),
     )
     return s
 
@@ -302,8 +360,11 @@ def test_counts_are_four_independent_values(db, scene):
 
 def test_by_is_the_actual_person_name(db, scene):
     """Never "PM", "Project Head" or "Activity Lead" - always the person."""
+    # Recorded by the TAG ESTIMATION Lead and by the project Head respectively,
+    # so two different real people appear in one report.
     ps_svc.create_production_status(
-        db, scene.lead_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=225)
+        db, scene.tag_lead_u, scene.project_a.id,
+        _payload(scene.tag_est.id, tag_count=225),
     )
     ps_svc.create_production_status(
         db, scene.head_u, scene.project_a.id, _payload(scene.mtl.id, doc_count=4)
@@ -311,7 +372,7 @@ def test_by_is_the_actual_person_name(db, scene):
 
     report = ps_svc.cumulative_report(db, scene.pm)
     by = {r.activity: r.by for r in _rows(report)}
-    assert by["TAG ESTIMATION"] == "Santhosh Kumar"
+    assert by["TAG ESTIMATION"] == "Divya Raman"
     assert by["MTL"] == "Hema Rao"
     assert not {"PM", "Project Head", "Activity Lead"} & set(by.values())
 
@@ -328,7 +389,7 @@ def test_null_completed_on_stays_null(db, scene):
     # ...and the workbook leaves the cell genuinely empty, not "-" and not a
     # date somebody guessed.
     ws = _sheet(ps_svc.cumulative_report(db, scene.pm))
-    assert ws.cell(row=2, column=10).value is None
+    assert ws.cell(row=2, column=_COL["COMPLETED ON"]).value is None
 
 
 # --- 11. remarks are preserved in full ---------------------------------------
@@ -348,8 +409,8 @@ def test_full_remarks_are_preserved(db, scene):
 
     # Untruncated in the workbook too - the column is wrapped, not clipped.
     ws = _sheet(report)
-    assert ws.cell(row=2, column=11).value == remark
-    assert ws.cell(row=2, column=11).alignment.wrap_text is True
+    assert ws.cell(row=2, column=_COL["REMARKS"]).value == remark
+    assert ws.cell(row=2, column=_COL["REMARKS"]).alignment.wrap_text is True
 
 
 # --- 12. zero counts stay numeric zero ---------------------------------------
@@ -370,49 +431,287 @@ def test_zero_counts_stay_numeric_zero(db, scene):
     assert (row.doc_count, row.spares_count, row.crs_count) == (0, 0, 0)
 
     ws = _sheet(report)
-    for column in (6, 7, 8, 9):          # TAG, DOC, SPARES, CRS
+    counts = [_COL[u] for u in ("TAG", "DOC", "SPARES", "CRS")]
+    for column in counts:
         value = ws.cell(row=2, column=column).value
         assert isinstance(value, int), f"column {column} is {value!r}, not an int"
-    assert [ws.cell(row=2, column=c).value for c in (6, 7, 8, 9)] == [225, 0, 0, 0]
+    assert [ws.cell(row=2, column=c).value for c in counts] == [225, 0, 0, 0]
 
 
 # --- 13. PROJECT / PLANT -----------------------------------------------------
 
-def test_project_plant_uses_project_information(db, scene):
-    """The existing project display convention, from existing project data."""
-    planning = PlanningPlant(code="1100", description="Chennai Planning")
-    db.add(planning)
-    db.flush()
-    maintenance = MaintenancePlant(
-        code="1102", description="Chennai Works", planning_plant_id=planning.id
+def test_report_display_combines_project_plant_and_revision(db, scene):
+    """<PROJECT> - <MAINTENANCE PLANT> <REVISION>, from the record's own plant."""
+    ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, revision="REV-0",
+                 maintenance_plant_id=scene.kahm.id, tag_count=1),
     )
-    db.add(maintenance)
-    db.flush()
+    ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, revision="REV-1",
+                 maintenance_plant_id=scene.kahn.id, tag_count=2),
+    )
 
-    scene.project_a.planning_plant_id = planning.id
-    scene.project_b.maintenance_plant_id = maintenance.id
+    rows = _rows(ps_svc.cumulative_report(db, scene.pm))
+    assert [r.project_plant for r in rows] == [
+        "GC-A - KAHM REV-0",
+        "GC-A - KAHN REV-1",
+    ]
+    # The parts are still individually available, and the revision is still in
+    # the dataset even though the workbook has no column for it.
+    assert [r.maintenance_plant_code for r in rows] == ["KAHM", "KAHN"]
+    assert [r.revision for r in rows] == ["REV-0", "REV-1"]
+
+
+def test_report_display_omits_the_plant_when_there_is_none(db, scene):
+    """No plant produces a clean project value - never "/ null" or a stray dash.
+
+    The revision is kept: it is NOT NULL on the table and is the only thing
+    telling two rows of the same project and activity apart.
+    """
+    ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, revision="REV-0", tag_count=1),
+    )
+    display = _rows(ps_svc.cumulative_report(db, scene.pm))[0].project_plant
+
+    assert display == "GC-A REV-0"
+    # No placeholder text and no dangling separator where the plant would have
+    # been. (A bare "-" is not junk on its own - project codes contain one.)
+    for junk in ("null", "None", "undefined", "/", " - ", "  "):
+        assert junk not in display, f"{junk!r} leaked into {display!r}"
+
+
+def test_report_display_is_the_project_alone_with_no_plant_and_no_revision(db, scene):
+    """The pure project case, asserted on the formatter directly.
+
+    A stored row always has a revision (NOT NULL + non-blank CHECK), so this
+    combination cannot be produced through the API - the formatter still has to
+    handle it cleanly.
+    """
+    assert (
+        ps_svc._project_plant_display(scene.project_a, None, None) == "GC-A"
+    )
+    assert ps_svc._project_plant_display(scene.project_a, "KAHM", None) == "GC-A - KAHM"
+    assert ps_svc._project_plant_display(scene.project_a, None, "REV-0") == "GC-A REV-0"
+    # Blank strings are treated as absent, not printed as empty segments.
+    assert ps_svc._project_plant_display(scene.project_a, "  ", "  ") == "GC-A"
+
+
+def test_report_returns_the_selected_maintenance_plant(db, scene):
+    ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, maintenance_plant_id=scene.kahm.id),
+    )
+    row = _rows(ps_svc.cumulative_report(db, scene.pm))[0]
+    assert row.maintenance_plant_id == scene.kahm.id
+    assert row.maintenance_plant_code == "KAHM"
+
+
+def test_project_name_is_returned(db, scene):
+    """The project's own identifier, straight off the project row."""
+    out = ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id)
+    )
+    assert out.project_code == "GC-A"
+    assert out.project_name == "Alpha"
+    assert _rows(ps_svc.cumulative_report(db, scene.pm))[0].project_code == "GC-A"
+
+
+# --- 13b. maintenance plant persistence + validation -------------------------
+
+def test_selected_maintenance_plant_is_persisted(db, scene):
+    out = ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, maintenance_plant_id=scene.kahm.id),
+    )
+    assert out.maintenance_plant_id == scene.kahm.id
+    assert out.maintenance_plant_code == "KAHM"
+    assert out.maintenance_plant_description == "Kahma Main"
+
+    # Stored on the row itself, not derived at read time from the project.
+    stored = db.execute(
+        text("SELECT maintenance_plant_id FROM project_production_statuses WHERE id = :i"),
+        {"i": out.id},
+    ).scalar_one()
+    assert stored == scene.kahm.id
+
+    # And it survives a re-read through the project tab's own endpoint.
+    latest = ps_svc.list_latest(db, scene.pm, scene.project_a.id)
+    assert latest[0].maintenance_plant_code == "KAHM"
+
+
+def test_maintenance_plant_is_optional(db, scene):
+    """A project with no plant chosen records production status perfectly well."""
+    out = ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id)
+    )
+    assert out.maintenance_plant_id is None
+    assert out.maintenance_plant_code is None
+    # Nothing is back-filled from the Planning Plant.
+    assert out.planning_plant_code == "2300"
+    assert out.maintenance_plant_code != out.planning_plant_code
+
+
+def test_unrelated_maintenance_plant_is_rejected(db, scene):
+    """A plant from another Planning Plant is a 422, never silently dropped."""
+    with pytest.raises(AppError) as ei:
+        ps_svc.create_production_status(
+            db, scene.pm, scene.project_a.id,
+            _payload(scene.tag_est.id, maintenance_plant_id=scene.foreign_plant.id),
+        )
+    assert ei.value.status_code == 422
+    assert "does not belong to this project" in ei.value.message
+
+    # An id that is not a plant at all is refused the same way.
+    import uuid as _uuid
+    with pytest.raises(AppError) as ei:
+        ps_svc.create_production_status(
+            db, scene.pm, scene.project_a.id,
+            _payload(scene.tag_est.id, maintenance_plant_id=_uuid.uuid4()),
+        )
+    assert ei.value.status_code == 422
+
+    # Nothing was written.
+    assert db.query(ProjectProductionStatus).count() == 0
+
+
+def test_inactive_maintenance_plant_cannot_be_chosen(db, scene):
+    scene.kahm.is_active = False
+    db.commit()
+    with pytest.raises(AppError) as ei:
+        ps_svc.create_production_status(
+            db, scene.pm, scene.project_a.id,
+            _payload(scene.tag_est.id, maintenance_plant_id=scene.kahm.id),
+        )
+    assert ei.value.status_code == 422
+
+
+def test_project_without_planning_plant_cannot_select_a_plant(db, scene):
+    """No Planning Plant means no plants to offer - and none may be forced in."""
+    scene.project_b.planning_plant_id = None
+    db.commit()
+    with pytest.raises(AppError) as ei:
+        ps_svc.create_production_status(
+            db, scene.pm, scene.project_b.id,
+            _payload(scene.mtl.id, maintenance_plant_id=scene.kahm.id),
+        )
+    assert ei.value.status_code == 422
+
+    # ...but recording WITHOUT a plant still works.
+    out = ps_svc.create_production_status(
+        db, scene.pm, scene.project_b.id, _payload(scene.mtl.id)
+    )
+    assert out.maintenance_plant_id is None
+
+
+def test_rows_recorded_before_the_plant_column_still_work(db, scene):
+    """Migration 0071 left old rows NULL; they must read and report normally."""
+    out = ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, revision="REV-0", tag_count=225),
+    )
+    # Force the pre-0071 shape explicitly, as an upgraded database holds it.
+    db.execute(
+        text("UPDATE project_production_statuses SET maintenance_plant_id = NULL "
+             "WHERE id = :i"),
+        {"i": out.id},
+    )
     db.commit()
 
-    ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=1)
-    )
-    ps_svc.create_production_status(
-        db, scene.pm, scene.project_b.id, _payload(scene.mtl.id, tag_count=2)
-    )
+    latest = ps_svc.list_latest(db, scene.pm, scene.project_a.id)
+    assert latest[0].maintenance_plant_id is None
+    assert latest[0].tag_count == 225
 
-    plants = {r.project_code: r.project_plant for r in _rows(ps_svc.cumulative_report(db, scene.pm))}
-    # Planning Plant when that is all the project has...
-    assert plants["GC-A"] == "GC-A / 1100"
-    # ...and the more specific Maintenance Plant when the project carries one.
-    assert plants["GC-B"] == "GC-B / 1102"
+    report = _rows(ps_svc.cumulative_report(db, scene.pm))
+    assert report[0].maintenance_plant_code is None
+    assert report[0].project_plant == "GC-A REV-0"
 
 
-def test_project_plant_falls_back_to_the_code(db, scene):
-    """A project with no plant still names itself - never a blank cell."""
+def test_maintenance_plant_does_not_change_record_identity(db, scene):
+    """Two updates differing only by plant are still ONE current row.
+
+    Identity stays project + revision + activity. The newer update supersedes
+    the older exactly as it did before the plant column existed, and the older
+    one stays in the history.
+    """
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=1)
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, revision="REV-0",
+                 maintenance_plant_id=scene.kahm.id, tag_count=100),
     )
-    assert _rows(ps_svc.cumulative_report(db, scene.pm))[0].project_plant == "GC-A"
+    ps_svc.create_production_status(
+        db, scene.pm, scene.project_a.id,
+        _payload(scene.tag_est.id, revision="REV-0",
+                 maintenance_plant_id=scene.kahn.id, tag_count=200),
+    )
+
+    report = _rows(ps_svc.cumulative_report(db, scene.pm))
+    assert len(report) == 1
+    assert report[0].tag_count == 200
+    assert report[0].maintenance_plant_code == "KAHN"
+
+    # The superseded update - and its plant - remain in the trail.
+    history = ps_svc.list_history(db, scene.pm, scene.project_a.id)
+    assert [(h.tag_count, h.maintenance_plant_code) for h in history] == [
+        (200, "KAHN"),
+        (100, "KAHM"),
+    ]
+
+
+# --- 13c. Head vs Lead activity authority ------------------------------------
+
+def test_head_may_record_for_every_activity_on_the_project(db, scene):
+    """A Head's authority is project-wide, not narrowed to activities they lead.
+
+    This is the backend rule the Activity dropdown must mirror: for each of the
+    project's activities `activity_staffing_authority` answers "full" for the
+    Head, so all of them are offerable.
+    """
+    from app.core import authz
+
+    for activity in (scene.tag_est, scene.mtl):
+        assert (
+            authz.activity_staffing_authority(
+                db, scene.head_u, scene.project_a, activity.id
+            )
+            == "full"
+        )
+        ps_svc.create_production_status(
+            db, scene.head_u, scene.project_a.id, _payload(activity.id, tag_count=1)
+        )
+
+    recorded = {r.activity for r in _rows(ps_svc.cumulative_report(db, scene.pm))}
+    assert recorded == {"TAG ESTIMATION", "MTL"}
+
+
+def test_lead_may_record_only_for_their_own_activity(db, scene):
+    """The Lead's authority stays narrow - unchanged by this patch."""
+    from app.core import authz
+
+    # tag_lead leads TAG ESTIMATION only.
+    assert (
+        authz.activity_staffing_authority(
+            db, scene.tag_lead_u, scene.project_a, scene.tag_est.id
+        )
+        == "lead"
+    )
+    assert (
+        authz.activity_staffing_authority(
+            db, scene.tag_lead_u, scene.project_a, scene.mtl.id
+        )
+        is None
+    )
+
+    ps_svc.create_production_status(
+        db, scene.tag_lead_u, scene.project_a.id, _payload(scene.tag_est.id)
+    )
+    with pytest.raises(AppError) as ei:
+        ps_svc.create_production_status(
+            db, scene.tag_lead_u, scene.project_a.id, _payload(scene.mtl.id)
+        )
+    assert ei.value.status_code == 403
 
 
 # --- 14. empty report --------------------------------------------------------
@@ -461,22 +760,26 @@ def test_workbook_matches_the_report_dataset(db, scene):
     report = ps_svc.cumulative_report(db, scene.pm)
     ws = _sheet(report)
 
+    def cell(r, label):
+        return ws.cell(row=r, column=_COL[label]).value
+
     assert ws.max_row == report["row_count"] + 1        # + the header row
     for offset, row in enumerate(_rows(report)):
         excel_row = offset + 2
-        assert ws.cell(row=excel_row, column=1).value == row.serial
-        assert ws.cell(row=excel_row, column=2).value == row.project_plant
-        assert ws.cell(row=excel_row, column=3).value == row.revision
-        assert ws.cell(row=excel_row, column=4).value == row.activity
-        assert ws.cell(row=excel_row, column=5).value == row.status_label
-        assert ws.cell(row=excel_row, column=6).value == row.tag_count
-        assert ws.cell(row=excel_row, column=7).value == row.doc_count
-        assert ws.cell(row=excel_row, column=8).value == row.spares_count
-        assert ws.cell(row=excel_row, column=9).value == row.crs_count
-        completed = ws.cell(row=excel_row, column=10).value
+        assert cell(excel_row, "S.NO") == row.serial
+        assert cell(excel_row, "PROJECT / PLANT") == row.project_plant
+        assert cell(excel_row, "ACTIVITY") == row.activity
+        assert cell(excel_row, "PROJECT STATUS") == row.status_label
+        assert cell(excel_row, "TAG") == row.tag_count
+        assert cell(excel_row, "DOC") == row.doc_count
+        assert cell(excel_row, "SPARES") == row.spares_count
+        assert cell(excel_row, "CRS") == row.crs_count
+        completed = cell(excel_row, "COMPLETED ON")
         assert (completed.date() if completed else None) == row.completed_on
-        assert (ws.cell(row=excel_row, column=11).value or None) == row.remarks
-        assert ws.cell(row=excel_row, column=12).value == row.by
+        assert (cell(excel_row, "REMARKS") or None) == row.remarks
+        assert cell(excel_row, "BY") == row.by
+        # The revision is not its own cell - it rides inside PROJECT / PLANT.
+        assert row.revision in cell(excel_row, "PROJECT / PLANT")
 
     # Sequential S.NO with no gaps.
     assert [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)] == [1, 2, 3]
@@ -496,29 +799,26 @@ def test_workbook_columns_and_formatting(db, scene):
     ws = wb.active
 
     assert ws.title == "Production Status"
-    assert [ws.cell(row=1, column=c).value for c in range(1, 13)] == [
-        "S.NO", "PROJECT / PLANT", "REVISION", "ACTIVITY", "PROJECT STATUS",
-        # Four separate count columns, never merged into one "COUNT" cell.
-        "TAG", "DOC", "SPARES", "CRS",
-        "COMPLETED ON", "REMARKS", "BY",
-    ]
-    assert ws.max_column == 12
+    assert [ws.cell(row=1, column=c).value for c in range(1, 12)] == _COLUMNS
+    assert ws.max_column == 11
     assert len(ws.merged_cells.ranges) == 0
+    # No REVISION column - the revision is inside PROJECT / PLANT now.
+    assert "REVISION" not in _COLUMNS
 
     # Bold header, frozen header row, autofilter over every column.
     assert ws.cell(row=1, column=1).font.bold is True
     assert ws.freeze_panes == "A2"
-    assert ws.auto_filter.ref == "A1:L2"
+    assert ws.auto_filter.ref == "A1:K2"
 
     # Reasonable, explicitly-set column widths.
-    assert ws.column_dimensions["B"].width >= 20      # PROJECT / PLANT
-    assert ws.column_dimensions["K"].width >= 40      # REMARKS
+    assert ws.column_dimensions["B"].width >= 30      # PROJECT / PLANT
+    assert ws.column_dimensions["J"].width >= 40      # REMARKS
 
     # DD-MMM-YYYY on a real date cell, and wrapped remarks.
-    completed = ws.cell(row=2, column=10)
+    completed = ws.cell(row=2, column=_COL["COMPLETED ON"])
     assert completed.number_format == "DD-MMM-YYYY"
     assert completed.value.date() == date(2025, 12, 5)
-    assert ws.cell(row=2, column=11).alignment.wrap_text is True
+    assert ws.cell(row=2, column=_COL["REMARKS"]).alignment.wrap_text is True
 
 
 # --- 17. the download is a valid .xlsx ---------------------------------------
@@ -541,12 +841,15 @@ def test_download_produces_a_valid_xlsx(db, scene, client, login):
     assert res.content[:2] == b"PK"
     ws = openpyxl.load_workbook(BytesIO(res.content)).active
     assert ws.title == "Production Status"
-    assert ws.cell(row=2, column=6).value == 225
+    assert ws.cell(row=2, column=_COL["TAG"]).value == 225
 
     # The downloaded file holds exactly the rows the preview endpoint served.
     preview = client.get(REPORT_URL, headers=login("pm@x.com")).json()
     assert ws.max_row == preview["row_count"] + 1
-    assert ws.cell(row=2, column=2).value == preview["rows"][0]["project_plant"]
+    assert (
+        ws.cell(row=2, column=_COL["PROJECT / PLANT"]).value
+        == preview["rows"][0]["project_plant"]
+    )
 
 
 # --- 18. the report is not a history export ----------------------------------

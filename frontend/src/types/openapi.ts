@@ -5358,6 +5358,8 @@ export interface components {
              * Format: uuid
              */
             activity_id: string;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
             /**
              * Status
              * @enum {string}
@@ -5408,6 +5410,8 @@ export interface components {
             planning_plant_code?: string | null;
             /** Planning Plant Description */
             planning_plant_description?: string | null;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
             /** Maintenance Plant Code */
             maintenance_plant_code?: string | null;
             /** Maintenance Plant Description */
@@ -5499,6 +5503,10 @@ export interface components {
             project_code: string;
             /** Project Plant */
             project_plant: string;
+            /** Maintenance Plant Id */
+            maintenance_plant_id?: string | null;
+            /** Maintenance Plant Code */
+            maintenance_plant_code?: string | null;
             /** Revision */
             revision: string;
             /**

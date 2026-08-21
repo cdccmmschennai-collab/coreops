@@ -17835,6 +17835,18 @@
             "format": "uuid",
             "title": "Activity Id"
           },
+          "maintenance_plant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Plant Id"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -17940,6 +17952,18 @@
               }
             ],
             "title": "Planning Plant Description"
+          },
+          "maintenance_plant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Plant Id"
           },
           "maintenance_plant_code": {
             "anyOf": [
@@ -18121,6 +18145,29 @@
           "project_plant": {
             "type": "string",
             "title": "Project Plant"
+          },
+          "maintenance_plant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Plant Id"
+          },
+          "maintenance_plant_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Plant Code"
           },
           "revision": {
             "type": "string",

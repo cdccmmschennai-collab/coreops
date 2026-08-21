@@ -25,8 +25,9 @@ import { formatDateTime } from "@/lib/format";
 import { useLatestProductionStatus } from "../hooks";
 import {
   buildProductionStatusRows,
-  formatProjectPlant,
+  formatProjectDisplay,
   historyTargetFor,
+  maintenancePlantScope,
   NO_STATUS_HINT,
   NO_STATUS_TITLE,
   productionStatusErrorMessage,
@@ -78,7 +79,7 @@ export function ProductionStatusTab({
   const staffingQuery = useActivityStaffing(project.id);
   const latestQuery = useLatestProductionStatus(project.id);
 
-  const projectPlant = React.useMemo(() => formatProjectPlant(project), [project]);
+  const projectDisplay = React.useMemo(() => formatProjectDisplay(project), [project]);
 
   const activities = React.useMemo(
     () =>
@@ -131,7 +132,10 @@ export function ProductionStatusTab({
     <div className="space-y-4">
       <ProductionStatusForm
         projectId={project.id}
-        projectPlant={projectPlant}
+        projectDisplay={projectDisplay}
+        // The project's Planning Plant scopes which Maintenance Plants the form
+        // may offer — exactly as it does on the Project Edit page.
+        planningPlantCode={maintenancePlantScope(project)}
         activities={activities}
         projectHasActivities={projectHasActivities}
       />

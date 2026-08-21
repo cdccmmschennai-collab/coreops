@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Combobox } from "@/components/ui/combobox";
 import { CountInput } from "@/components/ui/count-input";
 import {
   Form,
@@ -25,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { AppError } from "@/lib/api-client";
 
 import { useCreateProductionStatus } from "../hooks";
@@ -49,8 +51,15 @@ import {
 
 interface ProductionStatusFormProps {
   projectId: string;
-  /** Read-only "Project / Plant", derived from the project the page loaded. */
-  projectPlant: string;
+  /** Read-only "Project" — the project code, from the project the page loaded. */
+  projectDisplay: string;
+  /**
+   * The project's Planning Plant code. Scopes the Maintenance Plant dropdown to
+   * the plants that Planning Plant actually has — the same scoping the Project
+   * Edit page applies. Undefined when the project has no Planning Plant, which
+   * means there are no Maintenance Plants to offer at all.
+   */
+  planningPlantCode?: string;
   /** The activities this viewer may submit for (PM/Head: all; Lead: own). */
   activities: ActivityOption[];
   /** Whether the project has any staffed activity at all — the two empty
@@ -72,11 +81,20 @@ interface ProductionStatusFormProps {
  */
 export function ProductionStatusForm({
   projectId,
-  projectPlant,
+  projectDisplay,
+  planningPlantCode,
   activities,
   projectHasActivities,
 }: ProductionStatusFormProps) {
   const mutation = useCreateProductionStatus(projectId);
+
+  // The SAME source the Project Edit page's Maintenance Plant dropdown reads:
+  // `useMaintenancePlantOptions(activeOnly, planningPlantCode, enabled)` over
+  // GET /plants/maintenance-plants. No second plant lookup exists, so this
+  // dropdown can never offer a plant the POST would reject — the backend
+  // validates against that same scoped list.
+  const { options: plantOptions, isLoading: plantsLoading } =
+    useMaintenancePlantOptions(true, planningPlantCode, !!planningPlantCode);
 
   const form = useForm<ProductionStatusFormValues>({
     resolver: zodResolver(productionStatusFormSchema),
@@ -136,16 +154,54 @@ export function ProductionStatusForm({
       <CardContent>
         <Form {...form}>
           <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
-            {/* Project / Plant is read-only and derived — never an input, and
-                never stored again on the record (it hangs off project_id). */}
+            {/* Project is read-only and derived — never an input, and never
+                stored again on the record (it hangs off project_id). */}
             <div className="flex items-baseline justify-between gap-4 rounded-md border border-border bg-muted/30 px-3 py-2">
-              <span className="text-sm text-muted-foreground">Project / Plant</span>
+              <span className="text-sm text-muted-foreground">Project</span>
               <span className="text-right font-mono text-sm font-medium">
-                {projectPlant}
+                {projectDisplay}
               </span>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
+              {/* Maintenance Plant — selectable, and stored ON the record.
+                  Deliberately NOT the project's Planning Plant: the Planning
+                  Plant only decides WHICH plants may be offered here.
+
+                  Optional throughout. A project whose Planning Plant has no
+                  Maintenance Plants (or has no Planning Plant at all) simply
+                  offers none, and the form still saves — the plant is left
+                  unset rather than invented, and the report leaves that part of
+                  the Project / Plant value out. */}
+              <FormField
+                control={form.control}
+                name="maintenance_plant_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Maintenance Plant</FormLabel>
+                    <FormControl>
+                      <Combobox
+                        value={field.value || ""}
+                        onValueChange={field.onChange}
+                        options={plantOptions}
+                        placeholder={
+                          !planningPlantCode
+                            ? "No maintenance plants for this project"
+                            : plantsLoading
+                              ? "Loading plants…"
+                              : "Select maintenance plant…"
+                        }
+                        searchPlaceholder="Search maintenance plants…"
+                        emptyMessage="No plants for this project's Planning Plant."
+                        disabled={!planningPlantCode}
+                        allowClear
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               <FormField
                 control={form.control}
                 name="revision"

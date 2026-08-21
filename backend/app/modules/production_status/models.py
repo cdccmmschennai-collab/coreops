@@ -96,6 +96,25 @@ class ProjectProductionStatus(Base):
     crs_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     completed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The Maintenance Plant this update belongs to (migration 0071). A POINTER
+    # into existing plant master data - the same nullable FK shape
+    # `work_report_tasks.maintenance_plant_id` already uses - so no plant code or
+    # description is duplicated onto this row and no second plant source exists.
+    #
+    # Nullable on purpose, three ways: rows recorded before 0071 have none, a
+    # project whose Planning Plant has no Maintenance Plants cannot offer one,
+    # and choosing one is optional even when they exist. A missing plant is
+    # never inferred from the project's Planning Plant.
+    #
+    # NOT part of the record's identity. "Current status" is still derived per
+    # project + revision + activity; two updates that differ only by plant are
+    # the same combination, and the newer one supersedes the older exactly as it
+    # would have before this column existed.
+    maintenance_plant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("maintenance_plants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # The actual person, never the role. RESTRICT mirrors the other history
     # tables: an author with recorded updates cannot be hard deleted.
     created_by: Mapped[uuid.UUID] = mapped_column(
@@ -139,5 +158,9 @@ class ProjectProductionStatus(Base):
             "project_id",
             "activity_id",
             text("created_at DESC"),
+        ),
+        Index(
+            "project_production_statuses_maintenance_plant_idx",
+            "maintenance_plant_id",
         ),
     )

@@ -21,6 +21,12 @@ class ProductionStatusCreate(BaseModel):
     # the project, so it is not accepted here either.
     revision: str = Field(min_length=1, max_length=50)
     activity_id: uuid.UUID
+    # The Maintenance Plant this update belongs to. OPTIONAL: a project whose
+    # Planning Plant has no Maintenance Plants simply has none to offer, and the
+    # form must not be blocked by that. Validated in the service against the
+    # plants the project's Planning Plant actually has - it is never derived
+    # from the Planning Plant, and never guessed.
+    maintenance_plant_id: uuid.UUID | None = None
     status: ProductionStatusValue
     # Four independent units; same `default=0, ge=0` convention the work report
     # task schema uses for its counts.
@@ -37,12 +43,20 @@ class ProductionStatusOut(BaseModel):
 
     id: uuid.UUID
 
-    # --- project / plant (derived from the project, never entered) ---------
+    # --- project (derived from the project, never entered) -----------------
     project_id: uuid.UUID
     project_code: str
     project_name: str
+    # The project's own Planning Plant. Context only: it is what scopes the
+    # Maintenance Plant dropdown, and it is NEVER shown as this record's plant.
     planning_plant_code: str | None = None
     planning_plant_description: str | None = None
+
+    # --- maintenance plant: THIS RECORD's selection (migration 0071) -------
+    # Resolved from `maintenance_plant_id` on the row, not from the project.
+    # All three are null when no plant was chosen, which is a normal state and
+    # is never filled in from the Planning Plant.
+    maintenance_plant_id: uuid.UUID | None = None
     maintenance_plant_code: str | None = None
     maintenance_plant_description: str | None = None
 
@@ -101,10 +115,20 @@ class ProductionStatusReportRow(BaseModel):
 
     project_id: uuid.UUID
     project_code: str
-    # The rendered "PROJECT / PLANT" cell (see service._project_plant). One
-    # field, not a second project/plant record.
+    # The rendered "PROJECT / PLANT" cell - project, this record's Maintenance
+    # Plant and the revision combined into one clean string (see
+    # service._project_plant_display). One field, not a second project/plant
+    # record, and never containing "null", "-" or a dangling separator.
     project_plant: str
+    # The parts behind that cell, for a client that needs them individually.
+    # Null when no plant was chosen.
+    maintenance_plant_id: uuid.UUID | None = None
+    maintenance_plant_code: str | None = None
 
+    # Kept in the dataset even though the workbook no longer gives it a column
+    # of its own: revision is part of what identifies a production status row
+    # (project + revision + activity) and of how its history is looked up, so
+    # dropping it from the payload would break far more than a column heading.
     revision: str
 
     activity_id: uuid.UUID

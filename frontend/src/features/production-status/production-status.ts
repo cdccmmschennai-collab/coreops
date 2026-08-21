@@ -126,36 +126,60 @@ export function formatProductionDate(raw: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
-// Project / Plant - read-only, derived from the project the page already has
+// Project - read-only, from the project the page already has
 // ---------------------------------------------------------------------------
 
-/** The project fields the header line reads. */
-export interface ProjectPlantSource {
+/** The project fields the form's read-only Project line reads. */
+export interface ProjectDisplaySource {
   code?: string | null;
   name?: string | null;
   planning_plant_code?: string | null;
-  maintenance_plant_code?: string | null;
 }
 
 /**
- * The read-only "Project / Plant" value.
+ * The read-only "Project" value on the form - "4716-LC25102900".
  *
- * Assembled from project information the page already loaded - it is never an
- * input, never editable, and never copied into the production-status record as
- * a separate field (the record stores `project_id`, and the API resolves these
- * labels back out of it).
+ * The project's CODE: the identifier the Projects UI names a project by, and
+ * what the business writes on a report. Falls back to the descriptive name only
+ * if a project somehow has no code.
  *
- * Maintenance Plant wins over Planning Plant when both exist: it is the more
- * specific location, and it is what a project-master row leaves null - so
- * falling back to the Planning Plant keeps the line populated either way.
+ * Plant is deliberately NOT part of this. The plant shown on this form is the
+ * Maintenance Plant the user selects for the update, which is its own field and
+ * its own stored value - it is never spliced into the project line, and it is
+ * never derived from the project's Planning Plant.
  */
-export function formatProjectPlant(project: ProjectPlantSource | null | undefined): string {
+export function formatProjectDisplay(
+  project: ProjectDisplaySource | null | undefined,
+): string {
   if (!project) return VALUE_UNAVAILABLE;
-  const plant = project.maintenance_plant_code ?? project.planning_plant_code ?? null;
-  const code = project.code ?? null;
-  const parts = [code, plant].filter((p): p is string => !!p && p.trim() !== "");
-  if (parts.length === 0) return project.name?.trim() || VALUE_UNAVAILABLE;
-  return parts.join(" / ");
+  const code = project.code?.trim();
+  if (code) return code;
+  return project.name?.trim() || VALUE_UNAVAILABLE;
+}
+
+/**
+ * Which Maintenance Plants the form may offer, expressed the way the shared
+ * plant-master hook wants it: the project's Planning Plant CODE, or undefined.
+ *
+ * This is the whole of the "available for THIS project" rule on the client. The
+ * options themselves come from `useMaintenancePlantOptions(true, code, !!code)`
+ * - the same hook, over the same `GET /plants/maintenance-plants` endpoint,
+ * with the same `planning_plant_code` scoping the Project Edit page uses. No
+ * second plant source exists, and the backend validates a submitted plant
+ * against that identical scoped list.
+ *
+ * `undefined` means the project has no Planning Plant, so there are no
+ * Maintenance Plants to offer at all. That is a normal state: the field is left
+ * empty and the update saves without one.
+ *
+ * Lives here rather than inline in the component so the rule is coverable by
+ * `node --test`, which cannot mount JSX.
+ */
+export function maintenancePlantScope(
+  project: ProjectDisplaySource | null | undefined,
+): string | undefined {
+  const code = project?.planning_plant_code?.trim();
+  return code ? code : undefined;
 }
 
 // ---------------------------------------------------------------------------

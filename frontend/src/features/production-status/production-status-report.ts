@@ -57,7 +57,10 @@ export interface ProductionStatusReportRowLike {
   project_id: string;
   project_code: string;
   project_plant: string;
+  /** Still on the row, but folded into `project_plant` for display. */
   revision: string;
+  maintenance_plant_id?: string | null;
+  maintenance_plant_code?: string | null;
   activity_id: string;
   activity: string;
   status: string;
@@ -83,8 +86,8 @@ export const REPORT_BLANK = "-";
 export interface ProductionStatusReportTableRow {
   key: string;
   serial: string;
+  /** Project, Maintenance Plant and revision, already combined by the backend. */
   projectPlant: string;
-  revision: string;
   activity: string;
   status: string;
   /** The raw stored status, so the badge can colour without re-parsing a label. */
@@ -156,8 +159,10 @@ export function buildProductionStatusReportRows(
   return (rows ?? []).map((r) => ({
     key: r.id,
     serial: String(r.serial),
+    // Project + Maintenance Plant + revision, combined server-side and already
+    // guaranteed clean - no "null", no "undefined", no dangling separator. The
+    // preview prints it verbatim, which is why it always matches the Excel.
     projectPlant: r.project_plant || REPORT_BLANK,
-    revision: r.revision || REPORT_BLANK,
     activity: r.activity || REPORT_BLANK,
     // The backend's wording of the existing vocabulary - the preview never
     // maps in_progress/closed to words itself, or the file could disagree.
@@ -187,11 +192,17 @@ export function buildProductionStatusReportRows(
  * TAG / DOC / SPARES / CRS are four separate columns under no merged "COUNT"
  * banner: they are four independent units and there is no combined total,
  * here or in the file.
+ *
+ * There is deliberately NO REVISION column: the revision is part of the
+ * PROJECT / PLANT cell ("4460-GC22104900 - KAHM REV-0"), which is the
+ * business's own way of naming a project revision. The value is still on every
+ * row (`ProductionStatusReportRowLike.revision`) because it identifies the
+ * record and its history — it just has no column of its own, in the preview or
+ * in the file.
  */
 export const REPORT_COLUMNS = [
   { key: "serial", label: "S.NO", numeric: true },
   { key: "projectPlant", label: "PROJECT / PLANT", numeric: false },
-  { key: "revision", label: "REVISION", numeric: false },
   { key: "activity", label: "ACTIVITY", numeric: false },
   { key: "status", label: "PROJECT STATUS", numeric: false },
   { key: "tag", label: "TAG", numeric: true },

@@ -23,8 +23,9 @@ import {
   COUNT_UNITS,
   formatCount,
   formatProductionDate,
-  formatProjectPlant,
+  formatProjectDisplay,
   historyTargetFor,
+  maintenancePlantScope,
   isSaveInFlight,
   leadsAnyActivity,
   NO_ACTIVITIES_HINT,
@@ -196,6 +197,41 @@ test("the project Head may submit for every activity on their project", () => {
   assert.deepEqual(options.map((o) => o.id), ["act-tag", "act-mtl", "act-doc"]);
 });
 
+test("a Head is NOT narrowed to the activities they happen to lead", () => {
+  // The Head's authority is project-wide - `authz.activity_staffing_authority`
+  // answers "full" for every activity on their project (see
+  // backend/tests/test_production_status_report.py). The dropdown must not
+  // apply the Lead-specific derivation on top of that and hand back a subset.
+  const asHeadWhoLeadsOne = submittableActivityOptions(STAFFING, {
+    canManage: false,
+    isHead: true,
+    employeeId: LEAD_EMP,          // this person also leads exactly one activity
+  });
+  const asPlainLead = submittableActivityOptions(STAFFING, {
+    canManage: false,
+    isHead: false,
+    employeeId: LEAD_EMP,
+  });
+
+  assert.deepEqual(asHeadWhoLeadsOne.map((o) => o.id), ["act-tag", "act-mtl", "act-doc"]);
+  assert.deepEqual(asPlainLead.map((o) => o.id), ["act-tag"]);
+  assert.ok(
+    asHeadWhoLeadsOne.length > asPlainLead.length,
+    "being Head must widen the list, never leave it at the Lead subset",
+  );
+
+  // A Head who leads nothing still gets everything - Head authority does not
+  // depend on holding any Lead assignment.
+  assert.deepEqual(
+    submittableActivityOptions(STAFFING, {
+      canManage: false,
+      isHead: true,
+      employeeId: "emp-nobody",
+    }).map((o) => o.id),
+    ["act-tag", "act-mtl", "act-doc"],
+  );
+});
+
 test("an Activity Lead may submit only for the activity they lead", () => {
   const options = submittableActivityOptions(STAFFING, {
     canManage: false,
@@ -304,19 +340,49 @@ test("no row is dropped and nothing is recomputed", () => {
 // 6. Project / Plant is derived, never entered
 // ---------------------------------------------------------------------------
 
-test("Project / Plant is assembled from the project row", () => {
+test("the read-only Project line is the project's code", () => {
   assert.equal(
-    formatProjectPlant({ code: "GC25100600", name: "X", maintenance_plant_code: "ABCD" }),
-    "GC25100600 / ABCD",
+    formatProjectDisplay({ code: "4716-LC25102900", name: "Execution of..." }),
+    "4716-LC25102900",
   );
-  // Maintenance Plant wins; the Planning Plant is the fallback.
+  // The descriptive name is the fallback only when there is no code.
+  assert.equal(formatProjectDisplay({ name: "Unnamed" }), "Unnamed");
+  assert.equal(formatProjectDisplay(null), VALUE_UNAVAILABLE);
+});
+
+test("the plant dropdown is scoped by the project's Planning Plant code", () => {
+  // This is what gets handed to `useMaintenancePlantOptions(true, code, !!code)`
+  // - the SAME hook and the SAME scoping the Project Edit page uses, so the
+  // two dropdowns can never offer different plants for one project.
   assert.equal(
-    formatProjectPlant({ code: "GC25100600", planning_plant_code: "1200" }),
-    "GC25100600 / 1200",
+    maintenancePlantScope({ code: "4460-GC22104900", planning_plant_code: "2300" }),
+    "2300",
   );
-  assert.equal(formatProjectPlant({ code: "GC25100600" }), "GC25100600");
-  assert.equal(formatProjectPlant({ name: "Unnamed" }), "Unnamed");
-  assert.equal(formatProjectPlant(null), VALUE_UNAVAILABLE);
+});
+
+test("a project with no Planning Plant offers no plants, and that is fine", () => {
+  // undefined disables the dropdown rather than falling back to "all plants" -
+  // and the update still saves with no plant at all.
+  assert.equal(maintenancePlantScope({ code: "TESTING001" }), undefined);
+  assert.equal(maintenancePlantScope({ code: "X", planning_plant_code: "" }), undefined);
+  assert.equal(maintenancePlantScope({ code: "X", planning_plant_code: "  " }), undefined);
+  assert.equal(maintenancePlantScope(null), undefined);
+});
+
+test("no plant is ever spliced into the Project line", () => {
+  // The plant shown on this form is the Maintenance Plant the user SELECTS,
+  // which is its own field. The Planning Plant in particular must never be
+  // rendered as this record's plant.
+  assert.equal(
+    formatProjectDisplay({ code: "4716-LC25102900", planning_plant_code: "2400" }),
+    "4716-LC25102900",
+  );
+  assert.equal(
+    formatProjectDisplay({ code: "4716-LC25102900", planning_plant_code: "2400" }).includes(
+      "2400",
+    ),
+    false,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -327,11 +393,12 @@ function values(over: Partial<ProductionStatusFormValues> = {}): ProductionStatu
   return { ...EMPTY_PRODUCTION_STATUS_FORM, ...over };
 }
 
-test("the body carries only the nine fields the user entered", () => {
+test("the body carries only the ten fields the user entered", () => {
   const body = toProductionStatusBody(
     values({
       revision: "REV-0",
       activity_id: "act-tag",
+      maintenance_plant_id: "plant-kahm",
       status: "closed",
       tag_count: "225",
       completed_on: "2025-12-05",
@@ -343,6 +410,7 @@ test("the body carries only the nine fields the user entered", () => {
     "completed_on",
     "crs_count",
     "doc_count",
+    "maintenance_plant_id",
     "remarks",
     "revision",
     "spares_count",
@@ -352,6 +420,41 @@ test("the body carries only the nine fields the user entered", () => {
   // The project is the path and the author is the token — never the body.
   assert.equal("project_id" in body, false);
   assert.equal("created_by" in body, false);
+});
+
+test("the selected maintenance plant is submitted as its identifier", () => {
+  const body = toProductionStatusBody(
+    values({ revision: "REV-0", activity_id: "a", maintenance_plant_id: "plant-kahm" }),
+  );
+  // The plant's id, not its code and not its label.
+  assert.equal(body.maintenance_plant_id, "plant-kahm");
+});
+
+test("no maintenance plant is sent as null, never \"\" and never guessed", () => {
+  const body = toProductionStatusBody(values({ revision: "REV-0", activity_id: "a" }));
+  assert.equal(body.maintenance_plant_id, null);
+  // Selecting nothing must not be rejected by the form - a project whose
+  // Planning Plant has no Maintenance Plants has none to offer.
+  assert.equal(
+    productionStatusFormSchema.safeParse(
+      values({ revision: "REV-0", activity_id: "a", maintenance_plant_id: "" }),
+    ).success,
+    true,
+  );
+});
+
+test("a saved plant is kept for the next update in the same sitting", () => {
+  const next = resetAfterSave(
+    values({
+      revision: "REV-0",
+      activity_id: "a",
+      maintenance_plant_id: "plant-kahm",
+      tag_count: "225",
+    }),
+  );
+  assert.equal(next.maintenance_plant_id, "plant-kahm");
+  // ...while what was asserted about THAT update is cleared.
+  assert.equal(next.tag_count, "");
 });
 
 test("a blank count is sent as 0, matching the API's unused-unit contract", () => {
@@ -709,6 +812,8 @@ test("a status change is submitted as a whole new record, not a patch", () => {
   assert.deepEqual(body, {
     revision: "REV-0",
     activity_id: "act-mtl",
+    // No plant was chosen on either save - null, never inferred.
+    maintenance_plant_id: null,
     status: "closed",
     tag_count: 225,
     doc_count: 0,

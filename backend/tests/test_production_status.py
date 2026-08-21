@@ -133,7 +133,11 @@ def test_migration_created_table_and_indexes(db):
         "id", "project_id", "revision", "activity_id", "status",
         "tag_count", "doc_count", "spares_count", "crs_count",
         "completed_on", "remarks", "created_by", "created_at",
+        # Migration 0071 - the record's selected Maintenance Plant. Nullable,
+        # so every row written before 0071 is still valid.
+        "maintenance_plant_id",
     }
+    assert cols["maintenance_plant_id"] == ("uuid", "YES")
     # Append-only: no updated_at, no soft-delete column (asserted by the set above).
     assert cols["tag_count"] == ("integer", "NO")
     assert cols["crs_count"] == ("integer", "NO")

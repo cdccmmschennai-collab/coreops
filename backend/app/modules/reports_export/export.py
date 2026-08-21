@@ -902,10 +902,17 @@ _PS_DATE_FORMAT = "DD-MMM-YYYY"
 # TAG / DOC / SPARES / CRS are four separate columns under no merged "COUNT"
 # banner and with no total column: they are four independent units, and a
 # combined figure would be a number the business never asked for.
+#
+# There is deliberately NO separate REVISION column: the revision is part of the
+# PROJECT / PLANT cell ("4460-GC22104900 - KAHM REV-0"), which is the business's
+# own way of naming a project revision. The value is still carried in the report
+# dataset (ProductionStatusReportRow.revision) because it identifies the row and
+# its history - it just does not get a column of its own here.
 _PS_COLUMNS = [
     ("S.NO", 7.0, "num"),
-    ("PROJECT / PLANT", 24.0, "text"),
-    ("REVISION", 12.0, "text"),
+    # Wider than the other text columns: it now carries project, plant and
+    # revision in one cell.
+    ("PROJECT / PLANT", 34.0, "text"),
     ("ACTIVITY", 26.0, "text"),
     ("PROJECT STATUS", 16.0, "text"),
     ("TAG", 9.0, "num"),
@@ -919,7 +926,7 @@ _PS_COLUMNS = [
 
 
 def _ps_cell_values(row: dict) -> list:
-    """One report row -> the 12 cell values, in column order.
+    """One report row -> the 11 cell values, in column order.
 
     Three rules the PM's spreadsheet depends on:
 
@@ -933,8 +940,10 @@ def _ps_cell_values(row: dict) -> list:
     """
     return [
         row.get("serial"),
+        # Already combined project + plant + revision by the service, and
+        # already guaranteed free of "null"/"-"/dangling separators. Rendered
+        # verbatim - this builder composes nothing.
         row.get("project_plant") or "",
-        row.get("revision") or "",
         row.get("activity") or "",
         row.get("status_label") or "",
         int(row.get("tag_count") or 0),

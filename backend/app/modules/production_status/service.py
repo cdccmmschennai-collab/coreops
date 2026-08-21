@@ -38,6 +38,7 @@ from app.modules.activity_master.models import LEVEL_ACTIVITY, ActivityMaster
 from app.modules.audit import service as audit
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee
+from app.modules.plants.models import MaintenancePlant
 from app.modules.production_status.models import (
     PRODUCTION_STATUS_CLOSED,
     PRODUCTION_STATUS_IN_PROGRESS,
@@ -123,6 +124,63 @@ def _assert_can_record(
         )
 
 
+def _validate_maintenance_plant(
+    db: Session, project: Project, maintenance_plant_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """Accept a Maintenance Plant only if this project could have offered it.
+
+    "Could have offered it" has exactly one definition, and it is the one the
+    Project Edit page's dropdown already uses:
+    `plants.service.list_maintenance_plants(planning_plant_code=...)` - the
+    plants belonging to the project's Planning Plant, active ones only. This
+    function calls THAT function rather than re-deriving the relationship, so
+    the dropdown and this check can never disagree and no second plant lookup
+    exists in the codebase.
+
+    Returns the id to store, or None:
+      None in     -> None out. Choosing no plant is legitimate: a project whose
+                     Planning Plant has no Maintenance Plants has none to offer,
+                     and the form must not be blocked by that.
+      valid in    -> that id.
+      anything else -> 422. An unrelated or inactive plant is rejected rather
+                     than silently dropped, so a mis-wired client fails loudly.
+
+    The plant is NEVER inferred from the Planning Plant. A project with no
+    Planning Plant can offer no Maintenance Plant at all, so any selection
+    against it is refused.
+    """
+    if maintenance_plant_id is None:
+        return None
+
+    from app.modules.plants.service import list_maintenance_plants
+
+    # The project's Planning Plant, resolved through the projects module's own
+    # helper so the direct-link/legacy-parent precedence is not restated here.
+    _attach_plants(db, [project])
+    planning_code = project.planning_plant_code  # type: ignore[attr-defined]
+    if not planning_code:
+        raise AppError(
+            "validation_error",
+            "This project has no Planning Plant, so no maintenance plant can be "
+            "selected for it.",
+            422,
+        )
+
+    allowed = {
+        row["id"]
+        for row in list_maintenance_plants(
+            db, active_only=True, planning_plant_code=planning_code
+        )
+    }
+    if maintenance_plant_id not in allowed:
+        raise AppError(
+            "validation_error",
+            "That maintenance plant does not belong to this project.",
+            422,
+        )
+    return maintenance_plant_id
+
+
 def _fetch_valid_activity(
     db: Session, project: Project, activity_id: uuid.UUID
 ) -> ActivityMaster:
@@ -203,6 +261,30 @@ def _activities_by_id(
     }
 
 
+def _record_plants_by_id(
+    db: Session, rows: list[ProjectProductionStatus]
+) -> dict[uuid.UUID, MaintenancePlant]:
+    """The Maintenance Plants THESE ROWS point at (migration 0071).
+
+    Keyed off `maintenance_plant_id` on each record - deliberately not off the
+    project, which carries its own unrelated plant fields. One bulk query for
+    the whole result set, never one per row.
+
+    An inactive plant is still resolved: a record recorded against a plant that
+    was later retired must keep showing the plant it was recorded against. Only
+    the *choosing* of a plant is restricted to active ones.
+    """
+    ids = {r.maintenance_plant_id for r in rows if r.maintenance_plant_id}
+    if not ids:
+        return {}
+    return {
+        mp.id: mp
+        for mp in db.execute(
+            select(MaintenancePlant).where(MaintenancePlant.id.in_(ids))
+        ).scalars().all()
+    }
+
+
 def _to_out(
     db: Session, project: Project, rows: list[ProjectProductionStatus]
 ) -> list[ProductionStatusOut]:
@@ -213,10 +295,15 @@ def _to_out(
 
     activities = _activities_by_id(db, rows)
     names = _author_names(db, {r.created_by for r in rows})
+    plants = _record_plants_by_id(db, rows)
 
     out: list[ProductionStatusOut] = []
     for r in rows:
         activity = activities.get(r.activity_id)
+        # THIS RECORD's plant, from its own maintenance_plant_id - never the
+        # project's plant fields and never derived from the Planning Plant.
+        # Null stays null.
+        plant = plants.get(r.maintenance_plant_id) if r.maintenance_plant_id else None
         out.append(
             ProductionStatusOut(
                 id=r.id,
@@ -225,8 +312,9 @@ def _to_out(
                 project_name=project.name,
                 planning_plant_code=project.planning_plant_code,  # type: ignore[attr-defined]
                 planning_plant_description=project.planning_plant_description,  # type: ignore[attr-defined]
-                maintenance_plant_code=project.maintenance_plant_code,  # type: ignore[attr-defined]
-                maintenance_plant_description=project.maintenance_plant_description,  # type: ignore[attr-defined]
+                maintenance_plant_id=r.maintenance_plant_id,
+                maintenance_plant_code=plant.code if plant else None,
+                maintenance_plant_description=plant.description if plant else None,
                 revision=r.revision,
                 activity_id=r.activity_id,
                 activity_name=activity.name if activity else None,
@@ -362,11 +450,17 @@ def create_production_status(
       403  caller does not manage this activity on this project
       404  activity does not exist in Activity Master
       422  activity is a sub-activity, or is not one of this project's
+      422  maintenance plant does not belong to this project
       422  revision is blank
     """
     project = _fetch_project(db, project_id)
     _assert_can_record(db, actor, project, data.activity_id)
     _fetch_valid_activity(db, project, data.activity_id)
+    # Optional. None stays None - a project with no Maintenance Plants to offer
+    # still records production status.
+    maintenance_plant_id = _validate_maintenance_plant(
+        db, project, data.maintenance_plant_id
+    )
 
     revision = data.revision.strip()
     if not revision:
@@ -378,6 +472,7 @@ def create_production_status(
         project_id=project.id,
         revision=revision,
         activity_id=data.activity_id,
+        maintenance_plant_id=maintenance_plant_id,
         status=data.status,
         tag_count=data.tag_count,
         doc_count=data.doc_count,
@@ -399,6 +494,9 @@ def create_production_status(
             "project_id": str(project.id),
             "revision": revision,
             "activity_id": str(data.activity_id),
+            "maintenance_plant_id": (
+                str(maintenance_plant_id) if maintenance_plant_id else None
+            ),
             "status": data.status,
             "tag_count": data.tag_count,
             "doc_count": data.doc_count,
@@ -433,28 +531,51 @@ def _status_label(status: str) -> str:
     return PRODUCTION_STATUS_LABELS.get(status, status)
 
 
-def _project_plant(project: Project) -> str:
-    """The report's PROJECT / PLANT cell - "GC25100600 / 1102".
+def _project_plant_display(
+    project: Project, plant_code: str | None, revision: str | None
+) -> str:
+    """The report's PROJECT / PLANT cell.
 
-    The same convention the Production Status tab's header line already uses
-    (frontend production-status.ts::formatProjectPlant): the project code, then
-    the Maintenance Plant if the project has one, else its Planning Plant.
-    Maintenance wins because it is the more specific location, and a project
-    loaded from the project master leaves it null - so the Planning Plant keeps
-    the cell populated either way.
+        "4460-GC22104900 - KAHM REV-0"
+
+    Three parts, joined only when they are actually there:
+
+        <project> - <maintenance plant> <revision>
+
+    project          the project's code ("4460-GC22104900",
+                     "NGLC2-GC10108000-PUMPING STATION") - the identifier the
+                     Projects UI names a project by. Falls back to the project's
+                     descriptive name only if a project somehow has no code.
+        - plant      THIS RECORD's Maintenance Plant code, from its own
+                     `maintenance_plant_id`. NEVER the Planning Plant, and never
+                     the project's own plant column.
+        revision     appended so REV-0 and REV-1 of one activity stay visibly
+                     distinct now that the workbook has no REVISION column of
+                     its own.
+
+    Any absent part is omitted along with its separator, so the cell is always
+    clean - a missing plant produces "4391-GC21107300 REV-0", never
+    "4391-GC21107300 - REV-0", "... / null", "... / -" or "... / undefined".
+
+    Note on the spec's "no maintenance plant -> project alone": that holds when
+    there is also no revision. `revision` is NOT NULL on the table, so dropping
+    it whenever a plant is missing would erase the only thing distinguishing two
+    rows of the same project and activity - which section 9's revision-isolation
+    rule forbids. The revision is therefore kept and the plant segment alone is
+    dropped.
 
     Resolved HERE rather than in the browser precisely because the Excel is
     rendered server-side: if each side built this string itself, the file and
-    the preview would be two implementations of one column, free to drift. The
-    plant is read off the project through the projects module's own helper, so
-    it is never a second project/plant field.
+    the preview would be two implementations of one column, free to drift.
     """
-    plant = (
-        getattr(project, "maintenance_plant_code", None)
-        or getattr(project, "planning_plant_code", None)
-    )
-    parts = [p for p in (project.code, plant) if p and p.strip()]
-    return " / ".join(parts) if parts else (project.name or "").strip()
+    text = (project.code or "").strip() or (project.name or "").strip()
+    plant = (plant_code or "").strip()
+    rev = (revision or "").strip()
+    if plant:
+        text = f"{text} - {plant}" if text else plant
+    if rev:
+        text = f"{text} {rev}" if text else rev
+    return text
 
 
 def _activity_label(activity: ActivityMaster | None) -> str:
@@ -503,12 +624,17 @@ def cumulative_report(db: Session, actor: User) -> dict:
     # and pick in Python") while the outer query is free to sort for a reader.
     latest = aliased(ProjectProductionStatus, _latest_stmt().subquery())
     activity = aliased(ActivityMaster)
+    # Each ROW's own Maintenance Plant (migration 0071), joined in the same
+    # query. An outer join because choosing a plant is optional - a row without
+    # one still belongs in the report.
+    plant = aliased(MaintenancePlant)
 
     rows = list(
         db.execute(
-            select(latest, Project, activity)
+            select(latest, Project, activity, plant)
             .join(Project, Project.id == latest.project_id)
             .outerjoin(activity, activity.id == latest.activity_id)
+            .outerjoin(plant, plant.id == latest.maintenance_plant_id)
             .where(Project.deleted_at.is_(None))
             .order_by(
                 Project.code,
@@ -519,20 +645,30 @@ def cumulative_report(db: Session, actor: User) -> dict:
         ).all()
     )
 
-    # Plants and author names in two bulk queries for the whole report, the same
-    # shape `_to_out` uses - never one lookup per row.
-    _attach_plants(db, [project for _r, project, _a in rows])
-    names = _author_names(db, {r.created_by for r, _p, _a in rows})
+    # Author names in one bulk query for the whole report, the same shape
+    # `_to_out` uses - never one lookup per row. The projects no longer need
+    # `_attach_plants` here: the report's plant is the RECORD's, joined above,
+    # and the project's own plant columns are not part of this cell any more.
+    names = _author_names(db, {r.created_by for r, _p, _a, _mp in rows})
 
     out: list[ProductionStatusReportRow] = []
-    for serial, (r, project, activity_row) in enumerate(rows, start=1):
+    for serial, (r, project, activity_row, plant_row) in enumerate(rows, start=1):
         out.append(
             ProductionStatusReportRow(
                 serial=serial,
                 id=r.id,
                 project_id=project.id,
                 project_code=project.code,
-                project_plant=_project_plant(project),
+                # project + THIS RECORD's plant + revision, cleanly combined.
+                project_plant=_project_plant_display(
+                    project,
+                    plant_row.code if plant_row else None,
+                    r.revision,
+                ),
+                maintenance_plant_id=r.maintenance_plant_id,
+                maintenance_plant_code=plant_row.code if plant_row else None,
+                # Still in the dataset even though the workbook no longer gives
+                # it its own column - it identifies the row and its history.
                 revision=r.revision,
                 activity_id=r.activity_id,
                 activity=_activity_label(activity_row),

@@ -42,9 +42,12 @@ function row(
     serial: 1,
     id: "ps-1",
     project_id: "proj-1",
-    project_code: "GC25100600",
-    project_plant: "GC25100600 / 1102",
+    project_code: "4460-GC22104900",
+    // Already combined by the backend: project - plant revision.
+    project_plant: "4460-GC22104900 - KAHM REV-0",
     revision: "REV-0",
+    maintenance_plant_id: "plant-kahm",
+    maintenance_plant_code: "KAHM",
     activity_id: "act-1",
     activity: "TAG ESTIMATION",
     status: "closed",
@@ -98,13 +101,58 @@ test("S.NO is the backend's serial, never a client-side index", () => {
   assert.deepEqual(rows.map((r) => r.serial), ["7", "8"]);
 });
 
-test("REV-0 and REV-1 both render - a revision is not a version", () => {
+test("REV-0 and REV-1 stay distinct - inside the PROJECT / PLANT cell", () => {
   const rows = buildProductionStatusReportRows([
-    row({ id: "a", revision: "REV-0", activity: "MTL", status_label: "CLOSED" }),
-    row({ id: "b", revision: "REV-1", activity: "MTL", status_label: "IN PROGRESS" }),
+    row({
+      id: "a",
+      revision: "REV-0",
+      project_plant: "4460-GC22104900 - KAHM REV-0",
+      activity: "MTL",
+      status_label: "CLOSED",
+    }),
+    row({
+      id: "b",
+      revision: "REV-1",
+      project_plant: "4460-GC22104900 - KAHN REV-1",
+      activity: "MTL",
+      status_label: "IN PROGRESS",
+    }),
   ]);
-  assert.deepEqual(rows.map((r) => r.revision), ["REV-0", "REV-1"]);
+  // There is no REVISION column any more, so the two rows must remain
+  // distinguishable by their combined cell alone.
+  assert.deepEqual(rows.map((r) => r.projectPlant), [
+    "4460-GC22104900 - KAHM REV-0",
+    "4460-GC22104900 - KAHN REV-1",
+  ]);
+  assert.notEqual(rows[0].projectPlant, rows[1].projectPlant);
   assert.deepEqual(rows.map((r) => r.status), ["CLOSED", "IN PROGRESS"]);
+});
+
+test("the PROJECT / PLANT cell is printed verbatim, never re-composed", () => {
+  // The backend owns the format. If the preview built the string itself it
+  // would be a second implementation and could drift from the Excel.
+  const cases = [
+    "4460-GC22104900 - KAHM REV-0",   // project + plant + revision
+    "4391-GC21107300 REV-0",          // no plant
+    "NGLC2-GC10108000-PUMPING STATION", // project alone
+  ];
+  for (const project_plant of cases) {
+    const [built] = buildProductionStatusReportRows([row({ project_plant })]);
+    assert.equal(built.projectPlant, project_plant);
+  }
+});
+
+test("no placeholder junk ever reaches the PROJECT / PLANT cell", () => {
+  for (const project_plant of ["4391-GC21107300 REV-0", "4391-GC21107300"]) {
+    const [built] = buildProductionStatusReportRows([row({ project_plant })]);
+    for (const junk of ["null", "undefined", "/ null", " - REV", "  "]) {
+      assert.equal(
+        built.projectPlant.includes(junk),
+        false,
+        `${junk} leaked into ${built.projectPlant}`,
+      );
+    }
+  }
 });
 
 // --- 3. counts --------------------------------------------------------------
@@ -207,13 +255,26 @@ test("the columns are the workbook's columns, in the workbook's order", () => {
   assert.deepEqual(
     REPORT_COLUMNS.map((c) => c.label),
     [
-      "S.NO", "PROJECT / PLANT", "REVISION", "ACTIVITY", "PROJECT STATUS",
+      "S.NO", "PROJECT / PLANT", "ACTIVITY", "PROJECT STATUS",
       // Four separate count columns - no merged COUNT banner, no total.
       "TAG", "DOC", "SPARES", "CRS",
       "COMPLETED ON", "REMARKS", "BY",
     ],
   );
-  assert.equal(REPORT_COLUMNS.length, 12);
+  assert.equal(REPORT_COLUMNS.length, 11);
+});
+
+test("there is no REVISION column - it lives inside PROJECT / PLANT", () => {
+  // `REPORT_COLUMNS` is `as const`, so its labels are a literal union and
+  // `.includes("REVISION")` would not even compile. Widening to string[] keeps
+  // the check a real runtime assertion rather than a tautology.
+  const labels: string[] = REPORT_COLUMNS.map((c) => c.label);
+  assert.equal(labels.includes("REVISION"), false);
+
+  // ...but the value is still on the row, because it identifies the record and
+  // its history.
+  const source = row({ revision: "REV-1" });
+  assert.equal(source.revision, "REV-1");
 });
 
 test("every column key exists on a built row", () => {
