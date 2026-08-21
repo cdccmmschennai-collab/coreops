@@ -876,3 +876,121 @@ def build_project_weekly_report_workbook(report: dict) -> BytesIO:
                 cell.number_format = "dd-mm-yyyy"
 
     return _finalize(wb)
+
+
+# ---------------------------------------------------------------------------
+# PM cumulative Production Status report (Phase 4)
+# ---------------------------------------------------------------------------
+#
+# The rows handed in are ALREADY the finished report (see
+# production_status/service.py::cumulative_report). This builder only renders
+# them: it does not sort, filter, aggregate or recompute anything, which is what
+# guarantees the workbook holds exactly the rows the PM saw in the preview.
+_PS_HEADER_FILL = PatternFill(fill_type="solid", fgColor="FFFFFF00")
+_PS_HEADER_FONT = Font(name="Calibri", size=11, bold=True)
+_PS_BODY_FONT = Font(name="Calibri", size=11)
+_PS_SHEET_NAME = "Production Status"
+
+# The business date format the report is specified in: 05-Dec-2025. A real
+# Excel date carries the value; this only decides how it prints.
+_PS_DATE_FORMAT = "DD-MMM-YYYY"
+
+# (header, width, kind) — kind drives alignment/format only.
+#   "text"   left, no wrap        "wrap"   left, wrapped (long free text)
+#   "num"    centered number      "date"   real Excel date
+#
+# TAG / DOC / SPARES / CRS are four separate columns under no merged "COUNT"
+# banner and with no total column: they are four independent units, and a
+# combined figure would be a number the business never asked for.
+_PS_COLUMNS = [
+    ("S.NO", 7.0, "num"),
+    ("PROJECT / PLANT", 24.0, "text"),
+    ("REVISION", 12.0, "text"),
+    ("ACTIVITY", 26.0, "text"),
+    ("PROJECT STATUS", 16.0, "text"),
+    ("TAG", 9.0, "num"),
+    ("DOC", 9.0, "num"),
+    ("SPARES", 10.0, "num"),
+    ("CRS", 9.0, "num"),
+    ("COMPLETED ON", 15.0, "date"),
+    ("REMARKS", 60.0, "wrap"),
+    ("BY", 22.0, "text"),
+]
+
+
+def _ps_cell_values(row: dict) -> list:
+    """One report row -> the 12 cell values, in column order.
+
+    Three rules the PM's spreadsheet depends on:
+
+      counts       stay integers, INCLUDING zero. A 0 is written as the number
+                   0, never as "-" — the column has to stay sortable, filterable
+                   and summable, and a text placeholder in one cell breaks all
+                   three for the whole column.
+      completed_on stays a real date, or is left empty (None) when the update
+                   has not completed. No placeholder, and no invented date.
+      remarks      go in whole. Never truncated; the column is wrapped instead.
+    """
+    return [
+        row.get("serial"),
+        row.get("project_plant") or "",
+        row.get("revision") or "",
+        row.get("activity") or "",
+        row.get("status_label") or "",
+        int(row.get("tag_count") or 0),
+        int(row.get("doc_count") or 0),
+        int(row.get("spares_count") or 0),
+        int(row.get("crs_count") or 0),
+        row.get("completed_on"),
+        row.get("remarks") or "",
+        row.get("by") or "",
+    ]
+
+
+def build_production_status_report_workbook(report: dict) -> BytesIO:
+    """Render the cumulative Production Status report (the dict from
+    production_status.service.cumulative_report) as .xlsx.
+
+    Sheet "Production Status", one bold header row that stays frozen and
+    filterable while the PM scrolls. An empty report still produces a valid
+    workbook with its header row — the same thing every other CoreOps export
+    does rather than returning an error or an empty file.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = _PS_SHEET_NAME
+
+    for idx, (label, width, _kind) in enumerate(_PS_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=idx, value=label)
+        cell.font = _PS_HEADER_FONT
+        cell.fill = _PS_HEADER_FILL
+        cell.border = _BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    rows = report.get("rows") or []
+    for offset, row in enumerate(rows):
+        excel_row = offset + 2
+        for idx, ((_label, _width, kind), value) in enumerate(
+            zip(_PS_COLUMNS, _ps_cell_values(row)), start=1
+        ):
+            cell = ws.cell(row=excel_row, column=idx, value=value)
+            cell.font = _PS_BODY_FONT
+            cell.border = _BORDER
+            cell.alignment = Alignment(
+                horizontal="center" if kind in ("num", "date") else "left",
+                vertical="top",
+                wrap_text=kind == "wrap",
+            )
+            if kind == "date":
+                cell.number_format = _PS_DATE_FORMAT
+
+    # The header stays put, and stays filterable, however long the report is.
+    # The filter spans the header row even when there are no data rows, so an
+    # empty workbook still opens as a proper table rather than a bare grid.
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = (
+        f"A1:{get_column_letter(len(_PS_COLUMNS))}{max(len(rows) + 1, 1)}"
+    )
+
+    return _finalize(wb)

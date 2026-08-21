@@ -18,3 +18,13 @@ export interface ProductionStatusHistoryParams {
   activityId?: string;
   revision?: string;
 }
+
+// The PM cumulative report (Phase 4). A flat, fully-rendered row - the plant
+// label, the activity label, the status wording, the author's name and the
+// S.NO are all resolved server-side, because the .xlsx is rendered from this
+// same dataset and the two must not be able to disagree.
+export type ProductionStatusReport =
+  components["schemas"]["ProductionStatusReportOut"];
+
+export type ProductionStatusReportRow =
+  components["schemas"]["ProductionStatusReportRow"];

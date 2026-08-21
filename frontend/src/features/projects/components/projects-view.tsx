@@ -3,11 +3,13 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Plus } from "lucide-react";
+import { ClipboardList, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
+import { ProductionStatusReportDialog } from "@/features/production-status/components/production-status-report-dialog";
+import { canViewProductionStatusReport } from "@/features/production-status/production-status-report";
 import { can } from "@/lib/rbac";
 
 import { ArchiveDialog } from "./archive-dialog";
@@ -46,6 +48,13 @@ export function ProjectsView() {
 
   const query = useProjects(params);
   const [archiveTarget, setArchiveTarget] = React.useState<Project | null>(null);
+  const [reportOpen, setReportOpen] = React.useState(false);
+
+  // The cumulative Production Status report is PM-only. A Project Head and an
+  // activity Lead both read Production Status on their own projects and still
+  // must not see this - it spans every project. The endpoint enforces the same
+  // rule, so hiding the button is convenience, not the control.
+  const canViewReport = canViewProductionStatusReport(role);
 
   function commit(next: URLSearchParams) {
     const qs = next.toString();
@@ -78,6 +87,20 @@ export function ProjectsView() {
     </Button>
   ) : null;
 
+  // Sits beside "New project" in the page header. Secondary variant: reviewing
+  // a report is not the primary action on this page, creating a project is.
+  const headerActions = (
+    <>
+      {canViewReport && (
+        <Button variant="secondary" onClick={() => setReportOpen(true)}>
+          <ClipboardList className="h-4 w-4" />
+          Production Status
+        </Button>
+      )}
+      {addButton}
+    </>
+  );
+
   const count = query.data?.total;
 
   return (
@@ -87,7 +110,7 @@ export function ProjectsView() {
         subtitle={
           count !== undefined ? `${count} ${count === 1 ? "project" : "projects"}` : undefined
         }
-        actions={addButton}
+        actions={headerActions}
       />
       <div className="mb-4">
         <ProjectsFilters values={{ q: params.q, status: params.status }} onChange={onFilterChange} />
@@ -110,6 +133,11 @@ export function ProjectsView() {
           if (!open) setArchiveTarget(null);
         }}
       />
+      {/* Mounted only for a PM, so the report query can never be fired by a
+          viewer the endpoint would refuse. */}
+      {canViewReport && (
+        <ProductionStatusReportDialog open={reportOpen} onOpenChange={setReportOpen} />
+      )}
     </>
   );
 }

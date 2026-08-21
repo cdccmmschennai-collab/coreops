@@ -2243,6 +2243,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/production-status/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Production Status Report
+         * @description The latest production status of every project + revision + activity.
+         *
+         *     ONE request for the whole report - the client never walks the project list
+         *     firing a request per project.
+         *
+         *     project_manager only, enforced inside the service (`_assert_can_read_report`)
+         *     rather than by a role dependency here, so a Head, an activity Lead or an
+         *     ordinary employee gets the same 403 whether they reach it through the API or
+         *     through any other caller of the service. Hiding the button in the UI is
+         *     convenience; this is the control.
+         */
+        get: operations["get_production_status_report_api_v1_production_status_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/production-status/report.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Production Status Report Xlsx
+         * @description The same dataset as the preview, as a styled .xlsx download.
+         *
+         *     Calls the identical service function the preview does - one query, one
+         *     ordering, one set of rows - so the file can never hold more or fewer rows
+         *     than the screen it was downloaded from. Authorization runs again inside that
+         *     service, so pasting this URL as a non-PM fails with 403 exactly as the
+         *     preview does.
+         *
+         *     `.xlsx` suffix + StreamingResponse + Content-Disposition is the established
+         *     CoreOps export shape (/projects/{id}/weekly-report.xlsx,
+         *     /reports-export/activity-rows.xlsx) - no second Excel stack, no base64 in
+         *     JSON.
+         */
+        get: operations["get_production_status_report_xlsx_api_v1_production_status_report_xlsx_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plants/planning-plants": {
         parameters: {
             query?: never;
@@ -5392,6 +5452,83 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** ProductionStatusReportOut */
+        ProductionStatusReportOut: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Row Count */
+            row_count: number;
+            /** Rows */
+            rows: components["schemas"]["ProductionStatusReportRow"][];
+        };
+        /**
+         * ProductionStatusReportRow
+         * @description One line of the PM's cumulative report - the latest update for one
+         *     project + revision + activity.
+         *
+         *     Deliberately a FLAT, fully-rendered row rather than `ProductionStatusOut`:
+         *     the same dict is serialised to the browser and rendered into the .xlsx, so
+         *     every cell that needs a decision (which plant label, which status wording,
+         *     which serial number) is decided once here on the server. A client that
+         *     formatted these itself would be a second implementation of the report, and
+         *     the preview and the file could then disagree.
+         *
+         *     What is NOT rendered: the four counts stay integers and `completed_on` stays
+         *     a date, because Excel must receive real numbers and a real date to filter,
+         *     sort and sum them. Formatting those is each renderer's job, the VALUE is
+         *     not.
+         */
+        ProductionStatusReportRow: {
+            /** Serial */
+            serial: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Code */
+            project_code: string;
+            /** Project Plant */
+            project_plant: string;
+            /** Revision */
+            revision: string;
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /** Activity */
+            activity: string;
+            /** Status */
+            status: string;
+            /** Status Label */
+            status_label: string;
+            /** Tag Count */
+            tag_count: number;
+            /** Doc Count */
+            doc_count: number;
+            /** Spares Count */
+            spares_count: number;
+            /** Crs Count */
+            crs_count: number;
+            /** Completed On */
+            completed_on?: string | null;
+            /** Remarks */
+            remarks?: string | null;
+            /**
+             * By
+             * @default
+             */
+            by: string;
         };
         /** ProjectActivityCreate */
         ProjectActivityCreate: {
@@ -12547,6 +12684,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_production_status_report_api_v1_production_status_report_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductionStatusReportOut"];
+                };
+            };
+        };
+    };
+    get_production_status_report_xlsx_api_v1_production_status_report_xlsx_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

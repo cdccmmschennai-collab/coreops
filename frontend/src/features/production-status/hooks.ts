@@ -73,6 +73,23 @@ export function useProductionStatusHistory(
  * query for the project is invalidated too, because the new row belongs at the
  * top of its own activity/revision trail and of the unfiltered list.
  */
+/**
+ * The PM cumulative report.
+ *
+ * ONE query for every project. `enabled` carries both the caller's authority
+ * and the dialog's open state: the endpoint is PM-only, so a non-PM must not
+ * fire a request guaranteed to come back 403 (they never see the button
+ * either), and the report is not fetched at all until the PM opens it - the
+ * projects list must not pay for a report nobody asked for.
+ */
+export function useProductionStatusReport(enabled: boolean) {
+  return useQuery({
+    queryKey: productionStatusKeys.report(),
+    queryFn: () => productionStatusApi.report(),
+    enabled,
+  });
+}
+
 export function useCreateProductionStatus(projectId: string) {
   const qc = useQueryClient();
   return useMutation({

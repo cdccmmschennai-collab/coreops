@@ -65,3 +65,72 @@ class ProductionStatusOut(BaseModel):
     created_by: uuid.UUID
     created_by_name: str = ""
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# PM cumulative report (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class ProductionStatusReportRow(BaseModel):
+    """One line of the PM's cumulative report - the latest update for one
+    project + revision + activity.
+
+    Deliberately a FLAT, fully-rendered row rather than `ProductionStatusOut`:
+    the same dict is serialised to the browser and rendered into the .xlsx, so
+    every cell that needs a decision (which plant label, which status wording,
+    which serial number) is decided once here on the server. A client that
+    formatted these itself would be a second implementation of the report, and
+    the preview and the file could then disagree.
+
+    What is NOT rendered: the four counts stay integers and `completed_on` stays
+    a date, because Excel must receive real numbers and a real date to filter,
+    sort and sum them. Formatting those is each renderer's job, the VALUE is
+    not.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # 1-based, stamped from the report's single ordering - so the preview's
+    # S.NO and the workbook's S.NO are the same number for the same row.
+    serial: int
+
+    # The underlying production status record, so a client can key rows on
+    # something stable without inventing a composite key.
+    id: uuid.UUID
+
+    project_id: uuid.UUID
+    project_code: str
+    # The rendered "PROJECT / PLANT" cell (see service._project_plant). One
+    # field, not a second project/plant record.
+    project_plant: str
+
+    revision: str
+
+    activity_id: uuid.UUID
+    # The rendered ACTIVITY cell: the activity's name, else its code.
+    activity: str
+
+    # The stored value ('in_progress' / 'closed') AND its display wording. The
+    # vocabulary is unchanged; `status_label` is only how it reads.
+    status: str
+    status_label: str
+
+    # Four independent units. Never summed, never combined into one column.
+    tag_count: int
+    doc_count: int
+    spares_count: int
+    crs_count: int
+
+    # Null when the update has not completed. No date is ever invented.
+    completed_on: date | None = None
+    # Exactly what the author typed - never truncated.
+    remarks: str | None = None
+    # The real person's name, resolved server-side. Never a role word.
+    by: str = ""
+
+
+class ProductionStatusReportOut(BaseModel):
+    generated_at: datetime
+    row_count: int
+    rows: list[ProductionStatusReportRow]

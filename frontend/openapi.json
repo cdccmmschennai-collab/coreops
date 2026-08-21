@@ -9771,6 +9771,58 @@
         }
       }
     },
+    "/api/v1/production-status/report": {
+      "get": {
+        "tags": [
+          "production-status"
+        ],
+        "summary": "Get Production Status Report",
+        "description": "The latest production status of every project + revision + activity.\n\nONE request for the whole report - the client never walks the project list\nfiring a request per project.\n\nproject_manager only, enforced inside the service (`_assert_can_read_report`)\nrather than by a role dependency here, so a Head, an activity Lead or an\nordinary employee gets the same 403 whether they reach it through the API or\nthrough any other caller of the service. Hiding the button in the UI is\nconvenience; this is the control.",
+        "operationId": "get_production_status_report_api_v1_production_status_report_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductionStatusReportOut"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/production-status/report.xlsx": {
+      "get": {
+        "tags": [
+          "production-status"
+        ],
+        "summary": "Get Production Status Report Xlsx",
+        "description": "The same dataset as the preview, as a styled .xlsx download.\n\nCalls the identical service function the preview does - one query, one\nordering, one set of rows - so the file can never hold more or fewer rows\nthan the screen it was downloaded from. Authorization runs again inside that\nservice, so pasting this URL as a non-PM fails with 403 exactly as the\npreview does.\n\n`.xlsx` suffix + StreamingResponse + Content-Disposition is the established\nCoreOps export shape (/projects/{id}/weekly-report.xlsx,\n/reports-export/activity-rows.xlsx) - no second Excel stack, no base64 in\nJSON.",
+        "operationId": "get_production_status_report_xlsx_api_v1_production_status_report_xlsx_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/plants/planning-plants": {
       "get": {
         "tags": [
@@ -18018,6 +18070,143 @@
           "created_at"
         ],
         "title": "ProductionStatusOut"
+      },
+      "ProductionStatusReportOut": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "row_count": {
+            "type": "integer",
+            "title": "Row Count"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ProductionStatusReportRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "row_count",
+          "rows"
+        ],
+        "title": "ProductionStatusReportOut"
+      },
+      "ProductionStatusReportRow": {
+        "properties": {
+          "serial": {
+            "type": "integer",
+            "title": "Serial"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "project_code": {
+            "type": "string",
+            "title": "Project Code"
+          },
+          "project_plant": {
+            "type": "string",
+            "title": "Project Plant"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Activity Id"
+          },
+          "activity": {
+            "type": "string",
+            "title": "Activity"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "status_label": {
+            "type": "string",
+            "title": "Status Label"
+          },
+          "tag_count": {
+            "type": "integer",
+            "title": "Tag Count"
+          },
+          "doc_count": {
+            "type": "integer",
+            "title": "Doc Count"
+          },
+          "spares_count": {
+            "type": "integer",
+            "title": "Spares Count"
+          },
+          "crs_count": {
+            "type": "integer",
+            "title": "Crs Count"
+          },
+          "completed_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed On"
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks"
+          },
+          "by": {
+            "type": "string",
+            "title": "By",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "serial",
+          "id",
+          "project_id",
+          "project_code",
+          "project_plant",
+          "revision",
+          "activity_id",
+          "activity",
+          "status",
+          "status_label",
+          "tag_count",
+          "doc_count",
+          "spares_count",
+          "crs_count"
+        ],
+        "title": "ProductionStatusReportRow",
+        "description": "One line of the PM's cumulative report - the latest update for one\nproject + revision + activity.\n\nDeliberately a FLAT, fully-rendered row rather than `ProductionStatusOut`:\nthe same dict is serialised to the browser and rendered into the .xlsx, so\nevery cell that needs a decision (which plant label, which status wording,\nwhich serial number) is decided once here on the server. A client that\nformatted these itself would be a second implementation of the report, and\nthe preview and the file could then disagree.\n\nWhat is NOT rendered: the four counts stay integers and `completed_on` stays\na date, because Excel must receive real numbers and a real date to filter,\nsort and sum them. Formatting those is each renderer's job, the VALUE is\nnot."
       },
       "ProjectActivityCreate": {
         "properties": {

@@ -14,4 +14,6 @@ export const productionStatusKeys = {
       params.activityId ?? "",
       params.revision ?? "",
     ] as const,
+  /** The PM cumulative report. No project in the key - it spans all of them. */
+  report: () => ["production-status", "report"] as const,
 };
