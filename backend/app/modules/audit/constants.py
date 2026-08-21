@@ -18,6 +18,7 @@ class EntityType:
     ATTENDANCE_RECORD = "attendance_record"
     LEAVE_REQUEST = "leave_request"
     PERMISSION_REQUEST = "permission_request"
+    PRODUCTION_STATUS = "production_status"
 
 
 class AuditAction:
@@ -111,6 +112,13 @@ class AuditAction:
     PERMISSION_REQUEST_APPROVE = "permission.request.approve"
     PERMISSION_REQUEST_REJECT = "permission.request.reject"
     PERMISSION_REQUEST_CANCEL = "permission.request.cancel"
+
+    # --- production status (Tier B, migration 0070) ---
+    # The status table is itself append-only, so this row is not the history -
+    # it is the security trail: who recorded a production figure, from which IP,
+    # against which project/revision/activity. There is no update or delete
+    # action because the module has no update or delete path.
+    PRODUCTION_STATUS_RECORD = "production_status.record"
 
 
 # Statuses

@@ -37,6 +37,7 @@ from app.modules.users.router import router as users_router
 from app.modules.project_activities.router import router as project_activities_router
 from app.modules.project_deliverables.router import router as deliverables_router
 from app.modules.project_submissions.router import router as submissions_router
+from app.modules.production_status.router import router as production_status_router
 from app.modules.report_compliance.router import router as report_compliance_router
 from app.modules.reports_export.router import router as reports_export_router
 from app.modules.work_reports.router import router as work_reports_router
@@ -110,6 +111,7 @@ def create_app() -> FastAPI:
     app.include_router(project_activities_router, prefix=settings.API_V1_PREFIX)
     app.include_router(deliverables_router, prefix=settings.API_V1_PREFIX)
     app.include_router(submissions_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(production_status_router, prefix=settings.API_V1_PREFIX)
     app.include_router(plants_router, prefix=settings.API_V1_PREFIX)
     # Biometric (Phase 2). The ingestion route is always mounted but answers 404
     # to everyone while EASYTIME_INGESTION_ENABLED is false; the admin routes are
