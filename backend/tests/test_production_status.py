@@ -136,8 +136,15 @@ def test_migration_created_table_and_indexes(db):
         # Migration 0071 - the record's selected Maintenance Plant. Nullable,
         # so every row written before 0071 is still valid.
         "maintenance_plant_id",
+        # Migration 0072 - the typed activity name, for an activity that is not
+        # in Activity Master.
+        "activity_label",
     }
     assert cols["maintenance_plant_id"] == ("uuid", "YES")
+    # 0072: BOTH activity columns are nullable, because exactly one of them is
+    # set on any given row - which is what the CHECK below enforces.
+    assert cols["activity_id"] == ("uuid", "YES")
+    assert cols["activity_label"][1] == "YES"
     # Append-only: no updated_at, no soft-delete column (asserted by the set above).
     assert cols["tag_count"] == ("integer", "NO")
     assert cols["crs_count"] == ("integer", "NO")
@@ -165,6 +172,8 @@ def test_migration_created_table_and_indexes(db):
     }
     assert "project_production_statuses_status_valid" in checks
     assert "project_production_statuses_counts_non_negative" in checks
+    # 0072: an activity named exactly once - an id OR a typed label.
+    assert "project_production_statuses_activity_named_once" in checks
     assert "project_production_statuses_revision_not_blank" in checks
 
 
@@ -406,39 +415,41 @@ def test_invalid_project_and_activity_rejected(db, scene, make_project):
     # Unknown project.
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, _uuid.uuid4(), _payload(scene.activity.id)
+            db, scene.head_u, _uuid.uuid4(), _payload(scene.activity.id)
         )
     assert ei.value.status_code == 404
 
     # Unknown activity.
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project.id, _payload(_uuid.uuid4())
+            db, scene.head_u, scene.project.id, _payload(_uuid.uuid4())
         )
     assert ei.value.status_code == 404
 
-    # A real activity that is not on this project.
+    # An Activity Master activity this project is NOT staffed for is ACCEPTED
+    # now: the Head owns the project's whole output and reports against every
+    # activity, not only the ones somebody happens to be assigned to. Requiring
+    # staffing left a project with none unable to record anything at all.
     unrelated = _activity(db, "UNRELATED")
-    with pytest.raises(AppError) as ei:
-        ps_svc.create_production_status(
-            db, scene.pm, scene.project.id, _payload(unrelated.id)
-        )
-    assert ei.value.status_code == 422
+    out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(unrelated.id)
+    )
+    assert out.activity_name == "UNRELATED"
 
-    # A sub-activity is not a valid production-status activity.
+    # A sub-activity is still not a valid production-status activity.
     sub = am_svc.create_sub_activity(
         db, scene.activity.id, SubActivityCreate(code="FMTL-1", name="FMTL step")
     )
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project.id, _payload(sub.id)
+            db, scene.head_u, scene.project.id, _payload(sub.id)
         )
     assert ei.value.status_code == 422
 
     # Whitespace is not a revision label.
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project.id,
+            db, scene.head_u, scene.project.id,
             _payload(scene.activity.id, revision="   "),
         )
     assert ei.value.status_code == 422
@@ -682,3 +693,202 @@ def test_module_exposes_no_update_or_delete(db, scene):
     }
     assert "updated_at" not in cols
     assert "deleted_at" not in cols
+
+# ===========================================================================
+# Phase 6 - the Head's activity list, PM read-only, and a typed activity.
+# ===========================================================================
+
+# --- 20. the PM is read-only -------------------------------------------------
+
+def test_project_manager_cannot_record(db, scene, client, login):
+    """Deliberate: production status is a claim about work that was done, made
+    by the people who did it. The PM reads it - including the cumulative report
+    nobody else can - and records none of it."""
+    with pytest.raises(AppError) as ei:
+        ps_svc.create_production_status(
+            db, scene.pm, scene.project.id, _payload(scene.activity.id)
+        )
+    assert ei.value.status_code == 403
+
+    # Over HTTP too, so it is not merely a service-level rule.
+    res = client.post(
+        f"/api/v1/projects/{scene.project.id}/production-status",
+        headers=login("pm@x.com"),
+        json={"revision": "REV-0", "activity_id": str(scene.activity.id),
+              "status": "in_progress", "tag_count": 5},
+    )
+    assert res.status_code == 403
+
+
+def test_the_pm_keeps_every_read(db, scene, client, login):
+    """Read access is untouched - only the write is gone."""
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(scene.activity.id, tag_count=225)
+    )
+
+    assert len(ps_svc.list_latest(db, scene.pm, scene.project.id)) == 1
+    assert len(ps_svc.list_history(db, scene.pm, scene.project.id)) == 1
+    # And the cumulative report is still PM-only.
+    assert ps_svc.cumulative_report(db, scene.pm)["row_count"] == 1
+
+    hdr = login("pm@x.com")
+    base = f"/api/v1/projects/{scene.project.id}/production-status"
+    assert client.get(base, headers=hdr).status_code == 200
+    assert client.get(f"{base}/history", headers=hdr).status_code == 200
+
+
+# --- 21. the Head reaches every Activity Master activity ---------------------
+
+def test_head_may_record_against_an_unstaffed_activity(db, scene):
+    """The change this phase exists for.
+
+    An activity no one is staffed on is still an activity the project produces
+    against, and the Head owns that output. Requiring staffing left a project
+    with none unable to record anything at all.
+    """
+    unstaffed = _activity(db, "1ST STAGE IDB")
+
+    out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(unstaffed.id, tag_count=2136)
+    )
+    assert out.activity_name == "1ST STAGE IDB"
+    assert out.tag_count == 2136
+
+    # It appears on the tab and in the report like any other row.
+    assert {r.activity_name for r in ps_svc.list_latest(db, scene.head_u, scene.project.id)} == {
+        "1ST STAGE IDB"
+    }
+
+
+def test_a_lead_is_still_confined_to_the_activity_they_lead(db, scene):
+    """Widening the Head's list did not widen anyone else's."""
+    unstaffed = _activity(db, "1ST STAGE IDB")
+
+    # Their own activity: fine.
+    ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id, _payload(scene.activity.id, tag_count=10)
+    )
+    # Another activity on the project, and one on no project at all: neither.
+    for activity_id in (scene.other_activity.id, unstaffed.id):
+        with pytest.raises(AppError) as ei:
+            ps_svc.create_production_status(
+                db, scene.lead_u, scene.project.id, _payload(activity_id)
+            )
+        assert ei.value.status_code == 403
+
+
+# --- 22. a typed activity ----------------------------------------------------
+
+def test_head_can_type_an_activity_that_is_not_in_activity_master(db, scene):
+    out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        ProductionStatusCreate(
+            revision="REV-0", activity_label="HIERARCHY QA/QC",
+            status="in_progress", tag_count=1654, doc_count=56,
+        ),
+    )
+
+    assert out.activity_id is None
+    assert out.activity_label == "HIERARCHY QA/QC"
+    # Resolved to ONE name, so a client renders it without knowing which kind.
+    assert out.activity_name == "HIERARCHY QA/QC"
+    assert out.tag_count == 1654
+
+
+def test_a_typed_activity_never_enters_activity_master(db, scene):
+    """The whole reason it is a column and not a new master row: Activity
+    Master drives work reports, staffing and benchmarks company-wide."""
+    before = {a.id for a in am_svc.list_activities(db, active_only=False)}
+
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        ProductionStatusCreate(revision="REV-0", activity_label="HIERARCHY QA/QC",
+                               status="in_progress"),
+    )
+
+    assert {a.id for a in am_svc.list_activities(db, active_only=False)} == before
+
+
+def test_a_typed_activity_has_its_own_identity_and_history(db, scene):
+    """It supersedes and accumulates exactly as a master activity does."""
+    for tag in (100, 200):
+        ps_svc.create_production_status(
+            db, scene.head_u, scene.project.id,
+            ProductionStatusCreate(revision="REV-0", activity_label="HIERARCHY QA/QC",
+                                   status="in_progress", tag_count=tag),
+        )
+    # A DIFFERENT typed name is a different row, not a newer version of the same.
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        ProductionStatusCreate(revision="REV-0", activity_label="BOM QA/QC",
+                               status="in_progress", tag_count=584),
+    )
+    # And so is a master activity, which must not collide with either.
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(scene.activity.id, tag_count=7)
+    )
+
+    latest = ps_svc.list_latest(db, scene.head_u, scene.project.id)
+    assert {(r.activity_name, r.tag_count) for r in latest} == {
+        ("HIERARCHY QA/QC", 200), ("BOM QA/QC", 584), ("FMTL", 7),
+    }
+
+    # The trail is filterable by the typed name, the way an id filters a master
+    # activity's - so a typed activity's History dialog shows only its own.
+    trail = ps_svc.list_history(
+        db, scene.head_u, scene.project.id, activity_label="HIERARCHY QA/QC"
+    )
+    assert [h.tag_count for h in trail] == [200, 100]
+
+
+def test_only_the_head_may_type_an_activity(db, scene):
+    """A Lead's authority is over ONE named Activity Master activity - a typed
+    name has nothing for it to attach to."""
+    for actor in (scene.lead_u, scene.other_u, scene.pm):
+        with pytest.raises(AppError) as ei:
+            ps_svc.create_production_status(
+                db, actor, scene.project.id,
+                ProductionStatusCreate(revision="REV-0", activity_label="TYPED",
+                                       status="in_progress"),
+            )
+        assert ei.value.status_code == 403
+
+
+def test_an_activity_is_named_exactly_once(db, scene):
+    """Both, or neither, is refused before it reaches the database."""
+    import pydantic
+
+    # Neither.
+    with pytest.raises(pydantic.ValidationError):
+        ProductionStatusCreate(revision="REV-0", status="in_progress")
+    # Both.
+    with pytest.raises(pydantic.ValidationError):
+        ProductionStatusCreate(
+            revision="REV-0", activity_id=scene.activity.id,
+            activity_label="TYPED", status="in_progress",
+        )
+    # Whitespace is not a name.
+    with pytest.raises(pydantic.ValidationError):
+        ProductionStatusCreate(revision="REV-0", activity_label="   ",
+                               status="in_progress")
+
+    # ...and the database refuses it too, so no other path can write one.
+    with pytest.raises(Exception):
+        db.execute(
+            text(
+                "INSERT INTO project_production_statuses "
+                "(project_id, revision, status, created_by) "
+                "VALUES (:p, 'REV-0', 'in_progress', :u)"
+            ),
+            {"p": str(scene.project.id), "u": str(scene.head_u.id)},
+        )
+    db.rollback()
+
+
+def test_a_typed_name_is_stored_trimmed(db, scene):
+    out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        ProductionStatusCreate(revision="REV-0", activity_label="  PM PREPARATION  ",
+                               status="in_progress"),
+    )
+    assert out.activity_label == "PM PREPARATION"

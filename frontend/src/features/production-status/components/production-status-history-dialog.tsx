@@ -54,7 +54,14 @@ export function ProductionStatusHistoryDialog({
   const open = target !== null;
   const query = useProductionStatusHistory(
     projectId,
-    { activityId: target?.activityId, revision: target?.revision },
+    // Exactly one of these identifies the activity, mirroring the record: an
+    // Activity Master id, or the name that was typed. Sending the one the row
+    // carries is what keeps a typed activity's trail its own.
+    {
+      activityId: target?.activityId ?? undefined,
+      activityLabel: target?.typedActivity ?? undefined,
+      revision: target?.revision,
+    },
     open,
   );
   const rows = buildProductionStatusRows(query.data, formatDateTime);

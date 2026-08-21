@@ -209,7 +209,18 @@ export interface ProductionStatusViewer {
   employeeId: string | null;
 }
 
-export function activityLabel(activity: ActivityStaffingLike): string {
+/**
+ * The name to show for an activity.
+ *
+ * Takes only the two fields it reads, so it serves a staffing row and a
+ * production status record alike - the API already resolves `activity_name` for
+ * both an Activity Master activity and a typed one, so neither caller has to
+ * know which kind it holds.
+ */
+export function activityLabel(activity: {
+  activity_name?: string | null;
+  activity_code?: string | null;
+}): string {
   const name = activity.activity_name?.trim();
   if (name) return name;
   const code = activity.activity_code?.trim();
@@ -217,19 +228,46 @@ export function activityLabel(activity: ActivityStaffingLike): string {
 }
 
 /**
- * Every activity that is valid for this project.
+ * The activities this project is STAFFED for.
  *
- * Deliberately derived from the project's activity STAFFING rather than from a
- * new list: "valid for the project" has exactly one definition, and it is the
- * backend's - `_fetch_valid_activity` accepts an activity only when it has a
- * `project_activity_members` row on that project. Reading the same join here
- * means the dropdown can never offer something the POST would reject, and no
- * second activity catalogue exists to drift.
+ * Still exactly the `project_activity_members` join, and still what an Activity
+ * Lead's own options are drawn from. It is no longer the Head's list: see
+ * `submittableActivityOptions`.
  */
 export function projectActivityOptions(
   staffing: readonly ActivityStaffingLike[] | null | undefined,
 ): ActivityOption[] {
   return (staffing ?? []).map((a) => ({ id: a.activity_id, label: activityLabel(a) }));
+}
+
+/** One Activity Master activity, as GET /activity-master/activities returns it. */
+export interface ActivityMasterLike {
+  id: string;
+  code?: string | null;
+  name?: string | null;
+  level?: string | null;
+  is_active?: boolean | null;
+}
+
+/**
+ * Every activity in Activity Master, as dropdown options.
+ *
+ * The Head's list. Top-level Activities only and active ones only - a
+ * sub-activity is refused by the backend (`_fetch_valid_activity`), and an
+ * inactive activity is retired master data that should not be offered for new
+ * work. Sorted by the name actually shown, so the list reads alphabetically
+ * however the master data happens to be ordered.
+ */
+export function activityMasterOptions(
+  activities: readonly ActivityMasterLike[] | null | undefined,
+): ActivityOption[] {
+  return (activities ?? [])
+    .filter((a) => a.is_active !== false && (a.level ?? "activity") === "activity")
+    .map((a) => ({
+      id: a.id,
+      label: (a.name ?? "").trim() || (a.code ?? "").trim() || VALUE_UNAVAILABLE,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 /** True when the viewer leads at least one activity on this project. */
@@ -242,25 +280,129 @@ export function leadsAnyActivity(
 }
 
 /**
+ * May this viewer record production status at all?
+ *
+ * Mirrors backend `_record_authority`:
+ *   this project's Head          yes - every activity, and may type a new one
+ *   the Lead of an activity here yes - that activity only
+ *   the project_manager          NO. Read-only, deliberately.
+ *
+ * The PM exclusion is the point, not an oversight: production status is a claim
+ * about work that was done, made by the people who did it. The PM reads the tab
+ * and reads the cumulative report nobody else can.
+ *
+ * Hiding the form is convenience, not the control - the POST re-resolves the
+ * same rule and answers 403 regardless of what this returns.
+ */
+export function canRecordProductionStatus(
+  staffing: readonly ActivityStaffingLike[] | null | undefined,
+  viewer: ProductionStatusViewer,
+): boolean {
+  if (viewer.isHead) return true;
+  return leadsAnyActivity(staffing, viewer.employeeId);
+}
+
+/** May this viewer type an activity that is not in Activity Master? Head only. */
+export function canTypeNewActivity(viewer: ProductionStatusViewer): boolean {
+  return viewer.isHead;
+}
+
+// ---------------------------------------------------------------------------
+// A typed activity, inside a dropdown that selects by id
+// ---------------------------------------------------------------------------
+
+/**
+ * Marks a dropdown selection as a name the user TYPED rather than an id they
+ * picked.
+ *
+ * The activity control is one Combobox with one string value, and that value
+ * has to be able to say either "this Activity Master row" or "these words".
+ * Prefixing is how it says the second without a second form field to keep in
+ * step - `parseActivitySelection` turns it back into the two fields the API
+ * actually takes.
+ *
+ * A colon cannot appear in a UUID, so a real id can never be mistaken for a
+ * typed one however the two are mixed.
+ */
+export const TYPED_ACTIVITY_PREFIX = "new:";
+
+/** The dropdown value standing for a typed activity name. */
+export function typedActivityValue(label: string): string {
+  return `${TYPED_ACTIVITY_PREFIX}${label.trim()}`;
+}
+
+/** True when this selection is a typed name rather than an Activity Master id. */
+export function isTypedActivity(value: string | null | undefined): boolean {
+  return (value ?? "").startsWith(TYPED_ACTIVITY_PREFIX);
+}
+
+/**
+ * One dropdown value -> the two fields the API takes, exactly one of them set.
+ *
+ * The same split the backend enforces (`_exactly_one_activity`), done once
+ * here, so the form never has to reason about which kind of activity it holds.
+ * An empty selection yields two nulls and the form's own required-check is what
+ * catches it.
+ */
+export function parseActivitySelection(value: string | null | undefined): {
+  activity_id: string | null;
+  activity_label: string | null;
+} {
+  const raw = (value ?? "").trim();
+  if (!raw) return { activity_id: null, activity_label: null };
+  if (isTypedActivity(raw)) {
+    const label = raw.slice(TYPED_ACTIVITY_PREFIX.length).trim();
+    return label
+      ? { activity_id: null, activity_label: label }
+      : { activity_id: null, activity_label: null };
+  }
+  return { activity_id: raw, activity_label: null };
+}
+
+/**
+ * The options list with the current typed activity included.
+ *
+ * A typed name is not in Activity Master, so without this the Combobox would
+ * have nothing to render for its own selected value and the field would look
+ * empty right after the user typed into it. Appended, never merged into the
+ * master list, and only while it is the selection.
+ */
+export function withTypedActivityOption(
+  options: readonly ActivityOption[],
+  value: string | null | undefined,
+): ActivityOption[] {
+  if (!isTypedActivity(value)) return [...options];
+  const { activity_label } = parseActivitySelection(value);
+  if (!activity_label) return [...options];
+  return [...options, { id: value as string, label: activity_label }];
+}
+
+/**
  * The activities the viewer may POST an update for.
  *
- * Mirrors backend `authz.activity_staffing_authority`:
- *   PM or this project's Head -> "full", every activity on the project
- *   the assigned Lead of one activity -> "lead", that activity only
- *   anyone else -> nothing
+ *   the Head   EVERY activity in Activity Master - not just the ones this
+ *              project is staffed for. The Head owns the project's whole
+ *              output and reports on activities nobody may be formally staffed
+ *              on yet; requiring staffing left a project with none unable to
+ *              record anything at all.
+ *   a Lead     the activities they lead ON THIS PROJECT, from its staffing.
+ *              Their authority is over the activity they were given, and that
+ *              is unchanged.
+ *   the PM     none - they do not get the form.
  *
- * Hiding an activity is convenience, not the control: the POST re-resolves the
- * same authority server-side and answers 403 regardless of what this returns.
+ * Two sources on purpose, because the two rules genuinely ask different
+ * questions. Both mirror the backend, which validates whatever is submitted
+ * either way.
  */
 export function submittableActivityOptions(
   staffing: readonly ActivityStaffingLike[] | null | undefined,
+  activityMaster: readonly ActivityMasterLike[] | null | undefined,
   viewer: ProductionStatusViewer,
 ): ActivityOption[] {
-  const all = staffing ?? [];
-  if (viewer.canManage || viewer.isHead) return projectActivityOptions(all);
+  if (viewer.isHead) return activityMasterOptions(activityMaster);
   if (!viewer.employeeId) return [];
   return projectActivityOptions(
-    all.filter((a) => a.lead?.employee_id === viewer.employeeId),
+    (staffing ?? []).filter((a) => a.lead?.employee_id === viewer.employeeId),
   );
 }
 
@@ -272,9 +414,13 @@ export function submittableActivityOptions(
 export interface ProductionStatusRecordLike {
   id: string;
   revision: string;
-  activity_id: string;
+  /** Null when the activity was typed rather than chosen (migration 0072). */
+  activity_id?: string | null;
+  /** Resolved server-side from whichever way the activity was named. */
   activity_name?: string | null;
   activity_code?: string | null;
+  /** The typed name itself, null for an Activity Master activity. */
+  activity_label?: string | null;
   status: string;
   tag_count: number;
   doc_count: number;
@@ -289,7 +435,11 @@ export interface ProductionStatusRecordLike {
 export interface ProductionStatusRow {
   key: string;
   revision: string;
-  activityId: string;
+  /** Null when the activity was typed - see `typedActivity`. */
+  activityId: string | null;
+  /** The typed activity name, null for an Activity Master activity. Together
+   *  with `activityId` this is what identifies the row's history trail. */
+  typedActivity: string | null;
   activity: string;
   status: string;
   /** The raw stored status, for the badge to colour without re-parsing a label. */
@@ -328,7 +478,8 @@ export function buildProductionStatusRows(
   return (records ?? []).map((r) => ({
     key: r.id,
     revision: r.revision,
-    activityId: r.activity_id,
+    activityId: r.activity_id ?? null,
+    typedActivity: r.activity_label?.trim() || null,
     activity: activityLabel(r),
     status: productionStatusLabel(r.status),
     statusValue: resolveProductionStatus(r.status),
@@ -356,7 +507,11 @@ export function buildProductionStatusRows(
  * so opening one can never render another's updates.
  */
 export interface ProductionStatusHistoryTarget {
-  activityId: string;
+  /** The Activity Master id to filter on, null for a typed activity. */
+  activityId: string | null;
+  /** The typed name to filter on, null for an Activity Master activity.
+   *  Exactly one of these two is set, mirroring the record itself. */
+  typedActivity: string | null;
   /** Display only - the dialog title. Never sent to the API. */
   activityLabel: string;
   revision: string;
@@ -370,10 +525,14 @@ export interface ProductionStatusHistoryTarget {
  * has been changed to something else.
  */
 export function historyTargetFor(
-  row: Pick<ProductionStatusRow, "activityId" | "activity" | "revision">,
+  row: Pick<
+    ProductionStatusRow,
+    "activityId" | "typedActivity" | "activity" | "revision"
+  >,
 ): ProductionStatusHistoryTarget {
   return {
     activityId: row.activityId,
+    typedActivity: row.typedActivity,
     activityLabel: row.activity,
     revision: row.revision,
   };
@@ -427,10 +586,17 @@ export const NO_HISTORY_HINT =
 
 export const NO_ACTIVITIES_TITLE = "No activities to update";
 export const NO_ACTIVITIES_HINT =
-  "Production status is recorded against an activity you are staffed on. Ask the project Head to assign you to one.";
+  "Production status is recorded against an activity you lead. Ask the project Head to assign you to one.";
 
-export const NO_PROJECT_ACTIVITIES_HINT =
-  "This project has no activity staffing yet, so there is nothing to record production status against.";
+// The Head sees every Activity Master activity, so an empty list here means the
+// master data itself is empty - and they can type one anyway.
+export const NO_MASTER_ACTIVITIES_HINT =
+  "No activities exist in Activity Master yet. You can still type the activity you want to record against.";
+
+// The PM: read-only on this tab by design.
+export const READ_ONLY_TITLE = "Production status is recorded by the project team";
+export const READ_ONLY_HINT =
+  "The project Head and its activity leads record these updates. You can read every project's current status here, and download the cumulative report from the Projects page.";
 
 /**
  * Turn a failed request into something a user can act on.

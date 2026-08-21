@@ -35,14 +35,19 @@ import {
   REPORT_COLUMNS,
   REPORT_DOWNLOAD_ERROR,
   REPORT_EMPTY_HINT,
+  REPORT_EMPTY_MONTH_HINT,
+  REPORT_EMPTY_MONTH_TITLE,
   REPORT_EMPTY_TITLE,
   REPORT_ERROR_TITLE,
+  REPORT_MONTH_ALL,
   REPORT_NOTHING_TO_DOWNLOAD,
   REPORT_TITLE,
   reportErrorMessage,
+  reportMonthParam,
   reportSubtitle,
   type ProductionStatusReportTableRow,
 } from "../production-status-report";
+import { ReportMonthSelect } from "./report-month-select";
 import { ProductionStatusBadge } from "./status-badge";
 
 /**
@@ -58,6 +63,17 @@ import { ProductionStatusBadge } from "./status-badge";
  * formatting rule lives in ../production-status-report.ts, where `node --test`
  * can cover it.
  *
+ * The Month dropdown does not change that. It is a query parameter, not a pass
+ * over rows: choosing August refetches the report FOR August, and the Download
+ * button sends the very same parameter, so the file is exactly the rows on
+ * screen for whatever month is chosen. Nothing is filtered in the browser, and
+ * no large historical dataset is fetched to be sifted here.
+ *
+ * The month is the record's created_at month - an IN PROGRESS record has no
+ * completion date, so filtering on `completed_on` would hide exactly the rows a
+ * PM opens a month to look at. It is also the only filter: the report stays
+ * all-project and cumulative.
+ *
  * Read-only by construction. There is no form here, nothing is saved, and the
  * append-only history behind each row is untouched - the full trail is still
  * read only through each project's own History dialog.
@@ -69,9 +85,19 @@ export function ProductionStatusReportDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // The chosen month, "all" until the PM picks one. Local state, not a URL
+  // filter: this is a dialog, and the choice lasts as long as it is open.
+  const [month, setMonth] = React.useState<string>(REPORT_MONTH_ALL);
+  // The value actually sent to the API: undefined for All Months. One
+  // conversion, shared by the preview query and the download below, so the two
+  // cannot ask for different months.
+  const monthParam = reportMonthParam(month);
+
   // Not fetched until the PM actually opens the dialog - the projects list must
-  // not pay for a report nobody asked for.
-  const query = useProductionStatusReport(open);
+  // not pay for a report nobody asked for. The month is part of the request, so
+  // the FILTERING is the backend's: the browser never receives every historical
+  // record to sift through.
+  const query = useProductionStatusReport(open, monthParam);
   const [downloading, setDownloading] = React.useState(false);
 
   const rows: ProductionStatusReportTableRow[] = React.useMemo(
@@ -84,7 +110,9 @@ export function ProductionStatusReportDialog({
   async function onDownload() {
     setDownloading(true);
     try {
-      await downloadProductionStatusReportXlsx();
+      // The SAME month the preview was fetched with, through the same helper.
+      // Nothing is filtered client-side, so the file is exactly these rows.
+      await downloadProductionStatusReportXlsx(monthParam);
     } catch {
       toast.error(REPORT_DOWNLOAD_ERROR);
     } finally {
@@ -100,14 +128,31 @@ export function ProductionStatusReportDialog({
       <DialogContent className="max-w-[95vw] sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>{REPORT_TITLE}</DialogTitle>
+          {/* Both halves come from the SAME payload - `row_count` and the
+              backend's echo of the month it filtered on - so the count and the
+              month it claims to describe can never be a step out of sync while
+              a switch is in flight. */}
           <p className="text-sm text-muted-foreground">
-            {query.data ? reportSubtitle(query.data.row_count) : REPORT_ALL_PROJECTS}
+            {query.data
+              ? reportSubtitle(query.data.row_count, query.data.month)
+              : REPORT_ALL_PROJECTS}
           </p>
         </DialogHeader>
 
-        {/* Download on the left of Close, both above the table so they stay
-            reachable without scrolling a long report to the bottom. */}
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        {/* Month on the left, download on the right of it, both above the table
+            so they stay reachable without scrolling a long report to the
+            bottom. There is no Close button: the dialog's own X closes it, the
+            way every other dialog in CoreOps is dismissed. */}
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          {/* The months come with the report payload - no second request, and
+              no range invented here. A failed report has none to offer, so the
+              picker would only be a dead control next to the error. */}
+          <ReportMonthSelect
+            value={month}
+            onChange={setMonth}
+            months={query.data?.months}
+            disabled={query.isError}
+          />
           <Button
             onClick={() => void onDownload()}
             disabled={!canDownload || downloading}
@@ -116,9 +161,6 @@ export function ProductionStatusReportDialog({
           >
             <Download className="h-4 w-4" />
             Download Excel
-          </Button>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
-            Close
           </Button>
         </div>
 
@@ -133,11 +175,18 @@ export function ProductionStatusReportDialog({
           />
         )}
 
+        {/* A month with nothing in it reads differently from a system with
+            nothing in it - otherwise a PM who picked the wrong month is told
+            production status has never been recorded. Both are normal, and
+            neither is an error. Which one applies is decided by the month the
+            RESPONSE was filtered on, not by the dropdown. */}
         {!query.isFetching && !query.isError && rows.length === 0 && (
           <EmptyState
             icon={ClipboardList}
-            title={REPORT_EMPTY_TITLE}
-            description={REPORT_EMPTY_HINT}
+            title={query.data?.month ? REPORT_EMPTY_MONTH_TITLE : REPORT_EMPTY_TITLE}
+            description={
+              query.data?.month ? REPORT_EMPTY_MONTH_HINT : REPORT_EMPTY_HINT
+            }
           />
         )}
 

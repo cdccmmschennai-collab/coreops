@@ -21,16 +21,24 @@ import { test } from "node:test";
 import { productionStatusKeys } from "./keys.ts";
 import {
   buildProductionStatusReportRows,
+  buildReportMonthOptions,
   canDownloadReport,
   canViewProductionStatusReport,
   formatReportDate,
+  formatReportMonthLabel,
+  isReportMonth,
   REPORT_ALL_PROJECTS,
   REPORT_BLANK,
   REPORT_COLUMNS,
+  REPORT_EMPTY_MONTH_TITLE,
   REPORT_EMPTY_TITLE,
+  REPORT_MONTH_ALL,
+  REPORT_MONTH_ALL_LABEL,
   reportCount,
   reportErrorMessage,
+  reportMonthParam,
   reportSubtitle,
+  resolveReportMonth,
   type ProductionStatusReportRowLike,
 } from "./production-status-report.ts";
 
@@ -325,11 +333,125 @@ test("an offline request is reported as unreachable, not as a server error", () 
 // --- 11. query key ------------------------------------------------------------
 
 test("the report key carries no project - it spans all of them", () => {
-  assert.deepEqual(productionStatusKeys.report(), ["production-status", "report"]);
+  assert.deepEqual(productionStatusKeys.report(), [
+    "production-status",
+    "report",
+    "",
+  ]);
   // Distinct from the per-project keys, so opening the report never serves a
   // single project's cached rows.
   assert.notDeepEqual(
     productionStatusKeys.report(),
     productionStatusKeys.latest("proj-1"),
   );
+});
+
+// --- 12. the month filter (Phase 5) ------------------------------------------
+//
+// The dropdown narrows the REQUEST, never the response: nothing below filters a
+// row. The filtering itself is the backend's, covered in
+// backend/tests/test_production_status_report.py section 19.
+
+test("All Months sends no month - the cumulative request, unchanged", () => {
+  for (const all of [REPORT_MONTH_ALL, "", null, undefined]) {
+    assert.equal(reportMonthParam(all), undefined);
+  }
+  assert.equal(REPORT_MONTH_ALL_LABEL, "All Months");
+});
+
+test("a chosen month is sent as the API's YYYY-MM key; junk never is", () => {
+  assert.equal(reportMonthParam("2026-08"), "2026-08");
+  assert.equal(reportMonthParam(" 2026-09 "), "2026-09");
+  // Unfiltered beats asking the API for a month it will reject with an error.
+  for (const bad of ["2026", "2026-13", "2026-00", "26-08", "2026-08-14"]) {
+    assert.equal(reportMonthParam(bad), undefined, bad);
+    assert.equal(isReportMonth(bad), false, bad);
+  }
+});
+
+test("a month reads as its name and year, unshifted by the viewer's timezone", () => {
+  assert.equal(formatReportMonthLabel("2026-08"), "August 2026");
+  assert.equal(formatReportMonthLabel("2026-09"), "September 2026");
+  // Through `new Date(...)` this would be December for anyone west of
+  // Greenwich; parsed from the digits it cannot drift.
+  const tz = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  assert.equal(formatReportMonthLabel("2026-01"), "January 2026");
+  process.env.TZ = tz;
+  // Nothing usable prints nothing, never junk.
+  assert.equal(formatReportMonthLabel("2026-13"), "");
+  assert.equal(formatReportMonthLabel(null), "");
+});
+
+test("the dropdown is All Months plus the months that have records", () => {
+  assert.deepEqual(buildReportMonthOptions(["2026-08", "2026-09"]), [
+    { value: REPORT_MONTH_ALL, label: "All Months" },
+    { value: "2026-08", label: "August 2026" },
+    { value: "2026-09", label: "September 2026" },
+  ]);
+  // Always reachable, even with nothing recorded at all.
+  assert.deepEqual(buildReportMonthOptions([]), [
+    { value: REPORT_MONTH_ALL, label: "All Months" },
+  ]);
+  // Duplicates and junk cannot become options (they would also be dup keys).
+  const options = buildReportMonthOptions(["2026-08", "2026-08", "", "2026-13"]);
+  assert.deepEqual(options.map((o) => o.value), [REPORT_MONTH_ALL, "2026-08"]);
+});
+
+test("a selection no longer on offer falls back to All Months", () => {
+  const months = ["2026-08", "2026-09"];
+  assert.equal(resolveReportMonth("2026-08", months), "2026-08");
+  // Better the whole report than a stale month over an empty table.
+  assert.equal(resolveReportMonth("2026-10", months), REPORT_MONTH_ALL);
+  assert.equal(resolveReportMonth(null, months), REPORT_MONTH_ALL);
+});
+
+test("the subtitle names the month and counts the filtered rows", () => {
+  // The count is the backend's row_count for the filtered dataset, so it is
+  // also the number of rows in the downloaded file.
+  assert.equal(
+    reportSubtitle(4, "2026-08"),
+    `4 rows - August 2026 - ${REPORT_ALL_PROJECTS}`,
+  );
+  assert.equal(reportSubtitle(0, "2026-10"), `October 2026 - ${REPORT_ALL_PROJECTS}`);
+  // All Months keeps exactly the wording it always had.
+  assert.equal(reportSubtitle(12, null), `12 rows - ${REPORT_ALL_PROJECTS}`);
+  // Still all-project: the month narrows the report, it is not a different one.
+  assert.match(reportSubtitle(4, "2026-08"), /all projects/i);
+});
+
+test("an empty month reads differently from nothing ever recorded", () => {
+  assert.notEqual(REPORT_EMPTY_MONTH_TITLE, REPORT_EMPTY_TITLE);
+});
+
+test("each month is its own cached dataset, and All Months has one key", () => {
+  assert.deepEqual(productionStatusKeys.report("2026-08"),
+    ["production-status", "report", "2026-08"]);
+  assert.notDeepEqual(
+    productionStatusKeys.report("2026-08"),
+    productionStatusKeys.report("2026-09"),
+  );
+  assert.deepEqual(
+    productionStatusKeys.report(reportMonthParam(REPORT_MONTH_ALL)),
+    productionStatusKeys.report(),
+  );
+});
+
+test("preview and download resolve the selection to the same request", () => {
+  // The dialog derives ONE monthParam and gives it to both the report query and
+  // the .xlsx download - the whole reason the file is the rows on screen.
+  for (const selection of [REPORT_MONTH_ALL, "2026-08", "2026-13"]) {
+    assert.equal(reportMonthParam(selection), reportMonthParam(selection));
+  }
+});
+
+test("the month adds no other filter and no client-side filtering", () => {
+  // Same columns, and rows still mapped one-to-one in the order received.
+  assert.equal(REPORT_COLUMNS.length, 11);
+  const rows = buildProductionStatusReportRows([
+    row({ id: "a", serial: 4 }),
+    row({ id: "b", serial: 5 }),
+  ]);
+  assert.deepEqual(rows.map((r) => r.key), ["a", "b"]);
+  assert.deepEqual(rows.map((r) => r.serial), ["4", "5"]);
 });

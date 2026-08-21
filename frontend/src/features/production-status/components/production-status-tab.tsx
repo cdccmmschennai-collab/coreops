@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useActivities } from "@/features/activity-master/hooks";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useActivityStaffing } from "@/features/projects/hooks";
 import type { Project } from "@/features/projects/types";
@@ -25,13 +26,16 @@ import { formatDateTime } from "@/lib/format";
 import { useLatestProductionStatus } from "../hooks";
 import {
   buildProductionStatusRows,
+  canRecordProductionStatus,
+  canTypeNewActivity,
   formatProjectDisplay,
   historyTargetFor,
   maintenancePlantScope,
   NO_STATUS_HINT,
   NO_STATUS_TITLE,
   productionStatusErrorMessage,
-  projectActivityOptions,
+  READ_ONLY_HINT,
+  READ_ONLY_TITLE,
   submittableActivityOptions,
 } from "../production-status";
 import { ProductionStatusForm } from "./production-status-form";
@@ -44,26 +48,31 @@ import { ProductionStatusBadge } from "./status-badge";
 interface ProductionStatusTabProps {
   /** The project row the page already loaded - the source of Project / Plant. */
   project: Project;
-  /** Role-level PM. Full authority over every activity, on every project. */
+  /** Role-level PM. Reads every project here - and writes to none of them. */
   canManage: boolean;
-  /** This project's assigned Head. Full authority over this project's activities. */
+  /** This project's assigned Head. Records against any activity, or types one. */
   isHead: boolean;
 }
 
 /**
  * Production Status tab - the Project Head / Activity Lead working screen.
  *
- * Two halves, both fed by Phase 1:
+ * Two halves:
  *   the form appends one update (POST /production-status)
  *   the table shows the current status of every revision + activity
  *   (GET /production-status), with a per-row History dialog over
  *   GET /production-status/history.
  *
- * The activity dropdown comes from the project's activity staffing - the same
- * join the backend's `_fetch_valid_activity` accepts against - so the UI can
- * never offer an activity the POST would reject, and no second activity list
- * exists. Which of those the viewer may actually submit for is narrowed by
- * `submittableActivityOptions`, mirroring `authz.activity_staffing_authority`.
+ * Who gets the form, mirroring the backend's `_record_authority`:
+ *   the Head   yes - every Activity Master activity, and may type one that is
+ *              not in it at all
+ *   a Lead     yes - the activities they lead on this project
+ *   the PM     NO. The PM reads this tab and downloads the cumulative report;
+ *              the updates themselves are made by the people who did the work.
+ *
+ * The Head's dropdown therefore comes from Activity Master rather than the
+ * project's staffing: a project with no staffing still has production to
+ * report, and the backend no longer requires an activity to be staffed.
  *
  * None of this is the security boundary. Every endpoint re-resolves the same
  * authority server-side; hiding a control is convenience only.
@@ -79,16 +88,29 @@ export function ProductionStatusTab({
   const staffingQuery = useActivityStaffing(project.id);
   const latestQuery = useLatestProductionStatus(project.id);
 
+  const viewer = React.useMemo(
+    () => ({ canManage, isHead, employeeId }),
+    [canManage, isHead, employeeId],
+  );
+
+  // Whether the viewer may write at all - decided from the project's staffing
+  // and their Head flag, never from the role. A PM is deliberately not a writer
+  // here.
+  const canRecord = canRecordProductionStatus(staffingQuery.data, viewer);
+
+  // Activity Master, for the Head's dropdown. The SAME shared hook the Activity
+  // Master screen uses over the same endpoint - no second activity list exists.
+  // Only fetched for someone who can actually record: a PM reading the tab must
+  // not pay for a list they will never see.
+  const activityMasterQuery = useActivities(true);
+  const activityMaster = canRecord ? activityMasterQuery.data : undefined;
+
   const projectDisplay = React.useMemo(() => formatProjectDisplay(project), [project]);
 
   const activities = React.useMemo(
-    () =>
-      submittableActivityOptions(staffingQuery.data, { canManage, isHead, employeeId }),
-    [staffingQuery.data, canManage, isHead, employeeId],
+    () => submittableActivityOptions(staffingQuery.data, activityMaster, viewer),
+    [staffingQuery.data, activityMaster, viewer],
   );
-
-  const projectHasActivities =
-    projectActivityOptions(staffingQuery.data).length > 0;
 
   const rows = buildProductionStatusRows(latestQuery.data, formatDateTime);
 
@@ -130,25 +152,40 @@ export function ProductionStatusTab({
 
   return (
     <div className="space-y-4">
-      <ProductionStatusForm
-        projectId={project.id}
-        projectDisplay={projectDisplay}
-        // The project's Planning Plant scopes which Maintenance Plants the form
-        // may offer — exactly as it does on the Project Edit page.
-        planningPlantCode={maintenancePlantScope(project)}
-        activities={activities}
-        projectHasActivities={projectHasActivities}
-      />
+      {canRecord ? (
+        <ProductionStatusForm
+          projectId={project.id}
+          projectDisplay={projectDisplay}
+          // The project's Planning Plant scopes which Maintenance Plants the
+          // form may offer — exactly as it does on the Project Edit page.
+          planningPlantCode={maintenancePlantScope(project)}
+          activities={activities}
+          canTypeActivity={canTypeNewActivity(viewer)}
+        />
+      ) : (
+        // The PM's view of this tab, and anyone else with read authority: the
+        // current status below, and no form. Stated plainly rather than left as
+        // a missing card, so it reads as a rule and not as something broken.
+        <Card>
+          <CardHeader>
+            <CardTitle>Production Status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm font-medium text-foreground">{READ_ONLY_TITLE}</p>
+            <p className="mt-0.5 text-sm text-muted-foreground">{READ_ONLY_HINT}</p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
           <CardTitle>Current Status</CardTitle>
         </CardHeader>
         <CardContent className="px-0 pb-0">
-          {/* The staffing list is only needed for the dropdown; if it failed
-              the current status is still worth showing, so this is a note
-              rather than a page-level error. */}
-          {staffingQuery.isError && (
+          {/* The staffing list is only needed for a Lead's dropdown; if it
+              failed the current status is still worth showing, so this is a
+              note rather than a page-level error. */}
+          {canRecord && staffingQuery.isError && (
             <p className="px-6 pb-4 text-sm text-muted-foreground">
               Couldn&apos;t load this project&apos;s activities, so the Activity list above
               may be incomplete.

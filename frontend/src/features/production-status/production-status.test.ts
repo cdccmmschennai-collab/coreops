@@ -32,9 +32,18 @@ import {
   NO_ACTIVITIES_TITLE,
   NO_HISTORY_HINT,
   NO_HISTORY_TITLE,
-  NO_PROJECT_ACTIVITIES_HINT,
+  NO_MASTER_ACTIVITIES_HINT,
   NO_STATUS_HINT,
   NO_STATUS_TITLE,
+  READ_ONLY_HINT,
+  READ_ONLY_TITLE,
+  activityMasterOptions,
+  canRecordProductionStatus,
+  canTypeNewActivity,
+  isTypedActivity,
+  parseActivitySelection,
+  typedActivityValue,
+  withTypedActivityOption,
   PRODUCTION_STATUS_LABEL,
   PRODUCTION_STATUS_VALUES,
   productionStatusErrorMessage,
@@ -175,65 +184,60 @@ test("the activity list is the project's staffed activities and nothing else", (
 
 test("an activity is labelled by name, falling back to its code", () => {
   assert.equal(activityLabel(TAG_ESTIMATION), "TAG ESTIMATION");
-  assert.equal(activityLabel({ activity_id: "x", activity_code: "FMTL" }), "FMTL");
-  assert.equal(activityLabel({ activity_id: "x" }), VALUE_UNAVAILABLE);
+  assert.equal(activityLabel({ activity_code: "FMTL" }), "FMTL");
+  assert.equal(activityLabel({}), VALUE_UNAVAILABLE);
+  // A typed activity arrives with its name already resolved server-side, so
+  // the very same function renders it.
+  assert.equal(activityLabel({ activity_name: "HIERARCHY QA/QC" }), "HIERARCHY QA/QC");
 });
 
-test("a PM may submit for every activity on the project", () => {
-  const options = submittableActivityOptions(STAFFING, {
-    canManage: true,
-    isHead: false,
-    employeeId: null,
-  });
-  assert.deepEqual(options.map((o) => o.id), ["act-tag", "act-mtl", "act-doc"]);
-});
+// Activity Master, the Head's source. Deliberately unrelated to STAFFING: the
+// point of the change is that a Head is no longer limited to staffed work.
+const ACTIVITY_MASTER = [
+  { id: "am-mtl", name: "MTL PREPARATION", level: "activity", is_active: true },
+  { id: "am-tag", name: "TAG ESTIMATION", level: "activity", is_active: true },
+  { id: "am-idb", name: "1ST STAGE IDB", level: "activity", is_active: true },
+  // Not offered: retired master data, and a sub-activity the backend refuses.
+  { id: "am-old", name: "RETIRED", level: "activity", is_active: false },
+  { id: "am-sub", name: "FMTL REWORK", level: "sub_activity", is_active: true },
+];
 
-test("the project Head may submit for every activity on their project", () => {
-  const options = submittableActivityOptions(STAFFING, {
+test("the Head's list is Activity Master, not the project's staffing", () => {
+  // The whole point of the change: a project with no staffing at all still has
+  // production to report, so the Head sees every Activity Master activity.
+  const options = submittableActivityOptions(STAFFING, ACTIVITY_MASTER, {
     canManage: false,
     isHead: true,
     employeeId: "emp-head",
   });
-  assert.deepEqual(options.map((o) => o.id), ["act-tag", "act-mtl", "act-doc"]);
+  // Activity Master ids, not the staffing's act-* ones.
+  assert.deepEqual(options.map((o) => o.id), ["am-idb", "am-mtl", "am-tag"]);
+  // Sorted by the label actually shown.
+  assert.deepEqual(
+    options.map((o) => o.label),
+    ["1ST STAGE IDB", "MTL PREPARATION", "TAG ESTIMATION"],
+  );
 });
 
-test("a Head is NOT narrowed to the activities they happen to lead", () => {
-  // The Head's authority is project-wide - `authz.activity_staffing_authority`
-  // answers "full" for every activity on their project (see
-  // backend/tests/test_production_status_report.py). The dropdown must not
-  // apply the Lead-specific derivation on top of that and hand back a subset.
-  const asHeadWhoLeadsOne = submittableActivityOptions(STAFFING, {
+test("a Head with no staffing on the project still has every activity", () => {
+  const options = submittableActivityOptions([], ACTIVITY_MASTER, {
     canManage: false,
     isHead: true,
-    employeeId: LEAD_EMP,          // this person also leads exactly one activity
+    employeeId: "emp-head",
   });
-  const asPlainLead = submittableActivityOptions(STAFFING, {
-    canManage: false,
-    isHead: false,
-    employeeId: LEAD_EMP,
-  });
+  assert.equal(options.length, 3);
+});
 
-  assert.deepEqual(asHeadWhoLeadsOne.map((o) => o.id), ["act-tag", "act-mtl", "act-doc"]);
-  assert.deepEqual(asPlainLead.map((o) => o.id), ["act-tag"]);
-  assert.ok(
-    asHeadWhoLeadsOne.length > asPlainLead.length,
-    "being Head must widen the list, never leave it at the Lead subset",
-  );
-
-  // A Head who leads nothing still gets everything - Head authority does not
-  // depend on holding any Lead assignment.
-  assert.deepEqual(
-    submittableActivityOptions(STAFFING, {
-      canManage: false,
-      isHead: true,
-      employeeId: "emp-nobody",
-    }).map((o) => o.id),
-    ["act-tag", "act-mtl", "act-doc"],
-  );
+test("retired activities and sub-activities are never offered", () => {
+  const ids = activityMasterOptions(ACTIVITY_MASTER).map((o) => o.id);
+  assert.equal(ids.includes("am-old"), false);
+  assert.equal(ids.includes("am-sub"), false);
 });
 
 test("an Activity Lead may submit only for the activity they lead", () => {
-  const options = submittableActivityOptions(STAFFING, {
+  // Unchanged: a Lead's authority is over the activity they were given, and it
+  // still comes from the project's staffing - not from Activity Master.
+  const options = submittableActivityOptions(STAFFING, ACTIVITY_MASTER, {
     canManage: false,
     isHead: false,
     employeeId: LEAD_EMP,
@@ -245,7 +249,7 @@ test("an Activity Lead may submit only for the activity they lead", () => {
 test("someone who leads nothing is offered nothing to submit", () => {
   for (const employeeId of ["emp-nobody", null]) {
     assert.deepEqual(
-      submittableActivityOptions(STAFFING, {
+      submittableActivityOptions(STAFFING, ACTIVITY_MASTER, {
         canManage: false,
         isHead: false,
         employeeId,
@@ -253,6 +257,85 @@ test("someone who leads nothing is offered nothing to submit", () => {
       [],
     );
   }
+});
+
+// --- who may write at all ---------------------------------------------------
+
+test("the PM is READ-ONLY on this tab", () => {
+  // Deliberate, and the one rule this change is most about. The PM reads every
+  // project's status and downloads the cumulative report; the updates are made
+  // by the people who did the work.
+  const pm = { canManage: true, isHead: false, employeeId: "emp-pm" };
+  assert.equal(canRecordProductionStatus(STAFFING, pm), false);
+  assert.equal(canTypeNewActivity(pm), false);
+  assert.deepEqual(submittableActivityOptions(STAFFING, ACTIVITY_MASTER, pm), []);
+});
+
+test("the Head writes, and is the only one who may type an activity", () => {
+  const head = { canManage: false, isHead: true, employeeId: "emp-head" };
+  const lead = { canManage: false, isHead: false, employeeId: LEAD_EMP };
+  assert.equal(canRecordProductionStatus(STAFFING, head), true);
+  assert.equal(canRecordProductionStatus(STAFFING, lead), true);
+  assert.equal(canTypeNewActivity(head), true);
+  // A Lead's authority is over one named Activity Master activity - there is
+  // nothing for a typed name to attach to.
+  assert.equal(canTypeNewActivity(lead), false);
+});
+
+test("someone who neither heads nor leads cannot record", () => {
+  assert.equal(
+    canRecordProductionStatus(STAFFING, {
+      canManage: false,
+      isHead: false,
+      employeeId: "emp-nobody",
+    }),
+    false,
+  );
+});
+
+// --- a typed activity -------------------------------------------------------
+
+test("a typed activity is carried as a prefixed selection, then split", () => {
+  const value = typedActivityValue("  HIERARCHY QA/QC  ");
+  assert.equal(value, "new:HIERARCHY QA/QC");
+  assert.equal(isTypedActivity(value), true);
+  assert.deepEqual(parseActivitySelection(value), {
+    activity_id: null,
+    activity_label: "HIERARCHY QA/QC",
+  });
+});
+
+test("a chosen activity is sent as an id, never as a label", () => {
+  const id = "3f1b2c44-0000-4000-8000-000000000001";
+  assert.equal(isTypedActivity(id), false);
+  assert.deepEqual(parseActivitySelection(id), {
+    activity_id: id,
+    activity_label: null,
+  });
+});
+
+test("exactly one of id / label is ever produced", () => {
+  for (const value of ["new:MTL", "act-1", "", null, undefined, "new:   "]) {
+    const { activity_id, activity_label } = parseActivitySelection(value);
+    assert.equal(
+      Number(activity_id !== null) + Number(activity_label !== null) <= 1,
+      true,
+      `both set for ${String(value)}`,
+    );
+  }
+});
+
+test("a typed activity is shown in the dropdown while it is the selection", () => {
+  const options = activityMasterOptions(ACTIVITY_MASTER);
+  const withTyped = withTypedActivityOption(options, "new:HIERARCHY QA/QC");
+  assert.equal(withTyped.length, options.length + 1);
+  assert.deepEqual(withTyped[withTyped.length - 1], {
+    id: "new:HIERARCHY QA/QC",
+    label: "HIERARCHY QA/QC",
+  });
+  // A chosen activity is already in the list - nothing is appended.
+  assert.deepEqual(withTypedActivityOption(options, "am-mtl"), options);
+  assert.deepEqual(withTypedActivityOption(options, ""), options);
 });
 
 test("leadsAnyActivity decides tab visibility for a Lead", () => {
@@ -407,6 +490,7 @@ test("the body carries only the ten fields the user entered", () => {
   );
   assert.deepEqual(Object.keys(body).sort(), [
     "activity_id",
+    "activity_label",
     "completed_on",
     "crs_count",
     "doc_count",
@@ -607,13 +691,39 @@ test("a row's History opens that row's own revision AND activity", () => {
   );
   assert.deepEqual(historyTargetFor(rows[0]), {
     activityId: "act-mtl",
+    typedActivity: null,
     activityLabel: "MTL PREPARATION",
     revision: "REV-0",
   });
   assert.deepEqual(historyTargetFor(rows[1]), {
     activityId: "act-mtl",
+    typedActivity: null,
     activityLabel: "MTL PREPARATION",
     revision: "REV-1",
+  });
+});
+
+test("a typed activity's row opens its own trail, by name", () => {
+  // It has no id to filter on, so the name is what identifies its history -
+  // exactly the way the record itself names its activity.
+  const [row] = buildProductionStatusRows(
+    [
+      record({
+        id: "t",
+        activity_id: null,
+        activity_label: "HIERARCHY QA/QC",
+        activity_name: "HIERARCHY QA/QC",
+        activity_code: null,
+      }),
+    ],
+    fmt,
+  );
+  assert.equal(row.activity, "HIERARCHY QA/QC");
+  assert.deepEqual(historyTargetFor(row), {
+    activityId: null,
+    typedActivity: "HIERARCHY QA/QC",
+    activityLabel: "HIERARCHY QA/QC",
+    revision: "REV-0",
   });
 });
 
@@ -630,8 +740,28 @@ test("REV-0 and REV-1 of one activity are two different cached datasets", () => 
     revision: "REV-1",
   });
   assert.notDeepEqual(rev0, rev1);
-  assert.deepEqual([...rev0], ["production-status", "history", PROJECT, "act-mtl", "REV-0"]);
-  assert.deepEqual([...rev1], ["production-status", "history", PROJECT, "act-mtl", "REV-1"]);
+  // The empty slot is the typed-activity name, which an Activity Master row
+  // does not have - see keys.ts.
+  assert.deepEqual([...rev0],
+    ["production-status", "history", PROJECT, "act-mtl", "", "REV-0"]);
+  assert.deepEqual([...rev1],
+    ["production-status", "history", PROJECT, "act-mtl", "", "REV-1"]);
+});
+
+test("a typed activity's trail is its own cached dataset", () => {
+  // A typed activity has no id, so without the label in the key every typed
+  // activity on a project would share one cache entry.
+  const hierarchy = productionStatusKeys.history(PROJECT, {
+    activityLabel: "HIERARCHY QA/QC",
+    revision: "REV-0",
+  });
+  const bom = productionStatusKeys.history(PROJECT, {
+    activityLabel: "BOM QA/QC",
+    revision: "REV-0",
+  });
+  assert.notDeepEqual(hierarchy, bom);
+  assert.deepEqual([...hierarchy],
+    ["production-status", "history", PROJECT, "", "HIERARCHY QA/QC", "REV-0"]);
 });
 
 test("the same revision of two activities is two different cached datasets", () => {
@@ -812,6 +942,9 @@ test("a status change is submitted as a whole new record, not a patch", () => {
   assert.deepEqual(body, {
     revision: "REV-0",
     activity_id: "act-mtl",
+    // An id was chosen, so the typed-name field is null - exactly one of the
+    // two is ever set.
+    activity_label: null,
     // No plant was chosen on either save - null, never inferred.
     maintenance_plant_id: null,
     status: "closed",
@@ -915,12 +1048,14 @@ test("each empty case has its own copy, so no panel can render blank", () => {
     NO_STATUS_TITLE, NO_STATUS_HINT,
     NO_HISTORY_TITLE, NO_HISTORY_HINT,
     NO_ACTIVITIES_TITLE, NO_ACTIVITIES_HINT,
-    NO_PROJECT_ACTIVITIES_HINT,
+    NO_MASTER_ACTIVITIES_HINT,
+    READ_ONLY_TITLE, READ_ONLY_HINT,
   ];
   for (const text of copy) assert.equal(text.trim().length > 0, true);
-  // "you have no activity here" and "this project has none" are different
-  // situations and must not share a sentence.
-  assert.notEqual(NO_ACTIVITIES_HINT, NO_PROJECT_ACTIVITIES_HINT);
+  // "you lead nothing here", "the master list is empty" and "you may only read
+  // this" are three different situations and must not share a sentence.
+  assert.notEqual(NO_ACTIVITIES_HINT, NO_MASTER_ACTIVITIES_HINT);
+  assert.notEqual(NO_ACTIVITIES_HINT, READ_ONLY_HINT);
   assert.notEqual(NO_STATUS_TITLE, NO_HISTORY_TITLE);
 });
 

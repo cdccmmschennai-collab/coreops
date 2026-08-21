@@ -9727,6 +9727,22 @@
             }
           },
           {
+            "name": "activity_label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Activity Label"
+            }
+          },
+          {
             "name": "revision",
             "in": "query",
             "required": false,
@@ -9777,8 +9793,33 @@
           "production-status"
         ],
         "summary": "Get Production Status Report",
-        "description": "The latest production status of every project + revision + activity.\n\nONE request for the whole report - the client never walks the project list\nfiring a request per project.\n\nproject_manager only, enforced inside the service (`_assert_can_read_report`)\nrather than by a role dependency here, so a Head, an activity Lead or an\nordinary employee gets the same 403 whether they reach it through the API or\nthrough any other caller of the service. Hiding the button in the UI is\nconvenience; this is the control.",
+        "description": "The latest production status of every project + revision + activity.\n\nONE request for the whole report - the client never walks the project list\nfiring a request per project. The response also carries `months`, every\nmonth that has records, so the month picker needs no second request either.\n\nproject_manager only, enforced inside the service (`_assert_can_read_report`)\nrather than by a role dependency here, so a Head, an activity Lead or an\nordinary employee gets the same 403 whether they reach it through the API or\nthrough any other caller of the service. Hiding the button in the UI is\nconvenience; this is the control. The month filter changes nothing about\nthat rule - it narrows what a PM sees, it never widens who may see it.",
         "operationId": "get_production_status_report_api_v1_production_status_report_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow the report to the production status records RECORDED in this month, as YYYY-MM (for example 2026-08). Omit it for the cumulative all-months report. The month is the record's created_at month, never completed_on - an in-progress record has no completion date.",
+              "title": "Month"
+            },
+            "description": "Narrow the report to the production status records RECORDED in this month, as YYYY-MM (for example 2026-08). Omit it for the cumulative all-months report. The month is the record's created_at month, never completed_on - an in-progress record has no completion date."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -9789,13 +9830,18 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/production-status/report.xlsx": {
@@ -9804,8 +9850,33 @@
           "production-status"
         ],
         "summary": "Get Production Status Report Xlsx",
-        "description": "The same dataset as the preview, as a styled .xlsx download.\n\nCalls the identical service function the preview does - one query, one\nordering, one set of rows - so the file can never hold more or fewer rows\nthan the screen it was downloaded from. Authorization runs again inside that\nservice, so pasting this URL as a non-PM fails with 403 exactly as the\npreview does.\n\n`.xlsx` suffix + StreamingResponse + Content-Disposition is the established\nCoreOps export shape (/projects/{id}/weekly-report.xlsx,\n/reports-export/activity-rows.xlsx) - no second Excel stack, no base64 in\nJSON.",
+        "description": "The same dataset as the preview, as a styled .xlsx download.\n\nCalls the identical service function the preview does, with the identical\n`month` - one query, one ordering, one filter, one set of rows - so the file\ncan never hold more or fewer rows than the screen it was downloaded from.\nAuthorization runs again inside that service, so pasting this URL as a\nnon-PM fails with 403 exactly as the preview does.\n\n`.xlsx` suffix + StreamingResponse + Content-Disposition is the established\nCoreOps export shape (/projects/{id}/weekly-report.xlsx,\n/reports-export/activity-rows.xlsx) - no second Excel stack, no base64 in\nJSON.",
         "operationId": "get_production_status_report_xlsx_api_v1_production_status_report_xlsx_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Narrow the report to the production status records RECORDED in this month, as YYYY-MM (for example 2026-08). Omit it for the cumulative all-months report. The month is the record's created_at month, never completed_on - an in-progress record has no completion date.",
+              "title": "Month"
+            },
+            "description": "Narrow the report to the production status records RECORDED in this month, as YYYY-MM (for example 2026-08). Omit it for the cumulative all-months report. The month is the record's created_at month, never completed_on - an in-progress record has no completion date."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -9814,13 +9885,18 @@
                 "schema": {}
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
+        }
       }
     },
     "/api/v1/plants/planning-plants": {
@@ -17831,9 +17907,28 @@
             "title": "Revision"
           },
           "activity_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Activity Id"
+          },
+          "activity_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Label"
           },
           "maintenance_plant_id": {
             "anyOf": [
@@ -17906,7 +18001,6 @@
         "type": "object",
         "required": [
           "revision",
-          "activity_id",
           "status"
         ],
         "title": "ProductionStatusCreate"
@@ -17992,8 +18086,15 @@
             "title": "Revision"
           },
           "activity_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Activity Id"
           },
           "activity_name": {
@@ -18017,6 +18118,17 @@
               }
             ],
             "title": "Activity Code"
+          },
+          "activity_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Label"
           },
           "status": {
             "type": "string",
@@ -18084,7 +18196,6 @@
           "project_code",
           "project_name",
           "revision",
-          "activity_id",
           "status",
           "tag_count",
           "doc_count",
@@ -18101,6 +18212,25 @@
             "type": "string",
             "format": "date-time",
             "title": "Generated At"
+          },
+          "month": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
+          },
+          "months": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Months",
+            "default": []
           },
           "row_count": {
             "type": "integer",
@@ -18174,8 +18304,15 @@
             "title": "Revision"
           },
           "activity_id": {
-            "type": "string",
-            "format": "uuid",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Activity Id"
           },
           "activity": {
@@ -18243,7 +18380,6 @@
           "project_code",
           "project_plant",
           "revision",
-          "activity_id",
           "activity",
           "status",
           "status_label",

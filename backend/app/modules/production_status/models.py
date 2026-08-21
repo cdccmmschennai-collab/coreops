@@ -85,10 +85,24 @@ class ProjectProductionStatus(Base):
     # many revisions at once, and projects.tag_scope_revision is an unrelated
     # integer counter for tag-scope history.
     revision: Mapped[str] = mapped_column(Text, nullable=False)
-    # activity_master row, level='activity' (enforced in the service).
-    activity_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="RESTRICT"), nullable=False
+    # The activity this update is about, named in exactly ONE of two ways
+    # (migration 0072, enforced by the
+    # `project_production_statuses_activity_named_once` CHECK):
+    #
+    #   activity_id     an activity_master row, level='activity'
+    #   activity_label  a name a Project Head typed, for an activity that is not
+    #                   in Activity Master
+    #
+    # The label lives here rather than becoming an Activity Master row because
+    # Activity Master is company-wide data driving work reports, staffing and
+    # benchmarks - a heading typed for one project's production status has no
+    # business in any of them. Both are part of the record's IDENTITY: current
+    # status is derived per project + revision + activity, whichever way the
+    # activity is named.
+    activity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activity_master.id", ondelete="RESTRICT"), nullable=True
     )
+    activity_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     tag_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     doc_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -141,6 +155,20 @@ class ProjectProductionStatus(Base):
             "tag_count >= 0 AND doc_count >= 0 AND spares_count >= 0 AND crs_count >= 0",
             name="project_production_statuses_counts_non_negative",
         ),
+        # An activity named exactly once - an id OR a typed label, never both
+        # and never neither (migration 0072). A row naming no activity is not a
+        # state any caller should be able to reach, so it is refused here and
+        # not only in the service.
+        #
+        # `activity_label IS NOT NULL` is spelled out deliberately: without it a
+        # row with BOTH columns NULL evaluates to NULL, and a CHECK constraint
+        # PASSES on NULL - letting through the exact state this forbids.
+        CheckConstraint(
+            "(activity_id IS NOT NULL AND activity_label IS NULL)"
+            " OR (activity_id IS NULL AND activity_label IS NOT NULL"
+            " AND btrim(activity_label) <> '')",
+            name="project_production_statuses_activity_named_once",
+        ),
         # The two access paths the module actually has, and nothing else:
         #   1. latest / history for a project+revision+activity
         #   2. history for a project+activity across revisions
@@ -151,6 +179,9 @@ class ProjectProductionStatus(Base):
             "project_id",
             "revision",
             "activity_id",
+            # Part of the identity too, so "latest per project + revision +
+            # activity" stays one index lookup for a typed activity as well.
+            "activity_label",
             text("created_at DESC"),
         ),
         Index(

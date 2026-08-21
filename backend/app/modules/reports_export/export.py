@@ -899,9 +899,10 @@ _PS_DATE_FORMAT = "DD-MMM-YYYY"
 #   "text"   left, no wrap        "wrap"   left, wrapped (long free text)
 #   "num"    centered number      "date"   real Excel date
 #
-# TAG / DOC / SPARES / CRS are four separate columns under no merged "COUNT"
-# banner and with no total column: they are four independent units, and a
-# combined figure would be a number the business never asked for.
+# TAG / DOC / SPARES / CRS sit under one merged COUNT banner, matching the
+# business's own production sheet (202512_CMMS CHENNAI PRODUCTION-DECEMBER
+# 2025.xlsx). The banner is a HEADING over four independent units - there is
+# still no total column and nothing is ever summed across them.
 #
 # There is deliberately NO separate REVISION column: the revision is part of the
 # PROJECT / PLANT cell ("4460-GC22104900 - KAHM REV-0"), which is the business's
@@ -923,6 +924,33 @@ _PS_COLUMNS = [
     ("REMARKS", 60.0, "wrap"),
     ("BY", 22.0, "text"),
 ]
+
+# The merged banner: label, first column, last column (1-based, inclusive).
+# Every other column has no banner and is merged vertically across both header
+# rows instead, so the sheet reads as one two-row header.
+_PS_COUNT_BANNER = ("COUNT", 5, 8)
+
+# Header occupies rows 1-2; data starts at row 3.
+_PS_HEADER_ROWS = 2
+_PS_FIRST_DATA_ROW = _PS_HEADER_ROWS + 1
+
+# PROJECT STATUS is coloured the way the business's own sheet colours it -
+# bold green for a closed line, bold blue for one still running - so a PM
+# scanning the column sees the same thing in CoreOps' export as in the file they
+# have always used. Keyed on the STORED status, never on the rendered label, so
+# rewording a label cannot silently change what a colour means; an unrecognised
+# status simply gets the ordinary body font.
+_PS_STATUS_FONTS = {
+    "closed": Font(name="Calibri", size=11, bold=True, color="FF00B050"),
+    "in_progress": Font(name="Calibri", size=11, bold=True, color="FF0070C0"),
+}
+
+# 1-based, resolved from the column list by NAME so moving a column or changing
+# its width cannot silently colour the wrong one.
+_PS_STATUS_COLUMN = next(
+    idx for idx, (label, _w, _k) in enumerate(_PS_COLUMNS, start=1)
+    if label == "PROJECT STATUS"
+)
 
 
 def _ps_cell_values(row: dict) -> list:
@@ -956,35 +984,73 @@ def _ps_cell_values(row: dict) -> list:
     ]
 
 
+def _ps_header_cell(ws, row: int, column: int, value: str | None):
+    """One header cell, in the sheet's single header style."""
+    cell = ws.cell(row=row, column=column, value=value)
+    cell.font = _PS_HEADER_FONT
+    cell.fill = _PS_HEADER_FILL
+    cell.border = _BORDER
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    return cell
+
+
+def _ps_write_header(ws) -> None:
+    """The two-row header: a merged COUNT banner over TAG/DOC/SPARES/CRS, with
+    every other column merged vertically across both rows.
+
+    Both cells of each merge are styled, not just the anchor: an unstyled second
+    cell shows as an unfilled, unbordered gap inside the merged block in Excel.
+    """
+    label, first, last = _PS_COUNT_BANNER
+
+    for idx, (header, width, _kind) in enumerate(_PS_COLUMNS, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+        if first <= idx <= last:
+            # Under the banner: the unit's own name goes on the second row.
+            _ps_header_cell(ws, 1, idx, label if idx == first else None)
+            _ps_header_cell(ws, 2, idx, header)
+        else:
+            _ps_header_cell(ws, 1, idx, header)
+            _ps_header_cell(ws, 2, idx, None)
+            ws.merge_cells(
+                start_row=1, end_row=2, start_column=idx, end_column=idx
+            )
+
+    ws.merge_cells(start_row=1, end_row=1, start_column=first, end_column=last)
+
+
 def build_production_status_report_workbook(report: dict) -> BytesIO:
     """Render the cumulative Production Status report (the dict from
     production_status.service.cumulative_report) as .xlsx.
 
-    Sheet "Production Status", one bold header row that stays frozen and
-    filterable while the PM scrolls. An empty report still produces a valid
-    workbook with its header row — the same thing every other CoreOps export
-    does rather than returning an error or an empty file.
+    Sheet "Production Status", laid out like the business's own production sheet
+    (202512_CMMS CHENNAI PRODUCTION-DECEMBER 2025.xlsx): a two-row header with a
+    merged COUNT banner over the four units, bold green CLOSED / bold blue
+    IN PROGRESS in the status column, and the header frozen and filterable while
+    the PM scrolls. An empty report still produces a valid workbook with its
+    header — the same thing every other CoreOps export does rather than
+    returning an error or an empty file.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = _PS_SHEET_NAME
 
-    for idx, (label, width, _kind) in enumerate(_PS_COLUMNS, start=1):
-        cell = ws.cell(row=1, column=idx, value=label)
-        cell.font = _PS_HEADER_FONT
-        cell.fill = _PS_HEADER_FILL
-        cell.border = _BORDER
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.column_dimensions[get_column_letter(idx)].width = width
+    _ps_write_header(ws)
 
     rows = report.get("rows") or []
     for offset, row in enumerate(rows):
-        excel_row = offset + 2
+        excel_row = offset + _PS_FIRST_DATA_ROW
         for idx, ((_label, _width, kind), value) in enumerate(
             zip(_PS_COLUMNS, _ps_cell_values(row)), start=1
         ):
             cell = ws.cell(row=excel_row, column=idx, value=value)
-            cell.font = _PS_BODY_FONT
+            # The status cell takes its colour from the STORED status; every
+            # other cell keeps the ordinary body font.
+            cell.font = (
+                _PS_STATUS_FONTS.get(row.get("status") or "", _PS_BODY_FONT)
+                if idx == _PS_STATUS_COLUMN
+                else _PS_BODY_FONT
+            )
             cell.border = _BORDER
             cell.alignment = Alignment(
                 horizontal="center" if kind in ("num", "date") else "left",
@@ -995,11 +1061,14 @@ def build_production_status_report_workbook(report: dict) -> BytesIO:
                 cell.number_format = _PS_DATE_FORMAT
 
     # The header stays put, and stays filterable, however long the report is.
-    # The filter spans the header row even when there are no data rows, so an
-    # empty workbook still opens as a proper table rather than a bare grid.
-    ws.freeze_panes = "A2"
+    # The filter spans the second header row (the one carrying every column's
+    # own name) even when there are no data rows, so an empty workbook still
+    # opens as a proper table rather than a bare grid.
+    ws.freeze_panes = f"A{_PS_FIRST_DATA_ROW}"
+    last_column = get_column_letter(len(_PS_COLUMNS))
     ws.auto_filter.ref = (
-        f"A1:{get_column_letter(len(_PS_COLUMNS))}{max(len(rows) + 1, 1)}"
+        f"A{_PS_HEADER_ROWS}:{last_column}"
+        f"{max(len(rows) + _PS_HEADER_ROWS, _PS_HEADER_ROWS)}"
     )
 
     return _finalize(wb)

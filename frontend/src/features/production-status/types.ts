@@ -15,7 +15,10 @@ export type ProductionStatusCreateBody =
 
 /** Optional narrowing for the history read. */
 export interface ProductionStatusHistoryParams {
+  /** An Activity Master activity's id. */
   activityId?: string;
+  /** A typed activity's own name - the other way a record names its activity. */
+  activityLabel?: string;
   revision?: string;
 }
 

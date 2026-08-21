@@ -7,14 +7,16 @@ RBAC (resolved through app.core.authz, never re-implemented here):
          Activity Lead    projects where they lead at least one activity
          everyone else    403 - the tab is not a general project tab
 
-  write  the caller must have management authority over THE SPECIFIC ACTIVITY,
-         resolved by `authz.activity_staffing_authority`:
-           "full" -> project_manager, or this project's Head
-           "lead" -> the assigned Lead of that one activity
-           None   -> 403
-         This is the same helper that already gates activity staffing changes,
-         so "authorized to manage this activity" has exactly one definition in
-         the codebase.
+  write  Project Head     every activity on their project, and the only role
+                          that may TYPE an activity not in Activity Master
+         Activity Lead    the one activity they lead
+         project_manager  403 - the PM is READ-ONLY here, deliberately
+         everyone else    403
+         Resolved by `_record_authority`, which is this module's own rule and
+         NOT `authz.activity_staffing_authority` - that helper answers "may you
+         change who works on this activity" and hands a PM "full". Production
+         status is a claim about work that was done, made by the people who did
+         it; the PM reads it and reads the cumulative report nobody else can.
 
   report the PM cumulative report (`cumulative_report`) is project_manager
          ONLY - see `_assert_can_read_report`. A Head or an activity Lead has
@@ -27,10 +29,11 @@ remain readable. "Latest" is derived (newest `created_at` per project+revision+
 activity), never stored - and it is derived in exactly ONE place, `_latest_stmt`,
 which both the per-project tab and the cumulative PM report read.
 """
+import re
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core import authz
@@ -49,7 +52,7 @@ from app.modules.production_status.schemas import (
     ProductionStatusOut,
     ProductionStatusReportRow,
 )
-from app.modules.projects.models import Project, ProjectActivityMember
+from app.modules.projects.models import Project
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
@@ -108,20 +111,73 @@ def _assert_can_read_report(actor: User) -> None:
         )
 
 
+# The two kinds of write authority on this tab. Deliberately NOT
+# `authz.activity_staffing_authority`, which is about STAFFING and hands a PM
+# "full" on every project - see `_record_authority`.
+RECORD_AUTHORITY_HEAD = "head"
+RECORD_AUTHORITY_LEAD = "lead"
+
+
+def _record_authority(
+    db: Session, actor: User, project: Project, activity_id: uuid.UUID | None
+) -> str | None:
+    """Who may APPEND a production status update, and for what.
+
+      "head"  this project's assigned Head. Every activity on the project, and
+              the only role that may type an activity that is not in Activity
+              Master.
+      "lead"  the assigned Lead of ONE Activity Master activity, for that
+              activity alone.
+      None    everyone else - including the project_manager.
+
+    The PM is read-only here BY DESIGN, and this is the one place that says so.
+    It is why this function exists at all instead of reusing
+    `authz.activity_staffing_authority`, which returns "full" for a PM: that
+    helper answers "may you change who works on this activity", which a PM
+    certainly may. Production status is a claim about work that was actually
+    done, and it is made by the people who did it - the Head who owns the
+    project and the Lead who owns the activity. The PM reads it, and reads the
+    cumulative report nobody else can (`_assert_can_read_report`).
+
+    A Lead cannot reach "head" by leaving `activity_id` empty: a typed activity
+    has no Lead to be, so the label path requires "head" (see
+    `_assert_can_record`).
+    """
+    if authz.is_project_head(db, actor, project):
+        return RECORD_AUTHORITY_HEAD
+    if activity_id is not None and authz.is_activity_lead(
+        db, actor, project.id, activity_id
+    ):
+        return RECORD_AUTHORITY_LEAD
+    return None
+
+
 def _assert_can_record(
-    db: Session, actor: User, project: Project, activity_id: uuid.UUID
-) -> None:
-    """Authority over ONE activity, via the shared staffing-authority helper.
+    db: Session, actor: User, project: Project, data: ProductionStatusCreate
+) -> str:
+    """403 unless the caller may record THIS update. Returns their authority.
 
     Checked before the activity itself is validated, so an unauthorized caller
     gets the same 403 whether or not the activity they guessed exists.
     """
-    if authz.activity_staffing_authority(db, actor, project, activity_id) is None:
+    authority = _record_authority(db, actor, project, data.activity_id)
+    if authority is None:
         raise AppError(
             "forbidden",
-            "You can only record production status for activities you manage.",
+            "Only this project's Head and its activity leads can record "
+            "production status.",
             403,
         )
+    # Typing an activity is the Head's call. A Lead's authority is over one
+    # named Activity Master activity, so there is nothing for it to attach to.
+    if data.activity_id is None and authority != RECORD_AUTHORITY_HEAD:
+        raise AppError(
+            "forbidden",
+            "Only this project's Head can record production status for an "
+            "activity that is not in Activity Master.",
+            403,
+        )
+    return authority
 
 
 def _validate_maintenance_plant(
@@ -181,16 +237,23 @@ def _validate_maintenance_plant(
     return maintenance_plant_id
 
 
-def _fetch_valid_activity(
-    db: Session, project: Project, activity_id: uuid.UUID
-) -> ActivityMaster:
-    """The activity must exist in Activity Master, be a top-level Activity, and
-    be one of THIS project's activities.
+def _fetch_valid_activity(db: Session, activity_id: uuid.UUID) -> ActivityMaster:
+    """The activity must exist in Activity Master and be a top-level Activity.
 
-    A project's activities are the ones it is staffed for
-    (``project_activity_members``) - that join is the only structural
-    project<->activity link in the system, and it is the same one the Activity
-    Lead relationship is built on. No parallel activity list is invented here.
+    Deliberately NOT narrowed to the project's activity staffing any more. A
+    project is staffed for the activities people are assigned to work on, which
+    is a different question from what a Head reports production against: the
+    Head owns the whole project's output and needs every activity available,
+    including ones nobody is formally staffed for yet. Requiring staffing meant
+    a project with none had nothing to record at all, which is the state this
+    change exists to fix.
+
+    Authority is still per-activity and unchanged in strength - a Lead reaches
+    only the activity they lead (`_record_authority`). This function answers
+    "is this a real Activity", not "may you use it".
+
+    A sub-activity is still refused: production status is recorded against an
+    Activity, and that has not changed.
     """
     activity = db.get(ActivityMaster, activity_id)
     if activity is None:
@@ -199,20 +262,6 @@ def _fetch_valid_activity(
         raise AppError(
             "validation_error",
             "Production status is recorded against an Activity, not a sub-activity.",
-            422,
-        )
-    staffed = db.execute(
-        select(ProjectActivityMember.id)
-        .where(
-            ProjectActivityMember.project_id == project.id,
-            ProjectActivityMember.activity_id == activity_id,
-        )
-        .limit(1)
-    ).scalar_one_or_none()
-    if staffed is None:
-        raise AppError(
-            "validation_error",
-            "That activity is not part of this project.",
             422,
         )
     return activity
@@ -251,12 +300,18 @@ def _attach_plants(db: Session, projects: list[Project]) -> None:
 def _activities_by_id(
     db: Session, rows: list[ProjectProductionStatus]
 ) -> dict[uuid.UUID, ActivityMaster]:
+    """Bulk-resolve the Activity Master rows these records point at.
+
+    Rows with a typed activity have no `activity_id` and are simply not part of
+    the lookup - their name is already on the row.
+    """
+    ids = {r.activity_id for r in rows if r.activity_id}
+    if not ids:
+        return {}
     return {
         a.id: a
         for a in db.execute(
-            select(ActivityMaster).where(
-                ActivityMaster.id.in_({r.activity_id for r in rows})
-            )
+            select(ActivityMaster).where(ActivityMaster.id.in_(ids))
         ).scalars().all()
     }
 
@@ -285,6 +340,21 @@ def _record_plants_by_id(
     }
 
 
+def _activity_display(
+    activity: ActivityMaster | None, activity_label: str | None
+) -> str:
+    """The ACTIVITY cell, however the activity was named.
+
+    An Activity Master activity reads as its name (falling back to its code); a
+    typed activity reads as exactly what was typed. ONE function, used by the
+    project tab, the report and the workbook alike, so no screen has to know -
+    or show - which kind of row it is looking at.
+    """
+    if activity is not None:
+        return (activity.name or "").strip() or (activity.code or "").strip()
+    return (activity_label or "").strip()
+
+
 def _to_out(
     db: Session, project: Project, rows: list[ProjectProductionStatus]
 ) -> list[ProductionStatusOut]:
@@ -299,7 +369,7 @@ def _to_out(
 
     out: list[ProductionStatusOut] = []
     for r in rows:
-        activity = activities.get(r.activity_id)
+        activity = activities.get(r.activity_id) if r.activity_id else None
         # THIS RECORD's plant, from its own maintenance_plant_id - never the
         # project's plant fields and never derived from the Planning Plant.
         # Null stays null.
@@ -317,8 +387,11 @@ def _to_out(
                 maintenance_plant_description=plant.description if plant else None,
                 revision=r.revision,
                 activity_id=r.activity_id,
-                activity_name=activity.name if activity else None,
+                # One resolved name whichever way the activity was named, so a
+                # client renders `activity_name` and never combines fields.
+                activity_name=_activity_display(activity, r.activity_label) or None,
                 activity_code=activity.code if activity else None,
+                activity_label=r.activity_label,
                 status=r.status,
                 tag_count=r.tag_count,
                 doc_count=r.doc_count,
@@ -346,6 +419,13 @@ _LATEST_KEY = (
     ProjectProductionStatus.project_id,
     ProjectProductionStatus.revision,
     ProjectProductionStatus.activity_id,
+    # The typed activity is part of the identity exactly as an id is (migration
+    # 0072): two updates typed "HIERARCHY QA/QC" on the same project and
+    # revision are the same combination and the newer supersedes the older.
+    # Postgres treats NULLs as equal in DISTINCT ON, so an id-named row groups
+    # by its id with a NULL label, and a typed row groups by its label with a
+    # NULL id - without either colliding with the other.
+    ProjectProductionStatus.activity_label,
 )
 
 
@@ -402,6 +482,7 @@ def list_history(
     project_id: uuid.UUID,
     *,
     activity_id: uuid.UUID | None = None,
+    activity_label: str | None = None,
     revision: str | None = None,
 ) -> list[ProductionStatusOut]:
     """Every recorded update for the project, newest first.
@@ -409,6 +490,12 @@ def list_history(
     Optionally narrowed to one activity and/or one revision - which is what the
     "history for a project/activity" view reads. Nothing is ever filtered out
     by status: a superseded INPROGRESS row stays in the result forever.
+
+    An activity is named the same two ways it is on the record itself:
+    `activity_id` for an Activity Master activity, `activity_label` for one that
+    was typed. A caller sends whichever the row it is opening the trail for
+    carries, so a typed activity has its own history exactly as a master one
+    does.
     """
     project = _fetch_project(db, project_id)
     _assert_can_read(db, actor, project)
@@ -418,6 +505,12 @@ def list_history(
     )
     if activity_id is not None:
         stmt = stmt.where(ProjectProductionStatus.activity_id == activity_id)
+    if activity_label is not None:
+        clean_label = activity_label.strip()
+        if clean_label:
+            stmt = stmt.where(
+                ProjectProductionStatus.activity_label == clean_label
+            )
     if revision is not None:
         clean = revision.strip()
         if clean:
@@ -447,15 +540,18 @@ def create_production_status(
 
     Refuses, in this order:
       404  project does not exist (or is archived)
-      403  caller does not manage this activity on this project
+      403  caller is not this project's Head, nor the Lead of this activity
+           (a project_manager is READ-ONLY here - see `_record_authority`)
+      403  a Lead tried to type an activity of their own
       404  activity does not exist in Activity Master
-      422  activity is a sub-activity, or is not one of this project's
+      422  activity is a sub-activity
       422  maintenance plant does not belong to this project
       422  revision is blank
     """
     project = _fetch_project(db, project_id)
-    _assert_can_record(db, actor, project, data.activity_id)
-    _fetch_valid_activity(db, project, data.activity_id)
+    _assert_can_record(db, actor, project, data)
+    if data.activity_id is not None:
+        _fetch_valid_activity(db, data.activity_id)
     # Optional. None stays None - a project with no Maintenance Plants to offer
     # still records production status.
     maintenance_plant_id = _validate_maintenance_plant(
@@ -471,7 +567,10 @@ def create_production_status(
     row = ProjectProductionStatus(
         project_id=project.id,
         revision=revision,
+        # Exactly one of these is set - the schema's `_exactly_one_activity`
+        # already refused anything else, and the table's CHECK is the backstop.
         activity_id=data.activity_id,
+        activity_label=data.activity_label,
         maintenance_plant_id=maintenance_plant_id,
         status=data.status,
         tag_count=data.tag_count,
@@ -493,7 +592,8 @@ def create_production_status(
         details={
             "project_id": str(project.id),
             "revision": revision,
-            "activity_id": str(data.activity_id),
+            "activity_id": str(data.activity_id) if data.activity_id else None,
+            "activity_label": data.activity_label,
             "maintenance_plant_id": (
                 str(maintenance_plant_id) if maintenance_plant_id else None
             ),
@@ -512,6 +612,91 @@ def create_production_status(
 # ---------------------------------------------------------------------------
 # PM cumulative report (Phase 4) - read only, one dataset for preview + Excel
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# The report's month filter (Phase 5)
+# ---------------------------------------------------------------------------
+#
+# The month is taken from the record's `created_at` - WHEN THE UPDATE WAS
+# RECORDED - and never from `completed_on`. An IN PROGRESS update legitimately
+# has no completion date, so filtering on `completed_on` would silently drop
+# exactly the rows a PM opens a month to look at.
+#
+# UTC, on both sides of the feature: the bucket a record falls into
+# (`_month_expr`) and the window a filter selects (`_month_bounds`) are computed
+# the same way, so a month offered by the dropdown can never come back empty
+# because the two disagreed. It also matches what the UI already shows - every
+# timestamp in this module is rendered from the leading digits of the serialized
+# ISO string, which are UTC.
+
+# "2026-08". A plain, sortable key: lexicographic order IS chronological order,
+# which is what lets the dropdown be ordered by the same expression it groups by.
+MONTH_FORMAT = "YYYY-MM"
+
+
+def _month_expr():
+    """The month bucket a production status record belongs to, as SQL."""
+    return func.to_char(
+        func.timezone("UTC", ProjectProductionStatus.created_at), MONTH_FORMAT
+    )
+
+
+def _month_bounds(month: str) -> tuple[datetime, datetime]:
+    """`"2026-08"` -> the half-open window `[2026-08-01Z, 2026-09-01Z)`.
+
+    Half-open on purpose: `>= start` and `< end` needs no "last day of the
+    month" arithmetic and cannot drop a record recorded in the final second of
+    the month.
+    """
+    # Matched strictly rather than parsed leniently: "26-08" is a real date to
+    # `int()` (the year 26) and would silently return an empty report the client
+    # would then present as a filtered one.
+    matched = re.fullmatch(r"(\d{4})-(0[1-9]|1[0-2])", (month or "").strip())
+    if matched is None:
+        raise AppError(
+            "validation_error",
+            "Month must be written as YYYY-MM, for example 2026-08.",
+            422,
+        )
+    year, mon = int(matched.group(1)), int(matched.group(2))
+    start = datetime(year, mon, 1, tzinfo=timezone.utc)
+    end = (
+        datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        if mon == 12
+        else datetime(year, mon + 1, 1, tzinfo=timezone.utc)
+    )
+    return start, end
+
+
+def _available_months(db: Session) -> list[str]:
+    """Every month that actually has production status records, ascending.
+
+    Derived from ALL records, not from the latest-per-combination set the report
+    renders: a combination whose newest update is in September may still have an
+    August update, and August must stay selectable so that row can be read.
+
+    Deliberately independent of whichever month is currently selected - the
+    dropdown must never collapse to the one option the PM already picked.
+
+    Archived (soft-deleted) projects are excluded, matching the report itself, so
+    the dropdown cannot offer a month whose only records the report will not
+    show.
+    """
+    month = _month_expr()
+    return [
+        m
+        for m in db.execute(
+            select(month)
+            .join(Project, Project.id == ProjectProductionStatus.project_id)
+            .where(Project.deleted_at.is_(None))
+            .distinct()
+            .order_by(month)
+        )
+        .scalars()
+        .all()
+        if m
+    ]
+
 
 # The stored values become words a reader understands here, and only here on
 # this side of the wire. The VALUES are untouched (`in_progress` / `closed`):
@@ -578,20 +763,43 @@ def _project_plant_display(
     return text
 
 
-def _activity_label(activity: ActivityMaster | None) -> str:
-    if activity is None:
-        return ""
-    return (activity.name or "").strip() or (activity.code or "").strip()
 
 
-def cumulative_report(db: Session, actor: User) -> dict:
+
+
+def cumulative_report(db: Session, actor: User, month: str | None = None) -> dict:
     """The PM's cumulative Production Status - the latest row for every
     project + revision + activity in the system, in one query.
 
     THE dataset. The JSON endpoint serialises this and the .xlsx endpoint
     renders this same dict into a workbook, so the file always holds exactly the
     rows the PM reviewed on screen - there is no second query, no second
-    ordering and no second "latest".
+    ordering and no second "latest". `month` is passed straight through by both
+    endpoints for the same reason: the filter is part of the dataset's
+    definition, so the download cannot hold a different set of rows from the
+    preview it was taken from.
+
+    `month` ("2026-08", or None for every month):
+
+      None    the report is exactly what it has always been - every project,
+              every revision, every activity, cumulative.
+
+      set     narrowed to the records RECORDED in that month (`created_at`, see
+              the module note above - never `completed_on`, which an IN PROGRESS
+              record does not have). The narrowing happens BEFORE the DISTINCT
+              ON, so each combination resolves to its latest update *within that
+              month*: asking for August shows what August's records said, not
+              what a later September update replaced them with.
+
+      A month with no records is a valid, empty report - not an error.
+
+    `months` on the result lists every month that has records at all, so the
+    caller can offer the choice without a second endpoint, and the list does not
+    shrink to whatever month is currently selected.
+
+    Nothing else filters. There is no project, activity or status filter here by
+    design: the report is all-project and cumulative, and the month is the only
+    narrowing it accepts.
 
     What it is not:
 
@@ -622,7 +830,24 @@ def cumulative_report(db: Session, actor: User) -> dict:
     # report is ordered by project CODE, which lives on another table. Wrapping
     # keeps the latest-row selection in the database (never "load all history
     # and pick in Python") while the outer query is free to sort for a reader.
-    latest = aliased(ProjectProductionStatus, _latest_stmt().subquery())
+    selected = (month or "").strip() or None
+    stmt = _latest_stmt()
+    if selected is not None:
+        # Narrowed HERE, on the inner statement, so the DISTINCT ON runs over
+        # the month's records and each combination resolves to its latest update
+        # within the month. Filtering the outer query instead would first pick
+        # each combination's newest row overall and then throw away any that
+        # happened to fall outside the month - so a row updated again later
+        # would vanish from the earlier month entirely.
+        #
+        # Still one database query: the filter is a WHERE, not a second pass in
+        # Python over every historical record.
+        start, end = _month_bounds(selected)
+        stmt = stmt.where(
+            ProjectProductionStatus.created_at >= start,
+            ProjectProductionStatus.created_at < end,
+        )
+    latest = aliased(ProjectProductionStatus, stmt.subquery())
     activity = aliased(ActivityMaster)
     # Each ROW's own Maintenance Plant (migration 0071), joined in the same
     # query. An outer join because choosing a plant is optional - a row without
@@ -639,8 +864,13 @@ def cumulative_report(db: Session, actor: User) -> dict:
             .order_by(
                 Project.code,
                 latest.revision,
-                activity.name,
+                # The name the row is actually shown under, so a typed activity
+                # sorts among the Activity Master ones instead of bunching at
+                # one end on a NULL join. Same expression the ACTIVITY cell is
+                # rendered from.
+                func.coalesce(activity.name, latest.activity_label),
                 latest.activity_id,
+                latest.activity_label,
             )
         ).all()
     )
@@ -671,7 +901,8 @@ def cumulative_report(db: Session, actor: User) -> dict:
                 # it its own column - it identifies the row and its history.
                 revision=r.revision,
                 activity_id=r.activity_id,
-                activity=_activity_label(activity_row),
+                # One column, both kinds of activity - see _activity_display.
+                activity=_activity_display(activity_row, r.activity_label),
                 status=r.status,
                 status_label=_status_label(r.status),
                 # Four independent values, straight off the record. A stored 0
@@ -694,18 +925,37 @@ def cumulative_report(db: Session, actor: User) -> dict:
 
     return {
         "generated_at": datetime.now(timezone.utc),
+        # The filter this dataset was built with - echoed back so a client can
+        # tell which report it is holding. None means the cumulative all-months
+        # report.
+        "month": selected,
+        # Every month that has records, whatever the current filter is.
+        "months": _available_months(db),
+        # The FILTERED count. `rows` and `row_count` always describe the same
+        # list, so "12 rows" on screen is 12 rows in the file.
         "row_count": len(out),
         "rows": out,
     }
 
 
-def report_filename(today: date | None = None) -> str:
-    """`PRODUCTION STATUS [21 AUG 2026].xlsx`.
+def report_filename(today: date | None = None, month: str | None = None) -> str:
+    """`PRODUCTION STATUS [21 AUG 2026].xlsx`, or `[AUG 2026]` for one month.
 
     Same shape as the weekly report's filename (uppercase name, bracketed date),
     so CoreOps exports land in a downloads folder looking like one family.
     Characters that would break a Content-Disposition header are stripped.
+
+    A month-filtered download is named for the MONTH rather than for today, so
+    two files downloaded on the same day are told apart by what is in them. The
+    unfiltered name is unchanged.
     """
-    day = today or datetime.now(timezone.utc).date()
-    name = f"PRODUCTION STATUS [{day.day} {day.strftime('%b').upper()} {day.year}].xlsx"
+    selected = (month or "").strip() or None
+    if selected is not None:
+        start, _end = _month_bounds(selected)
+        name = f"PRODUCTION STATUS [{start.strftime('%b').upper()} {start.year}].xlsx"
+    else:
+        day = today or datetime.now(timezone.utc).date()
+        name = (
+            f"PRODUCTION STATUS [{day.day} {day.strftime('%b').upper()} {day.year}].xlsx"
+        )
     return "".join(c for c in name if c.isprintable() and c not in '"\\/:*?<>|')

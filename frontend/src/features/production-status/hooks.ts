@@ -81,12 +81,21 @@ export function useProductionStatusHistory(
  * fire a request guaranteed to come back 403 (they never see the button
  * either), and the report is not fetched at all until the PM opens it - the
  * projects list must not pay for a report nobody asked for.
+ *
+ * `month` ("2026-08", or undefined for All Months) is part of the query key, so
+ * changing the dropdown refetches instead of showing another month's rows, and
+ * a month already looked at comes back from the cache. The filtering itself is
+ * entirely the server's - this hook narrows the request, never the response.
  */
-export function useProductionStatusReport(enabled: boolean) {
+export function useProductionStatusReport(enabled: boolean, month?: string) {
   return useQuery({
-    queryKey: productionStatusKeys.report(),
-    queryFn: () => productionStatusApi.report(),
+    queryKey: productionStatusKeys.report(month),
+    queryFn: () => productionStatusApi.report(month),
     enabled,
+    // The months on offer come with the report, so they would blink away on
+    // every switch if the previous data were dropped. Keeping it also stops the
+    // table flashing empty between months.
+    placeholderData: (prev) => prev,
   });
 }
 

@@ -24,9 +24,22 @@ Covers, in order:
  17. the download is a valid .xlsx        test_download_produces_a_valid_xlsx
  18. the report reads no history          test_report_never_returns_history_rows
 
+Phase 5 adds ONE filter - the month - and section 19 covers it:
+
+ 19a. All Months is the old report       test_all_months_is_the_unfiltered_...
+      ...and is the default              test_the_default_over_http_is_all_months
+      the months on offer                test_the_months_on_offer_come_with_...
+ 19b. August                             test_august_returns_only_august_records
+ 19c. September                          test_september_returns_only_september_...
+      created_at, never completed_on     test_the_month_is_created_at_never_...
+ 19d. a month with no records            test_a_month_with_no_records_is_an_empty_...
+ 19e. preview dataset == download        test_the_workbook_holds_exactly_the_...
+ 19f. PM-only is unchanged               test_the_month_filter_does_not_widen_...
+ 19g. history/tab are unchanged          test_the_month_filter_does_not_touch_...
+
 Run:  docker exec wms-backend-1 pytest tests/test_production_status_report.py -q
 """
-from datetime import date
+from datetime import date, datetime, timezone
 from io import BytesIO
 
 import openpyxl
@@ -58,6 +71,30 @@ _COLUMNS = [
     "COMPLETED ON", "REMARKS", "BY",
 ]
 _COL = {label: idx for idx, label in enumerate(_COLUMNS, start=1)}
+
+# The sheet mirrors the business's own production file: TAG/DOC/SPARES/CRS sit
+# under one merged COUNT banner, so the header is TWO rows and the first data
+# row is row 3.
+_HEADER_ROWS = 2
+_FIRST_DATA_ROW = _HEADER_ROWS + 1
+
+# The colours the business's own file uses for the PROJECT STATUS cell.
+_CLOSED_COLOUR = "FF00B050"        # green
+_IN_PROGRESS_COLOUR = "FF0070C0"   # blue
+
+
+def _header_labels(ws):
+    """Each column's own name, wherever the two header rows put it.
+
+    A column under the COUNT banner carries its name on row 2; every other
+    column is merged across both rows and carries it on row 1. This flattens
+    that back to one list, so a test can assert the columns without caring how
+    the header is laid out.
+    """
+    return [
+        ws.cell(row=2, column=c).value or ws.cell(row=1, column=c).value
+        for c in range(1, len(_COLUMNS) + 1)
+    ]
 
 
 # --- helpers ---------------------------------------------------------------
@@ -201,7 +238,7 @@ def scene(db, make_user, make_employee, make_project):
 
 def test_project_manager_can_read_report(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, status="closed",
                  completed_on=date(2025, 12, 5), remarks="Issued to client."),
     )
@@ -226,7 +263,7 @@ def test_project_manager_can_read_report(db, scene):
 def test_non_pm_roles_are_rejected(db, scene):
     """Project-scoped read authority is deliberately NOT report authority."""
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=10)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=10)
     )
 
     for actor in (scene.head_u, scene.lead_u, scene.emp_u):
@@ -244,7 +281,7 @@ def test_non_pm_roles_are_rejected(db, scene):
 
 def test_report_endpoints_are_pm_only_over_http(db, scene, client, login):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=10)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=10)
     )
 
     for email in ("head@x.com", "lead@x.com", "emp@x.com"):
@@ -261,10 +298,10 @@ def test_report_endpoints_are_pm_only_over_http(db, scene, client, login):
 
 def test_report_spans_every_project(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=225)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=225)
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_b.id, _payload(scene.mtl.id, doc_count=40)
+        db, scene.head_b_u, scene.project_b.id, _payload(scene.mtl.id, doc_count=40)
     )
 
     report = ps_svc.cumulative_report(db, scene.pm)
@@ -279,10 +316,10 @@ def test_report_spans_every_project(db, scene):
 
 def test_report_includes_every_activity(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=225)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=225)
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.mtl.id, doc_count=12)
+        db, scene.head_u, scene.project_a.id, _payload(scene.mtl.id, doc_count=12)
     )
 
     report = ps_svc.cumulative_report(db, scene.pm)
@@ -295,11 +332,11 @@ def test_report_includes_every_activity(db, scene):
 def test_both_revisions_appear(db, scene):
     """A revision is part of the row's identity, not a version of it."""
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.mtl.id, revision="REV-0", tag_count=100, status="closed"),
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.mtl.id, revision="REV-1", tag_count=15),
     )
 
@@ -318,7 +355,7 @@ def test_both_revisions_appear(db, scene):
 def test_only_latest_row_per_combination(db, scene):
     for tag, status in ((180, "in_progress"), (210, "in_progress"), (225, "closed")):
         ps_svc.create_production_status(
-            db, scene.pm, scene.project_a.id,
+            db, scene.head_u, scene.project_a.id,
             _payload(scene.tag_est.id, tag_count=tag, status=status,
                      completed_on=date(2025, 12, 5) if status == "closed" else None),
         )
@@ -344,7 +381,7 @@ def test_only_latest_row_per_combination(db, scene):
 
 def test_counts_are_four_independent_values(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, doc_count=12,
                  spares_count=7, crs_count=3),
     )
@@ -381,7 +418,7 @@ def test_by_is_the_actual_person_name(db, scene):
 
 def test_null_completed_on_stays_null(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=180)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=180)
     )
     row = _rows(ps_svc.cumulative_report(db, scene.pm))[0]
     assert row.completed_on is None
@@ -389,7 +426,7 @@ def test_null_completed_on_stays_null(db, scene):
     # ...and the workbook leaves the cell genuinely empty, not "-" and not a
     # date somebody guessed.
     ws = _sheet(ps_svc.cumulative_report(db, scene.pm))
-    assert ws.cell(row=2, column=_COL["COMPLETED ON"]).value is None
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["COMPLETED ON"]).value is None
 
 
 # --- 11. remarks are preserved in full ---------------------------------------
@@ -401,7 +438,7 @@ def test_full_remarks_are_preserved(db, scene):
         "Awaiting formal sign-off before the revision is frozen."
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, remarks=remark),
     )
     report = ps_svc.cumulative_report(db, scene.pm)
@@ -409,8 +446,8 @@ def test_full_remarks_are_preserved(db, scene):
 
     # Untruncated in the workbook too - the column is wrapped, not clipped.
     ws = _sheet(report)
-    assert ws.cell(row=2, column=_COL["REMARKS"]).value == remark
-    assert ws.cell(row=2, column=_COL["REMARKS"]).alignment.wrap_text is True
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["REMARKS"]).value == remark
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["REMARKS"]).alignment.wrap_text is True
 
 
 # --- 12. zero counts stay numeric zero ---------------------------------------
@@ -422,7 +459,7 @@ def test_zero_counts_stay_numeric_zero(db, scene):
     the whole column - which is the entire point of exporting a spreadsheet.
     """
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, doc_count=0,
                  spares_count=0, crs_count=0),
     )
@@ -433,9 +470,9 @@ def test_zero_counts_stay_numeric_zero(db, scene):
     ws = _sheet(report)
     counts = [_COL[u] for u in ("TAG", "DOC", "SPARES", "CRS")]
     for column in counts:
-        value = ws.cell(row=2, column=column).value
+        value = ws.cell(row=_FIRST_DATA_ROW, column=column).value
         assert isinstance(value, int), f"column {column} is {value!r}, not an int"
-    assert [ws.cell(row=2, column=c).value for c in counts] == [225, 0, 0, 0]
+    assert [ws.cell(row=_FIRST_DATA_ROW, column=c).value for c in counts] == [225, 0, 0, 0]
 
 
 # --- 13. PROJECT / PLANT -----------------------------------------------------
@@ -443,12 +480,12 @@ def test_zero_counts_stay_numeric_zero(db, scene):
 def test_report_display_combines_project_plant_and_revision(db, scene):
     """<PROJECT> - <MAINTENANCE PLANT> <REVISION>, from the record's own plant."""
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, revision="REV-0",
                  maintenance_plant_id=scene.kahm.id, tag_count=1),
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, revision="REV-1",
                  maintenance_plant_id=scene.kahn.id, tag_count=2),
     )
@@ -471,7 +508,7 @@ def test_report_display_omits_the_plant_when_there_is_none(db, scene):
     telling two rows of the same project and activity apart.
     """
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, revision="REV-0", tag_count=1),
     )
     display = _rows(ps_svc.cumulative_report(db, scene.pm))[0].project_plant
@@ -501,7 +538,7 @@ def test_report_display_is_the_project_alone_with_no_plant_and_no_revision(db, s
 
 def test_report_returns_the_selected_maintenance_plant(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, maintenance_plant_id=scene.kahm.id),
     )
     row = _rows(ps_svc.cumulative_report(db, scene.pm))[0]
@@ -512,7 +549,7 @@ def test_report_returns_the_selected_maintenance_plant(db, scene):
 def test_project_name_is_returned(db, scene):
     """The project's own identifier, straight off the project row."""
     out = ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id)
     )
     assert out.project_code == "GC-A"
     assert out.project_name == "Alpha"
@@ -523,7 +560,7 @@ def test_project_name_is_returned(db, scene):
 
 def test_selected_maintenance_plant_is_persisted(db, scene):
     out = ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, maintenance_plant_id=scene.kahm.id),
     )
     assert out.maintenance_plant_id == scene.kahm.id
@@ -545,7 +582,7 @@ def test_selected_maintenance_plant_is_persisted(db, scene):
 def test_maintenance_plant_is_optional(db, scene):
     """A project with no plant chosen records production status perfectly well."""
     out = ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id)
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id)
     )
     assert out.maintenance_plant_id is None
     assert out.maintenance_plant_code is None
@@ -558,7 +595,7 @@ def test_unrelated_maintenance_plant_is_rejected(db, scene):
     """A plant from another Planning Plant is a 422, never silently dropped."""
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project_a.id,
+            db, scene.head_u, scene.project_a.id,
             _payload(scene.tag_est.id, maintenance_plant_id=scene.foreign_plant.id),
         )
     assert ei.value.status_code == 422
@@ -568,7 +605,7 @@ def test_unrelated_maintenance_plant_is_rejected(db, scene):
     import uuid as _uuid
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project_a.id,
+            db, scene.head_u, scene.project_a.id,
             _payload(scene.tag_est.id, maintenance_plant_id=_uuid.uuid4()),
         )
     assert ei.value.status_code == 422
@@ -582,7 +619,7 @@ def test_inactive_maintenance_plant_cannot_be_chosen(db, scene):
     db.commit()
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project_a.id,
+            db, scene.head_u, scene.project_a.id,
             _payload(scene.tag_est.id, maintenance_plant_id=scene.kahm.id),
         )
     assert ei.value.status_code == 422
@@ -594,14 +631,14 @@ def test_project_without_planning_plant_cannot_select_a_plant(db, scene):
     db.commit()
     with pytest.raises(AppError) as ei:
         ps_svc.create_production_status(
-            db, scene.pm, scene.project_b.id,
+            db, scene.head_b_u, scene.project_b.id,
             _payload(scene.mtl.id, maintenance_plant_id=scene.kahm.id),
         )
     assert ei.value.status_code == 422
 
     # ...but recording WITHOUT a plant still works.
     out = ps_svc.create_production_status(
-        db, scene.pm, scene.project_b.id, _payload(scene.mtl.id)
+        db, scene.head_b_u, scene.project_b.id, _payload(scene.mtl.id)
     )
     assert out.maintenance_plant_id is None
 
@@ -609,7 +646,7 @@ def test_project_without_planning_plant_cannot_select_a_plant(db, scene):
 def test_rows_recorded_before_the_plant_column_still_work(db, scene):
     """Migration 0071 left old rows NULL; they must read and report normally."""
     out = ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, revision="REV-0", tag_count=225),
     )
     # Force the pre-0071 shape explicitly, as an upgraded database holds it.
@@ -637,12 +674,12 @@ def test_maintenance_plant_does_not_change_record_identity(db, scene):
     one stays in the history.
     """
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, revision="REV-0",
                  maintenance_plant_id=scene.kahm.id, tag_count=100),
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, revision="REV-0",
                  maintenance_plant_id=scene.kahn.id, tag_count=200),
     )
@@ -729,7 +766,7 @@ def test_empty_report(db, scene, client, login):
 
     # The workbook is still a valid file with its header row.
     ws = _sheet(report)
-    assert ws.max_row == 1
+    assert ws.max_row == _HEADER_ROWS
     assert ws.cell(row=1, column=1).value == "S.NO"
 
 
@@ -745,16 +782,16 @@ def _sheet(report):
 def test_workbook_matches_the_report_dataset(db, scene):
     """Every preview row, in the same order, with the same values."""
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, status="closed",
                  completed_on=date(2025, 12, 5), remarks="Closed."),
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.mtl.id, revision="REV-1", doc_count=12),
     )
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_b.id, _payload(scene.mtl.id, spares_count=7)
+        db, scene.head_b_u, scene.project_b.id, _payload(scene.mtl.id, spares_count=7)
     )
 
     report = ps_svc.cumulative_report(db, scene.pm)
@@ -763,9 +800,9 @@ def test_workbook_matches_the_report_dataset(db, scene):
     def cell(r, label):
         return ws.cell(row=r, column=_COL[label]).value
 
-    assert ws.max_row == report["row_count"] + 1        # + the header row
+    assert ws.max_row == report["row_count"] + _HEADER_ROWS   # + the header rows
     for offset, row in enumerate(_rows(report)):
-        excel_row = offset + 2
+        excel_row = offset + _FIRST_DATA_ROW
         assert cell(excel_row, "S.NO") == row.serial
         assert cell(excel_row, "PROJECT / PLANT") == row.project_plant
         assert cell(excel_row, "ACTIVITY") == row.activity
@@ -782,14 +819,17 @@ def test_workbook_matches_the_report_dataset(db, scene):
         assert row.revision in cell(excel_row, "PROJECT / PLANT")
 
     # Sequential S.NO with no gaps.
-    assert [ws.cell(row=r, column=1).value for r in range(2, ws.max_row + 1)] == [1, 2, 3]
+    assert [
+        ws.cell(row=r, column=1).value
+        for r in range(_FIRST_DATA_ROW, ws.max_row + 1)
+    ] == [1, 2, 3]
 
 
 # --- 16. workbook columns + formatting ---------------------------------------
 
 def test_workbook_columns_and_formatting(db, scene):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, status="closed",
                  completed_on=date(2025, 12, 5), remarks="Issued."),
     )
@@ -799,33 +839,98 @@ def test_workbook_columns_and_formatting(db, scene):
     ws = wb.active
 
     assert ws.title == "Production Status"
-    assert [ws.cell(row=1, column=c).value for c in range(1, 12)] == _COLUMNS
+    assert _header_labels(ws) == _COLUMNS
     assert ws.max_column == 11
-    assert len(ws.merged_cells.ranges) == 0
     # No REVISION column - the revision is inside PROJECT / PLANT now.
     assert "REVISION" not in _COLUMNS
 
-    # Bold header, frozen header row, autofilter over every column.
+    # Bold header, frozen below BOTH header rows, autofilter over the row that
+    # carries every column's own name.
     assert ws.cell(row=1, column=1).font.bold is True
-    assert ws.freeze_panes == "A2"
-    assert ws.auto_filter.ref == "A1:K2"
+    assert ws.freeze_panes == "A3"
+    assert ws.auto_filter.ref == "A2:K3"
 
     # Reasonable, explicitly-set column widths.
     assert ws.column_dimensions["B"].width >= 30      # PROJECT / PLANT
     assert ws.column_dimensions["J"].width >= 40      # REMARKS
 
     # DD-MMM-YYYY on a real date cell, and wrapped remarks.
-    completed = ws.cell(row=2, column=_COL["COMPLETED ON"])
+    completed = ws.cell(row=_FIRST_DATA_ROW, column=_COL["COMPLETED ON"])
     assert completed.number_format == "DD-MMM-YYYY"
     assert completed.value.date() == date(2025, 12, 5)
-    assert ws.cell(row=2, column=_COL["REMARKS"]).alignment.wrap_text is True
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["REMARKS"]).alignment.wrap_text is True
+
+
+# --- 16b. the COUNT banner and the status colours ----------------------------
+
+def test_the_four_units_sit_under_one_merged_count_banner(db, scene):
+    """The business's own layout: COUNT over TAG / DOC / SPARES / CRS.
+
+    A HEADING, not a total - there is still no combined column, and nothing is
+    summed across the four.
+    """
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.tag_est.id, tag_count=225, doc_count=17),
+    )
+    ws = _sheet(ps_svc.cumulative_report(db, scene.pm))
+
+    merged = {str(r) for r in ws.merged_cells.ranges}
+    # COUNT spans the four unit columns on the first header row...
+    assert "E1:H1" in merged
+    assert ws.cell(row=1, column=_COL["TAG"]).value == "COUNT"
+    # ...and each unit keeps its own name on the second.
+    assert [ws.cell(row=2, column=_COL[u]).value
+            for u in ("TAG", "DOC", "SPARES", "CRS")] == ["TAG", "DOC", "SPARES", "CRS"]
+
+    # Every other column is merged vertically across both header rows instead.
+    for column in ("A", "B", "C", "D", "I", "J", "K"):
+        assert f"{column}1:{column}2" in merged
+
+    # Still four independent values, and no total column anywhere.
+    assert ws.max_column == len(_COLUMNS)
+    assert "TOTAL" not in _header_labels(ws)
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["TAG"]).value == 225
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["DOC"]).value == 17
+
+
+def test_project_status_is_coloured_the_way_the_business_sheet_colours_it(db, scene):
+    """CLOSED bold green, IN PROGRESS bold blue - from the reference file."""
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.tag_est.id, status="closed", completed_on=date(2025, 12, 5)),
+    )
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.mtl.id, status="in_progress"),
+    )
+    report = ps_svc.cumulative_report(db, scene.pm)
+    ws = _sheet(report)
+
+    by_status = {}
+    for offset, row in enumerate(_rows(report)):
+        cell = ws.cell(row=offset + _FIRST_DATA_ROW, column=_COL["PROJECT STATUS"])
+        by_status[row.status] = cell
+
+    assert by_status["closed"].value == "CLOSED"
+    assert by_status["closed"].font.color.rgb == _CLOSED_COLOUR
+    assert by_status["closed"].font.bold is True
+
+    assert by_status["in_progress"].value == "IN PROGRESS"
+    assert by_status["in_progress"].font.color.rgb == _IN_PROGRESS_COLOUR
+    assert by_status["in_progress"].font.bold is True
+
+    # The colour is keyed on the STORED status, so it cannot drift from the
+    # label; and no other cell is coloured.
+    plant = ws.cell(row=_FIRST_DATA_ROW, column=_COL["PROJECT / PLANT"])
+    assert plant.font.bold is not True
 
 
 # --- 17. the download is a valid .xlsx ---------------------------------------
 
 def test_download_produces_a_valid_xlsx(db, scene, client, login):
     ps_svc.create_production_status(
-        db, scene.pm, scene.project_a.id,
+        db, scene.head_u, scene.project_a.id,
         _payload(scene.tag_est.id, tag_count=225, status="closed",
                  completed_on=date(2025, 12, 5)),
     )
@@ -841,13 +946,13 @@ def test_download_produces_a_valid_xlsx(db, scene, client, login):
     assert res.content[:2] == b"PK"
     ws = openpyxl.load_workbook(BytesIO(res.content)).active
     assert ws.title == "Production Status"
-    assert ws.cell(row=2, column=_COL["TAG"]).value == 225
+    assert ws.cell(row=_FIRST_DATA_ROW, column=_COL["TAG"]).value == 225
 
     # The downloaded file holds exactly the rows the preview endpoint served.
     preview = client.get(REPORT_URL, headers=login("pm@x.com")).json()
-    assert ws.max_row == preview["row_count"] + 1
+    assert ws.max_row == preview["row_count"] + _HEADER_ROWS
     assert (
-        ws.cell(row=2, column=_COL["PROJECT / PLANT"]).value
+        ws.cell(row=_FIRST_DATA_ROW, column=_COL["PROJECT / PLANT"]).value
         == preview["rows"][0]["project_plant"]
     )
 
@@ -858,7 +963,7 @@ def test_report_never_returns_history_rows(db, scene):
     """Cumulative means "one current row each", not "the whole trail"."""
     for tag in (10, 20, 30, 40):
         ps_svc.create_production_status(
-            db, scene.pm, scene.project_a.id, _payload(scene.tag_est.id, tag_count=tag)
+            db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=tag)
         )
 
     report = ps_svc.cumulative_report(db, scene.pm)
@@ -868,3 +973,352 @@ def test_report_never_returns_history_rows(db, scene):
     # History is untouched and still complete inside the project.
     history = ps_svc.list_history(db, scene.pm, scene.project_a.id)
     assert [h.tag_count for h in history] == [40, 30, 20, 10]
+
+# --- 19. the month filter (Phase 5) ------------------------------------------
+#
+# The month is the record's created_at month, NEVER completed_on: an IN PROGRESS
+# record has no completion date, and filtering on one would drop exactly the rows
+# a PM opens a month to look at.
+#
+# It is the only filter the report accepts. Everything else about it is
+# unchanged - still all-project, still cumulative, still PM-only.
+
+AUG = datetime(2026, 8, 14, 9, 0, tzinfo=timezone.utc)
+SEP = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+
+
+def _recorded_at(db, row, when):
+    """Backdate one record so a month can actually be exercised.
+
+    created_at is a server default (now()), so a test that does not move it can
+    only ever produce rows in the current month.
+    """
+    db.execute(
+        text("UPDATE project_production_statuses SET created_at = :ts WHERE id = :i"),
+        {"ts": when, "i": row.id},
+    )
+    db.commit()
+    return row
+
+
+def _seed_two_months(db, scene):
+    """Two months of records, with one combination appearing in BOTH.
+
+      August      GC-A REV-0 TAG ESTIMATION  tag=100   (in progress)
+                  GC-B REV-0 MTL             doc=5
+      September   GC-A REV-0 TAG ESTIMATION  tag=200   supersedes the August one
+                  GC-A REV-0 MTL             spares=9
+
+    So: 3 rows cumulatively, 2 in August, 2 in September - and TAG ESTIMATION
+    reads 100 in August and 200 in September, which is what pins "latest within
+    the month" rather than "latest overall, then discard".
+    """
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.tag_est.id, tag_count=100),
+    ), AUG)
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_b_u, scene.project_b.id, _payload(scene.mtl.id, doc_count=5),
+    ), AUG)
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.tag_est.id, tag_count=200),
+    ), SEP)
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id, _payload(scene.mtl.id, spares_count=9),
+    ), SEP)
+
+
+def _labels(report):
+    """(project, activity, the count that identifies the seeded row)."""
+    return {(r.project_code, r.activity) for r in _rows(report)}
+
+
+# --- 19a. All Months ---------------------------------------------------------
+
+def test_all_months_is_the_unfiltered_cumulative_report(db, scene):
+    """No month = exactly the report Phase 4 already produced."""
+    _seed_two_months(db, scene)
+
+    report = ps_svc.cumulative_report(db, scene.pm)
+
+    # Every project, every activity, the latest row of each - across all months.
+    assert report["month"] is None
+    assert report["row_count"] == 3
+    assert _labels(report) == {
+        ("GC-A", "MTL"), ("GC-A", "TAG ESTIMATION"), ("GC-B", "MTL"),
+    }
+    # The September update is what TAG ESTIMATION currently reads.
+    assert _find(report, project_code="GC-A", revision="REV-0",
+                 activity="TAG ESTIMATION").tag_count == 200
+    # Ordering and S.NO are untouched by the new field.
+    assert [r.serial for r in _rows(report)] == [1, 2, 3]
+
+
+def test_the_default_over_http_is_all_months(db, scene, client, login):
+    """Omitting the parameter is All Months - the PM opens the dialog on the
+    cumulative report, exactly as before this phase."""
+    _seed_two_months(db, scene)
+
+    body = client.get(REPORT_URL, headers=login("pm@x.com")).json()
+    assert body["month"] is None
+    assert body["row_count"] == 3
+    assert len(body["rows"]) == 3
+
+
+def test_the_months_on_offer_come_with_the_report_and_never_shrink(db, scene):
+    """The dropdown's options ride on the report - no second endpoint.
+
+    Ascending, drawn from EVERY record (so August is offered even though its
+    update was superseded in September), and identical whatever month is
+    currently selected - picking August must not leave August as the only thing
+    selectable.
+    """
+    _seed_two_months(db, scene)
+
+    for month in (None, "2026-08", "2026-09", "2026-10"):
+        report = ps_svc.cumulative_report(db, scene.pm, month=month)
+        assert report["months"] == ["2026-08", "2026-09"]
+
+
+# --- 19b. August -------------------------------------------------------------
+
+def test_august_returns_only_august_records(db, scene):
+    _seed_two_months(db, scene)
+
+    report = ps_svc.cumulative_report(db, scene.pm, month="2026-08")
+
+    assert report["month"] == "2026-08"
+    assert report["row_count"] == 2
+    assert _labels(report) == {("GC-A", "TAG ESTIMATION"), ("GC-B", "MTL")}
+    # The September-only row is absent...
+    assert _find(report, project_code="GC-A", revision="REV-0", activity="MTL") is None
+    # ...and the shared combination reads what AUGUST recorded, not what
+    # September later replaced it with.
+    assert _find(report, project_code="GC-A", revision="REV-0",
+                 activity="TAG ESTIMATION").tag_count == 100
+    # Serials are re-stamped over the filtered list, with no gaps.
+    assert [r.serial for r in _rows(report)] == [1, 2]
+
+
+# --- 19c. September ----------------------------------------------------------
+
+def test_september_returns_only_september_records(db, scene):
+    _seed_two_months(db, scene)
+
+    report = ps_svc.cumulative_report(db, scene.pm, month="2026-09")
+
+    assert report["month"] == "2026-09"
+    assert report["row_count"] == 2
+    assert _labels(report) == {("GC-A", "TAG ESTIMATION"), ("GC-A", "MTL")}
+    assert _find(report, project_code="GC-A", revision="REV-0",
+                 activity="TAG ESTIMATION").tag_count == 200
+    # August's other project is not in September's report.
+    assert _find(report, project_code="GC-B", revision="REV-0",
+                 activity="MTL") is None
+
+
+def test_the_month_is_created_at_never_completed_on(db, scene):
+    """An IN PROGRESS record has no completion date and must still be findable.
+
+    The August record is recorded in August and completed in December; it belongs
+    to August. The September record has no completed_on at all and must not
+    disappear because of it.
+    """
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.tag_est.id, tag_count=100, status="closed",
+                 completed_on=date(2026, 12, 5)),
+    ), AUG)
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id,
+        _payload(scene.mtl.id, status="in_progress", completed_on=None),
+    ), SEP)
+
+    august = ps_svc.cumulative_report(db, scene.pm, month="2026-08")
+    assert august["row_count"] == 1
+    assert august["rows"][0].activity == "TAG ESTIMATION"
+    assert august["rows"][0].completed_on == date(2026, 12, 5)
+
+    # December - the completion month - holds nothing, and is not even offered.
+    assert ps_svc.cumulative_report(db, scene.pm, month="2026-12")["row_count"] == 0
+    assert august["months"] == ["2026-08", "2026-09"]
+
+    # The record with no completion date is present in the month it was recorded.
+    september = ps_svc.cumulative_report(db, scene.pm, month="2026-09")
+    assert september["row_count"] == 1
+    assert september["rows"][0].activity == "MTL"
+    assert september["rows"][0].completed_on is None
+
+
+def test_month_boundaries_are_half_open(db, scene):
+    """The last instant of a month is in it; the first of the next is not."""
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id, _payload(scene.tag_est.id, tag_count=1),
+    ), datetime(2026, 8, 31, 23, 59, 59, tzinfo=timezone.utc))
+    _recorded_at(db, ps_svc.create_production_status(
+        db, scene.head_u, scene.project_a.id, _payload(scene.mtl.id, tag_count=2),
+    ), datetime(2026, 9, 1, 0, 0, 0, tzinfo=timezone.utc))
+
+    august = ps_svc.cumulative_report(db, scene.pm, month="2026-08")
+    september = ps_svc.cumulative_report(db, scene.pm, month="2026-09")
+    assert [r.activity for r in _rows(august)] == ["TAG ESTIMATION"]
+    assert [r.activity for r in _rows(september)] == ["MTL"]
+
+
+# --- 19d. a month with no records --------------------------------------------
+
+def test_a_month_with_no_records_is_an_empty_report(db, scene, client, login):
+    """Empty is a valid answer, not an error - the same way the whole report
+    already treats "nothing recorded yet"."""
+    _seed_two_months(db, scene)
+
+    report = ps_svc.cumulative_report(db, scene.pm, month="2026-10")
+    assert report["month"] == "2026-10"
+    assert report["row_count"] == 0
+    assert report["rows"] == []
+    # The choice is still on offer - an empty month does not empty the dropdown.
+    assert report["months"] == ["2026-08", "2026-09"]
+
+    res = client.get(f"{REPORT_URL}?month=2026-10", headers=login("pm@x.com"))
+    assert res.status_code == 200
+    assert res.json()["row_count"] == 0
+
+    # And the download is still a real, openable workbook with its header row.
+    res = client.get(f"{XLSX_URL}?month=2026-10", headers=login("pm@x.com"))
+    assert res.status_code == 200
+    ws = openpyxl.load_workbook(BytesIO(res.content)).active
+    assert ws.max_row == _HEADER_ROWS
+    assert ws.cell(row=1, column=1).value == "S.NO"
+
+
+def test_a_malformed_month_is_rejected(db, scene):
+    """A bad month is refused rather than silently ignored - a client sending
+    junk must fail loudly instead of receiving an unfiltered report it will
+    present as filtered."""
+    _seed_two_months(db, scene)
+
+    for bad in ("2026", "august", "2026-13", "2026-00", "26-08", "2026-08-14"):
+        with pytest.raises(AppError) as ei:
+            ps_svc.cumulative_report(db, scene.pm, month=bad)
+        assert ei.value.status_code == 422
+
+    # A blank month is not junk - it is "no filter", i.e. All Months.
+    assert ps_svc.cumulative_report(db, scene.pm, month="  ")["month"] is None
+
+
+# --- 19e. the preview and the download are ONE dataset -----------------------
+
+@pytest.mark.parametrize("month", [None, "2026-08", "2026-09", "2026-10"])
+def test_the_workbook_holds_exactly_the_filtered_preview_rows(db, scene, month):
+    """Whatever the filter, the file is the screen.
+
+    Both renderers read the SAME service call with the SAME month, so this is
+    structural - there is no second query to drift.
+    """
+    _seed_two_months(db, scene)
+
+    report = ps_svc.cumulative_report(db, scene.pm, month=month)
+    ws = _sheet(report)
+
+    assert ws.max_row == report["row_count"] + _HEADER_ROWS   # + the header rows
+    for offset, row in enumerate(_rows(report)):
+        excel_row = offset + _FIRST_DATA_ROW
+        assert ws.cell(row=excel_row, column=_COL["S.NO"]).value == row.serial
+        assert ws.cell(row=excel_row, column=_COL["PROJECT / PLANT"]).value == (
+            row.project_plant
+        )
+        assert ws.cell(row=excel_row, column=_COL["ACTIVITY"]).value == row.activity
+        assert ws.cell(row=excel_row, column=_COL["TAG"]).value == row.tag_count
+        assert ws.cell(row=excel_row, column=_COL["DOC"]).value == row.doc_count
+        assert ws.cell(row=excel_row, column=_COL["SPARES"]).value == row.spares_count
+        assert ws.cell(row=excel_row, column=_COL["CRS"]).value == row.crs_count
+    # The columns and their order are untouched by the filter.
+    assert _header_labels(ws) == _COLUMNS
+
+
+@pytest.mark.parametrize("query,expected", [("", 3), ("?month=2026-08", 2),
+                                            ("?month=2026-09", 2)])
+def test_preview_and_download_agree_over_http(db, scene, client, login, query, expected):
+    """The two endpoints, same month, same rows - checked end to end."""
+    _seed_two_months(db, scene)
+    hdr = login("pm@x.com")
+
+    preview = client.get(f"{REPORT_URL}{query}", headers=hdr).json()
+    assert preview["row_count"] == expected
+
+    res = client.get(f"{XLSX_URL}{query}", headers=hdr)
+    assert res.status_code == 200
+    ws = openpyxl.load_workbook(BytesIO(res.content)).active
+
+    assert ws.max_row == preview["row_count"] + _HEADER_ROWS
+    for offset, row in enumerate(preview["rows"]):
+        excel_row = offset + _FIRST_DATA_ROW
+        assert ws.cell(row=excel_row, column=_COL["PROJECT / PLANT"]).value == (
+            row["project_plant"]
+        )
+        assert ws.cell(row=excel_row, column=_COL["ACTIVITY"]).value == row["activity"]
+        assert ws.cell(row=excel_row, column=_COL["S.NO"]).value == row["serial"]
+
+
+def test_a_month_filtered_download_is_named_for_that_month(db, scene, client, login):
+    _seed_two_months(db, scene)
+
+    res = client.get(f"{XLSX_URL}?month=2026-08", headers=login("pm@x.com"))
+    assert "PRODUCTION STATUS [AUG 2026].xlsx" in res.headers["content-disposition"]
+
+    # The unfiltered name is unchanged - still dated for the day it was taken.
+    assert ps_svc.report_filename(today=date(2026, 8, 21)) == (
+        "PRODUCTION STATUS [21 AUG 2026].xlsx"
+    )
+    assert ps_svc.report_filename(month="2026-09") == (
+        "PRODUCTION STATUS [SEP 2026].xlsx"
+    )
+
+
+# --- 19f. authorization is unchanged -----------------------------------------
+
+def test_the_month_filter_does_not_widen_who_may_read_the_report(db, scene, client, login):
+    """The filter narrows what a PM sees. It never changes who may see it."""
+    _seed_two_months(db, scene)
+
+    for actor in (scene.head_u, scene.lead_u, scene.emp_u):
+        for month in (None, "2026-08", "2026-09", "2026-10"):
+            with pytest.raises(AppError) as ei:
+                ps_svc.cumulative_report(db, actor, month=month)
+            assert ei.value.status_code == 403
+
+    # Over HTTP too, on both routes, with the month on the query string.
+    for email in ("head@x.com", "lead@x.com", "emp@x.com"):
+        hdr = login(email)
+        assert client.get(f"{REPORT_URL}?month=2026-08", headers=hdr).status_code == 403
+        assert client.get(f"{XLSX_URL}?month=2026-08", headers=hdr).status_code == 403
+
+    pm_hdr = login("pm@x.com")
+    assert client.get(f"{REPORT_URL}?month=2026-08", headers=pm_hdr).status_code == 200
+    assert client.get(f"{XLSX_URL}?month=2026-08", headers=pm_hdr).status_code == 200
+
+    # A 403 comes BEFORE the month is even looked at - an unauthorized caller
+    # never learns whether a month is valid.
+    with pytest.raises(AppError) as ei:
+        ps_svc.cumulative_report(db, scene.emp_u, month="not-a-month")
+    assert ei.value.status_code == 403
+
+
+# --- 19g. nothing else changed -----------------------------------------------
+
+def test_the_month_filter_does_not_touch_history_or_the_project_tab(db, scene):
+    """The filter belongs to the report. Recording and history are untouched."""
+    _seed_two_months(db, scene)
+
+    # The project's own tab still shows its current status across all months.
+    latest = ps_svc.list_latest(db, scene.pm, scene.project_a.id)
+    assert {(r.activity_name, r.tag_count) for r in latest} == {
+        ("TAG ESTIMATION", 200), ("MTL", 0),
+    }
+
+    # The append-only trail is complete - both months, nothing filtered away.
+    history = ps_svc.list_history(
+        db, scene.pm, scene.project_a.id, activity_id=scene.tag_est.id
+    )
+    assert [h.tag_count for h in history] == [200, 100]

@@ -2255,13 +2255,15 @@ export interface paths {
          * @description The latest production status of every project + revision + activity.
          *
          *     ONE request for the whole report - the client never walks the project list
-         *     firing a request per project.
+         *     firing a request per project. The response also carries `months`, every
+         *     month that has records, so the month picker needs no second request either.
          *
          *     project_manager only, enforced inside the service (`_assert_can_read_report`)
          *     rather than by a role dependency here, so a Head, an activity Lead or an
          *     ordinary employee gets the same 403 whether they reach it through the API or
          *     through any other caller of the service. Hiding the button in the UI is
-         *     convenience; this is the control.
+         *     convenience; this is the control. The month filter changes nothing about
+         *     that rule - it narrows what a PM sees, it never widens who may see it.
          */
         get: operations["get_production_status_report_api_v1_production_status_report_get"];
         put?: never;
@@ -2283,11 +2285,11 @@ export interface paths {
          * Get Production Status Report Xlsx
          * @description The same dataset as the preview, as a styled .xlsx download.
          *
-         *     Calls the identical service function the preview does - one query, one
-         *     ordering, one set of rows - so the file can never hold more or fewer rows
-         *     than the screen it was downloaded from. Authorization runs again inside that
-         *     service, so pasting this URL as a non-PM fails with 403 exactly as the
-         *     preview does.
+         *     Calls the identical service function the preview does, with the identical
+         *     `month` - one query, one ordering, one filter, one set of rows - so the file
+         *     can never hold more or fewer rows than the screen it was downloaded from.
+         *     Authorization runs again inside that service, so pasting this URL as a
+         *     non-PM fails with 403 exactly as the preview does.
          *
          *     `.xlsx` suffix + StreamingResponse + Content-Disposition is the established
          *     CoreOps export shape (/projects/{id}/weekly-report.xlsx,
@@ -5353,11 +5355,10 @@ export interface components {
         ProductionStatusCreate: {
             /** Revision */
             revision: string;
-            /**
-             * Activity Id
-             * Format: uuid
-             */
-            activity_id: string;
+            /** Activity Id */
+            activity_id?: string | null;
+            /** Activity Label */
+            activity_label?: string | null;
             /** Maintenance Plant Id */
             maintenance_plant_id?: string | null;
             /**
@@ -5418,15 +5419,14 @@ export interface components {
             maintenance_plant_description?: string | null;
             /** Revision */
             revision: string;
-            /**
-             * Activity Id
-             * Format: uuid
-             */
-            activity_id: string;
+            /** Activity Id */
+            activity_id?: string | null;
             /** Activity Name */
             activity_name?: string | null;
             /** Activity Code */
             activity_code?: string | null;
+            /** Activity Label */
+            activity_label?: string | null;
             /** Status */
             status: string;
             /** Tag Count */
@@ -5464,6 +5464,13 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** Month */
+            month?: string | null;
+            /**
+             * Months
+             * @default []
+             */
+            months: string[];
             /** Row Count */
             row_count: number;
             /** Rows */
@@ -5509,11 +5516,8 @@ export interface components {
             maintenance_plant_code?: string | null;
             /** Revision */
             revision: string;
-            /**
-             * Activity Id
-             * Format: uuid
-             */
-            activity_id: string;
+            /** Activity Id */
+            activity_id?: string | null;
             /** Activity */
             activity: string;
             /** Status */
@@ -12666,6 +12670,7 @@ export interface operations {
         parameters: {
             query?: {
                 activity_id?: string | null;
+                activity_label?: string | null;
                 revision?: string | null;
             };
             header?: never;
@@ -12698,7 +12703,10 @@ export interface operations {
     };
     get_production_status_report_api_v1_production_status_report_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Narrow the report to the production status records RECORDED in this month, as YYYY-MM (for example 2026-08). Omit it for the cumulative all-months report. The month is the record's created_at month, never completed_on - an in-progress record has no completion date. */
+                month?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -12714,11 +12722,23 @@ export interface operations {
                     "application/json": components["schemas"]["ProductionStatusReportOut"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_production_status_report_xlsx_api_v1_production_status_report_xlsx_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Narrow the report to the production status records RECORDED in this month, as YYYY-MM (for example 2026-08). Omit it for the cumulative all-months report. The month is the record's created_at month, never completed_on - an in-progress record has no completion date. */
+                month?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -12732,6 +12752,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

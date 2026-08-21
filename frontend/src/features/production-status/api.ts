@@ -13,9 +13,21 @@ import type {
 const REPORT_PATH = "/production-status/report";
 const REPORT_XLSX_PATH = "/production-status/report.xlsx";
 
+/**
+ * `?month=2026-08`, or nothing at all for the cumulative all-months report.
+ *
+ * ONE function, used by both report routes below, so the preview and the
+ * download can never be asked for different months - which is what makes the
+ * file the PM saves exactly the rows they were looking at.
+ */
+function monthQuery(month: string | undefined): string {
+  return month ? `?month=${encodeURIComponent(month)}` : "";
+}
+
 function historyQuery(params: ProductionStatusHistoryParams): string {
   const sp = new URLSearchParams();
   if (params.activityId) sp.set("activity_id", params.activityId);
+  if (params.activityLabel) sp.set("activity_label", params.activityLabel);
   if (params.revision) sp.set("revision", params.revision);
   const q = sp.toString();
   return q ? `?${q}` : "";
@@ -50,8 +62,13 @@ export const productionStatusApi = {
    * would be N requests, and N separately-ordered result sets the client would
    * then have to merge and number itself. The backend does the whole thing in
    * one query.
+   *
+   * `month` ("2026-08") narrows it to that month's records, server-side. Omit
+   * it for All Months. The response also carries `months` - every month that
+   * has records - so the picker needs no request of its own.
    */
-  report: () => api.get<ProductionStatusReport>(REPORT_PATH),
+  report: (month?: string) =>
+    api.get<ProductionStatusReport>(`${REPORT_PATH}${monthQuery(month)}`),
 };
 
 /**
@@ -62,9 +79,16 @@ export const productionStatusApi = {
  * is the same shape `downloadWeeklyReportXlsx` uses for every other CoreOps
  * export. The file is built by the backend from the same service call the
  * preview reads, so no data is re-derived here - this function only saves it.
+ *
+ * `month` is passed straight through to the same endpoint parameter the preview
+ * used. No rows are filtered here: the browser never trims the file it just
+ * received, so "the Excel contains exactly the preview's rows" holds because
+ * both asked the one query for the one thing.
  */
-export async function downloadProductionStatusReportXlsx(): Promise<void> {
-  const res = await fetch(`${env.apiBaseUrl}${REPORT_XLSX_PATH}`, {
+export async function downloadProductionStatusReportXlsx(
+  month?: string,
+): Promise<void> {
+  const res = await fetch(`${env.apiBaseUrl}${REPORT_XLSX_PATH}${monthQuery(month)}`, {
     headers: { Authorization: `Bearer ${getToken() ?? ""}` },
     cache: "no-store",
   });

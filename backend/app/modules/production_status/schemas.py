@@ -8,7 +8,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Mirrors VALID_PRODUCTION_STATUSES in models.py; kept as a Literal so an
 # unknown status is rejected as a 422 by FastAPI before it reaches the service.
@@ -20,7 +20,14 @@ class ProductionStatusCreate(BaseModel):
     # what the caller is authorized against. Plant information is derived from
     # the project, so it is not accepted here either.
     revision: str = Field(min_length=1, max_length=50)
-    activity_id: uuid.UUID
+
+    # The activity, named exactly ONE of two ways (see models.py and migration
+    # 0072). `activity_id` picks an Activity Master activity; `activity_label`
+    # is a name a Project Head typed for an activity that is not in Activity
+    # Master and deliberately never enters it. Sending both, or neither, is a
+    # 422 - see `_exactly_one_activity`.
+    activity_id: uuid.UUID | None = None
+    activity_label: str | None = Field(default=None, max_length=200)
     # The Maintenance Plant this update belongs to. OPTIONAL: a project whose
     # Planning Plant has no Maintenance Plants simply has none to offer, and the
     # form must not be blocked by that. Validated in the service against the
@@ -36,6 +43,26 @@ class ProductionStatusCreate(BaseModel):
     crs_count: int = Field(default=0, ge=0)
     completed_on: date | None = None
     remarks: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_activity(self) -> "ProductionStatusCreate":
+        """An update is about ONE activity, named once.
+
+        Rejected here rather than left to the database's CHECK so a client gets
+        a 422 that says what is wrong, instead of a 500 from a constraint
+        violation. A label of only whitespace is not a name.
+        """
+        label = (self.activity_label or "").strip()
+        if self.activity_id is not None and label:
+            raise ValueError(
+                "Choose an existing activity or type a new one, not both."
+            )
+        if self.activity_id is None and not label:
+            raise ValueError("An activity is required.")
+        # Normalised once, here, so the service and the database both see the
+        # trimmed value and a stored label never carries stray whitespace.
+        self.activity_label = label or None
+        return self
 
 
 class ProductionStatusOut(BaseModel):
@@ -62,10 +89,17 @@ class ProductionStatusOut(BaseModel):
 
     revision: str
 
-    # --- activity (activity_master) ---------------------------------------
-    activity_id: uuid.UUID
+    # --- activity ---------------------------------------------------------
+    # Null when the activity was typed rather than chosen (migration 0072).
+    activity_id: uuid.UUID | None = None
+    # Resolved from Activity Master when there is an id, else the typed label.
+    # A client renders THIS and never has to know which kind of row it is on.
     activity_name: str | None = None
     activity_code: str | None = None
+    # The typed name itself, null for an Activity Master activity. Carried so a
+    # client can tell the two apart when it needs to (the form re-selecting a
+    # value), never so it has to combine them for display.
+    activity_label: str | None = None
 
     status: str
     tag_count: int
@@ -131,8 +165,10 @@ class ProductionStatusReportRow(BaseModel):
     # dropping it from the payload would break far more than a column heading.
     revision: str
 
-    activity_id: uuid.UUID
-    # The rendered ACTIVITY cell: the activity's name, else its code.
+    # Null when the activity was typed rather than chosen (migration 0072).
+    activity_id: uuid.UUID | None = None
+    # The rendered ACTIVITY cell: the Activity Master name (else its code), or
+    # the typed label. ONE column - the report never says which kind it was.
     activity: str
 
     # The stored value ('in_progress' / 'closed') AND its display wording. The
@@ -156,5 +192,20 @@ class ProductionStatusReportRow(BaseModel):
 
 class ProductionStatusReportOut(BaseModel):
     generated_at: datetime
+
+    # --- month filter (Phase 5) -------------------------------------------
+    # The month this dataset was built for ("2026-08"), echoed back so a client
+    # can tell which report it is holding. Null is the cumulative all-months
+    # report - the original, unfiltered behaviour.
+    month: str | None = None
+    # Every month that has production status records, ascending ("2026-08",
+    # "2026-09", ...). Derived from all records rather than from the rows below,
+    # so the choice on offer does not shrink to the month already selected. Sent
+    # with the report itself rather than from a second endpoint - one request
+    # still answers the whole dialog.
+    months: list[str] = []
+
+    # Describes `rows` and nothing else: when a month is selected this is that
+    # month's count, which is what the screen shows and what the file contains.
     row_count: int
     rows: list[ProductionStatusReportRow]

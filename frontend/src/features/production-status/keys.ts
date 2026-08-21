@@ -12,8 +12,12 @@ export const productionStatusKeys = {
       "history",
       projectId,
       params.activityId ?? "",
+      params.activityLabel ?? "",
       params.revision ?? "",
     ] as const,
-  /** The PM cumulative report. No project in the key - it spans all of them. */
-  report: () => ["production-status", "report"] as const,
+  /** The PM cumulative report. No project in the key - it spans all of them.
+   *  The month IS in the key: "All Months" and "August 2026" are two different
+   *  datasets, so switching the dropdown must fetch rather than re-render the
+   *  other month's rows. "" is All Months. */
+  report: (month?: string) => ["production-status", "report", month ?? ""] as const,
 };

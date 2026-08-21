@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 // Relative .ts value import - the node --test harness resolves it directly.
-import { PRODUCTION_STATUS_VALUES } from "./production-status.ts";
+import {
+  parseActivitySelection,
+  PRODUCTION_STATUS_VALUES,
+} from "./production-status.ts";
 import type { ProductionStatusCreateBody } from "./types";
 
 export const REVISION_REQUIRED_ERROR = "Revision is required";
@@ -24,6 +27,11 @@ export const ACTIVITY_REQUIRED_ERROR = "Select an activity";
  */
 export const productionStatusFormSchema = z.object({
   revision: z.string().trim().min(1, REVISION_REQUIRED_ERROR).max(50),
+  // ONE field for the activity, holding either an Activity Master id or a
+  // `new:`-prefixed name the Head typed. `parseActivitySelection` splits it
+  // into the two fields the API takes - see production-status.ts. A single
+  // field because the control is a single Combobox: two fields would be two
+  // things to keep in step for no gain.
   activity_id: z.string().min(1, ACTIVITY_REQUIRED_ERROR),
   // OPTIONAL - deliberately no `.min(1)`. A project whose Planning Plant has no
   // Maintenance Plants has none to offer, and the form must not be blocked by
@@ -81,9 +89,13 @@ const orNull = (v: string): string | null => (v.trim() === "" ? null : v.trim())
 export function toProductionStatusBody(
   v: ProductionStatusFormValues,
 ): ProductionStatusCreateBody {
+  // Exactly one of activity_id / activity_label, which is what the API accepts
+  // and what the table's CHECK enforces.
+  const activity = parseActivitySelection(v.activity_id);
   return {
     revision: v.revision.trim(),
-    activity_id: v.activity_id,
+    activity_id: activity.activity_id,
+    activity_label: activity.activity_label,
     // "" -> null. The API takes a plant id or nothing; it never receives an
     // empty string, and it never infers a plant when none was chosen.
     maintenance_plant_id: orNull(v.maintenance_plant_id),

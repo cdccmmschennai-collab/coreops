@@ -8,7 +8,12 @@
  * living inside JSX cannot be covered at all.
  *
  * This module computes NOTHING about the report itself. It does not sort,
- * filter, number, sum or re-derive anything. The backend
+ * filter, number, sum or re-derive anything - including the Phase 5 month
+ * filter, which is a query parameter sent to the backend and never a pass over
+ * rows here. What lives in this file is only how a month is spelled ("2026-08"),
+ * how it reads ("August 2026") and which options exist; the FILTERING happens in
+ * the report query, so the preview and the .xlsx download stay one dataset. The
+ * backend
  * (`production_status/service.py::cumulative_report`) is the one place the
  * dataset exists: it picks the latest row per project + revision + activity,
  * orders them, stamps `serial`, resolves the plant label, the activity label,
@@ -61,7 +66,9 @@ export interface ProductionStatusReportRowLike {
   revision: string;
   maintenance_plant_id?: string | null;
   maintenance_plant_code?: string | null;
-  activity_id: string;
+  /** Null when the activity was typed rather than chosen from Activity Master. */
+  activity_id?: string | null;
+  /** The rendered ACTIVITY cell - resolved server-side either way. */
   activity: string;
   status: string;
   status_label: string;
@@ -226,12 +233,141 @@ export function canDownloadReport(
   return !isFetching && (rows?.length ?? 0) > 0;
 }
 
-/** Sub-line under the dialog title: "12 rows - all projects". */
-export function reportSubtitle(count: number | null | undefined): string {
+/**
+ * Sub-line under the dialog title: "12 rows - all projects", or
+ * "4 rows - August 2026 - all projects" once a month is chosen.
+ *
+ * The count is the BACKEND's `row_count`, which always describes the rows it
+ * sent - so the number on screen is the number of rows in the file. Nothing
+ * here counts anything itself.
+ */
+export function reportSubtitle(
+  count: number | null | undefined,
+  month?: string | null,
+): string {
+  const label = monthLabel(month);
+  const scope = label ? `${label} - ${REPORT_ALL_PROJECTS}` : REPORT_ALL_PROJECTS;
   if (count === null || count === undefined || count <= 0) {
-    return REPORT_ALL_PROJECTS;
+    return scope;
   }
-  return `${count} ${count === 1 ? "row" : "rows"} - ${REPORT_ALL_PROJECTS}`;
+  return `${count} ${count === 1 ? "row" : "rows"} - ${scope}`;
+}
+
+// ---------------------------------------------------------------------------
+// The month filter (Phase 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * The "no month" sentinel.
+ *
+ * A non-empty string on purpose: the underlying Radix Select reserves "" for
+ * its own placeholder/clear behaviour, so an empty value cannot be an option.
+ * It is turned back into "no query parameter at all" by `reportMonthParam`.
+ */
+export const REPORT_MONTH_ALL = "all";
+
+export const REPORT_MONTH_ALL_LABEL = "All Months";
+export const REPORT_MONTH_FIELD_LABEL = "Month";
+
+/**
+ * The value the API should be asked for.
+ *
+ * "all" (and anything blank or malformed) becomes `undefined`, i.e. no `month`
+ * parameter - which is exactly the cumulative all-months request this dialog
+ * has always made. Both the preview and the .xlsx download go through this one
+ * function, so they cannot ask for different things.
+ */
+export function reportMonthParam(
+  value: string | null | undefined,
+): string | undefined {
+  const clean = (value ?? "").trim();
+  if (!clean || clean === REPORT_MONTH_ALL) return undefined;
+  return isReportMonth(clean) ? clean : undefined;
+}
+
+/** Is this a month key the API will accept - "2026-08"? */
+export function isReportMonth(value: string | null | undefined): boolean {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test((value ?? "").trim());
+}
+
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
+
+/**
+ * "2026-08" as "August 2026".
+ *
+ * Formatted from the digits rather than through `new Date(...)`/`toLocale...`:
+ * a month key is not an instant, and constructing a Date from one would put it
+ * at UTC midnight, which is the previous month for any viewer west of
+ * Greenwich. Same reasoning as `formatReportDate`.
+ *
+ * Anything that is not a month key returns "" - the caller then falls back to
+ * the all-months wording rather than printing something meaningless.
+ */
+export function formatReportMonthLabel(value: string | null | undefined): string {
+  const clean = (value ?? "").trim();
+  if (!isReportMonth(clean)) return "";
+  const name = MONTH_NAMES[Number(clean.slice(5, 7)) - 1];
+  return name ? `${name} ${clean.slice(0, 4)}` : "";
+}
+
+/** The label for a selection, or "" for All Months. Internal to this module. */
+function monthLabel(value: string | null | undefined): string {
+  return formatReportMonthLabel(reportMonthParam(value) ?? "");
+}
+
+export interface ReportMonthOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * The Month dropdown's options: All Months first, then every month that has
+ * records.
+ *
+ * The months come from the API (`ProductionStatusReportOut.months`), derived
+ * there from the production status records themselves - this never invents a
+ * range, and never offers a month with nothing in it. Unrecognised entries from
+ * a newer backend are skipped rather than rendered as junk, and duplicates
+ * collapse so a repeated month cannot produce two identical options (which
+ * would also be duplicate React keys).
+ *
+ * `All Months` is always present, so the PM can always get back to the
+ * cumulative report - including when there are no records at all.
+ */
+export function buildReportMonthOptions(
+  months: readonly string[] | null | undefined,
+): ReportMonthOption[] {
+  const seen = new Set<string>();
+  const options: ReportMonthOption[] = [
+    { value: REPORT_MONTH_ALL, label: REPORT_MONTH_ALL_LABEL },
+  ];
+  for (const raw of months ?? []) {
+    const month = (raw ?? "").trim();
+    if (!isReportMonth(month) || seen.has(month)) continue;
+    seen.add(month);
+    options.push({ value: month, label: formatReportMonthLabel(month) });
+  }
+  return options;
+}
+
+/**
+ * Keep a selection that is still on offer; otherwise fall back to All Months.
+ *
+ * Guards the one way this dropdown can end up pointing at nothing: a month the
+ * PM picked before the records behind it changed. Falling back to All Months
+ * shows the whole report rather than an empty screen with a stale month in the
+ * box.
+ */
+export function resolveReportMonth(
+  selected: string | null | undefined,
+  months: readonly string[] | null | undefined,
+): string {
+  const month = reportMonthParam(selected);
+  if (!month) return REPORT_MONTH_ALL;
+  return (months ?? []).includes(month) ? month : REPORT_MONTH_ALL;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +380,14 @@ export const REPORT_ALL_PROJECTS = "Cumulative report - all projects";
 export const REPORT_EMPTY_TITLE = "No production status records available.";
 export const REPORT_EMPTY_HINT =
   "Once a Project Head or an activity Lead records an update, it appears here as that revision and activity's current status.";
+
+// A selected month with nothing in it. Deliberately its own wording: telling a
+// PM who picked the wrong month that production status has never been recorded
+// would be plainly false. Neither state is an error.
+export const REPORT_EMPTY_MONTH_TITLE =
+  "No production status records for this month.";
+export const REPORT_EMPTY_MONTH_HINT =
+  "Nothing was recorded in the month selected. Choose another month, or All Months for the full cumulative report.";
 
 export const REPORT_ERROR_TITLE = "Couldn't load the production status report";
 export const REPORT_DOWNLOAD_ERROR =
