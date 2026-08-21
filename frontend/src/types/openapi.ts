@@ -1190,7 +1190,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get My Leave Balance */
+        /**
+         * Get My Leave Balance
+         * @description The signed-in employee's own balance for one month.
+         *
+         *     A pure read. It derives the figure and writes nothing - asking for a month
+         *     can never accrue that month's allocation.
+         */
         get: operations["get_my_leave_balance_api_v1_leave_balances_me_get"];
         put?: never;
         post?: never;
@@ -1207,10 +1213,57 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get Leave Balance */
+        get: operations["get_leave_balance_api_v1_leave_balances__employee_id__get"];
         put?: never;
-        /** Set Leave Balance */
+        /**
+         * Set Leave Balance
+         * @description PM correction. The body still carries the TARGET balance the manager
+         *     wants; the service stores the difference as an adjustment so the monthly
+         *     allocation underneath it survives.
+         */
         post: operations["set_leave_balance_api_v1_leave_balances__employee_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-balances/{employee_id}/allocations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Leave Allocations */
+        get: operations["list_leave_allocations_api_v1_leave_balances__employee_id__allocations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/leave-balances/{employee_id}/allocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Leave Allocation
+         * @description Set `Leave/month` from `effective_from` (a first-of-month) onwards.
+         *
+         *     PUT rather than POST because it is idempotent per effective month: sending
+         *     the same month twice settles on one row rather than stacking two rates for
+         *     one month. Earlier months keep the rate they were on.
+         */
+        put: operations["set_leave_allocation_api_v1_leave_balances__employee_id__allocation_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1228,6 +1281,161 @@ export interface paths {
         get: operations["list_leave_balance_history_api_v1_leave_balances__employee_id__history_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Permission Requests */
+        get: operations["list_permission_requests_api_v1_permission_requests_get"];
+        put?: never;
+        /** Create Permission Request */
+        post: operations["create_permission_request_api_v1_permission_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Permission History
+         * @description One calendar month of permission history WITH that month's balance.
+         *
+         *     Both halves come from the same month bounds computed once server-side, and the
+         *     rows are filtered on `permission_date` - never `created_at` - so the table and
+         *     the figure above it can never describe different months.
+         */
+        get: operations["get_permission_history_api_v1_permission_requests_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/balance/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get My Permission Balance */
+        get: operations["get_my_permission_balance_api_v1_permission_requests_balance_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/balance/{employee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Employee Permission Balance
+         * @description The balance a project manager needs to judge a pending request against.
+         *     Read-only; the approval re-derives it under a lock regardless.
+         */
+        get: operations["get_employee_permission_balance_api_v1_permission_requests_balance__employee_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/{req_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Permission Request
+         * @description The detail page's single call: the request, the employee and reviewer names,
+         *     and the request's place in its month's balance.
+         *
+         *     Same authorisation as the list - own requests for an employee, any for a
+         *     project manager - so this is not a way around the list's scoping.
+         */
+        get: operations["get_permission_request_api_v1_permission_requests__req_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/{req_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Permission Request */
+        post: operations["cancel_permission_request_api_v1_permission_requests__req_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/{req_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Permission Request */
+        post: operations["approve_permission_request_api_v1_permission_requests__req_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/permission-requests/{req_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Permission Request */
+        post: operations["reject_permission_request_api_v1_permission_requests__req_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2000,6 +2208,41 @@ export interface paths {
         patch: operations["update_submission_status_api_v1_projects__project_id__submissions__submission_id__status_patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/production-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Latest Production Status */
+        get: operations["list_latest_production_status_api_v1_projects__project_id__production_status_get"];
+        put?: never;
+        /** Create Production Status */
+        post: operations["create_production_status_api_v1_projects__project_id__production_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/production-status/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Production Status History */
+        get: operations["list_production_status_history_api_v1_projects__project_id__production_status_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/plants/planning-plants": {
         parameters: {
             query?: never;
@@ -2156,6 +2399,30 @@ export interface paths {
          *     from a punch stream (Phase 9 supplies them).
          */
         get: operations["list_daily_review_api_v1_biometric_daily_review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/biometric/daily-review/{employee_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Daily Review Detail
+         * @description One employee, one day - the Phase 9B PM detail screen.
+         *
+         *     project_manager ONLY, exactly like `/daily-review`. Read-only: reports
+         *     what the biometric evidence and the official record (if any) say; writes
+         *     nothing.
+         */
+        get: operations["get_daily_review_detail_api_v1_biometric_daily_review__employee_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3194,6 +3461,25 @@ export interface components {
             no_record: number;
         };
         /**
+         * DailyReviewDetailOut
+         * @description One employee, one day - the Phase 9B PM detail screen.
+         *
+         *     `row` is the exact same shape `DailyReviewPage.items` uses, so the two
+         *     screens can never disagree about what a saved decision looks like.
+         */
+        DailyReviewDetailOut: {
+            /**
+             * Review Date
+             * Format: date
+             */
+            review_date: string;
+            /** Provider */
+            provider: string;
+            row: components["schemas"]["DailyReviewRowOut"];
+            /** Punches */
+            punches: components["schemas"]["PunchEntryOut"][];
+        };
+        /**
          * DailyReviewPage
          * @description One attendance day across every in-scope employee.
          *
@@ -3213,6 +3499,10 @@ export interface components {
             items: components["schemas"]["DailyReviewRowOut"][];
             /** Total */
             total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
             counts: components["schemas"]["DailyReviewCounts"];
         };
         /**
@@ -3243,6 +3533,10 @@ export interface components {
             last_out?: string | null;
             /** Worked Minutes */
             worked_minutes?: number | null;
+            /** First In Source */
+            first_in_source?: string | null;
+            /** Last Out Source */
+            last_out_source?: string | null;
             /** Scheduled Start At */
             scheduled_start_at?: string | null;
             /** Scheduled End At */
@@ -3277,19 +3571,26 @@ export interface components {
             attendance_check_out_at?: string | null;
             /** Attendance Note */
             attendance_note?: string | null;
+            /** Permission Hours */
+            permission_hours?: number | null;
         };
         /**
          * DailySummaryOut
-         * @description One employee, one attendance day: the outer boundary of their punches.
+         * @description One employee, one attendance day: the FINALIZED result, for the
+         *     employee's own Calendar.
          *
-         *     `first_in` / `last_out` are the earliest and latest punch of the day after
-         *     re-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does
-         *     not provide (see `summary.py`). They are deliberately not named
-         *     check_in/check_out: this is observation, and `attendance_records` remains the
-         *     official source.
+         *     `first_in` / `last_out` are the earliest/latest punch of the day after
+         *     re-scan collapsing (see `summary.py`), merged with the official
+         *     `attendance_records` decision where the device recorded nothing - the SAME
+         *     merge `_review_row` performs for the PM Records/detail screens (Phase 9C):
+         *     device evidence always wins, a PM-entered time only fills a boundary the
+         *     device left empty. `first_in_source`/`last_out_source` say which case this
+         *     was. `attendance_records` remains the one place a human decision is
+         *     written; nothing here writes it.
          *
-         *     `last_out` is null when only one punch survives collapsing. One sighting
-         *     cannot be both an arrival and a departure, and an OUT is never invented.
+         *     `last_out` is null when only one punch survives collapsing AND no official
+         *     check-out exists either. One device sighting alone cannot be both an
+         *     arrival and a departure, and an OUT is never invented.
          */
         DailySummaryOut: {
             /**
@@ -3310,6 +3611,10 @@ export interface components {
             first_in?: string | null;
             /** Last Out */
             last_out?: string | null;
+            /** First In Source */
+            first_in_source?: string | null;
+            /** Last Out Source */
+            last_out_source?: string | null;
             /**
              * Punch Count
              * @default 0
@@ -3346,6 +3651,8 @@ export interface components {
             review_required: boolean;
             /** Review Reasons */
             review_reasons?: string[];
+            /** Permission Hours */
+            permission_hours?: number | null;
         };
         /** DailySummaryPage */
         DailySummaryPage: {
@@ -4034,6 +4341,71 @@ export interface components {
             /** Is Active */
             is_active?: boolean | null;
         };
+        /** LeaveAllocationOut */
+        LeaveAllocationOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Effective From
+             * Format: date
+             */
+            effective_from: string;
+            /** Monthly Days */
+            monthly_days: number;
+            /** Note */
+            note?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * LeaveAllocationPage
+         * @description Every rate this employee has ever been on, newest first.
+         */
+        LeaveAllocationPage: {
+            /** Items */
+            items: components["schemas"]["LeaveAllocationOut"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * LeaveAllocationUpdate
+         * @description Set the employee's `Leave/month` from a given month onwards.
+         *
+         *     Effective-dated on purpose: this writes a NEW row rather than editing the one
+         *     in force, so raising somebody to 2 d/month in March leaves January and
+         *     February on their old rate forever. Re-saving the SAME effective month
+         *     updates that month's row - a correction to a decision, not a second competing
+         *     decision.
+         */
+        LeaveAllocationUpdate: {
+            /** Monthly Days */
+            monthly_days: number;
+            /**
+             * Effective From
+             * Format: date
+             */
+            effective_from: string;
+            /** Note */
+            note?: string | null;
+        };
         /**
          * LeaveAttendanceSummaryOut
          * @description What attendance already exists across one leave request's dates.
@@ -4094,7 +4466,12 @@ export interface components {
         };
         /**
          * LeaveBalanceOut
-         * @description One employee's balance row for the manager list.
+         * @description One employee's DERIVED balance for one month, with its working.
+         *
+         *     Every term of `closing = carry_forward + allocation + adjustment - consumed`
+         *     is reported, not just the total: the PM correcting a figure needs to see
+         *     where it came from, and a card that shows only the total hides an accrual
+         *     fault completely.
          */
         LeaveBalanceOut: {
             /**
@@ -4106,8 +4483,25 @@ export interface components {
             employee_code: string;
             /** Employee Name */
             employee_name: string;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
             /** Available Leave */
             available_leave: number;
+            /** Monthly Allocation */
+            monthly_allocation: number;
+            /** Carry Forward */
+            carry_forward: number;
+            /** Adjustment */
+            adjustment: number;
+            /** Consumed */
+            consumed: number;
+            /** In Ledger */
+            in_ledger: boolean;
+            /** Ledger Start Month */
+            ledger_start_month?: string | null;
             /** Last Updated */
             last_updated?: string | null;
         };
@@ -4121,13 +4515,28 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
         };
-        /** LeaveBalanceUpdate */
+        /**
+         * LeaveBalanceUpdate
+         * @description The PM's manual correction, entered as the TARGET balance.
+         *
+         *     Unchanged on the wire: the manager still types the number they want the
+         *     employee to have, exactly as before. The service turns it into a signed
+         *     adjustment (`target - the month's automatic balance`) so the correction sits
+         *     beside the monthly allocation instead of destroying it.
+         */
         LeaveBalanceUpdate: {
             /** Available Leave */
             available_leave: number;
             /** Reason */
             reason: string;
+            /** Month */
+            month?: string | null;
         };
         /** LeaveDeliverableImpactOut */
         LeaveDeliverableImpactOut: {
@@ -4336,7 +4745,7 @@ export interface components {
         };
         /**
          * MyLeaveBalanceOut
-         * @description The signed-in employee's own available leave (read-only).
+         * @description The signed-in employee's own balance for one month (read-only).
          */
         MyLeaveBalanceOut: {
             /**
@@ -4344,8 +4753,25 @@ export interface components {
              * Format: uuid
              */
             employee_id: string;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
             /** Available Leave */
             available_leave: number;
+            /** Monthly Allocation */
+            monthly_allocation: number;
+            /** Carry Forward */
+            carry_forward: number;
+            /** Adjustment */
+            adjustment: number;
+            /** Consumed */
+            consumed: number;
+            /** In Ledger */
+            in_ledger: boolean;
+            /** Ledger Start Month */
+            ledger_start_month?: string | null;
             /** Last Updated */
             last_updated?: string | null;
         };
@@ -4578,6 +5004,231 @@ export interface components {
             /** New Password */
             new_password: string;
         };
+        /**
+         * PermissionBalanceOut
+         * @description One employee's permission standing for one calendar month.
+         *
+         *     `remaining_hours` is derived server-side and is the only figure any decision
+         *     is made against - the frontend's preview is a convenience, never an input.
+         */
+        PermissionBalanceOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
+            /** Allowance Hours */
+            allowance_hours: number;
+            /** Approved Hours */
+            approved_hours: number;
+            /** Remaining Hours */
+            remaining_hours: number;
+            /**
+             * Is Current Month
+             * @default true
+             */
+            is_current_month: boolean;
+            /**
+             * Requests Allowed
+             * @default true
+             */
+            requests_allowed: boolean;
+        };
+        /**
+         * PermissionHistoryOut
+         * @description One month of an employee's permission history, with that month's balance.
+         *
+         *     Returned together on purpose: the history table and the "2h / 4h" figure above
+         *     it describe the same month, and computing the month's bounds in one place -
+         *     here, from `balance.month_bounds` - is what keeps the client from deriving a
+         *     second answer.
+         */
+        PermissionHistoryOut: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
+            balance: components["schemas"]["PermissionBalanceOut"];
+            /** Items */
+            items: components["schemas"]["PermissionRequestOut"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * PermissionRequestBalanceOut
+         * @description The month's standing AND this request's place in it, for the detail page.
+         *
+         *     Every figure is computed server-side from the same derivation as everything
+         *     else, so the detail page does no arithmetic of its own. The point of the
+         *     request-specific fields is to be able to state what a request actually cost
+         *     WITHOUT pretending: only an approved request has consumed anything, so
+         *     `consumed_by_request` is 0 for pending, rejected and cancelled alike.
+         *
+         *     `remaining_before_request` is "what this month would have if this request did
+         *     not exist" - not a replay of the historical figure at the instant of
+         *     approval, which later approvals would have moved and which only the audit log
+         *     can answer. For an approved request the two coincide whenever it was the last
+         *     one decided, and the derived form is stable rather than guessed.
+         */
+        PermissionRequestBalanceOut: {
+            /**
+             * Month
+             * Format: date
+             */
+            month: string;
+            /** Allowance Hours */
+            allowance_hours: number;
+            /** Approved Hours */
+            approved_hours: number;
+            /** Remaining Hours */
+            remaining_hours: number;
+            /** Consumed By Request */
+            consumed_by_request: number;
+            /** Remaining Before Request */
+            remaining_before_request: number;
+            /** Remaining If Approved */
+            remaining_if_approved?: number | null;
+        };
+        /** PermissionRequestCreate */
+        PermissionRequestCreate: {
+            /**
+             * Permission Date
+             * Format: date
+             */
+            permission_date: string;
+            /**
+             * Duration Hours
+             * @enum {integer}
+             */
+            duration_hours: 1 | 2;
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * PermissionRequestDetailOut
+         * @description One request with everything the detail page shows, resolved server-side.
+         *
+         *     The names are here rather than looked up in the browser because the employee
+         *     list endpoint is manager-scoped: an employee opening their OWN request has no
+         *     way to resolve a name through it. Sending them with the request also means the
+         *     page needs exactly one call.
+         */
+        PermissionRequestDetailOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Permission Date
+             * Format: date
+             */
+            permission_date: string;
+            /** Duration Hours */
+            duration_hours: number;
+            /** Reason */
+            reason?: string | null;
+            status: components["schemas"]["PermissionStatus"];
+            /** Manager Id */
+            manager_id?: string | null;
+            /** Manager Comment */
+            manager_comment?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Employee Name */
+            employee_name?: string | null;
+            /** Employee Code */
+            employee_code?: string | null;
+            /** Reviewer Name */
+            reviewer_name?: string | null;
+            balance: components["schemas"]["PermissionRequestBalanceOut"];
+        };
+        /** PermissionRequestOut */
+        PermissionRequestOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Permission Date
+             * Format: date
+             */
+            permission_date: string;
+            /** Duration Hours */
+            duration_hours: number;
+            /** Reason */
+            reason?: string | null;
+            status: components["schemas"]["PermissionStatus"];
+            /** Manager Id */
+            manager_id?: string | null;
+            /** Manager Comment */
+            manager_comment?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PermissionRequestPage */
+        PermissionRequestPage: {
+            /** Items */
+            items: components["schemas"]["PermissionRequestOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** PermissionReviewBody */
+        PermissionReviewBody: {
+            /** Comment */
+            comment?: string | null;
+        };
+        /**
+         * PermissionStatus
+         * @enum {string}
+         */
+        PermissionStatus: "pending" | "approved" | "rejected" | "cancelled";
         /** PlannedDateChangeOut */
         PlannedDateChangeOut: {
             /**
@@ -4632,6 +5283,110 @@ export interface components {
             description: string;
             /** Is Active */
             is_active: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ProductionStatusCreate */
+        ProductionStatusCreate: {
+            /** Revision */
+            revision: string;
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "closed";
+            /**
+             * Tag Count
+             * @default 0
+             */
+            tag_count: number;
+            /**
+             * Doc Count
+             * @default 0
+             */
+            doc_count: number;
+            /**
+             * Spares Count
+             * @default 0
+             */
+            spares_count: number;
+            /**
+             * Crs Count
+             * @default 0
+             */
+            crs_count: number;
+            /** Completed On */
+            completed_on?: string | null;
+            /** Remarks */
+            remarks?: string | null;
+        };
+        /** ProductionStatusOut */
+        ProductionStatusOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /** Project Code */
+            project_code: string;
+            /** Project Name */
+            project_name: string;
+            /** Planning Plant Code */
+            planning_plant_code?: string | null;
+            /** Planning Plant Description */
+            planning_plant_description?: string | null;
+            /** Maintenance Plant Code */
+            maintenance_plant_code?: string | null;
+            /** Maintenance Plant Description */
+            maintenance_plant_description?: string | null;
+            /** Revision */
+            revision: string;
+            /**
+             * Activity Id
+             * Format: uuid
+             */
+            activity_id: string;
+            /** Activity Name */
+            activity_name?: string | null;
+            /** Activity Code */
+            activity_code?: string | null;
+            /** Status */
+            status: string;
+            /** Tag Count */
+            tag_count: number;
+            /** Doc Count */
+            doc_count: number;
+            /** Spares Count */
+            spares_count: number;
+            /** Crs Count */
+            crs_count: number;
+            /** Completed On */
+            completed_on?: string | null;
+            /** Remarks */
+            remarks?: string | null;
+            /**
+             * Created By
+             * Format: uuid
+             */
+            created_by: string;
+            /**
+             * Created By Name
+             * @default
+             */
+            created_by_name: string;
             /**
              * Created At
              * Format: date-time
@@ -4999,6 +5754,29 @@ export interface components {
             invalid: number;
             /** Status */
             status: string;
+        };
+        /**
+         * PunchEntryOut
+         * @description One surviving (post-dedup) punch on the detail page's evidence list.
+         *
+         *     Always `source="device"` - nothing here is ever PM-entered. A PM-supplied
+         *     boundary the device did not record lives on `row.attendance_check_in_at` /
+         *     `row.attendance_check_out_at`, never as a row in this list: no synthetic
+         *     punch is invented (see the module docstring).
+         */
+        PunchEntryOut: {
+            /**
+             * Punch Time
+             * Format: date-time
+             */
+            punch_time: string;
+            /** Role */
+            role: string;
+            /**
+             * Source
+             * @default device
+             */
+            source: string;
         };
         /**
          * PunchIn
@@ -9111,6 +9889,8 @@ export interface operations {
     list_leave_balances_api_v1_leave_balances_get: {
         parameters: {
             query?: {
+                /** @description Any date in the calendar month to report. Defaults to the current Chennai business month. */
+                month?: string | null;
                 q?: string | null;
                 sort_dir?: string;
                 limit?: number;
@@ -9144,7 +9924,10 @@ export interface operations {
     };
     get_my_leave_balance_api_v1_leave_balances_me_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Any date in the calendar month to report. Defaults to the current Chennai business month. */
+                month?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9158,6 +9941,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MyLeaveBalanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_leave_balance_api_v1_leave_balances__employee_id__get: {
+        parameters: {
+            query?: {
+                /** @description Any date in the calendar month to report. Defaults to the current Chennai business month. */
+                month?: string | null;
+            };
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveBalanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -9197,6 +10023,72 @@ export interface operations {
             };
         };
     };
+    list_leave_allocations_api_v1_leave_balances__employee_id__allocations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveAllocationPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_leave_allocation_api_v1_leave_balances__employee_id__allocation_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LeaveAllocationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveAllocationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_leave_balance_history_api_v1_leave_balances__employee_id__history_get: {
         parameters: {
             query?: {
@@ -9218,6 +10110,308 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LeaveBalanceHistoryPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_permission_requests_api_v1_permission_requests_get: {
+        parameters: {
+            query?: {
+                employee_id?: string | null;
+                status?: components["schemas"]["PermissionStatus"] | null;
+                from?: string | null;
+                to?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_permission_request_api_v1_permission_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_permission_history_api_v1_permission_requests_history_get: {
+        parameters: {
+            query?: {
+                /** @description Any date in the month to report. Defaults to the current Chennai business month. */
+                month?: string | null;
+                /** @description Whose history. Defaults to the caller; naming somebody else requires the project_manager role. */
+                employee_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionHistoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_permission_balance_api_v1_permission_requests_balance_me_get: {
+        parameters: {
+            query?: {
+                /** @description Any date in the month to report. Defaults to the current Chennai business month. */
+                month?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionBalanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_employee_permission_balance_api_v1_permission_requests_balance__employee_id__get: {
+        parameters: {
+            query?: {
+                month?: string | null;
+            };
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionBalanceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_permission_request_api_v1_permission_requests__req_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_permission_request_api_v1_permission_requests__req_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_permission_request_api_v1_permission_requests__req_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PermissionReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_permission_request_api_v1_permission_requests__req_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                req_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PermissionReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestOut"];
                 };
             };
             /** @description Validation Error */
@@ -11257,6 +12451,106 @@ export interface operations {
             };
         };
     };
+    list_latest_production_status_api_v1_projects__project_id__production_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductionStatusOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_production_status_api_v1_projects__project_id__production_status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductionStatusCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductionStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_production_status_history_api_v1_projects__project_id__production_status_history_get: {
+        parameters: {
+            query?: {
+                activity_id?: string | null;
+                revision?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProductionStatusOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_planning_plants_api_v1_plants_planning_plants_get: {
         parameters: {
             query?: {
@@ -11498,6 +12792,9 @@ export interface operations {
                 date: string;
                 provider?: string;
                 classification?: string | null;
+                q?: string | null;
+                limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -11512,6 +12809,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DailyReviewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_daily_review_detail_api_v1_biometric_daily_review__employee_id__get: {
+        parameters: {
+            query: {
+                date: string;
+                provider?: string;
+            };
+            header?: never;
+            path: {
+                employee_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyReviewDetailOut"];
                 };
             };
             /** @description Validation Error */

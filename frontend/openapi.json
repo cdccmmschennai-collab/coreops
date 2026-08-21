@@ -4933,6 +4933,25 @@
         ],
         "parameters": [
           {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any date in the calendar month to report. Defaults to the current Chennai business month.",
+              "title": "Month"
+            },
+            "description": "Any date in the calendar month to report. Defaults to the current Chennai business month."
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -5013,7 +5032,34 @@
           "leave-balances"
         ],
         "summary": "Get My Leave Balance",
+        "description": "The signed-in employee's own balance for one month.\n\nA pure read. It derives the figure and writes nothing - asking for a month\ncan never accrue that month's allocation.",
         "operationId": "get_my_leave_balance_api_v1_leave_balances_me_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any date in the calendar month to report. Defaults to the current Chennai business month.",
+              "title": "Month"
+            },
+            "description": "Any date in the calendar month to report. Defaults to the current Chennai business month."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5024,21 +5070,92 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
           }
-        },
+        }
+      }
+    },
+    "/api/v1/leave-balances/{employee_id}": {
+      "get": {
+        "tags": [
+          "leave-balances"
+        ],
+        "summary": "Get Leave Balance",
+        "operationId": "get_leave_balance_api_v1_leave_balances__employee_id__get",
         "security": [
           {
             "HTTPBearer": []
           }
-        ]
-      }
-    },
-    "/api/v1/leave-balances/{employee_id}": {
+        ],
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Employee Id"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any date in the calendar month to report. Defaults to the current Chennai business month.",
+              "title": "Month"
+            },
+            "description": "Any date in the calendar month to report. Defaults to the current Chennai business month."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveBalanceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "leave-balances"
         ],
         "summary": "Set Leave Balance",
+        "description": "PM correction. The body still carries the TARGET balance the manager\nwants; the service stores the difference as an adjustment so the monthly\nallocation underneath it survives.",
         "operationId": "set_leave_balance_api_v1_leave_balances__employee_id__post",
         "security": [
           {
@@ -5074,6 +5191,113 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LeaveBalanceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/leave-balances/{employee_id}/allocations": {
+      "get": {
+        "tags": [
+          "leave-balances"
+        ],
+        "summary": "List Leave Allocations",
+        "operationId": "list_leave_allocations_api_v1_leave_balances__employee_id__allocations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Employee Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveAllocationPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/leave-balances/{employee_id}/allocation": {
+      "put": {
+        "tags": [
+          "leave-balances"
+        ],
+        "summary": "Set Leave Allocation",
+        "description": "Set `Leave/month` from `effective_from` (a first-of-month) onwards.\n\nPUT rather than POST because it is idempotent per effective month: sending\nthe same month twice settles on one row rather than stacking two rates for\none month. Earlier months keep the rate they were on.",
+        "operationId": "set_leave_allocation_api_v1_leave_balances__employee_id__allocation_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Employee Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaveAllocationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveAllocationOut"
                 }
               }
             }
@@ -5145,6 +5369,614 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LeaveBalanceHistoryPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "List Permission Requests",
+        "operationId": "list_permission_requests_api_v1_permission_requests_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Employee Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PermissionStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRequestPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Create Permission Request",
+        "operationId": "create_permission_request_api_v1_permission_requests_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionRequestCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/history": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Permission History",
+        "description": "One calendar month of permission history WITH that month's balance.\n\nBoth halves come from the same month bounds computed once server-side, and the\nrows are filtered on `permission_date` - never `created_at` - so the table and\nthe figure above it can never describe different months.",
+        "operationId": "get_permission_history_api_v1_permission_requests_history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any date in the month to report. Defaults to the current Chennai business month.",
+              "title": "Month"
+            },
+            "description": "Any date in the month to report. Defaults to the current Chennai business month."
+          },
+          {
+            "name": "employee_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whose history. Defaults to the caller; naming somebody else requires the project_manager role.",
+              "title": "Employee Id"
+            },
+            "description": "Whose history. Defaults to the caller; naming somebody else requires the project_manager role."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionHistoryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/balance/me": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get My Permission Balance",
+        "operationId": "get_my_permission_balance_api_v1_permission_requests_balance_me_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any date in the month to report. Defaults to the current Chennai business month.",
+              "title": "Month"
+            },
+            "description": "Any date in the month to report. Defaults to the current Chennai business month."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionBalanceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/balance/{employee_id}": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Employee Permission Balance",
+        "description": "The balance a project manager needs to judge a pending request against.\nRead-only; the approval re-derives it under a lock regardless.",
+        "operationId": "get_employee_permission_balance_api_v1_permission_requests_balance__employee_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Employee Id"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionBalanceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/{req_id}": {
+      "get": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Get Permission Request",
+        "description": "The detail page's single call: the request, the employee and reviewer names,\nand the request's place in its month's balance.\n\nSame authorisation as the list - own requests for an employee, any for a\nproject manager - so this is not a way around the list's scoping.",
+        "operationId": "get_permission_request_api_v1_permission_requests__req_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRequestDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/{req_id}/cancel": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Cancel Permission Request",
+        "operationId": "cancel_permission_request_api_v1_permission_requests__req_id__cancel_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/{req_id}/approve": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Approve Permission Request",
+        "operationId": "approve_permission_request_api_v1_permission_requests__req_id__approve_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionReviewBody",
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRequestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/permission-requests/{req_id}/reject": {
+      "post": {
+        "tags": [
+          "permissions"
+        ],
+        "summary": "Reject Permission Request",
+        "operationId": "reject_permission_request_api_v1_permission_requests__req_id__reject_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "req_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Req Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionReviewBody",
+                "default": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionRequestOut"
                 }
               }
             }
@@ -8746,6 +9578,199 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/production-status": {
+      "get": {
+        "tags": [
+          "production-status"
+        ],
+        "summary": "List Latest Production Status",
+        "operationId": "list_latest_production_status_api_v1_projects__project_id__production_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProductionStatusOut"
+                  },
+                  "title": "Response List Latest Production Status Api V1 Projects  Project Id  Production Status Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "production-status"
+        ],
+        "summary": "Create Production Status",
+        "operationId": "create_production_status_api_v1_projects__project_id__production_status_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductionStatusCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductionStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/production-status/history": {
+      "get": {
+        "tags": [
+          "production-status"
+        ],
+        "summary": "List Production Status History",
+        "operationId": "list_production_status_history_api_v1_projects__project_id__production_status_history_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "activity_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Activity Id"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProductionStatusOut"
+                  },
+                  "title": "Response List Production Status History Api V1 Projects  Project Id  Production Status History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/plants/planning-plants": {
       "get": {
         "tags": [
@@ -9305,6 +10330,46 @@
               ],
               "title": "Classification"
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 15,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
           }
         ],
         "responses": {
@@ -9314,6 +10379,75 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DailyReviewPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/biometric/daily-review/{employee_id}": {
+      "get": {
+        "tags": [
+          "biometric"
+        ],
+        "summary": "Get Daily Review Detail",
+        "description": "One employee, one day - the Phase 9B PM detail screen.\n\nproject_manager ONLY, exactly like `/daily-review`. Read-only: reports\nwhat the biometric evidence and the official record (if any) say; writes\nnothing.",
+        "operationId": "get_daily_review_detail_api_v1_biometric_daily_review__employee_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Employee Id"
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Date"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "easytime",
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyReviewDetailOut"
                 }
               }
             }
@@ -11994,6 +13128,38 @@
         "title": "DailyReviewCounts",
         "description": "The whole day, counted BEFORE any classification filter is applied.\n\nTruthfully derivable from biometric evidence alone - which is why there is\nno `leave`, `permission` or `half_day` here. Those need the approved-exception\ndata that Phase 9 integrates; inventing them from punch durations is exactly\nthe guess this module refuses to make."
       },
+      "DailyReviewDetailOut": {
+        "properties": {
+          "review_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Review Date"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "row": {
+            "$ref": "#/components/schemas/DailyReviewRowOut"
+          },
+          "punches": {
+            "items": {
+              "$ref": "#/components/schemas/PunchEntryOut"
+            },
+            "type": "array",
+            "title": "Punches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_date",
+          "provider",
+          "row",
+          "punches"
+        ],
+        "title": "DailyReviewDetailOut",
+        "description": "One employee, one day - the Phase 9B PM detail screen.\n\n`row` is the exact same shape `DailyReviewPage.items` uses, so the two\nscreens can never disagree about what a saved decision looks like."
+      },
       "DailyReviewPage": {
         "properties": {
           "review_date": {
@@ -12016,6 +13182,14 @@
             "type": "integer",
             "title": "Total"
           },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
           "counts": {
             "$ref": "#/components/schemas/DailyReviewCounts"
           }
@@ -12026,6 +13200,8 @@
           "provider",
           "items",
           "total",
+          "limit",
+          "offset",
           "counts"
         ],
         "title": "DailyReviewPage",
@@ -12094,6 +13270,28 @@
               }
             ],
             "title": "Worked Minutes"
+          },
+          "first_in_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First In Source"
+          },
+          "last_out_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Out Source"
           },
           "scheduled_start_at": {
             "anyOf": [
@@ -12219,6 +13417,17 @@
               }
             ],
             "title": "Attendance Note"
+          },
+          "permission_hours": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission Hours"
           }
         },
         "type": "object",
@@ -12287,6 +13496,28 @@
               }
             ],
             "title": "Last Out"
+          },
+          "first_in_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First In Source"
+          },
+          "last_out_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Out Source"
           },
           "punch_count": {
             "type": "integer",
@@ -12386,6 +13617,17 @@
             },
             "type": "array",
             "title": "Review Reasons"
+          },
+          "permission_hours": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permission Hours"
           }
         },
         "type": "object",
@@ -12394,7 +13636,7 @@
           "summary_date"
         ],
         "title": "DailySummaryOut",
-        "description": "One employee, one attendance day: the outer boundary of their punches.\n\n`first_in` / `last_out` are the earliest and latest punch of the day after\nre-scan collapsing - NOT device-reported IN/OUT states, which EasyTime does\nnot provide (see `summary.py`). They are deliberately not named\ncheck_in/check_out: this is observation, and `attendance_records` remains the\nofficial source.\n\n`last_out` is null when only one punch survives collapsing. One sighting\ncannot be both an arrival and a departure, and an OUT is never invented."
+        "description": "One employee, one attendance day: the FINALIZED result, for the\nemployee's own Calendar.\n\n`first_in` / `last_out` are the earliest/latest punch of the day after\nre-scan collapsing (see `summary.py`), merged with the official\n`attendance_records` decision where the device recorded nothing - the SAME\nmerge `_review_row` performs for the PM Records/detail screens (Phase 9C):\ndevice evidence always wins, a PM-entered time only fills a boundary the\ndevice left empty. `first_in_source`/`last_out_source` say which case this\nwas. `attendance_records` remains the one place a human decision is\nwritten; nothing here writes it.\n\n`last_out` is null when only one punch survives collapsing AND no official\ncheck-out exists either. One device sighting alone cannot be both an\narrival and a departure, and an OUT is never invented."
       },
       "DailySummaryPage": {
         "properties": {
@@ -14395,6 +15637,128 @@
         "type": "object",
         "title": "JobCodeUpdate"
       },
+      "LeaveAllocationOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date",
+            "title": "Effective From"
+          },
+          "monthly_days": {
+            "type": "number",
+            "title": "Monthly Days"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "employee_id",
+          "effective_from",
+          "monthly_days",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LeaveAllocationOut"
+      },
+      "LeaveAllocationPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LeaveAllocationOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "LeaveAllocationPage",
+        "description": "Every rate this employee has ever been on, newest first."
+      },
+      "LeaveAllocationUpdate": {
+        "properties": {
+          "monthly_days": {
+            "type": "number",
+            "maximum": 999.99,
+            "minimum": 0.0,
+            "title": "Monthly Days"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date",
+            "title": "Effective From"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "monthly_days",
+          "effective_from"
+        ],
+        "title": "LeaveAllocationUpdate",
+        "description": "Set the employee's `Leave/month` from a given month onwards.\n\nEffective-dated on purpose: this writes a NEW row rather than editing the one\nin force, so raising somebody to 2 d/month in March leaves January and\nFebruary on their old rate forever. Re-saving the SAME effective month\nupdates that month's row - a correction to a decision, not a second competing\ndecision."
+      },
       "LeaveAttendanceSummaryOut": {
         "properties": {
           "leave_request_id": {
@@ -14536,9 +15900,46 @@
             "type": "string",
             "title": "Employee Name"
           },
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
+          },
           "available_leave": {
             "type": "number",
             "title": "Available Leave"
+          },
+          "monthly_allocation": {
+            "type": "number",
+            "title": "Monthly Allocation"
+          },
+          "carry_forward": {
+            "type": "number",
+            "title": "Carry Forward"
+          },
+          "adjustment": {
+            "type": "number",
+            "title": "Adjustment"
+          },
+          "consumed": {
+            "type": "number",
+            "title": "Consumed"
+          },
+          "in_ledger": {
+            "type": "boolean",
+            "title": "In Ledger"
+          },
+          "ledger_start_month": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger Start Month"
           },
           "last_updated": {
             "anyOf": [
@@ -14558,10 +15959,16 @@
           "employee_id",
           "employee_code",
           "employee_name",
-          "available_leave"
+          "month",
+          "available_leave",
+          "monthly_allocation",
+          "carry_forward",
+          "adjustment",
+          "consumed",
+          "in_ledger"
         ],
         "title": "LeaveBalanceOut",
-        "description": "One employee's balance row for the manager list."
+        "description": "One employee's DERIVED balance for one month, with its working.\n\nEvery term of `closing = carry_forward + allocation + adjustment - consumed`\nis reported, not just the total: the PM correcting a figure needs to see\nwhere it came from, and a card that shows only the total hides an accrual\nfault completely."
       },
       "LeaveBalancePage": {
         "properties": {
@@ -14583,6 +15990,11 @@
           "offset": {
             "type": "integer",
             "title": "Offset"
+          },
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
           }
         },
         "type": "object",
@@ -14590,7 +16002,8 @@
           "items",
           "total",
           "limit",
-          "offset"
+          "offset",
+          "month"
         ],
         "title": "LeaveBalancePage"
       },
@@ -14598,8 +16011,8 @@
         "properties": {
           "available_leave": {
             "type": "number",
-            "maximum": 999.99,
-            "minimum": -999.99,
+            "maximum": 9999.99,
+            "minimum": -9999.99,
             "title": "Available Leave"
           },
           "reason": {
@@ -14607,6 +16020,18 @@
             "maxLength": 2000,
             "minLength": 1,
             "title": "Reason"
+          },
+          "month": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
           }
         },
         "type": "object",
@@ -14614,7 +16039,8 @@
           "available_leave",
           "reason"
         ],
-        "title": "LeaveBalanceUpdate"
+        "title": "LeaveBalanceUpdate",
+        "description": "The PM's manual correction, entered as the TARGET balance.\n\nUnchanged on the wire: the manager still types the number they want the\nemployee to have, exactly as before. The service turns it into a signed\nadjustment (`target - the month's automatic balance`) so the correction sits\nbeside the monthly allocation instead of destroying it."
       },
       "LeaveDeliverableImpactOut": {
         "properties": {
@@ -15148,9 +16574,46 @@
             "format": "uuid",
             "title": "Employee Id"
           },
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
+          },
           "available_leave": {
             "type": "number",
             "title": "Available Leave"
+          },
+          "monthly_allocation": {
+            "type": "number",
+            "title": "Monthly Allocation"
+          },
+          "carry_forward": {
+            "type": "number",
+            "title": "Carry Forward"
+          },
+          "adjustment": {
+            "type": "number",
+            "title": "Adjustment"
+          },
+          "consumed": {
+            "type": "number",
+            "title": "Consumed"
+          },
+          "in_ledger": {
+            "type": "boolean",
+            "title": "In Ledger"
+          },
+          "ledger_start_month": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger Start Month"
           },
           "last_updated": {
             "anyOf": [
@@ -15168,10 +16631,16 @@
         "type": "object",
         "required": [
           "employee_id",
-          "available_leave"
+          "month",
+          "available_leave",
+          "monthly_allocation",
+          "carry_forward",
+          "adjustment",
+          "consumed",
+          "in_ledger"
         ],
         "title": "MyLeaveBalanceOut",
-        "description": "The signed-in employee's own available leave (read-only)."
+        "description": "The signed-in employee's own balance for one month (read-only)."
       },
       "NotificationOut": {
         "properties": {
@@ -15718,6 +17187,459 @@
         ],
         "title": "PasswordUpdate"
       },
+      "PermissionBalanceOut": {
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
+          },
+          "allowance_hours": {
+            "type": "integer",
+            "title": "Allowance Hours"
+          },
+          "approved_hours": {
+            "type": "integer",
+            "title": "Approved Hours"
+          },
+          "remaining_hours": {
+            "type": "integer",
+            "title": "Remaining Hours"
+          },
+          "is_current_month": {
+            "type": "boolean",
+            "title": "Is Current Month",
+            "default": true
+          },
+          "requests_allowed": {
+            "type": "boolean",
+            "title": "Requests Allowed",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "employee_id",
+          "month",
+          "allowance_hours",
+          "approved_hours",
+          "remaining_hours"
+        ],
+        "title": "PermissionBalanceOut",
+        "description": "One employee's permission standing for one calendar month.\n\n`remaining_hours` is derived server-side and is the only figure any decision\nis made against - the frontend's preview is a convenience, never an input."
+      },
+      "PermissionHistoryOut": {
+        "properties": {
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
+          },
+          "balance": {
+            "$ref": "#/components/schemas/PermissionBalanceOut"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionRequestOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "employee_id",
+          "month",
+          "balance",
+          "items",
+          "total"
+        ],
+        "title": "PermissionHistoryOut",
+        "description": "One month of an employee's permission history, with that month's balance.\n\nReturned together on purpose: the history table and the \"2h / 4h\" figure above\nit describe the same month, and computing the month's bounds in one place -\nhere, from `balance.month_bounds` - is what keeps the client from deriving a\nsecond answer."
+      },
+      "PermissionRequestBalanceOut": {
+        "properties": {
+          "month": {
+            "type": "string",
+            "format": "date",
+            "title": "Month"
+          },
+          "allowance_hours": {
+            "type": "integer",
+            "title": "Allowance Hours"
+          },
+          "approved_hours": {
+            "type": "integer",
+            "title": "Approved Hours"
+          },
+          "remaining_hours": {
+            "type": "integer",
+            "title": "Remaining Hours"
+          },
+          "consumed_by_request": {
+            "type": "integer",
+            "title": "Consumed By Request"
+          },
+          "remaining_before_request": {
+            "type": "integer",
+            "title": "Remaining Before Request"
+          },
+          "remaining_if_approved": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining If Approved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "month",
+          "allowance_hours",
+          "approved_hours",
+          "remaining_hours",
+          "consumed_by_request",
+          "remaining_before_request"
+        ],
+        "title": "PermissionRequestBalanceOut",
+        "description": "The month's standing AND this request's place in it, for the detail page.\n\nEvery figure is computed server-side from the same derivation as everything\nelse, so the detail page does no arithmetic of its own. The point of the\nrequest-specific fields is to be able to state what a request actually cost\nWITHOUT pretending: only an approved request has consumed anything, so\n`consumed_by_request` is 0 for pending, rejected and cancelled alike.\n\n`remaining_before_request` is \"what this month would have if this request did\nnot exist\" - not a replay of the historical figure at the instant of\napproval, which later approvals would have moved and which only the audit log\ncan answer. For an approved request the two coincide whenever it was the last\none decided, and the derived form is stable rather than guessed."
+      },
+      "PermissionRequestCreate": {
+        "properties": {
+          "permission_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Permission Date"
+          },
+          "duration_hours": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Duration Hours"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permission_date",
+          "duration_hours"
+        ],
+        "title": "PermissionRequestCreate"
+      },
+      "PermissionRequestDetailOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "permission_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Permission Date"
+          },
+          "duration_hours": {
+            "type": "integer",
+            "title": "Duration Hours"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PermissionStatus"
+          },
+          "manager_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manager Id"
+          },
+          "manager_comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manager Comment"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "employee_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Name"
+          },
+          "employee_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Employee Code"
+          },
+          "reviewer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Name"
+          },
+          "balance": {
+            "$ref": "#/components/schemas/PermissionRequestBalanceOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "employee_id",
+          "permission_date",
+          "duration_hours",
+          "status",
+          "created_at",
+          "updated_at",
+          "balance"
+        ],
+        "title": "PermissionRequestDetailOut",
+        "description": "One request with everything the detail page shows, resolved server-side.\n\nThe names are here rather than looked up in the browser because the employee\nlist endpoint is manager-scoped: an employee opening their OWN request has no\nway to resolve a name through it. Sending them with the request also means the\npage needs exactly one call."
+      },
+      "PermissionRequestOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "employee_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Employee Id"
+          },
+          "permission_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Permission Date"
+          },
+          "duration_hours": {
+            "type": "integer",
+            "title": "Duration Hours"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PermissionStatus"
+          },
+          "manager_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manager Id"
+          },
+          "manager_comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manager Comment"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "employee_id",
+          "permission_date",
+          "duration_hours",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PermissionRequestOut"
+      },
+      "PermissionRequestPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionRequestOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "PermissionRequestPage"
+      },
+      "PermissionReviewBody": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          }
+        },
+        "type": "object",
+        "title": "PermissionReviewBody"
+      },
+      "PermissionStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "cancelled"
+        ],
+        "title": "PermissionStatus"
+      },
       "PlannedDateChangeOut": {
         "properties": {
           "id": {
@@ -15847,6 +17769,255 @@
           "created_at"
         ],
         "title": "PlanningPlantOut"
+      },
+      "ProductionStatusCreate": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Revision"
+          },
+          "activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Activity Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "closed"
+            ],
+            "title": "Status"
+          },
+          "tag_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Tag Count",
+            "default": 0
+          },
+          "doc_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Doc Count",
+            "default": 0
+          },
+          "spares_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Spares Count",
+            "default": 0
+          },
+          "crs_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Crs Count",
+            "default": 0
+          },
+          "completed_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed On"
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "activity_id",
+          "status"
+        ],
+        "title": "ProductionStatusCreate"
+      },
+      "ProductionStatusOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Project Id"
+          },
+          "project_code": {
+            "type": "string",
+            "title": "Project Code"
+          },
+          "project_name": {
+            "type": "string",
+            "title": "Project Name"
+          },
+          "planning_plant_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planning Plant Code"
+          },
+          "planning_plant_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planning Plant Description"
+          },
+          "maintenance_plant_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Plant Code"
+          },
+          "maintenance_plant_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maintenance Plant Description"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "activity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Activity Id"
+          },
+          "activity_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Name"
+          },
+          "activity_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Code"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "tag_count": {
+            "type": "integer",
+            "title": "Tag Count"
+          },
+          "doc_count": {
+            "type": "integer",
+            "title": "Doc Count"
+          },
+          "spares_count": {
+            "type": "integer",
+            "title": "Spares Count"
+          },
+          "crs_count": {
+            "type": "integer",
+            "title": "Crs Count"
+          },
+          "completed_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed On"
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks"
+          },
+          "created_by": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Created By"
+          },
+          "created_by_name": {
+            "type": "string",
+            "title": "Created By Name",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "project_code",
+          "project_name",
+          "revision",
+          "activity_id",
+          "status",
+          "tag_count",
+          "doc_count",
+          "spares_count",
+          "crs_count",
+          "created_by",
+          "created_at"
+        ],
+        "title": "ProductionStatusOut"
       },
       "ProjectActivityCreate": {
         "properties": {
@@ -17072,6 +19243,31 @@
         ],
         "title": "PunchBatchResult",
         "description": "Deterministic ingestion counters.\n\nInvariant: ``inserted + duplicates + invalid == received``.\n\n``unmapped`` is NOT part of that sum - it counts how many of the newly\nINSERTED rows carry ``employee_id = NULL``. An unmapped punch is stored, it\nis simply not attributable to a CoreOps employee yet."
+      },
+      "PunchEntryOut": {
+        "properties": {
+          "punch_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Punch Time"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "device"
+          }
+        },
+        "type": "object",
+        "required": [
+          "punch_time",
+          "role"
+        ],
+        "title": "PunchEntryOut",
+        "description": "One surviving (post-dedup) punch on the detail page's evidence list.\n\nAlways `source=\"device\"` - nothing here is ever PM-entered. A PM-supplied\nboundary the device did not record lives on `row.attendance_check_in_at` /\n`row.attendance_check_out_at`, never as a row in this list: no synthetic\npunch is invented (see the module docstring)."
       },
       "PunchIn": {
         "properties": {

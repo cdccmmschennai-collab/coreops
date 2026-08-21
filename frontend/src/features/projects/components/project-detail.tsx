@@ -34,6 +34,8 @@ import { AppError } from "@/lib/api-client";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { Tabs } from "@/components/ui/tabs";
+import { ProductionStatusTab } from "@/features/production-status/components/production-status-tab";
+import { useLeadsAnyActivity } from "@/features/production-status/hooks";
 import { ArchiveDialog } from "./archive-dialog";
 import { ProjectMembers } from "./project-members";
 import { ProjectTimeline } from "./project-timeline";
@@ -200,7 +202,15 @@ export function ProjectDetail({ id }: { id: string }) {
 
   // One resolved authority for this project, shared with the Edit button, the
   // tab list and the /edit page guard.
-  const viewer = useProjectAuthority(project);
+  const baseViewer = useProjectAuthority(project);
+  // The third arm of the Production Status read rule (PM / Head / activity
+  // Lead). Resolved from the project's activity staffing, which the Members
+  // card on Overview already fetches, so this adds no request.
+  const leadsActivity = useLeadsAnyActivity(project?.id);
+  const viewer = React.useMemo(
+    () => ({ ...baseViewer, leadsAnyActivity: leadsActivity }),
+    [baseViewer, leadsActivity],
+  );
   const canManage = viewer.canManage;
   const tabItems = React.useMemo(() => buildProjectTabs(viewer), [viewer]);
   // Never trust the raw query value: retired tabs (`activities`, `submissions`),
@@ -379,6 +389,17 @@ export function ProjectDetail({ id }: { id: string }) {
       )}
 
       {activeTab === "summary" && <SummaryTab projectId={project.id} />}
+
+      {activeTab === "production-status" && (
+        // PM / this project's Head / any of its activity Leads - the tab is not
+        // in `tabItems` for anyone else, and all three endpoints enforce the
+        // same rule server-side, so this is never the only guard.
+        <ProductionStatusTab
+          project={project}
+          canManage={viewer.canManage}
+          isHead={viewer.isHead}
+        />
+      )}
 
       {activeTab === "weekly-report" && (
         // Assigned Head only — the tab is not in `tabItems` for anyone else,

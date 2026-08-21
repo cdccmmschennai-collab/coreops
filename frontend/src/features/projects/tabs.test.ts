@@ -23,10 +23,17 @@ import {
   type ProjectTabViewer,
 } from "./tabs.ts";
 
-// The three viewer kinds from the Phase 1 permission matrix.
+// The viewer kinds from the permission matrix.
 const HEAD: ProjectTabViewer = { canManage: false, isHead: true };
 const PM: ProjectTabViewer = { canManage: true, isHead: false };
 const VIEWER: ProjectTabViewer = { canManage: false, isHead: false };
+// Activity Lead: no project-level authority at all, but leads at least one
+// activity on this project. Only Production Status consults this.
+const LEAD: ProjectTabViewer = {
+  canManage: false,
+  isHead: false,
+  leadsAnyActivity: true,
+};
 
 function labels(viewer: ProjectTabViewer): string[] {
   return buildProjectTabs(viewer).map((t) => t.label);
@@ -37,20 +44,28 @@ function values(viewer: ProjectTabViewer): string[] {
 }
 
 // Test 1 — Head
-test("Head sees Overview, Tag Scope, Summary and Weekly Report", () => {
+test("Head sees Overview, Tag Scope, Summary, Production Status and Weekly Report", () => {
   assert.deepEqual(labels(HEAD), [
     "Overview",
     "Tag Scope",
     "Summary",
+    "Production Status",
     "Weekly Report",
   ]);
 });
 
 // Test 2 — Project Manager
-test("Project Manager sees Overview, Tag Scope and Summary — not Weekly Report", () => {
+test("Project Manager sees everything except Weekly Report", () => {
   // Head-only by current requirement. A PM manages every project but does not
   // get this project's weekly operational report unless assigned as its Head.
-  assert.deepEqual(labels(PM), ["Overview", "Tag Scope", "Summary"]);
+  // Production Status IS included — the Phase 1 read rule gives a PM every
+  // project's production status.
+  assert.deepEqual(labels(PM), [
+    "Overview",
+    "Tag Scope",
+    "Summary",
+    "Production Status",
+  ]);
 });
 
 test("a Project Manager who is also the Head still gets one of each tab", () => {
@@ -58,6 +73,7 @@ test("a Project Manager who is also the Head still gets one of each tab", () => 
     "Overview",
     "Tag Scope",
     "Summary",
+    "Production Status",
     "Weekly Report",
   ]);
 });
@@ -83,13 +99,68 @@ test("only this project's Head is offered Weekly Report", () => {
   assert.equal(values(VIEWER).includes("weekly-report"), false);
 });
 
-test("Weekly Report sits last, after the three open tabs", () => {
+test("Weekly Report sits last, after the open tabs and Production Status", () => {
   assert.deepEqual(values(HEAD), [
     "overview",
     "tag-scope",
     "summary",
+    "production-status",
     "weekly-report",
   ]);
+});
+
+// ---------- Production Status (Phase 2) ------------------------------------
+test("Production Status is offered to the PM, the Head and any activity Lead", () => {
+  for (const viewer of [PM, HEAD, LEAD]) {
+    assert.equal(canSeeProjectTab("production-status", viewer), true);
+    assert.equal(values(viewer).includes("production-status"), true);
+  }
+});
+
+test("a plain project member is NOT offered Production Status", () => {
+  // Narrower than Tag Scope on purpose: a contributor or QC member can open the
+  // project but not its production figures.
+  assert.equal(canSeeProjectTab("production-status", VIEWER), false);
+  assert.equal(values(VIEWER).includes("production-status"), false);
+  assert.deepEqual(labels(VIEWER), ["Overview", "Tag Scope", "Summary"]);
+});
+
+test("an activity Lead gets Production Status but not Weekly Report", () => {
+  assert.deepEqual(labels(LEAD), [
+    "Overview",
+    "Tag Scope",
+    "Summary",
+    "Production Status",
+  ]);
+  assert.equal(canSeeProjectTab("weekly-report", LEAD), false);
+});
+
+test("a hand-typed production-status URL falls back for an unauthorized viewer", () => {
+  // Hiding the tab is not the protection: the value is normalised here, and all
+  // three endpoints refuse the request regardless of what the client renders.
+  assert.equal(resolveProjectTab("production-status", HEAD), "production-status");
+  assert.equal(resolveProjectTab("production-status", PM), "production-status");
+  assert.equal(resolveProjectTab("production-status", LEAD), "production-status");
+  assert.equal(resolveProjectTab("production-status", VIEWER), "overview");
+});
+
+test("Production Status is matched exactly, so near-miss values fall back", () => {
+  assert.equal(resolveProjectTab("Production-Status", HEAD), "overview");
+  assert.equal(resolveProjectTab("production_status", HEAD), "overview");
+  assert.equal(resolveProjectTab("productionstatus", HEAD), "overview");
+});
+
+test("adding Production Status left every other tab's visibility untouched", () => {
+  for (const viewer of [HEAD, PM, VIEWER, LEAD]) {
+    for (const tab of ["overview", "tag-scope", "summary"] as const) {
+      assert.equal(canSeeProjectTab(tab, viewer), true, `${tab}`);
+      assert.equal(resolveProjectTab(tab, viewer), tab);
+    }
+  }
+  // Weekly Report is still Head-only, unchanged by the new tab.
+  assert.equal(canSeeProjectTab("weekly-report", HEAD), true);
+  assert.equal(canSeeProjectTab("weekly-report", PM), false);
+  assert.equal(canSeeProjectTab("weekly-report", VIEWER), false);
 });
 
 test("a hand-typed weekly-report URL falls back for anyone but the Head", () => {

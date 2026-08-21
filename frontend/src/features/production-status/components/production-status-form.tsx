@@ -1,0 +1,276 @@
+"use client";
+
+import * as React from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CountInput } from "@/components/ui/count-input";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { AppError } from "@/lib/api-client";
+
+import { useCreateProductionStatus } from "../hooks";
+import {
+  COUNT_UNITS,
+  NO_ACTIVITIES_HINT,
+  NO_ACTIVITIES_TITLE,
+  NO_PROJECT_ACTIVITIES_HINT,
+  PRODUCTION_STATUS_LABEL,
+  PRODUCTION_STATUS_VALUES,
+  productionStatusErrorMessage,
+  type ActivityOption,
+} from "../production-status";
+import {
+  EMPTY_PRODUCTION_STATUS_FORM,
+  productionStatusFormSchema,
+  resetAfterSave,
+  toProductionStatusBody,
+  type ProductionStatusFormValues,
+} from "../schemas";
+
+interface ProductionStatusFormProps {
+  projectId: string;
+  /** Read-only "Project / Plant", derived from the project the page loaded. */
+  projectPlant: string;
+  /** The activities this viewer may submit for (PM/Head: all; Lead: own). */
+  activities: ActivityOption[];
+  /** Whether the project has any staffed activity at all — the two empty
+   *  states below say different things and must not be confused. */
+  projectHasActivities: boolean;
+}
+
+/**
+ * Save Status — the single entry form.
+ *
+ * Every save is a POST that APPENDS one record. There is no edit mode and no
+ * "load the current values into the form" step, because production status is
+ * append-only: correcting a figure means recording the corrected update, which
+ * supersedes the previous one for display while leaving it in the history.
+ *
+ * Nothing on this screen is calculated. The four counts, the status, the
+ * revision, the completion date and the remarks are submitted exactly as
+ * entered; what the "current" status then is, is the backend's answer.
+ */
+export function ProductionStatusForm({
+  projectId,
+  projectPlant,
+  activities,
+  projectHasActivities,
+}: ProductionStatusFormProps) {
+  const mutation = useCreateProductionStatus(projectId);
+
+  const form = useForm<ProductionStatusFormValues>({
+    resolver: zodResolver(productionStatusFormSchema),
+    defaultValues: EMPTY_PRODUCTION_STATUS_FORM,
+  });
+
+  async function onSubmit(values: ProductionStatusFormValues) {
+    try {
+      await mutation.mutateAsync(toProductionStatusBody(values));
+      toast.success("Production status saved");
+      // Keeps revision/activity/status, clears what was asserted about THIS
+      // update so the next save can never inherit the last one's numbers.
+      form.reset(resetAfterSave(values));
+    } catch (err) {
+      const status = err instanceof AppError ? err.status : null;
+      const message = err instanceof AppError ? err.message : null;
+      toast.error(productionStatusErrorMessage(status, message));
+    }
+  }
+
+  if (activities.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Update Production Status</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm font-medium text-foreground">{NO_ACTIVITIES_TITLE}</p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {projectHasActivities ? NO_ACTIVITIES_HINT : NO_PROJECT_ACTIVITIES_HINT}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Update Production Status</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Form {...form}>
+          <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
+            {/* Project / Plant is read-only and derived — never an input, and
+                never stored again on the record (it hangs off project_id). */}
+            <div className="flex items-baseline justify-between gap-4 rounded-md border border-border bg-muted/30 px-3 py-2">
+              <span className="text-sm text-muted-foreground">Project / Plant</span>
+              <span className="text-right font-mono text-sm font-medium">
+                {projectPlant}
+              </span>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField
+                control={form.control}
+                name="revision"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Revision</FormLabel>
+                    <FormControl>
+                      {/* Entered per update and owned by the record. Changing it
+                          starts a separate current status and a separate
+                          history — it never rewrites the previous revision. */}
+                      <Input placeholder="e.g. REV-0" autoComplete="off" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="activity_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Activity</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select an activity" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {activities.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Status</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {PRODUCTION_STATUS_VALUES.map((s) => (
+                          <SelectItem key={s} value={s}>
+                            {PRODUCTION_STATUS_LABEL[s]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="completed_on"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Completed On</FormLabel>
+                    <FormControl>
+                      {/* Never pre-filled with today: a completion date is a
+                          claim the user makes, not a default. Optional for both
+                          statuses, exactly as the API accepts it. */}
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            {/* Four independent units, four inputs, four equal boxes. They are
+                never added together or collapsed into one count. */}
+            <div>
+              <p className="mb-2 text-sm font-medium text-foreground">Count</p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {COUNT_UNITS.map((unit) => (
+                  <FormField
+                    key={unit.key}
+                    control={form.control}
+                    name={unit.key}
+                    render={({ field }) => (
+                      <FormItem className="rounded-md border border-border p-2">
+                        <FormLabel className="text-xs tracking-wide text-muted-foreground">
+                          {unit.label}
+                        </FormLabel>
+                        <FormControl>
+                          {/* Digits only, no spinners, no wheel-increment —
+                              the repo's shared count field. Blank is allowed
+                              and is sent as 0, matching the API's contract for
+                              an unused unit. */}
+                          <CountInput className="text-right tabular" placeholder="-" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <FormField
+              control={form.control}
+              name="remarks"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Remarks</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={3}
+                      placeholder="Optional note about this update"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="flex justify-end">
+              <Button type="submit" loading={mutation.isPending}>
+                Save Status
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  );
+}

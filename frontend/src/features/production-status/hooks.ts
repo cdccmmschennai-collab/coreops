@@ -1,0 +1,88 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { useAuth } from "@/features/auth/auth-provider";
+import { useActivityStaffing } from "@/features/projects/hooks";
+
+import { productionStatusApi } from "./api";
+import { productionStatusKeys } from "./keys";
+import { leadsAnyActivity } from "./production-status";
+import type {
+  ProductionStatusCreateBody,
+  ProductionStatusHistoryParams,
+} from "./types";
+
+/**
+ * Is the current user the Lead of any activity on this project?
+ *
+ * The third arm of the Production Status read rule (PM / Head / activity Lead),
+ * and the only one that needs data the project row does not carry. Resolved
+ * from the project's activity staffing — the very same join the backend
+ * authorizes on — so the tab appears for exactly the people the API will serve.
+ *
+ * Deliberately a separate hook from `useProjectAuthority`, which stays a pure
+ * derivation with no request of its own: the /edit page consults that one and
+ * has no reason to fetch staffing. On the detail page the query is already in
+ * flight for the Members card, so this costs no extra round trip.
+ */
+export function useLeadsAnyActivity(projectId: string | undefined): boolean {
+  const { employeeId } = useAuth();
+  const staffing = useActivityStaffing(projectId);
+  return leadsAnyActivity(staffing.data, employeeId);
+}
+
+/**
+ * Current production status for the project.
+ *
+ * `enabled` carries the caller's read authority: the endpoint is PM / Head /
+ * activity-Lead only, so a viewer without it must not fire a request that is
+ * guaranteed to come back 403 (the tab is not rendered for them either way).
+ */
+export function useLatestProductionStatus(
+  projectId: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: productionStatusKeys.latest(projectId ?? ""),
+    queryFn: () => productionStatusApi.listLatest(projectId as string),
+    enabled: !!projectId && enabled,
+  });
+}
+
+/**
+ * The append-only trail. Gated on `enabled` so the history only loads when the
+ * user actually opens it - the current view is what the tab leads with.
+ */
+export function useProductionStatusHistory(
+  projectId: string | undefined,
+  params: ProductionStatusHistoryParams,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: productionStatusKeys.history(projectId ?? "", params),
+    queryFn: () => productionStatusApi.listHistory(projectId as string, params),
+    enabled: !!projectId && enabled,
+  });
+}
+
+/**
+ * Append one update.
+ *
+ * Invalidates rather than patching the cache by hand: "latest" is derived
+ * server-side (newest row per revision+activity), so the client must not guess
+ * whether the row it just saved is the current one - it asks. Every history
+ * query for the project is invalidated too, because the new row belongs at the
+ * top of its own activity/revision trail and of the unfiltered list.
+ */
+export function useCreateProductionStatus(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProductionStatusCreateBody) =>
+      productionStatusApi.create(projectId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: productionStatusKeys.latest(projectId) });
+      qc.invalidateQueries({
+        queryKey: ["production-status", "history", projectId],
+      });
+    },
+  });
+}

@@ -21,6 +21,17 @@ export interface ProjectViewer {
   canManage: boolean;
   /** This viewer's employee id equals THIS project's `head_employee_id`. */
   isHead: boolean;
+  /**
+   * This viewer is the assigned Lead of at least one activity on THIS project
+   * (resolved from the project's activity staffing - see
+   * `useActivityLeadAuthority`).
+   *
+   * Optional, defaulting to false, because only the Production Status rule
+   * consults it: every other predicate here is a project-level question that an
+   * activity Lead has no special standing in, and callers that predate this
+   * field must keep meaning exactly what they meant before.
+   */
+  leadsAnyActivity?: boolean;
 }
 
 /**
@@ -77,6 +88,24 @@ export function canViewTagScope(): boolean {
  */
 export function canViewWeeklyReport(viewer: ProjectViewer): boolean {
   return viewer.isHead;
+}
+
+/**
+ * Opening Production Status — PM, this project's Head, or the Lead of any
+ * activity on this project.
+ *
+ * Deliberately NOT every project viewer: a plain contributor or QC member can
+ * open the project but not its production figures. That is narrower than
+ * `canViewTagScope` and wider than `canViewWeeklyReport`, which is why it is
+ * its own predicate rather than a reuse of either.
+ *
+ * Mirrors backend `production_status/service.py::_assert_can_read`, which is
+ * what actually enforces it — hiding the tab is a courtesy, not the guard. All
+ * three endpoints re-check server-side, so a pasted URL fails for everyone else
+ * regardless of what this returns.
+ */
+export function canViewProductionStatus(viewer: ProjectViewer): boolean {
+  return viewer.canManage || viewer.isHead || !!viewer.leadsAnyActivity;
 }
 
 /**

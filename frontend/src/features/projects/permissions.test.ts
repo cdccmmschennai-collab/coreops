@@ -20,6 +20,7 @@ import {
   canArchiveProject,
   canEditProject,
   canManageTagScope,
+  canViewProductionStatus,
   canViewTagScope,
   canViewWeeklyReport,
   isProjectAdmin,
@@ -106,6 +107,56 @@ test("a PM does NOT get the Weekly Report by virtue of being a PM", () => {
   assert.equal(isProjectAdmin(PM), true);
   // A PM who IS this project's Head qualifies — as its Head, not as a PM.
   assert.equal(canViewWeeklyReport({ canManage: true, isHead: true }), true);
+});
+
+// --- Production Status: PM / this project's Head / any of its activity Leads -
+const ACTIVITY_LEAD: ProjectViewer = {
+  canManage: false,
+  isHead: false,
+  leadsAnyActivity: true,
+};
+
+test("PM, the assigned Head and an activity Lead may open Production Status", () => {
+  assert.equal(canViewProductionStatus(PM), true);
+  assert.equal(canViewProductionStatus(ASSIGNED_HEAD), true);
+  assert.equal(canViewProductionStatus(ACTIVITY_LEAD), true);
+});
+
+test("a plain member and a Head of another project may NOT open Production Status", () => {
+  // Narrower than tag-scope READ, which every project viewer gets.
+  assert.equal(canViewProductionStatus(MEMBER), false);
+  assert.equal(canViewProductionStatus(UNASSIGNED_HEAD), false);
+  assert.equal(canViewTagScope(), true);
+});
+
+test("leadsAnyActivity defaults to false when a caller omits it", () => {
+  // The field is optional so existing callers keep meaning what they meant;
+  // omitting it must never accidentally grant access.
+  assert.equal(canViewProductionStatus({ canManage: false, isHead: false }), false);
+  assert.equal(
+    canViewProductionStatus({ canManage: false, isHead: false, leadsAnyActivity: false }),
+    false,
+  );
+});
+
+test("Production Status sits between Weekly Report and Tag Scope in breadth", () => {
+  // Wider than Weekly Report (Head-only): a PM and a Lead get it too.
+  assert.equal(canViewWeeklyReport(PM), false);
+  assert.equal(canViewProductionStatus(PM), true);
+  assert.equal(canViewWeeklyReport(ACTIVITY_LEAD), false);
+  assert.equal(canViewProductionStatus(ACTIVITY_LEAD), true);
+  // Narrower than Tag Scope (everyone): a plain member is excluded.
+  assert.equal(canViewProductionStatus(MEMBER), false);
+});
+
+test("an activity Lead gains Production Status and nothing else", () => {
+  // Leading an activity is not project authority: no edit, no archive, no
+  // tag-scope management, no Weekly Report.
+  assert.equal(canEditProject(ACTIVITY_LEAD), false);
+  assert.equal(canArchiveProject(ACTIVITY_LEAD), false);
+  assert.equal(canManageTagScope(ACTIVITY_LEAD), false);
+  assert.equal(isProjectAdmin(ACTIVITY_LEAD), false);
+  assert.equal(canViewWeeklyReport(ACTIVITY_LEAD), false);
 });
 
 test("Weekly Report access is strictly narrower than tag-scope management", () => {

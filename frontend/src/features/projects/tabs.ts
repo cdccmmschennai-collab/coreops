@@ -14,6 +14,10 @@
  *                   the tab is restricted to PM / this project's Head, which
  *                   the tab itself gates via canManageTagScope.
  *   Summary       — every user already permitted to view the project.
+ *   Production
+ *   Status        — PM, this project's Head, or the Lead of any activity on it
+ *                   (Phase 2). Narrower than Tag Scope: a plain contributor can
+ *                   open the project but not its production figures.
  *   Weekly Report — THIS project's assigned Head only (Phase 7). The one
  *                   restricted tab on the page, and the one place a PM is not
  *                   included; see canViewWeeklyReport for why.
@@ -25,12 +29,18 @@
 
 // Relative .ts value import — the node --test harness resolves it directly.
 import {
+  canViewProductionStatus,
   canViewTagScope,
   canViewWeeklyReport,
   type ProjectViewer,
 } from "./permissions.ts";
 
-export type ProjectTabValue = "overview" | "tag-scope" | "summary" | "weekly-report";
+export type ProjectTabValue =
+  | "overview"
+  | "tag-scope"
+  | "summary"
+  | "production-status"
+  | "weekly-report";
 
 /** Tab shown when no tab is selected, or when the selected one is invalid. */
 export const PROJECT_DEFAULT_TAB: ProjectTabValue = "overview";
@@ -53,6 +63,7 @@ const ALL_TABS: readonly ProjectTab[] = [
   { value: "overview", label: "Overview" },
   { value: "tag-scope", label: "Tag Scope" },
   { value: "summary", label: "Summary" },
+  { value: "production-status", label: "Production Status" },
   { value: "weekly-report", label: "Weekly Report" },
 ];
 
@@ -65,6 +76,7 @@ const ALL_TABS: readonly ProjectTab[] = [
  * next to the backend check it mirrors rather than being inlined here.
  */
 const RESTRICTED: Partial<Record<ProjectTabValue, (viewer: ProjectTabViewer) => boolean>> = {
+  "production-status": canViewProductionStatus,
   "weekly-report": canViewWeeklyReport,
 };
 
