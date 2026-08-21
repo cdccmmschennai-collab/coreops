@@ -1,121 +1,60 @@
 """Weekly Activity Report XLSX builder.
 
-One flat, filterable table: ONE ROW PER LOGICAL ACTIVITY (i.e. per half-day),
-never per Employee+Date. A day on which two activities were recorded produces
-two rows — FIRST HALF then SECOND HALF — instead of the old wide layout's
-"Project Code 2 / Activity Type 2 / …" repeated column groups, which could not
-be filtered or pivoted. The identifying columns an activity shares with its
-sibling (Employee, Date, Day, Day Status, Day Remarks) are merged VERTICALLY
-across the day's rows for readability; the activity columns themselves are never
-merged, so every row stays independently filterable.
+One layout: one row per Employee + Date, with dynamic activity column groups
+(Project Code, … then 2, 3 …) repeated up to the max activities recorded on any
+single day. The preview (flat rows) and this export share the same flat data,
+but the export adds per-employee sections so each block is self-contained: a
+merged employee title row, the full column header row, that employee's data
+rows, then a blank spacer row before the next employee. With a single employee
+the title/spacer are omitted and one header sits at the top.
 
-Structure (16 columns, matching the company's SAMPLE workbook plus an explicit
-DAY / HALF split):
-
-    EMPLOYEE ID & NAME | DATE | DAY | DAY STATUS | HALF | PROJECT CODE |
-    ACTIVITY TYPE | SUB ACTIVITY TYPE | NO. OF TAGS … NO. OF RECORDS |
-    BENCHMARK | DAY REMARKS
-
-Exactly one header row sits at the top — no per-employee banner or repeated
-header — with AutoFilter over the whole table and frozen panes beneath it.
-
-Styling mirrors the company template: Arial 10 bold header on yellow
-(FFFFFF00), thin borders, centered count columns, wrapped Day Remarks, real
-Excel dates, every text value uppercased on its way into the cell.
+Styling mirrors the company template: Arial 10 bold white header on teal
+(FF76A5AF), thin borders, centered count columns, wrapped Day Remarks, real
+Excel dates. Employee title rows are bold on a light teal tint (FFD9E2E1).
 Sheet: 'Weekly Activity Report'."""
 from decimal import Decimal
 from io import BytesIO
+from itertools import groupby
 
 import openpyxl
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.cell_range import CellRange
 
 from app.modules.activity_master.benchmark_exception import (
     VALID_BENCHMARK_EXCEPTION_CODES,
     export_exception_remark,
 )
-from app.modules.activity_master.models import (
-    COUNT_FIELDS,
-    QUANTITY_BENCHMARK_TYPES,
-    TASK_BENCHMARK_TYPES,
-)
-from app.modules.work_reports.models import DayPart
 
 SHEET_NAME = "Weekly Activity Report"
 
-_HEADER_FILL = PatternFill(fill_type="solid", fgColor="FFFFFF00")
-_HEADER_FONT = Font(name="Arial", size=10, bold=True)
+_HEADER_FILL = PatternFill(fill_type="solid", fgColor="FF76A5AF")
+_HEADER_FONT = Font(name="Arial", size=10, bold=True, color="FFFFFFFF")
+_GROUP_FILL = PatternFill(fill_type="solid", fgColor="FFD9E2E1")
+_GROUP_FONT = Font(name="Arial", size=10, bold=True)
 _DATA_FONT = Font(name="Arial", size=10)
 _THIN = Side(style="thin")
 _BORDER = Border(top=_THIN, bottom=_THIN, left=_THIN, right=_THIN)
 
-# The single header row: (label, width, centered). One row per activity, so
-# there is exactly one of each column — no numbered repeats.
-_COLUMNS: list[tuple[str, float, bool]] = [
-    ("EMPLOYEE ID & NAME", 24.0, False),
-    ("DATE", 12.0, False),
-    ("DAY", 12.0, False),
-    ("DAY STATUS", 16.0, False),
-    ("HALF", 13.0, False),
-    ("PROJECT CODE", 18.0, False),
-    ("ACTIVITY TYPE", 22.7, False),
-    ("SUB ACTIVITY TYPE", 40.0, False),
-    ("NO. OF TAGS", 11.0, True),
-    ("NO. OF DOCS", 11.0, True),
-    ("NO. OF BOM HEADER", 16.0, True),
-    ("NO. OF SPARES", 12.0, True),
-    ("NO. OF PAGES", 11.0, True),
-    ("NO. OF RECORDS", 12.0, True),
-    ("BENCHMARK", 16.0, False),
-    ("DAY REMARKS", 68.4, False),
+# One activity block: (label, width, centered).
+_BLOCK = [
+    ("Project Code", 16.4, False),
+    ("Activity Type", 22.7, False),
+    ("Sub Activity Type", 22.0, False),
+    ("No. of Tags", 11.0, True),
+    ("No. of Docs", 11.0, True),
+    ("No. of BOM HEADER", 16.0, True),
+    ("No. of Spares", 12.0, True),
+    ("No. of Pages", 11.0, True),
+    ("No. of Records", 12.0, True),
 ]
-_COL = {label: idx for idx, (label, _w, _c) in enumerate(_COLUMNS, start=1)}
-_TOTAL_COLS = len(_COLUMNS)
-_CENTERED = {_COL[label] for label, _w, center in _COLUMNS if center}
-_DATE_COL = _COL["DATE"]
-_REMARKS_COL = _COL["DAY REMARKS"]
-
-# Count columns, in the order COUNT_FIELDS defines (Tags | Docs | BOM | Spares |
-# Pages | Records) — one source of truth shared with the report form and the
-# benchmark export, so a seventh unit can never land out of order here.
-_COUNT_HEADERS = (
-    "NO. OF TAGS",
-    "NO. OF DOCS",
-    "NO. OF BOM HEADER",
-    "NO. OF SPARES",
-    "NO. OF PAGES",
-    "NO. OF RECORDS",
-)
-_COUNT_COLUMNS = tuple(zip(_COUNT_HEADERS, COUNT_FIELDS))
-
-# Day-level identity: repeated on every row of the day AND merged vertically
-# when the day has more than one activity row. The value is deliberately left in
-# every underlying cell (see _merge_day_block) so AutoFilter still matches the
-# second-half row — a merge that blanked them would silently drop half the
-# report from an "Employee = X" filter.
-_MERGED_COLUMNS = ("EMPLOYEE ID & NAME", "DATE", "DAY", "DAY STATUS", "DAY REMARKS")
-
-# Locale-independent weekday names for the DAY column (date.strftime('%A')
-# follows the server locale; this never does).
-_WEEKDAY_NAMES = (
-    "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY",
-)
-
-# Unit label as it reads in the BENCHMARK cell ("120 TAGS"). Keys are
-# activity_master's relevant_count_field values.
-_UNIT_LABELS = {
-    "tags": "TAGS",
-    "docs": "DOCS",
-    "bom": "BOM",
-    "spares": "SPARES",
-    "pages": "PAGES",
-    "records": "RECORDS",
-}
-
-_LUMPSUM = "LS"
+_FIXED_LEFT = [
+    ("Employee ID & Name", 24.0, False),
+    ("Date", 12.0, False),
+    ("Day Status", 11.0, False),
+]
+_REMARKS = ("Day Remarks", 68.4, False)
 
 
 def date_range_label(start, end) -> str:
@@ -139,6 +78,17 @@ def _write_header(ws, row: int, columns: list[tuple[str, float, bool]]) -> None:
         cell.border = _BORDER
         cell.alignment = Alignment(horizontal="center" if center else "left", vertical="center")
         ws.column_dimensions[get_column_letter(idx)].width = width
+
+
+def _write_group_header(ws, row: int, total_cols: int, label: str) -> None:
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=total_cols)
+    for col in range(1, total_cols + 1):
+        c = ws.cell(row=row, column=col)
+        c.fill = _GROUP_FILL
+        c.border = _BORDER
+    head = ws.cell(row=row, column=1, value=label)
+    head.font = _GROUP_FONT
+    head.alignment = Alignment(horizontal="left", vertical="center")
 
 
 def _style_data_cell(cell, center: bool, wrap: bool, is_date: bool) -> None:
@@ -735,167 +685,68 @@ def build_pending_benchmark_workbook(
     return _finalize(wb)
 
 
-def _weekday_label(value):
-    """The DAY cell: 'THURSDAY' for a real date, otherwise nothing. Never
-    derived from the server locale (see _WEEKDAY_NAMES)."""
-    weekday = getattr(value, "weekday", None)
-    return _WEEKDAY_NAMES[weekday()] if callable(weekday) else None
-
-
-def _quantity_display(value, unit):
-    """A benchmark quantity as it reads in the cell: '120 TAGS'.
-
-    The number is written whole wherever it is one (_cell_number), and the unit
-    is the sub-activity's own relevant_count_field — never guessed. A quantity
-    whose unit is missing still prints the number rather than dropping it: the
-    figure is the part that must not be lost."""
-    if value is None:
-        return None
-    number = _cell_number(value)
-    label = _UNIT_LABELS.get(unit or "")
-    return f"{number} {label}" if label else f"{number}"
-
-
-def benchmark_display(activity: dict):
-    """The BENCHMARK cell for one activity row, from the snapshot frozen on the
-    task at submit time. Three shapes, one per benchmark mode:
-
-      NUMERIC / NUMERIC_DAILY  -> '120 TAGS'        (quantity only)
-      TASK_STATUS_ONLY / TASK_BASED -> 'LS'         (lumpsum, no quantity)
-      TASK_WITH_QUANTITY       -> 'LS - 300 SPARES' (lumpsum WITH a quantity)
-
-    The third shape is the one that matters most: a lumpsum activity that also
-    carries a target must never collapse to a bare 'LS' and silently lose its
-    count. Whenever a value exists it is printed, whatever the mode — the mode
-    only decides whether the 'LS - ' prefix leads it.
-
-    No benchmark configured (benchmark_type NULL — e.g. LEAVE, TRAINING) leaves
-    the cell empty. Nothing is computed or invented here: this renders the
-    stored target, and legacy modes resolve through the same
-    QUANTITY_/TASK_BENCHMARK_TYPES sets every other read path uses."""
-    mode = activity.get("benchmark_type")
-    if mode is None:
-        return None
-    quantity = (
-        _quantity_display(activity.get("benchmark_value"), activity.get("benchmark_unit"))
-        if mode in QUANTITY_BENCHMARK_TYPES
-        else None
-    )
-    if mode in TASK_BENCHMARK_TYPES:
-        return f"{_LUMPSUM} - {quantity}" if quantity else _LUMPSUM
-    return quantity
-
-
-def half_label(day_part, index: int, total: int):
-    """The HALF cell: which part of the day this activity row covers.
-
-    The recorded period wins whenever there is one — a split-day report knows
-    which half each task belongs to, so first_half/second_half are read straight
-    off it and two tasks logged in the SAME half both read FIRST HALF rather
-    than being renumbered.
-
-    A full-day period (and a legacy row with no period at all) records no halves,
-    so the day's activities are labelled positionally, which is how the business
-    already reads the two-activity day the old wide layout produced: one activity
-    is the whole day, two split it into halves. A third or later activity — which
-    no half vocabulary covers — is numbered rather than mislabelled."""
-    if day_part == DayPart.first_half.value:
-        return "FIRST HALF"
-    if day_part == DayPart.second_half.value:
-        return "SECOND HALF"
-    if total <= 1:
-        return "FULL DAY"
-    if index == 0:
-        return "FIRST HALF"
-    if index == 1:
-        return "SECOND HALF"
-    return f"ACTIVITY {index + 1}"
-
-
-def _merge_day_block(ws, first_row: int, last_row: int) -> None:
-    """Merge the day-level identity columns vertically across one day's activity
-    rows, leaving each underlying cell's value in place.
-
-    openpyxl's merge_cells() blanks every cell but the top-left; registering the
-    range directly does not. That difference is the whole point: Excel still
-    displays one merged value, but AutoFilter and any downstream reader still see
-    the employee/date on the SECOND-half row, so filtering by employee cannot
-    quietly drop half the report. A column is merged only when every row in the
-    block genuinely holds the same value — a split day whose halves carry
-    different statuses keeps two separate, individually filterable cells."""
-    for label in _MERGED_COLUMNS:
-        col = _COL[label]
-        values = {ws.cell(r, col).value for r in range(first_row, last_row + 1)}
-        if len(values) == 1:
-            ws.merged_cells.add(
-                CellRange(min_col=col, min_row=first_row, max_col=col, max_row=last_row)
-            )
-
-
-def build_workbook(rows: list[dict], max_activities: int = 1) -> BytesIO:
-    """The Weekly Activity Report workbook: one row per activity (half-day).
-
-    `rows` is the Employee+Date grouping build_activity_groups produces; this
-    flattens each day's `activities` into consecutive rows and merges the day's
-    shared identity cells across them. `max_activities` no longer shapes the
-    sheet (there are no repeated column groups left) and is accepted only so the
-    existing call site keeps working unchanged."""
+def build_workbook(rows: list[dict], max_activities: int) -> BytesIO:
     wb, ws = _new_sheet()
-    _write_header(ws, 1, _COLUMNS)
-    ws.freeze_panes = "A2"
 
-    def write_activity_row(r: int, row: dict, activity: dict | None, index: int, total: int) -> None:
-        day_status = row.get("day_status")
-        ws.cell(r, _COL["EMPLOYEE ID & NAME"], _upper(row.get("employee_label")))
-        ws.cell(r, _DATE_COL, row.get("report_date"))
-        ws.cell(r, _COL["DAY"], _weekday_label(row.get("report_date")))
-        if activity is None:
-            # A no-activity day (leave / week off / company holiday / comp-off):
-            # the report carries no task lines at all. Day Status names the
-            # status and the activity cell repeats it — "LEAVE" — so the row is
-            # visible and filterable. Project, sub-activity, counts and benchmark
-            # stay empty: none of them exist for a day that was not worked.
-            ws.cell(r, _COL["DAY STATUS"], _upper(day_status))
-            ws.cell(r, _COL["HALF"], "FULL DAY")
-            ws.cell(r, _COL["ACTIVITY TYPE"], _upper(day_status))
-        else:
-            # The half's own status when a split day mixes two, else the day's.
-            ws.cell(
-                r, _COL["DAY STATUS"], _upper(activity.get("period_status") or day_status)
-            )
-            ws.cell(
-                r, _COL["HALF"], half_label(activity.get("day_part"), index, total)
-            )
-            ws.cell(r, _COL["PROJECT CODE"], _upper(activity.get("project_code")))
-            ws.cell(r, _COL["ACTIVITY TYPE"], _upper(activity.get("activity_type")))
-            ws.cell(r, _COL["SUB ACTIVITY TYPE"], _upper(activity.get("sub_activity_type")))
-            for header, key in _COUNT_COLUMNS:
-                # Legacy rows without the newer counts fall back to 0, matching
-                # the NOT NULL DEFAULT 0 the other count columns carry.
-                ws.cell(r, _COL[header], activity.get(key) or 0)
-            ws.cell(r, _COL["BENCHMARK"], benchmark_display(activity))
-        ws.cell(r, _REMARKS_COL, _upper(row.get("remarks")))
-        for col in range(1, _TOTAL_COLS + 1):
-            _style_data_cell(
-                ws.cell(r, col), col in _CENTERED, col == _REMARKS_COL, col == _DATE_COL
-            )
+    # Columns: Employee | Date | Day Status | (block × max) | Day Remarks.
+    columns = list(_FIXED_LEFT)
+    for i in range(1, max_activities + 1):
+        suffix = "" if i == 1 else f" {i}"
+        for label, width, center in _BLOCK:
+            columns.append((f"{label}{suffix}", width, center))
+    columns.append(_REMARKS)
+    total_cols = len(columns)
+    centers = {idx for idx, (_, _, c) in enumerate(columns, start=1) if c}
+    remarks_col = total_cols
+    n_left = len(_FIXED_LEFT)
 
-    r = 2
-    for row in rows:
-        activities = row.get("activities") or []
-        first_row = r
-        if not activities:
-            write_activity_row(r, row, None, 0, 0)
-            r += 1
-        else:
-            for index, activity in enumerate(activities):
-                write_activity_row(r, row, activity, index, len(activities))
+    def write_data_row(r: int, row: dict) -> None:
+        ws.cell(r, 1, row["employee_label"])
+        ws.cell(r, 2, row["report_date"])
+        ws.cell(r, 3, row["day_status"])
+        for i, act in enumerate(row["activities"][:max_activities]):
+            base = n_left + i * len(_BLOCK)
+            ws.cell(r, base + 1, act["project_code"])
+            ws.cell(r, base + 2, act["activity_type"])
+            ws.cell(r, base + 3, act["sub_activity_type"])
+            ws.cell(r, base + 4, act["tags"])
+            ws.cell(r, base + 5, act["docs"])
+            ws.cell(r, base + 6, act["bom"])
+            ws.cell(r, base + 7, act["spares"])
+            # Legacy rows without the new counts fall back to 0, matching the
+            # NOT NULL DEFAULT 0 the other four count columns carry.
+            ws.cell(r, base + 8, act.get("pages") or 0)
+            ws.cell(r, base + 9, act.get("records") or 0)
+        ws.cell(r, remarks_col, row["remarks"])
+        for col in range(1, total_cols + 1):
+            _style_data_cell(ws.cell(r, col), col in centers, col == remarks_col, col == 2)
+
+    # rows are ordered by employee_code → contiguous employee sections.
+    employees = [(label, list(grp)) for label, grp in groupby(rows, key=lambda r: r["employee_label"])]
+
+    # Single employee (or none): one top header, no title/spacer rows.
+    if len(employees) <= 1:
+        _write_header(ws, 1, columns)
+        ws.freeze_panes = "A2"
+        r = 2
+        for _, emp_rows in employees:
+            for row in emp_rows:
+                write_data_row(r, row)
                 r += 1
-        if r - first_row > 1:
-            _merge_day_block(ws, first_row, r - 1)
+        return _finalize(wb)
 
-    # One header row, one continuous table: the filter spans everything below it.
-    ws.auto_filter.ref = f"A1:{get_column_letter(_TOTAL_COLS)}{max(r - 1, 1)}"
+    # Multiple employees: a self-contained section per employee.
+    r = 1
+    for label, emp_rows in employees:
+        _write_group_header(ws, r, total_cols, label)
+        r += 1
+        _write_header(ws, r, columns)
+        r += 1
+        for row in emp_rows:
+            write_data_row(r, row)
+            r += 1
+        r += 1  # blank spacer row before the next employee
+
     return _finalize(wb)
 
 

@@ -822,15 +822,12 @@ def build_activity_rows(
         return []
 
     q = (
-        select(WorkReportTask, DailyWorkReport, Employee, WorkReportPeriod)
+        select(WorkReportTask, DailyWorkReport, Employee)
         .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
         .join(Employee, Employee.id == DailyWorkReport.employee_id)
         # Left join to the task's period so the split-day activity blocks can be
         # ordered First Half then Second Half deterministically, independent of
-        # task creation order (see the order_by below). The period is also
-        # SELECTED, not merely joined: the export's HALF column and its per-half
-        # Day Status read day_part / period_status straight off it. Nullable for
-        # legacy rows.
+        # task creation order (see the order_by below). Nullable for legacy rows.
         .outerjoin(WorkReportPeriod, WorkReportPeriod.id == WorkReportTask.period_id)
         .where(WorkReportTask.report_id.in_(scoped))
     )
@@ -884,30 +881,17 @@ def build_activity_rows(
     task_result = db.execute(q).all()
     # One combined Day Remarks per report (split-day halves labelled + ordered);
     # dedupe reports so the period lookup runs once per report, not once per task.
-    task_reports = {report.id: report for _t, report, _e, _p in task_result}
+    task_reports = {report.id: report for _t, report, _e in task_result}
     remarks_by_report = _combined_remarks_by_report(db, list(task_reports.values()))
 
     rows: list[dict] = []
-    for task, report, emp, period in task_result:
+    for task, report, emp in task_result:
         rows.append({
             "employee_label": f"{emp.employee_code} - {emp.full_name}",
             "report_date": report.report_date,
             "day_status": (
                 DAY_STATUS_LABELS.get(report.day_status.value, report.day_status.value)
                 if report.day_status
-                else None
-            ),
-            # The half this activity belongs to ('first_half' / 'second_half' /
-            # 'full_day'), and that half's OWN status when a split day mixes two
-            # (worked first half, leave second half). Both are read-only
-            # passthroughs of what the period already records — the report-level
-            # day_status above is left exactly as it was.
-            "day_part": period.day_part if period is not None else None,
-            "period_status": (
-                DAY_STATUS_LABELS.get(
-                    period.period_status.value, period.period_status.value
-                )
-                if period is not None and period.period_status
                 else None
             ),
             "project_code": task.project_code,
@@ -919,12 +903,6 @@ def build_activity_rows(
             "spares": task.spares_count,
             "pages": task.pages_count,
             "records": task.records_count,
-            # Benchmark as FROZEN on the task at submit time (_apply_benchmarks) —
-            # the mode, the effective per-period target and the unit it is counted
-            # in. Nothing is computed here: the export only renders these three.
-            "benchmark_type": task.benchmark_type_snapshot,
-            "benchmark_value": task.benchmark_value_snapshot,
-            "benchmark_unit": task.relevant_count_field_snapshot,
             "remarks": remarks_by_report[report.id],
         })
 
@@ -965,8 +943,6 @@ def build_activity_rows(
                     if report.day_status
                     else None
                 ),
-                "day_part": None,
-                "period_status": None,
                 "project_code": None,
                 "activity_type": None,
                 "sub_activity_type": None,
@@ -976,9 +952,6 @@ def build_activity_rows(
                 "spares": None,
                 "pages": None,
                 "records": None,
-                "benchmark_type": None,
-                "benchmark_value": None,
-                "benchmark_unit": None,
                 "remarks": leave_remarks[report.id],
             })
 
@@ -1027,8 +1000,6 @@ def build_activity_groups(
         # so the day shows with Day Status + Remarks but zero activities.
         activities = [
             {
-                "day_part": r["day_part"],
-                "period_status": r["period_status"],
                 "project_code": r["project_code"],
                 "activity_type": r["activity_type"],
                 "sub_activity_type": r["sub_activity_type"],
@@ -1038,9 +1009,6 @@ def build_activity_groups(
                 "spares": r["spares"],
                 "pages": r["pages"],
                 "records": r["records"],
-                "benchmark_type": r["benchmark_type"],
-                "benchmark_value": r["benchmark_value"],
-                "benchmark_unit": r["benchmark_unit"],
             }
             for r in day_rows
             if r["project_code"] is not None
