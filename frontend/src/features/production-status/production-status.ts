@@ -320,6 +320,76 @@ export function buildProductionStatusRows(
 }
 
 // ---------------------------------------------------------------------------
+// History target - which trail a row's History button opens
+// ---------------------------------------------------------------------------
+
+/**
+ * The one trail the history dialog reads: ONE revision of ONE activity.
+ *
+ * Both parts are always carried together. That pairing is what keeps REV-0 and
+ * REV-1 of the same activity separate trails and MTL and FMTL separate trails -
+ * the dialog sends both as filters, and the backend's `list_history` ANDs them,
+ * so opening one can never render another's updates.
+ */
+export interface ProductionStatusHistoryTarget {
+  activityId: string;
+  /** Display only - the dialog title. Never sent to the API. */
+  activityLabel: string;
+  revision: string;
+}
+
+/**
+ * The trail belonging to a current-status row.
+ *
+ * Derived from the row rather than from form state, so the History button on a
+ * row always opens that row's own revision + activity even after the form above
+ * has been changed to something else.
+ */
+export function historyTargetFor(
+  row: Pick<ProductionStatusRow, "activityId" | "activity" | "revision">,
+): ProductionStatusHistoryTarget {
+  return {
+    activityId: row.activityId,
+    activityLabel: row.activity,
+    revision: row.revision,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Save
+// ---------------------------------------------------------------------------
+
+/**
+ * Is a save already under way?
+ *
+ * Both flags matter, and neither alone is enough to stop a double-click:
+ *
+ *   `isSubmitting` is react-hook-form's, set the moment `handleSubmit` runs and
+ *   held across the async zod validation - the window BEFORE any request
+ *   exists, which `isPending` cannot cover.
+ *
+ *   `isPending` is the mutation's, held from the POST going out until the
+ *   response lands - the window AFTER validation, which `isSubmitting`
+ *   technically also covers but only because the submit handler awaits the
+ *   mutation; keeping it explicit means the guard survives that handler being
+ *   changed.
+ *
+ * The Save button is disabled while this is true (`Button` disables on
+ * `loading`), so the second click of a double-click has nothing to hit.
+ *
+ * This is deliberately NOT a uniqueness rule. Two INTENTIONAL updates with
+ * identical values are legitimate history and must both be stored - see
+ * `backend/tests/test_production_status.py::test_identical_updates_both_recorded`.
+ * The only thing suppressed here is a second submission of the SAME click.
+ */
+export function isSaveInFlight(state: {
+  isPending: boolean;
+  isSubmitting: boolean;
+}): boolean {
+  return state.isPending || state.isSubmitting;
+}
+
+// ---------------------------------------------------------------------------
 // Copy
 // ---------------------------------------------------------------------------
 

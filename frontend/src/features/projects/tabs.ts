@@ -7,17 +7,17 @@
  * `components/project-detail.tsx` renders exactly what these helpers return —
  * it never decides tab visibility on its own.
  *
- * Visibility rules:
+ * Visibility rules, in render order:
  *   Overview      — every user already permitted to view the project.
+ *   Production
+ *   Status        — PM, this project's Head, or the Lead of any activity on it
+ *                   (Phase 2). Narrower than Tag Scope: a plain contributor can
+ *                   open the project but not its production figures.
  *   Tag Scope     — every viewer too. The scope and its revision history are
  *                   context contributors need; only the Revise action inside
  *                   the tab is restricted to PM / this project's Head, which
  *                   the tab itself gates via canManageTagScope.
  *   Summary       — every user already permitted to view the project.
- *   Production
- *   Status        — PM, this project's Head, or the Lead of any activity on it
- *                   (Phase 2). Narrower than Tag Scope: a plain contributor can
- *                   open the project but not its production figures.
  *   Weekly Report — THIS project's assigned Head only (Phase 7). The one
  *                   restricted tab on the page, and the one place a PM is not
  *                   included; see canViewWeeklyReport for why.
@@ -59,11 +59,20 @@ export interface ProjectTab {
  */
 export type ProjectTabViewer = ProjectViewer;
 
+/**
+ * The tab order the page renders, and the only place it is defined.
+ *
+ * Production Status sits immediately after Overview: it is the screen the Head
+ * and the activity Leads work in daily, so it leads the project-specific tabs
+ * rather than sitting behind the reference ones. Ordering is presentation only -
+ * every visibility rule below is unchanged by it, and `resolveProjectTab`
+ * matches on value, so existing `?tab=` links keep working.
+ */
 const ALL_TABS: readonly ProjectTab[] = [
   { value: "overview", label: "Overview" },
+  { value: "production-status", label: "Production Status" },
   { value: "tag-scope", label: "Tag Scope" },
   { value: "summary", label: "Summary" },
-  { value: "production-status", label: "Production Status" },
   { value: "weekly-report", label: "Weekly Report" },
 ];
 

@@ -26,14 +26,12 @@ import {
   NO_HISTORY_HINT,
   NO_HISTORY_TITLE,
   productionStatusErrorMessage,
+  type ProductionStatusHistoryTarget,
 } from "../production-status";
 import { ProductionStatusBadge } from "./status-badge";
 
-export interface HistoryTarget {
-  activityId: string;
-  activityLabel: string;
-  revision: string;
-}
+/** Owned by the pure module, so the trail's identity has one definition. */
+export type HistoryTarget = ProductionStatusHistoryTarget;
 
 /**
  * Every update ever recorded for ONE revision + activity, newest first.

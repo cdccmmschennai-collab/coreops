@@ -26,6 +26,7 @@ import { useLatestProductionStatus } from "../hooks";
 import {
   buildProductionStatusRows,
   formatProjectPlant,
+  historyTargetFor,
   NO_STATUS_HINT,
   NO_STATUS_TITLE,
   productionStatusErrorMessage,
@@ -203,13 +204,9 @@ export function ProductionStatusTab({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() =>
-                          setHistoryTarget({
-                            activityId: r.activityId,
-                            activityLabel: r.activity,
-                            revision: r.revision,
-                          })
-                        }
+                        // The trail is this ROW's revision + activity, so the
+                        // dialog can only ever show that one combination.
+                        onClick={() => setHistoryTarget(historyTargetFor(r))}
                       >
                         <History className="h-3.5 w-3.5" />
                         History

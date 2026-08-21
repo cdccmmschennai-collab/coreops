@@ -44,12 +44,12 @@ function values(viewer: ProjectTabViewer): string[] {
 }
 
 // Test 1 — Head
-test("Head sees Overview, Tag Scope, Summary, Production Status and Weekly Report", () => {
+test("Head sees Overview, Production Status, Tag Scope, Summary and Weekly Report", () => {
   assert.deepEqual(labels(HEAD), [
     "Overview",
+    "Production Status",
     "Tag Scope",
     "Summary",
-    "Production Status",
     "Weekly Report",
   ]);
 });
@@ -62,18 +62,18 @@ test("Project Manager sees everything except Weekly Report", () => {
   // project's production status.
   assert.deepEqual(labels(PM), [
     "Overview",
+    "Production Status",
     "Tag Scope",
     "Summary",
-    "Production Status",
   ]);
 });
 
 test("a Project Manager who is also the Head still gets one of each tab", () => {
   assert.deepEqual(labels({ canManage: true, isHead: true }), [
     "Overview",
+    "Production Status",
     "Tag Scope",
     "Summary",
-    "Production Status",
     "Weekly Report",
   ]);
 });
@@ -99,13 +99,28 @@ test("only this project's Head is offered Weekly Report", () => {
   assert.equal(values(VIEWER).includes("weekly-report"), false);
 });
 
-test("Weekly Report sits last, after the open tabs and Production Status", () => {
+test("the tab order is Overview, Production Status, Tag Scope, Summary, Weekly Report", () => {
+  // Phase 3 correction: Production Status moved up to sit directly after
+  // Overview. Pinned here because order is what the page renders, and the only
+  // place it is defined is tabs.ts's ALL_TABS.
   assert.deepEqual(values(HEAD), [
     "overview",
+    "production-status",
     "tag-scope",
     "summary",
-    "production-status",
     "weekly-report",
+  ]);
+});
+
+test("hiding a tab preserves the relative order of the rest", () => {
+  // A viewer who loses Production Status and Weekly Report still sees the
+  // remaining tabs in the same sequence - filtering never reshuffles.
+  assert.deepEqual(values(VIEWER), ["overview", "tag-scope", "summary"]);
+  assert.deepEqual(values(LEAD), [
+    "overview",
+    "production-status",
+    "tag-scope",
+    "summary",
   ]);
 });
 
@@ -128,9 +143,9 @@ test("a plain project member is NOT offered Production Status", () => {
 test("an activity Lead gets Production Status but not Weekly Report", () => {
   assert.deepEqual(labels(LEAD), [
     "Overview",
+    "Production Status",
     "Tag Scope",
     "Summary",
-    "Production Status",
   ]);
   assert.equal(canSeeProjectTab("weekly-report", LEAD), false);
 });

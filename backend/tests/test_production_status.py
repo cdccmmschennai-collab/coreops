@@ -14,6 +14,16 @@ Focused suite for the new module only. Covers, in order:
  10. Activity Lead authorization     test_activity_lead_can_record_own_activity_only
  11. unauthorized employee rejected  test_unrelated_employee_is_rejected
  12. invalid project/activity        test_invalid_project_and_activity_rejected
+
+Phase 3 (workflow hardening) adds, without changing the Phase 1 model:
+
+ 13. revision isolation              test_revision_history_never_shows_another_revision
+ 14. activity isolation              test_updating_one_activity_leaves_the_others_alone
+ 15. multiple authors in one trail   test_each_update_keeps_its_own_author
+ 16. no de-duplication               test_identical_updates_both_recorded
+ 17. date is a plain calendar date   test_completed_on_is_a_calendar_date
+ 18. multiline remarks preserved     test_multiline_remarks_are_preserved
+ 19. nothing can edit or delete      test_module_exposes_no_update_or_delete
 """
 from datetime import date
 
@@ -428,3 +438,243 @@ def test_invalid_project_and_activity_rejected(db, scene, make_project):
             _payload(scene.activity.id, revision="   "),
         )
     assert ei.value.status_code == 422
+
+
+# ===========================================================================
+# Phase 3 - workflow hardening. Nothing below changes the Phase 1 model; each
+# test pins a guarantee the PM cumulative export will depend on.
+# ===========================================================================
+
+# --- 13. revision isolation --------------------------------------------------
+
+def test_revision_history_never_shows_another_revision(db, scene):
+    """REV-0 and REV-1 of the SAME activity are two independent trails."""
+    for tag in (100, 180, 225):
+        ps_svc.create_production_status(
+            db, scene.head_u, scene.project.id,
+            _payload(scene.activity.id, revision="REV-0", tag_count=tag,
+                     status="closed" if tag == 225 else "in_progress",
+                     completed_on=date(2025, 12, 5) if tag == 225 else None),
+        )
+    for tag in (50, 300):
+        ps_svc.create_production_status(
+            db, scene.head_u, scene.project.id,
+            _payload(scene.activity.id, revision="REV-1", tag_count=tag),
+        )
+
+    rev0 = ps_svc.list_history(
+        db, scene.head_u, scene.project.id,
+        activity_id=scene.activity.id, revision="REV-0",
+    )
+    rev1 = ps_svc.list_history(
+        db, scene.head_u, scene.project.id,
+        activity_id=scene.activity.id, revision="REV-1",
+    )
+    assert {r.revision for r in rev0} == {"REV-0"}
+    assert {r.revision for r in rev1} == {"REV-1"}
+    assert [r.tag_count for r in rev0] == [225, 180, 100]   # newest first
+    assert [r.tag_count for r in rev1] == [300, 50]
+    # Neither trail leaked into the other.
+    assert not ({r.id for r in rev0} & {r.id for r in rev1})
+
+    # Both revisions stay side by side in the current view - never merged.
+    latest = {r.revision: r for r in ps_svc.list_latest(db, scene.head_u, scene.project.id)}
+    assert set(latest) == {"REV-0", "REV-1"}
+    assert (latest["REV-0"].status, latest["REV-0"].tag_count) == ("closed", 225)
+    assert (latest["REV-1"].status, latest["REV-1"].tag_count) == ("in_progress", 300)
+
+    # Closing REV-0 did not touch REV-1's own record.
+    assert latest["REV-1"].completed_on is None
+
+
+# --- 14. activity isolation --------------------------------------------------
+
+def test_updating_one_activity_leaves_the_others_alone(db, scene):
+    """Recording against FMTL must not alter MTL's current status."""
+    fmtl = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.activity.id, tag_count=120, doc_count=7),
+    )
+    mtl = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.other_activity.id, tag_count=500, doc_count=1),
+    )
+
+    # A second FMTL update - MTL's row must be untouched, in the DB and in the
+    # derived "latest" view.
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.activity.id, tag_count=140, doc_count=7),
+    )
+
+    mtl_row = db.get(ProjectProductionStatus, mtl.id)
+    assert (mtl_row.tag_count, mtl_row.doc_count, mtl_row.status) == (500, 1, "in_progress")
+
+    latest = {r.activity_id: r for r in ps_svc.list_latest(db, scene.head_u, scene.project.id)}
+    assert set(latest) == {scene.activity.id, scene.other_activity.id}
+    assert latest[scene.activity.id].tag_count == 140
+    assert latest[scene.other_activity.id].tag_count == 500
+
+    # And each activity's history contains only its own updates.
+    fmtl_hist = ps_svc.list_history(
+        db, scene.head_u, scene.project.id, activity_id=scene.activity.id
+    )
+    mtl_hist = ps_svc.list_history(
+        db, scene.head_u, scene.project.id, activity_id=scene.other_activity.id
+    )
+    assert {r.activity_id for r in fmtl_hist} == {scene.activity.id}
+    assert {r.activity_id for r in mtl_hist} == {scene.other_activity.id}
+    assert [r.tag_count for r in fmtl_hist] == [140, 120]
+    assert [r.id for r in mtl_hist] == [mtl.id]
+    assert fmtl.id in {r.id for r in fmtl_hist}
+
+
+# --- 15. multiple authors ----------------------------------------------------
+
+def test_each_update_keeps_its_own_author(db, scene):
+    """Two people working the same project keep their own names on their own
+    updates - and on a shared trail, every entry keeps the person who made it."""
+    # FMTL is updated by its Activity Lead, MTL by the Project Head.
+    lead_out = ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id, _payload(scene.activity.id, tag_count=120)
+    )
+    head_out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.other_activity.id, tag_count=500),
+    )
+    assert lead_out.created_by_name == "Santhosh Kumar"
+    assert head_out.created_by_name == "Hema Rao"
+
+    # The same activity updated by two different authorized people: both names
+    # survive in the trail, in order.
+    ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(scene.activity.id, tag_count=225)
+    )
+    trail = ps_svc.list_history(
+        db, scene.head_u, scene.project.id, activity_id=scene.activity.id
+    )
+    assert [r.created_by_name for r in trail] == ["Hema Rao", "Santhosh Kumar"]
+    assert [r.created_by for r in trail] == [scene.head_u.id, scene.lead_u.id]
+
+    # The role is never the author, at any layer.
+    for r in trail:
+        assert r.created_by_name not in {"Activity Lead", "Project Head", "PM", "Head"}
+
+
+# --- 16. no de-duplication ---------------------------------------------------
+
+def test_identical_updates_both_recorded(db, scene):
+    """Two INTENTIONAL updates with identical values are legitimate history.
+
+    Double-click protection lives in the UI (a disabled button), deliberately
+    NOT in a uniqueness constraint - a constraint would refuse the second of two
+    genuine updates, which is a worse failure than a rare duplicate row.
+    """
+    first = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(scene.activity.id, tag_count=225)
+    )
+    second = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id, _payload(scene.activity.id, tag_count=225)
+    )
+    assert first.id != second.id
+    assert db.query(ProjectProductionStatus).count() == 2
+
+    trail = ps_svc.list_history(
+        db, scene.head_u, scene.project.id, activity_id=scene.activity.id
+    )
+    assert len(trail) == 2
+    # Exactly one of them is current, and it is deterministic.
+    latest = ps_svc.list_latest(db, scene.head_u, scene.project.id)
+    assert len(latest) == 1
+    assert latest[0].id == trail[0].id
+
+    # No unique index exists over the natural key that would have blocked this.
+    uniques = {
+        r[0] for r in db.execute(
+            text(
+                "SELECT indexname FROM pg_indexes "
+                "WHERE tablename = 'project_production_statuses' "
+                "AND indexdef LIKE '%UNIQUE%'"
+            )
+        ).all()
+    }
+    assert uniques == {"project_production_statuses_pkey"}
+
+
+# --- 17. completed_on is a calendar date -------------------------------------
+
+def test_completed_on_is_a_calendar_date(db, scene):
+    """Stored as DATE, so no timezone can move it to the previous day."""
+    out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.activity.id, status="closed", completed_on=date(2025, 12, 5)),
+    )
+    assert out.completed_on == date(2025, 12, 5)
+
+    stored = db.execute(
+        text("SELECT completed_on FROM project_production_statuses WHERE id = :i"),
+        {"i": out.id},
+    ).scalar_one()
+    assert stored == date(2025, 12, 5)
+    assert not hasattr(stored, "tzinfo")
+
+    # Re-read through the API shape - still the 5th.
+    latest = ps_svc.list_latest(db, scene.head_u, scene.project.id)
+    assert latest[0].completed_on.isoformat() == "2025-12-05"
+
+    # IN PROGRESS needs no completion date, and none is invented for it.
+    later = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.activity.id, revision="REV-1", status="in_progress"),
+    )
+    assert later.completed_on is None
+
+
+# --- 18. multiline remarks ---------------------------------------------------
+
+def test_multiline_remarks_are_preserved(db, scene):
+    remark = "FMTL submitted to QE.\nAwaiting response.\nPunch list received."
+    out = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.activity.id, remarks=f"\n{remark}\n"),
+    )
+    # Surrounding whitespace is trimmed; the line breaks INSIDE are not.
+    assert out.remarks == remark
+    assert out.remarks.count("\n") == 2
+    assert db.get(ProjectProductionStatus, out.id).remarks == remark
+
+    # A blank remark is stored as NULL rather than an empty string.
+    blank = ps_svc.create_production_status(
+        db, scene.head_u, scene.project.id,
+        _payload(scene.activity.id, revision="REV-1", remarks="   "),
+    )
+    assert blank.remarks is None
+
+
+# --- 19. append-only: nothing can edit or delete -----------------------------
+
+def test_module_exposes_no_update_or_delete(db, scene):
+    """The append-only guarantee is structural, not a convention."""
+    from app.modules.production_status import router as ps_router
+
+    methods = set()
+    for route in ps_router.router.routes:
+        methods |= set(getattr(route, "methods", set()))
+    assert methods == {"GET", "POST"}
+    assert not (methods & {"PUT", "PATCH", "DELETE"})
+
+    # No service function offers one either.
+    assert not [n for n in dir(ps_svc) if n.startswith(("update_", "delete_", "edit_"))]
+
+    # The table carries no updated_at / deleted_at to make an in-place edit
+    # expressible in the first place.
+    cols = {
+        r[0] for r in db.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'project_production_statuses'"
+            )
+        ).all()
+    }
+    assert "updated_at" not in cols
+    assert "deleted_at" not in cols

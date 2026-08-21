@@ -30,6 +30,7 @@ import { AppError } from "@/lib/api-client";
 import { useCreateProductionStatus } from "../hooks";
 import {
   COUNT_UNITS,
+  isSaveInFlight,
   NO_ACTIVITIES_HINT,
   NO_ACTIVITIES_TITLE,
   NO_PROJECT_ACTIVITIES_HINT,
@@ -82,7 +83,22 @@ export function ProductionStatusForm({
     defaultValues: EMPTY_PRODUCTION_STATUS_FORM,
   });
 
+  // True from the instant Save is pressed (react-hook-form sets isSubmitting
+  // before it runs the async zod validation) until the POST has answered. The
+  // Button disables itself on `loading`, so the second click of a double-click
+  // has nothing to hit and only one record is appended.
+  //
+  // Not a de-duplication rule: two INTENTIONAL saves with identical values are
+  // legitimate history and both still reach the append-only table.
+  const saving = isSaveInFlight({
+    isPending: mutation.isPending,
+    isSubmitting: form.formState.isSubmitting,
+  });
+
   async function onSubmit(values: ProductionStatusFormValues) {
+    // Belt and braces for the case a submit is triggered without the button
+    // (Enter in a text field while a save is already in flight).
+    if (mutation.isPending) return;
     try {
       await mutation.mutateAsync(toProductionStatusBody(values));
       toast.success("Production status saved");
@@ -264,7 +280,7 @@ export function ProductionStatusForm({
             />
 
             <div className="flex justify-end">
-              <Button type="submit" loading={mutation.isPending}>
+              <Button type="submit" loading={saving}>
                 Save Status
               </Button>
             </div>

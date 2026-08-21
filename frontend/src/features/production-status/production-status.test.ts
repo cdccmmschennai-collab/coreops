@@ -15,6 +15,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { productionStatusKeys } from "./keys.ts";
 import {
   activityLabel,
   AUTHOR_UNKNOWN,
@@ -23,7 +24,16 @@ import {
   formatCount,
   formatProductionDate,
   formatProjectPlant,
+  historyTargetFor,
+  isSaveInFlight,
   leadsAnyActivity,
+  NO_ACTIVITIES_HINT,
+  NO_ACTIVITIES_TITLE,
+  NO_HISTORY_HINT,
+  NO_HISTORY_TITLE,
+  NO_PROJECT_ACTIVITIES_HINT,
+  NO_STATUS_HINT,
+  NO_STATUS_TITLE,
   PRODUCTION_STATUS_LABEL,
   PRODUCTION_STATUS_VALUES,
   productionStatusErrorMessage,
@@ -472,4 +482,345 @@ test("errors read as something the user can act on", () => {
   );
   assert.match(productionStatusErrorMessage(0, null), /reach the server/i);
   assert.match(productionStatusErrorMessage(500, null), /went wrong/i);
+});
+
+// ===========================================================================
+// Phase 3 — workflow hardening
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// 11. Revision isolation — REV-0 and REV-1 are separate trails
+// ---------------------------------------------------------------------------
+
+const PROJECT = "proj-1";
+
+test("a row's History opens that row's own revision AND activity", () => {
+  const rows = buildProductionStatusRows(
+    [
+      record({ id: "a", revision: "REV-0", activity_id: "act-mtl", activity_name: "MTL PREPARATION" }),
+      record({ id: "b", revision: "REV-1", activity_id: "act-mtl", activity_name: "MTL PREPARATION" }),
+    ],
+    fmt,
+  );
+  assert.deepEqual(historyTargetFor(rows[0]), {
+    activityId: "act-mtl",
+    activityLabel: "MTL PREPARATION",
+    revision: "REV-0",
+  });
+  assert.deepEqual(historyTargetFor(rows[1]), {
+    activityId: "act-mtl",
+    activityLabel: "MTL PREPARATION",
+    revision: "REV-1",
+  });
+});
+
+test("REV-0 and REV-1 of one activity are two different cached datasets", () => {
+  // The filter is part of the query key, so opening REV-0's history can never
+  // render REV-1's rows out of the cache - and the request itself carries both
+  // filters, which the backend ANDs.
+  const rev0 = productionStatusKeys.history(PROJECT, {
+    activityId: "act-mtl",
+    revision: "REV-0",
+  });
+  const rev1 = productionStatusKeys.history(PROJECT, {
+    activityId: "act-mtl",
+    revision: "REV-1",
+  });
+  assert.notDeepEqual(rev0, rev1);
+  assert.deepEqual([...rev0], ["production-status", "history", PROJECT, "act-mtl", "REV-0"]);
+  assert.deepEqual([...rev1], ["production-status", "history", PROJECT, "act-mtl", "REV-1"]);
+});
+
+test("the same revision of two activities is two different cached datasets", () => {
+  const mtl = productionStatusKeys.history(PROJECT, {
+    activityId: "act-mtl",
+    revision: "REV-0",
+  });
+  const fmtl = productionStatusKeys.history(PROJECT, {
+    activityId: "act-fmtl",
+    revision: "REV-0",
+  });
+  const bom = productionStatusKeys.history(PROJECT, {
+    activityId: "act-bom",
+    revision: "REV-0",
+  });
+  assert.equal(new Set([mtl, fmtl, bom].map((k) => k.join("|"))).size, 3);
+});
+
+test("an unfiltered history is not the same dataset as a filtered one", () => {
+  assert.notDeepEqual(
+    productionStatusKeys.history(PROJECT, {}),
+    productionStatusKeys.history(PROJECT, { activityId: "act-mtl", revision: "REV-0" }),
+  );
+  // Two projects never share a trail either.
+  assert.notDeepEqual(
+    productionStatusKeys.history("proj-1", { revision: "REV-0" }),
+    productionStatusKeys.history("proj-2", { revision: "REV-0" }),
+  );
+  assert.notDeepEqual(
+    productionStatusKeys.latest("proj-1"),
+    productionStatusKeys.latest("proj-2"),
+  );
+});
+
+test("current status keeps one row per revision + activity, side by side", () => {
+  // The backend derives these; the UI must render both, not merge them.
+  const rows = buildProductionStatusRows(
+    [
+      record({ id: "a", revision: "REV-0", activity_id: "act-mtl", activity_name: "MTL PREPARATION",
+               status: "closed", tag_count: 500 }),
+      record({ id: "b", revision: "REV-1", activity_id: "act-mtl", activity_name: "MTL PREPARATION",
+               status: "in_progress", tag_count: 300 }),
+    ],
+    fmt,
+  );
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => `${r.revision} ${r.status} ${r.tag}`), [
+    "REV-0 CLOSED 500",
+    "REV-1 IN PROGRESS 300",
+  ]);
+});
+
+// ---------------------------------------------------------------------------
+// 12. Activity isolation — updating one activity leaves the others alone
+// ---------------------------------------------------------------------------
+
+test("activities on the same revision render independently", () => {
+  const rows = buildProductionStatusRows(
+    [
+      record({ id: "m", activity_id: "act-mtl", activity_name: "MTL PREPARATION", tag_count: 500 }),
+      record({ id: "f", activity_id: "act-fmtl", activity_name: "FMTL PREPARATION", tag_count: 120 }),
+      record({ id: "b", activity_id: "act-bom", activity_name: "BOM PREPARATION", tag_count: 40 }),
+    ],
+    fmt,
+  );
+  assert.deepEqual(rows.map((r) => r.activity), [
+    "MTL PREPARATION",
+    "FMTL PREPARATION",
+    "BOM PREPARATION",
+  ]);
+  assert.deepEqual(rows.map((r) => r.tag), ["500", "120", "40"]);
+  // Every row opens its own trail.
+  assert.deepEqual(
+    rows.map((r) => historyTargetFor(r).activityId),
+    ["act-mtl", "act-fmtl", "act-bom"],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 13. Multiple users — each update keeps its own author
+// ---------------------------------------------------------------------------
+
+test("each row shows the person who recorded it, not one shared author", () => {
+  const rows = buildProductionStatusRows(
+    [
+      record({ id: "m", activity_name: "MTL PREPARATION", created_by_name: "Santhosh Kumar" }),
+      record({ id: "f", activity_name: "FMTL PREPARATION", created_by_name: "Alex Manager" }),
+    ],
+    fmt,
+  );
+  assert.deepEqual(rows.map((r) => r.by), ["Santhosh Kumar", "Alex Manager"]);
+});
+
+test("a history trail keeps the author of every individual update", () => {
+  const rows = buildProductionStatusRows(
+    [
+      record({ id: "3", tag_count: 225, created_by_name: "Alex Manager" }),
+      record({ id: "2", tag_count: 180, created_by_name: "Santhosh Kumar" }),
+      record({ id: "1", tag_count: 100, created_by_name: "Santhosh Kumar" }),
+    ],
+    fmt,
+  );
+  assert.deepEqual(rows.map((r) => r.by), [
+    "Alex Manager",
+    "Santhosh Kumar",
+    "Santhosh Kumar",
+  ]);
+  // No role word ever substitutes for a person.
+  for (const r of rows) {
+    for (const role of ["Activity Lead", "Project Head", "PM", "Head"]) {
+      assert.notEqual(r.by, role);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 14. Count independence across successive updates
+// ---------------------------------------------------------------------------
+
+test("a later update changing one unit leaves the other three as submitted", () => {
+  const first = { tag_count: 225, doc_count: 100, spares_count: 50, crs_count: 20 };
+  const second = { ...first, tag_count: 300 };
+  const rows = buildProductionStatusRows(
+    [record({ id: "2", ...second }), record({ id: "1", ...first })],
+    fmt,
+  );
+  assert.deepEqual(
+    [rows[0].tag, rows[0].doc, rows[0].spares, rows[0].crs],
+    ["300", "100", "50", "20"],
+  );
+  assert.deepEqual(
+    [rows[1].tag, rows[1].doc, rows[1].spares, rows[1].crs],
+    ["225", "100", "50", "20"],
+  );
+});
+
+test("the form submits the four counts exactly as typed, deriving none of them", () => {
+  const body = toProductionStatusBody(
+    values({
+      revision: "REV-0",
+      activity_id: "act-mtl",
+      tag_count: "225",
+      doc_count: "100",
+      spares_count: "50",
+      crs_count: "20",
+    }),
+  );
+  assert.deepEqual(
+    [body.tag_count, body.doc_count, body.spares_count, body.crs_count],
+    [225, 100, 50, 20],
+  );
+  // No total, and no unit computed from another.
+  assert.equal("total_count" in body, false);
+  assert.equal(Object.keys(body).filter((k) => k.endsWith("_count")).length, 4);
+});
+
+// ---------------------------------------------------------------------------
+// 15. Status behaviour — two values, and a change is a NEW record
+// ---------------------------------------------------------------------------
+
+test("IN PROGRESS submits with no completion date invented for it", () => {
+  const body = toProductionStatusBody(
+    values({ revision: "REV-0", activity_id: "act-mtl", status: "in_progress" }),
+  );
+  assert.equal(body.status, "in_progress");
+  assert.equal(body.completed_on, null);
+});
+
+test("a status change is submitted as a whole new record, not a patch", () => {
+  // resetAfterSave carries the identity forward and clears the assertions, so
+  // the follow-up save is a complete record - nothing is 'left over' from the
+  // previous one to imply an edit.
+  const closed = resetAfterSave(
+    values({ revision: "REV-0", activity_id: "act-mtl", status: "in_progress", tag_count: "180" }),
+  );
+  const body = toProductionStatusBody({ ...closed, status: "closed", tag_count: "225",
+                                        completed_on: "2025-12-05" });
+  assert.deepEqual(body, {
+    revision: "REV-0",
+    activity_id: "act-mtl",
+    status: "closed",
+    tag_count: 225,
+    doc_count: 0,
+    spares_count: 0,
+    crs_count: 0,
+    completed_on: "2025-12-05",
+    remarks: null,
+  });
+  // No id and no edit marker: the API has no PATCH to send them to.
+  assert.equal("id" in body, false);
+});
+
+// ---------------------------------------------------------------------------
+// 16. Completed On — a calendar date, never shifted
+// ---------------------------------------------------------------------------
+
+test("a completion date never slips a day, whatever the viewer's timezone", () => {
+  // The formatter reads the digits, so the result does not depend on the
+  // runner's TZ at all - asserted here by running under an extreme one.
+  const before = process.env.TZ;
+  try {
+    for (const tz of ["Pacific/Kiritimati", "Pacific/Midway", "UTC", "Asia/Kolkata"]) {
+      process.env.TZ = tz;
+      assert.equal(formatProductionDate("2025-12-05"), "05 Dec 2025", tz);
+      assert.equal(formatProductionDate("2026-01-01"), "01 Jan 2026", tz);
+      assert.equal(formatProductionDate("2025-12-31"), "31 Dec 2025", tz);
+    }
+  } finally {
+    if (before === undefined) delete process.env.TZ;
+    else process.env.TZ = before;
+  }
+});
+
+test("the date the user picked is the date that is sent", () => {
+  const body = toProductionStatusBody(
+    values({ revision: "REV-0", activity_id: "a", completed_on: "2025-12-05" }),
+  );
+  // A plain YYYY-MM-DD string, never a Date turned into an instant.
+  assert.equal(body.completed_on, "2025-12-05");
+});
+
+// ---------------------------------------------------------------------------
+// 17. Remarks — multiline, preserved whole
+// ---------------------------------------------------------------------------
+
+test("a multiline remark survives to the API and back unchanged", () => {
+  const remark = "FMTL submitted to QE.\nAwaiting response.\nPunch list received.";
+  const body = toProductionStatusBody(
+    values({ revision: "REV-0", activity_id: "a", remarks: remark }),
+  );
+  assert.equal(body.remarks, remark);
+  assert.equal(body.remarks?.split("\n").length, 3);
+
+  const rows = buildProductionStatusRows([record({ remarks: remark })], fmt);
+  assert.equal(rows[0].remarks, remark);
+  // Nothing is truncated or collapsed - the cell renders it with
+  // `whitespace-pre-wrap`, so every line is visible.
+  assert.equal(rows[0].remarks?.includes("\n"), true);
+  assert.equal(rows[0].remarks?.endsWith("Punch list received."), true);
+});
+
+// ---------------------------------------------------------------------------
+// 18. Double submission
+// ---------------------------------------------------------------------------
+
+test("Save is blocked from the click until the response lands", () => {
+  // Before the click.
+  assert.equal(isSaveInFlight({ isPending: false, isSubmitting: false }), false);
+  // Clicked: react-hook-form flips isSubmitting before the async validation, so
+  // the button is already disabled while no request exists yet.
+  assert.equal(isSaveInFlight({ isPending: false, isSubmitting: true }), true);
+  // Request in flight.
+  assert.equal(isSaveInFlight({ isPending: true, isSubmitting: true }), true);
+  assert.equal(isSaveInFlight({ isPending: true, isSubmitting: false }), true);
+  // Settled - the next, intentional update may be saved.
+  assert.equal(isSaveInFlight({ isPending: false, isSubmitting: false }), false);
+});
+
+test("two intentional identical updates are both valid submissions", () => {
+  // The guard suppresses a repeated click, never a repeated update: recording
+  // the same figures twice is legitimate append-only history and the client
+  // must not reject or de-duplicate it.
+  const v = values({ revision: "REV-0", activity_id: "act-mtl", tag_count: "225" });
+  assert.equal(productionStatusFormSchema.safeParse(v).success, true);
+  assert.deepEqual(toProductionStatusBody(v), toProductionStatusBody(v));
+  // ...and the form is left ready to make exactly that second update.
+  const next = resetAfterSave(v);
+  assert.equal(next.revision, "REV-0");
+  assert.equal(next.activity_id, "act-mtl");
+  assert.equal(productionStatusFormSchema.safeParse(next).success, true);
+});
+
+// ---------------------------------------------------------------------------
+// 19. Empty states — every one of them says something
+// ---------------------------------------------------------------------------
+
+test("each empty case has its own copy, so no panel can render blank", () => {
+  const copy = [
+    NO_STATUS_TITLE, NO_STATUS_HINT,
+    NO_HISTORY_TITLE, NO_HISTORY_HINT,
+    NO_ACTIVITIES_TITLE, NO_ACTIVITIES_HINT,
+    NO_PROJECT_ACTIVITIES_HINT,
+  ];
+  for (const text of copy) assert.equal(text.trim().length > 0, true);
+  // "you have no activity here" and "this project has none" are different
+  // situations and must not share a sentence.
+  assert.notEqual(NO_ACTIVITIES_HINT, NO_PROJECT_ACTIVITIES_HINT);
+  assert.notEqual(NO_STATUS_TITLE, NO_HISTORY_TITLE);
+});
+
+test("no data means an empty list, never a thrown render", () => {
+  for (const input of [null, undefined, []] as const) {
+    assert.deepEqual(buildProductionStatusRows(input, fmt), []);
+  }
 });
