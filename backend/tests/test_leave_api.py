@@ -270,3 +270,156 @@ def test_filter_by_status(client, make_user, make_employee, make_leave_request, 
     res = client.get("/api/v1/leave-requests?status=pending", headers=h).json()
     assert res["total"] == 1
     assert res["items"][0]["status"] == "pending"
+
+
+# ---------- routing to project head ----------
+
+def test_create_routes_to_project_head_and_notifies(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    from datetime import timedelta
+
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    hu = make_user("head1@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HEAD1", user_id=hu.id)
+    project = make_project(code="RP-1", head_employee_id=head.id)
+
+    eu = make_user("emp10@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E10", user_id=eu.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    # `prev_day` must not be in the future - work_reports.service rejects a
+    # report dated after today - so it's pinned to the most recent working day
+    # at-or-before today, and `leave_date` is the next working day after that
+    # (rather than today+7 as originally sketched, which put `prev_day` days
+    # in the future on every day of the week and made the report creation
+    # below always fail with "Report date cannot be in the future").
+    prev_day = date.today()
+    while prev_day.weekday() >= 5:
+        prev_day -= timedelta(days=1)
+    leave_date = prev_day + timedelta(days=1)
+    while leave_date.weekday() >= 5:
+        leave_date += timedelta(days=1)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=prev_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp10@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["routed_project_id"] == str(project.id)
+
+    note = db.query(Notification).filter(Notification.user_id == hu.id).one()
+    assert note.type == "leave_submitted"
+    assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
+
+
+def test_create_no_head_falls_back_to_manager_notification(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    """The previous day's project DOES resolve, but has no Head assigned -
+    routed_project_id is still recorded, only the notification falls back."""
+    from datetime import timedelta
+
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    project = make_project(code="RP-2")  # no head_employee_id
+
+    mu = make_user("mgr10@x.com", role=UserRole.project_manager)
+    mgr = make_employee(employee_code="MGR10", user_id=mu.id)
+    eu = make_user("emp11@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E11", user_id=eu.id, manager_id=mgr.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    # `prev_day` must not be in the future - work_reports.service rejects a
+    # report dated after today - so it's pinned to the most recent working day
+    # at-or-before today, and `leave_date` is the next working day after that
+    # (rather than today+7 as originally sketched, which put `prev_day` days
+    # in the future on every day of the week and made the report creation
+    # below always fail with "Report date cannot be in the future").
+    prev_day = date.today()
+    while prev_day.weekday() >= 5:
+        prev_day -= timedelta(days=1)
+    leave_date = prev_day + timedelta(days=1)
+    while leave_date.weekday() >= 5:
+        leave_date += timedelta(days=1)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=prev_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp11@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["routed_project_id"] == str(project.id)
+
+    note = db.query(Notification).filter(Notification.user_id == mu.id).one()
+    assert note.type == "leave_submitted"
+    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+
+
+def test_create_self_as_head_falls_back_to_manager_notification(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    """The employee IS the routed project's Head - notifying them about their
+    own submission makes no sense, so this must fall back to their manager,
+    same as the no-head case."""
+    from datetime import timedelta
+
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    mu = make_user("mgr11@x.com", role=UserRole.project_manager)
+    mgr = make_employee(employee_code="MGR11", user_id=mu.id)
+    eu = make_user("emp12@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E12", user_id=eu.id, manager_id=mgr.id)
+    project = make_project(code="RP-3", head_employee_id=emp.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    # `prev_day` must not be in the future - work_reports.service rejects a
+    # report dated after today - so it's pinned to the most recent working day
+    # at-or-before today, and `leave_date` is the next working day after that
+    # (rather than today+7 as originally sketched, which put `prev_day` days
+    # in the future on every day of the week and made the report creation
+    # below always fail with "Report date cannot be in the future").
+    prev_day = date.today()
+    while prev_day.weekday() >= 5:
+        prev_day -= timedelta(days=1)
+    leave_date = prev_day + timedelta(days=1)
+    while leave_date.weekday() >= 5:
+        leave_date += timedelta(days=1)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=prev_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp12@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+
+    assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 1
+    assert db.query(Notification).filter(Notification.user_id == eu.id).count() == 0

@@ -42,6 +42,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
@@ -58,6 +59,7 @@ from app.modules.leave.effects import (
 )
 from app.modules.leave_balances import ledger
 from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave import routing
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
     DeliverableConflictOut,
@@ -258,6 +260,32 @@ def _notify_manager(db: Session, employee: Employee, type_: str, title: str,
     if mgr is None or mgr.user_id is None:
         return
     _push(db, mgr.user_id, type_, title, message, entity_id, target_url)
+
+
+def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
+                            type_: str, title: str, message: str) -> None:
+    """Notify whoever this request is routed to: the CURRENT Head of
+    `req.routed_project_id` if one is assigned (and isn't the requester
+    themself), else the employee's manager - the existing PM-fallback path,
+    unchanged.
+
+    The Head is resolved fresh here, never read off a value stored at
+    submission time, so a Head reassignment after filing still notifies the
+    right person (spec §15).
+    """
+    head_id = (
+        authz.project_head_employee_id(db, req.routed_project_id)
+        if req.routed_project_id is not None
+        else None
+    )
+    if head_id is not None and head_id != employee.id:
+        head = db.get(Employee, head_id)
+        if head is not None and head.user_id is not None:
+            _push(db, head.user_id, type_, title, message, req.id,
+                  f"/attendance?tab=leave&queue=pending&id={req.id}")
+            return
+    _notify_manager(db, employee, type_, title, message, req.id,
+                    f"/attendance?tab=leave&id={req.id}")
 
 
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
@@ -545,18 +573,17 @@ def create_leave_request(
         end_date=data.end_date,
         reason=data.reason,
         status=LeaveStatus.pending,
+        routed_project_id=routing.resolve_routed_project(db, me.id, data.start_date),
         created_by=actor.id,
         updated_by=actor.id,
     )
     db.add(req)
     db.commit()
     db.refresh(req)
-    _notify_manager(
-        db, me, "leave_submitted",
+    _notify_routed_approver(
+        db, me, req, "leave_submitted",
         f"{me.full_name} submitted a leave request",
         f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
-        req.id,
-        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -622,12 +649,10 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
     )
     db.commit()
     db.refresh(req)
-    _notify_manager(
-        db, me, "leave_cancelled",
+    _notify_routed_approver(
+        db, me, req, "leave_cancelled",
         f"{me.full_name} cancelled a leave request",
         f"{me.full_name} cancelled their leave request ({req.start_date} to {req.end_date}).",
-        req.id,
-        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -678,13 +703,11 @@ def request_leave_cancellation(
     )
     db.commit()
     db.refresh(req)
-    _notify_manager(
-        db, me, "leave_cancellation_requested",
+    _notify_routed_approver(
+        db, me, req, "leave_cancellation_requested",
         f"{me.full_name} requested leave cancellation",
         f"{me.employee_code} - {me.full_name} requested cancellation of approved "
         f"leave for {_period(req)}.",
-        req.id,
-        f"/attendance?tab=leave&queue=cancellation&id={req.id}",
     )
     return req
 
