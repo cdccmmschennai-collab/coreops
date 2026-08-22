@@ -9,7 +9,7 @@ itself is covered in `test_leave_phase10.py`.
 from datetime import date, timedelta
 from decimal import Decimal
 
-from app.modules.leave.models import LeaveStatus, LeaveType
+from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave_balances import ledger
 from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 from app.modules.users.models import UserRole
@@ -32,6 +32,22 @@ def _fund(db, employee_id, days: str = "30.00"):
         )
     )
     db.commit()
+
+
+def _make_leave(db, employee_id, *, routed_project_id=None, start=None, end=None):
+    req = LeaveRequest(
+        employee_id=employee_id,
+        leave_type=LeaveType.casual,
+        start_date=start or (date.today() + timedelta(days=7)),
+        end_date=end or (date.today() + timedelta(days=7)),
+        reason="Test",
+        status=LeaveStatus.pending,
+        routed_project_id=routed_project_id,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return req
 
 
 def _payload(**overrides):
@@ -423,3 +439,132 @@ def test_create_self_as_head_falls_back_to_manager_notification(
 
     assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 1
     assert db.query(Notification).filter(Notification.user_id == eu.id).count() == 0
+
+
+def _fund_and_login(login, email):
+    return login(email)
+
+
+def test_head_sees_only_own_routed_requests(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_a_u = make_user("heada@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HA", user_id=head_a_u.id)
+    head_b_u = make_user("headb@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HB", user_id=head_b_u.id)
+    project_a = make_project(code="SC-A", head_employee_id=head_a.id)
+    project_b = make_project(code="SC-B", head_employee_id=head_b.id)
+
+    emp_a_u = make_user("empa@x.com", role=UserRole.employee)
+    emp_a = make_employee(employee_code="EA", user_id=emp_a_u.id)
+    emp_b_u = make_user("empb@x.com", role=UserRole.employee)
+    emp_b = make_employee(employee_code="EB", user_id=emp_b_u.id)
+    make_employee(employee_code="EC", user_id=make_user("empc@x.com").id)  # unrelated, no routing
+
+    req_a = _make_leave(db, emp_a.id, routed_project_id=project_a.id)
+    req_b = _make_leave(db, emp_b.id, routed_project_id=project_b.id)
+
+    h = login("heada@x.com")
+    res = client.get("/api/v1/leave-requests", headers=h, params={"status": "pending"}).json()
+    ids = {row["id"] for row in res["items"]}
+    assert str(req_a.id) in ids
+    assert str(req_b.id) not in ids
+
+
+def test_head_can_approve_own_routed_request(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_u = make_user("headc@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HC", user_id=head_u.id)
+    project = make_project(code="SC-C", head_employee_id=head.id)
+
+    emp_u = make_user("empd@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ED", user_id=emp_u.id)
+    _fund(db, emp.id)
+
+    req = _make_leave(db, emp.id, routed_project_id=project.id)
+
+    h = login("headc@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+
+
+def test_head_cannot_approve_other_heads_request(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_a_u = make_user("heade@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HE", user_id=head_a_u.id)
+    make_project(code="SC-D", head_employee_id=head_a.id)
+    head_b_u = make_user("headf@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HF", user_id=head_b_u.id)
+    project_b = make_project(code="SC-E", head_employee_id=head_b.id)
+
+    emp_u = make_user("empe@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="EF", user_id=emp_u.id)
+    req = _make_leave(db, emp.id, routed_project_id=project_b.id)
+
+    h = login("heade@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_plain_employee_cannot_approve_anyone(
+    client, db, make_user, make_employee, make_project, login,
+):
+    project = make_project(code="SC-F")  # no head
+    emp_u = make_user("empf@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="EG", user_id=emp_u.id)
+    other_u = make_user("empg@x.com", role=UserRole.employee)
+    other = make_employee(employee_code="EH", user_id=other_u.id)
+    req = _make_leave(db, other.id, routed_project_id=project.id)
+
+    h = login("empf@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_head_cannot_approve_own_leave_even_if_self_routed(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_u = make_user("headg@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HG", user_id=head_u.id)
+    project = make_project(code="SC-G", head_employee_id=head.id)
+    req = _make_leave(db, head.id, routed_project_id=project.id)
+
+    h = login("headg@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_reassigned_head_takes_over_review_authority(
+    client, db, make_user, make_employee, make_project, login,
+):
+    """Spec §15: the PROJECT on the leave row is historical and frozen, but
+    WHO may review it is always the project's CURRENT head_employee_id - a
+    reassignment after the request was filed must be honoured immediately,
+    with no change to the leave row itself."""
+    head_a_u = make_user("headh@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HH", user_id=head_a_u.id)
+    head_b_u = make_user("headi@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HI", user_id=head_b_u.id)
+    project = make_project(code="SC-H", head_employee_id=head_a.id)
+
+    emp_u = make_user("empi@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="EI", user_id=emp_u.id)
+    _fund(db, emp.id)  # casual leave deducts balance - approval needs it funded
+    req = _make_leave(db, emp.id, routed_project_id=project.id)
+
+    # Reassign the project's Head from A to B - simulates the PM's existing
+    # `PUT /projects/{id}/head` action; nothing on the leave row changes.
+    project.head_employee_id = head_b.id
+    db.add(project)
+    db.commit()
+
+    h_a = login("headh@x.com")
+    res_a = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h_a, json={})
+    assert res_a.status_code == 403, res_a.text  # Head A lost authority
+
+    h_b = login("headi@x.com")
+    res_b = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h_b, json={})
+    assert res_b.status_code == 200, res_b.text  # Head B has it now

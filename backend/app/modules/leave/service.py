@@ -39,7 +39,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core import authz
@@ -384,11 +384,26 @@ def _apply_scope(db: Session, actor: User, stmt):
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
+    head_project_ids = authz.reviewable_project_ids(db, actor)
+    if head_project_ids:
+        return (
+            stmt.where(
+                or_(
+                    LeaveRequest.employee_id == me.id,
+                    LeaveRequest.routed_project_id.in_(head_project_ids),
+                )
+            ),
+            True,
+        )
     return stmt.where(LeaveRequest.employee_id == me.id), True
 
 
 def _assert_can_read(db: Session, actor: User, req: LeaveRequest) -> None:
     if actor.role == UserRole.project_manager:
+        return
+    if req.routed_project_id is not None and authz.can_review_report(
+        db, actor, {req.routed_project_id}
+    ):
         return
     me = _current_employee(db, actor)
     if me is None:
@@ -402,23 +417,31 @@ def _assert_can_review(db: Session, actor: User, req: LeaveRequest | None = None
     """Who may rule on a leave request - enforced here, in the backend, on every
     decision path. The frontend hides the buttons; this is what actually stops it.
 
-    NOBODY REVIEWS THEIR OWN LEAVE, including a project manager. The role check
-    alone is not enough: project managers are employees too and file their own
-    requests, so without the second check a PM could approve their own leave and
-    grant themselves the balance. `req` is therefore passed on every decision
-    path - approve, reject, and both cancellation decisions - because approving
-    the withdrawal of your own leave is the same self-review problem.
+    PM (any request) or the CURRENT Head of the request's routed project may
+    review. `authz.can_review_report` already encodes exactly that rule (it's
+    the same helper Work Reports uses) so this stays a one-line delegation
+    rather than a second copy of the PM-or-Head check.
+
+    NOBODY REVIEWS THEIR OWN LEAVE, including a project manager or a Head:
+    project managers and Heads are employees too and file their own requests,
+    so without the second check either could approve their own leave and grant
+    themselves the balance. `req` is therefore passed on every decision path -
+    approve, reject, and both cancellation decisions.
     """
-    if actor.role != UserRole.project_manager:
-        raise AppError("forbidden", "Only project managers can review leave requests.", 403)
+    project_ids = {req.routed_project_id} if (req is not None and req.routed_project_id is not None) else set()
+    if not authz.can_review_report(db, actor, project_ids):
+        raise AppError(
+            "forbidden",
+            "Only a project manager or this request's assigned Project Head can review it.",
+            403,
+        )
     if req is None:
         return
     me = _current_employee(db, actor)
     if me is not None and req.employee_id == me.id:
         raise AppError(
             "forbidden",
-            "You can't review your own leave request - another project manager "
-            "has to decide it.",
+            "You can't review your own leave request - another reviewer has to decide it.",
             403,
         )
 

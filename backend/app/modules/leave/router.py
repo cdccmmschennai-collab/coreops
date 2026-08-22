@@ -149,7 +149,7 @@ def request_leave_cancellation(
 @router.post("/{req_id}/approve-cancellation", response_model=LeaveRequestOut)
 def approve_leave_cancellation(
     req_id: uuid.UUID,
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
@@ -160,7 +160,7 @@ def approve_leave_cancellation(
 @router.post("/{req_id}/reject-cancellation", response_model=LeaveRequestOut)
 def reject_leave_cancellation(
     req_id: uuid.UUID,
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
@@ -172,7 +172,7 @@ def reject_leave_cancellation(
 def approve_leave_request(
     req_id: uuid.UUID,
     body: LeaveReviewBody = LeaveReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
@@ -184,7 +184,7 @@ def approve_leave_request(
 def reject_leave_request(
     req_id: uuid.UUID,
     body: LeaveReviewBody = LeaveReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
