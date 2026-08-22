@@ -16,6 +16,7 @@ export interface LeaveRequest {
   status: LeaveStatus;
   manager_id: string | null;
   manager_comment: string | null;
+  routed_project_id: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -9,11 +9,12 @@ import type {
   LeaveReviewBody,
 } from "./types";
 
-export function useLeaveList(params: LeaveListParams) {
+export function useLeaveList(params: LeaveListParams, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: leaveKeys.list(params),
     queryFn: () => leaveApi.list(params),
     placeholderData: (prev) => prev,
+    enabled: options?.enabled ?? true,
   });
 }
 

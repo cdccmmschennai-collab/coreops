@@ -8,11 +8,12 @@ import type {
   PermissionReviewBody,
 } from "./types";
 
-export function usePermissionList(params: PermissionListParams) {
+export function usePermissionList(params: PermissionListParams, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: permissionKeys.list(params),
     queryFn: () => permissionApi.list(params),
     placeholderData: (prev) => prev,
+    enabled: options?.enabled ?? true,
   });
 }
 
