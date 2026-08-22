@@ -40,6 +40,7 @@ class LeaveRequestOut(BaseModel):
     status: LeaveStatus
     manager_id: uuid.UUID | None = None
     manager_comment: str | None = None
+    routed_project_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
 

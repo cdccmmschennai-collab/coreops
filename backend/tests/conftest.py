@@ -214,6 +214,7 @@ def make_project(db):
         start_date=None,
         planned_completion_date=None,
         end_date=None,  # legacy alias
+        head_employee_id=None,
     ) -> Project:
         project = Project(
             code=code,
@@ -222,6 +223,7 @@ def make_project(db):
             status=status,
             start_date=start_date,
             planned_completion_date=planned_completion_date or end_date,
+            head_employee_id=head_employee_id,
         )
         db.add(project)
         db.commit()
@@ -288,6 +290,7 @@ def make_leave_request(db):
         reason: str | None = "Test reason",
         status: LeaveStatus = LeaveStatus.pending,
         manager_id=None,
+        routed_project_id=None,
         created_by=None,
     ) -> LeaveRequest:
         req = LeaveRequest(
@@ -298,6 +301,7 @@ def make_leave_request(db):
             reason=reason,
             status=status,
             manager_id=manager_id,
+            routed_project_id=routed_project_id,
             created_by=created_by,
             updated_by=created_by,
         )
