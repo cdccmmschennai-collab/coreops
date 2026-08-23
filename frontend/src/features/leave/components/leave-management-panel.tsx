@@ -29,6 +29,12 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
   const [rawQueue, setQueue] = useUrlState("queue", "pending");
   const queue = resolveLeaveQueue(rawQueue);
 
+  // `showPermissionQueue` is only ever passed `false` for a Project Head's
+  // reused panel (the Permission-requests queue is unrelated, PM-only). Reused
+  // here as the "am I rendering for a Head" signal rather than adding a second
+  // prop: a Head's own requests must not appear in their own approval queues.
+  const excludeSelf = !showPermissionQueue;
+
   // limit:1 — these two only exist to read `total` for the badges.
   const pendingCount =
     useLeaveList({ status: "pending", limit: 1, offset: 0 }).data?.total ?? 0;
@@ -70,10 +76,12 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
         onChange={setQueue}
       />
 
-      {queue === "pending" && <LeaveReviewPanel employeeId={employeeId} />}
-      {queue === "cancellation" && <LeaveCancellationReviewPanel />}
+      {queue === "pending" && (
+        <LeaveReviewPanel employeeId={employeeId} excludeSelf={excludeSelf} />
+      )}
+      {queue === "cancellation" && <LeaveCancellationReviewPanel excludeSelf={excludeSelf} />}
       {queue === "permission" && showPermissionQueue && <PermissionReviewPanel />}
-      {queue === "all" && <AdminLeaveList />}
+      {queue === "all" && <AdminLeaveList excludeSelf={excludeSelf} />}
     </div>
   );
 }

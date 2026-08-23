@@ -17,6 +17,7 @@ function toQuery(p: LeaveListParams): string {
   if (p.status) sp.set("status", p.status);
   if (p.from) sp.set("from", p.from);
   if (p.to) sp.set("to", p.to);
+  if (p.exclude_self) sp.set("exclude_self", "true");
   sp.set("limit", String(p.limit));
   sp.set("offset", String(p.offset));
   return sp.toString();

@@ -9,6 +9,7 @@ export type LeaveStatus =
 export interface LeaveRequest {
   id: string;
   employee_id: string;
+  employee_name: string | null;
   leave_type: LeaveType;
   start_date: string;
   end_date: string;
@@ -115,6 +116,7 @@ export interface LeaveListParams {
   to?: string;
   limit: number;
   offset: number;
+  exclude_self?: boolean;
 }
 
 // Full label map — keeps `sick`/`unpaid` so any historical requests still

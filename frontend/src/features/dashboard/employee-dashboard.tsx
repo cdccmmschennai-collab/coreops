@@ -51,7 +51,7 @@ export function EmployeeDashboard() {
   const { data: scope } = useReportScope();
   const isProjectHead = scope?.is_project_head === true;
   const pendingLeave = useLeaveList(
-    { status: "pending", limit: 1, offset: 0 },
+    { status: "pending", limit: 1, offset: 0, exclude_self: true },
     { enabled: isProjectHead },
   );
   const pendingLeaveCount = pendingLeave.data?.total ?? 0;

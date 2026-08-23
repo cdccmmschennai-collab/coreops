@@ -524,6 +524,21 @@ def test_plain_employee_cannot_approve_anyone(
     assert res.status_code == 403, res.text
 
 
+def test_plain_employee_cannot_approve_unrouted_request(
+    client, db, make_user, make_employee, login,
+):
+    other_u = make_user("otheremp@x.com", role=UserRole.employee)
+    other = make_employee(employee_code="OE", user_id=other_u.id)
+    req = _make_leave(db, other.id, routed_project_id=None)
+
+    attacker_u = make_user("attacker@x.com", role=UserRole.employee)
+    make_employee(employee_code="AT", user_id=attacker_u.id)
+
+    h = login("attacker@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
 def test_head_cannot_approve_own_leave_even_if_self_routed(
     client, db, make_user, make_employee, make_project, login,
 ):

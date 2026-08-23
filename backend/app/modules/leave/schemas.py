@@ -33,6 +33,7 @@ class LeaveRequestOut(BaseModel):
 
     id: uuid.UUID
     employee_id: uuid.UUID
+    employee_name: str | None = None
     leave_type: LeaveType
     start_date: date
     end_date: date
