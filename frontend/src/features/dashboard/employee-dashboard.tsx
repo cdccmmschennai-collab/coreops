@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, CalendarOff, FileText, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,8 +23,9 @@ import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benc
 import { BenchmarkActivities } from "@/features/benchmarks/components/benchmark-activities";
 import { useProjects } from "@/features/projects/hooks";
 import { StatusBadge } from "@/features/work-reports/components/status-badge";
-import { useWorkReportList } from "@/features/work-reports/hooks";
+import { useWorkReportList, useReportScope } from "@/features/work-reports/hooks";
 import { projectSummary } from "@/features/work-reports/project-summary";
+import { useLeaveList } from "@/features/leave/hooks";
 
 import { greeting, todayISO, weekStartISO } from "./utils";
 
@@ -45,6 +47,14 @@ function ProjectDot({ i }: { i: number }) {
 export function EmployeeDashboard() {
   const router = useRouter();
   const { user, employee, employeeId } = useAuth();
+
+  const { data: scope } = useReportScope();
+  const isProjectHead = scope?.is_project_head === true;
+  const pendingLeave = useLeaveList(
+    { status: "pending", limit: 1, offset: 0, exclude_self: true },
+    { enabled: isProjectHead },
+  );
+  const pendingLeaveCount = pendingLeave.data?.total ?? 0;
 
   // Greet by employee full name — never the username/email/login id.
   // Resolution order: Employee.full_name (from /auth/me) → username fallback.
@@ -201,6 +211,18 @@ export function EmployeeDashboard() {
               <Button asChild className="justify-start" variant="secondary">
                 <Link href="/reports"><FileText className="h-4 w-4" /> All my reports</Link>
               </Button>
+              {isProjectHead && (
+                <Button asChild className="justify-start" variant="secondary">
+                  <Link href="/attendance?tab=leave&queue=pending">
+                    <CalendarOff className="h-4 w-4" /> Pending leave requests
+                    {pendingLeaveCount > 0 && (
+                      <Badge variant="warning" className="ml-auto">
+                        {pendingLeaveCount}
+                      </Badge>
+                    )}
+                  </Link>
+                </Button>
+              )}
               <Button asChild className="justify-start" variant="secondary">
                 <Link href="/attendance?leave=request"><CalendarOff className="h-4 w-4" /> Leave request</Link>
               </Button>

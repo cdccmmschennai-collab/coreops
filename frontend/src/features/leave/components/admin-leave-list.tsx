@@ -39,8 +39,15 @@ const STATUS_OPTIONS: { value: LeaveStatus | ""; label: string }[] = [
   { value: "cancelled", label: "Cancelled" },
 ];
 
+interface Props {
+  /** True only when this panel is reused inside a Project Head's "Team
+   *  approvals" tab — excludes the Head's own requests from the "All leave"
+   *  queue, same as the other two queues. */
+  excludeSelf?: boolean;
+}
+
 /** Admin-level full leave list with filters — the "All leave" queue. */
-export function AdminLeaveList() {
+export function AdminLeaveList({ excludeSelf = false }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -57,7 +64,13 @@ export function AdminLeaveList() {
     router.replace(`${pathname}?${next.toString()}`);
   }
 
-  const query = useLeaveList({ status, employee_id: employeeId || undefined, limit: LIMIT, offset });
+  const query = useLeaveList({
+    status,
+    employee_id: employeeId || undefined,
+    limit: LIMIT,
+    offset,
+    exclude_self: excludeSelf,
+  });
   const items = query.data?.items ?? [];
 
   return (
@@ -96,7 +109,9 @@ export function AdminLeaveList() {
               {items.map((req) => (
                 <TableRow key={req.id}>
                   <TableCell className="font-medium">
-                    {empById.get(req.employee_id) ?? req.employee_id.slice(0, 8)}
+                    {req.employee_name ??
+                      empById.get(req.employee_id) ??
+                      req.employee_id.slice(0, 8)}
                   </TableCell>
                   <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>
                   <TableCell className="tabular">{req.start_date}</TableCell>

@@ -20,32 +20,44 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
+import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
 
 import { useApproveLeave, useDeliverableImpact, useLeaveList, useRejectLeave } from "../hooks";
 import { LEAVE_TYPE_LABEL, type DeliverableConflict } from "../types";
 
-const COL_COUNT = 7;
-
 interface Props {
   /** If set, only show requests for this employee's team. Admin: leave undefined for all. */
   employeeId?: string;
+  /** True only when this panel is reused inside a Project Head's "Team
+   *  approvals" tab — excludes the Head's own requests from the queue so they
+   *  can't see (and get 403'd trying to act on) their own pending leave here. */
+  excludeSelf?: boolean;
 }
 
 /** Manager / Admin panel: pending requests with approve/reject actions.
  *  Clicking a row opens the leave detail page (full reason + deliverable impact). */
-export function LeaveReviewPanel({ employeeId: _eid }: Props) {
+export function LeaveReviewPanel({ employeeId: _eid, excludeSelf = false }: Props) {
   const router = useRouter();
-  const pendingQuery = useLeaveList({ status: "pending", limit: 50, offset: 0 });
+  const { role } = useAuth();
+  const isManager = role === "project_manager";
+  const pendingQuery = useLeaveList({
+    status: "pending",
+    limit: 50,
+    offset: 0,
+    exclude_self: excludeSelf,
+  });
   const approve = useApproveLeave();
   const reject = useRejectLeave();
   const { byId: empById } = useEmployeeOptions();
 
   const pending = pendingQuery.data?.items ?? [];
   const pendingIds = React.useMemo(() => pending.map((r) => r.id), [pending]);
+  const COL_COUNT = isManager ? 7 : 6;
 
-  // One bulk call flags which displayed rows overlap a planned deliverable.
-  const impactQuery = useDeliverableImpact(pendingIds);
+  // Deliverable Impact is PM-only decision support; the endpoint rejects a
+  // Project Head, so the call itself — not just the column — is guarded.
+  const impactQuery = useDeliverableImpact(isManager ? pendingIds : []);
   const impactByLeave = React.useMemo(() => {
     const map = new Map<string, DeliverableConflict[]>();
     for (const item of impactQuery.data?.items ?? []) {
@@ -124,7 +136,7 @@ export function LeaveReviewPanel({ employeeId: _eid }: Props) {
                 <TableHead>From</TableHead>
                 <TableHead>To</TableHead>
                 <TableHead>Reason</TableHead>
-                <TableHead>Deliverable Impact</TableHead>
+                {isManager && <TableHead>Deliverable Impact</TableHead>}
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -132,7 +144,9 @@ export function LeaveReviewPanel({ employeeId: _eid }: Props) {
               {pending.map((req) => {
                 const hasImpact = (impactByLeave.get(req.id) ?? []).length > 0;
                 const empName =
-                  empById.get(req.employee_id) ?? req.employee_id.slice(0, 8);
+                  req.employee_name ??
+                  empById.get(req.employee_id) ??
+                  req.employee_id.slice(0, 8);
                 return (
                   <React.Fragment key={req.id}>
                     <TableRow
@@ -146,16 +160,18 @@ export function LeaveReviewPanel({ employeeId: _eid }: Props) {
                       <TableCell className="max-w-[180px] truncate text-muted-foreground">
                         {req.reason ?? "—"}
                       </TableCell>
-                      <TableCell>
-                        {hasImpact ? (
-                          <Badge variant="warning">
-                            <AlertTriangle className="h-3 w-3" />
-                            Deliverable
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
+                      {isManager && (
+                        <TableCell>
+                          {hasImpact ? (
+                            <Badge variant="warning">
+                              <AlertTriangle className="h-3 w-3" />
+                              Deliverable
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                      )}
                       <TableCell>
                         <div
                           className="flex items-center gap-1"

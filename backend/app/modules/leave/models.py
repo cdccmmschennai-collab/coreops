@@ -69,6 +69,17 @@ class LeaveRequest(UUIDMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
     manager_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The project the employee's PREVIOUS WORKING DAY's Daily Work Report shows
+    # them on, resolved once at creation by leave/routing.py. This is the
+    # historical PROJECT only — never a frozen head id. Who may review/is
+    # notified is always the project's CURRENT head_employee_id, looked up
+    # fresh via app.core.authz at read/notify/approve time, so a Head
+    # reassignment after this request was filed is honoured (Phase 1 spec §15).
+    # NULL means no single project could be determined - the request falls
+    # back to the existing PM approval flow.
+    routed_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -77,4 +88,5 @@ class LeaveRequest(UUIDMixin, TimestampMixin, Base):
         Index("leave_employee_idx", "employee_id", "start_date"),
         Index("leave_manager_idx", "manager_id", "status"),
         Index("leave_status_idx", "status"),
+        Index("leave_routed_project_idx", "routed_project_id"),
     )

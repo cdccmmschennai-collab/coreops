@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
+import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
 
 import {
@@ -32,28 +33,44 @@ import {
   type LeaveRequest,
 } from "../types";
 
-const COL_COUNT = 6;
 const LIMIT = 50;
 
 type Decision = "approve" | "reject";
+
+interface Props {
+  /** True only when this panel is reused inside a Project Head's "Team
+   *  approvals" tab — excludes the Head's own requests from the queue so they
+   *  can't see (and get 403'd trying to act on) their own cancellation request
+   *  here. */
+  excludeSelf?: boolean;
+}
 
 /** PM queue for approved leave employees have asked to withdraw.
  *
  *  Approving cancels the leave outright — there is no second confirmation step
  *  for the employee. Attendance is never touched, which the confirmation says
  *  explicitly so the manager knows to review it afterwards. */
-export function LeaveCancellationReviewPanel() {
+export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
   const router = useRouter();
-  const query = useLeaveList({ status: "cancellation_requested", limit: LIMIT, offset: 0 });
+  const { role } = useAuth();
+  const isManager = role === "project_manager";
+  const query = useLeaveList({
+    status: "cancellation_requested",
+    limit: LIMIT,
+    offset: 0,
+    exclude_self: excludeSelf,
+  });
   const approve = useApproveLeaveCancellation();
   const reject = useRejectLeaveCancellation();
   const { byId: empById } = useEmployeeOptions();
 
   const rows = query.data?.items ?? [];
   const ids = React.useMemo(() => rows.map((r) => r.id), [rows]);
+  const COL_COUNT = isManager ? 6 : 5;
 
-  // One bulk call for the whole table — never one request per row.
-  const summaryQuery = useLeaveAttendanceSummary(ids);
+  // Attendance summary is PM-only decision support; the endpoint rejects a
+  // Project Head, so the call itself — not just the column — is guarded.
+  const summaryQuery = useLeaveAttendanceSummary(isManager ? ids : []);
   const summaryById = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const item of summaryQuery.data?.items ?? []) {
@@ -118,7 +135,7 @@ export function LeaveCancellationReviewPanel() {
                 <TableHead>Type</TableHead>
                 <TableHead>From</TableHead>
                 <TableHead>To</TableHead>
-                <TableHead>Attendance</TableHead>
+                {isManager && <TableHead>Attendance</TableHead>}
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -130,14 +147,18 @@ export function LeaveCancellationReviewPanel() {
                   onClick={() => router.push(`/attendance/leave/${req.id}`)}
                 >
                   <TableCell className="font-medium">
-                    {empById.get(req.employee_id) ?? req.employee_id.slice(0, 8)}
+                    {req.employee_name ??
+                      empById.get(req.employee_id) ??
+                      req.employee_id.slice(0, 8)}
                   </TableCell>
                   <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>
                   <TableCell className="tabular">{req.start_date}</TableCell>
                   <TableCell className="tabular">{req.end_date}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {attendanceSummaryLabel(summaryById.get(req.id))}
-                  </TableCell>
+                  {isManager && (
+                    <TableCell className="text-muted-foreground">
+                      {attendanceSummaryLabel(summaryById.get(req.id))}
+                    </TableCell>
+                  )}
                   <TableCell>
                     <div
                       className="flex items-center gap-1"

@@ -9,7 +9,7 @@ itself is covered in `test_leave_phase10.py`.
 from datetime import date, timedelta
 from decimal import Decimal
 
-from app.modules.leave.models import LeaveStatus, LeaveType
+from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave_balances import ledger
 from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 from app.modules.users.models import UserRole
@@ -32,6 +32,22 @@ def _fund(db, employee_id, days: str = "30.00"):
         )
     )
     db.commit()
+
+
+def _make_leave(db, employee_id, *, routed_project_id=None, start=None, end=None):
+    req = LeaveRequest(
+        employee_id=employee_id,
+        leave_type=LeaveType.casual,
+        start_date=start or (date.today() + timedelta(days=7)),
+        end_date=end or (date.today() + timedelta(days=7)),
+        reason="Test",
+        status=LeaveStatus.pending,
+        routed_project_id=routed_project_id,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return req
 
 
 def _payload(**overrides):
@@ -270,3 +286,300 @@ def test_filter_by_status(client, make_user, make_employee, make_leave_request, 
     res = client.get("/api/v1/leave-requests?status=pending", headers=h).json()
     assert res["total"] == 1
     assert res["items"][0]["status"] == "pending"
+
+
+# ---------- routing to project head ----------
+
+def test_create_routes_to_project_head_and_notifies(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    from datetime import timedelta
+
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    hu = make_user("head1@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HEAD1", user_id=hu.id)
+    project = make_project(code="RP-1", head_employee_id=head.id)
+
+    eu = make_user("emp10@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E10", user_id=eu.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    # `prev_day` must not be in the future - work_reports.service rejects a
+    # report dated after today - so it's pinned to the most recent working day
+    # at-or-before today, and `leave_date` is the next working day after that
+    # (rather than today+7 as originally sketched, which put `prev_day` days
+    # in the future on every day of the week and made the report creation
+    # below always fail with "Report date cannot be in the future").
+    prev_day = date.today()
+    while prev_day.weekday() >= 5:
+        prev_day -= timedelta(days=1)
+    leave_date = prev_day + timedelta(days=1)
+    while leave_date.weekday() >= 5:
+        leave_date += timedelta(days=1)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=prev_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp10@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["routed_project_id"] == str(project.id)
+
+    note = db.query(Notification).filter(Notification.user_id == hu.id).one()
+    assert note.type == "leave_submitted"
+    assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
+
+
+def test_create_no_head_falls_back_to_manager_notification(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    """The previous day's project DOES resolve, but has no Head assigned -
+    routed_project_id is still recorded, only the notification falls back."""
+    from datetime import timedelta
+
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    project = make_project(code="RP-2")  # no head_employee_id
+
+    mu = make_user("mgr10@x.com", role=UserRole.project_manager)
+    mgr = make_employee(employee_code="MGR10", user_id=mu.id)
+    eu = make_user("emp11@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E11", user_id=eu.id, manager_id=mgr.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    # `prev_day` must not be in the future - work_reports.service rejects a
+    # report dated after today - so it's pinned to the most recent working day
+    # at-or-before today, and `leave_date` is the next working day after that
+    # (rather than today+7 as originally sketched, which put `prev_day` days
+    # in the future on every day of the week and made the report creation
+    # below always fail with "Report date cannot be in the future").
+    prev_day = date.today()
+    while prev_day.weekday() >= 5:
+        prev_day -= timedelta(days=1)
+    leave_date = prev_day + timedelta(days=1)
+    while leave_date.weekday() >= 5:
+        leave_date += timedelta(days=1)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=prev_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp11@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["routed_project_id"] == str(project.id)
+
+    note = db.query(Notification).filter(Notification.user_id == mu.id).one()
+    assert note.type == "leave_submitted"
+    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+
+
+def test_create_self_as_head_falls_back_to_manager_notification(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    """The employee IS the routed project's Head - notifying them about their
+    own submission makes no sense, so this must fall back to their manager,
+    same as the no-head case."""
+    from datetime import timedelta
+
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    mu = make_user("mgr11@x.com", role=UserRole.project_manager)
+    mgr = make_employee(employee_code="MGR11", user_id=mu.id)
+    eu = make_user("emp12@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E12", user_id=eu.id, manager_id=mgr.id)
+    project = make_project(code="RP-3", head_employee_id=emp.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    # `prev_day` must not be in the future - work_reports.service rejects a
+    # report dated after today - so it's pinned to the most recent working day
+    # at-or-before today, and `leave_date` is the next working day after that
+    # (rather than today+7 as originally sketched, which put `prev_day` days
+    # in the future on every day of the week and made the report creation
+    # below always fail with "Report date cannot be in the future").
+    prev_day = date.today()
+    while prev_day.weekday() >= 5:
+        prev_day -= timedelta(days=1)
+    leave_date = prev_day + timedelta(days=1)
+    while leave_date.weekday() >= 5:
+        leave_date += timedelta(days=1)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=prev_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp12@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+
+    assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 1
+    assert db.query(Notification).filter(Notification.user_id == eu.id).count() == 0
+
+
+def _fund_and_login(login, email):
+    return login(email)
+
+
+def test_head_sees_only_own_routed_requests(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_a_u = make_user("heada@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HA", user_id=head_a_u.id)
+    head_b_u = make_user("headb@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HB", user_id=head_b_u.id)
+    project_a = make_project(code="SC-A", head_employee_id=head_a.id)
+    project_b = make_project(code="SC-B", head_employee_id=head_b.id)
+
+    emp_a_u = make_user("empa@x.com", role=UserRole.employee)
+    emp_a = make_employee(employee_code="EA", user_id=emp_a_u.id)
+    emp_b_u = make_user("empb@x.com", role=UserRole.employee)
+    emp_b = make_employee(employee_code="EB", user_id=emp_b_u.id)
+    make_employee(employee_code="EC", user_id=make_user("empc@x.com").id)  # unrelated, no routing
+
+    req_a = _make_leave(db, emp_a.id, routed_project_id=project_a.id)
+    req_b = _make_leave(db, emp_b.id, routed_project_id=project_b.id)
+
+    h = login("heada@x.com")
+    res = client.get("/api/v1/leave-requests", headers=h, params={"status": "pending"}).json()
+    ids = {row["id"] for row in res["items"]}
+    assert str(req_a.id) in ids
+    assert str(req_b.id) not in ids
+
+
+def test_head_can_approve_own_routed_request(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_u = make_user("headc@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HC", user_id=head_u.id)
+    project = make_project(code="SC-C", head_employee_id=head.id)
+
+    emp_u = make_user("empd@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ED", user_id=emp_u.id)
+    _fund(db, emp.id)
+
+    req = _make_leave(db, emp.id, routed_project_id=project.id)
+
+    h = login("headc@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+
+
+def test_head_cannot_approve_other_heads_request(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_a_u = make_user("heade@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HE", user_id=head_a_u.id)
+    make_project(code="SC-D", head_employee_id=head_a.id)
+    head_b_u = make_user("headf@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HF", user_id=head_b_u.id)
+    project_b = make_project(code="SC-E", head_employee_id=head_b.id)
+
+    emp_u = make_user("empe@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="EF", user_id=emp_u.id)
+    req = _make_leave(db, emp.id, routed_project_id=project_b.id)
+
+    h = login("heade@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_plain_employee_cannot_approve_anyone(
+    client, db, make_user, make_employee, make_project, login,
+):
+    project = make_project(code="SC-F")  # no head
+    emp_u = make_user("empf@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="EG", user_id=emp_u.id)
+    other_u = make_user("empg@x.com", role=UserRole.employee)
+    other = make_employee(employee_code="EH", user_id=other_u.id)
+    req = _make_leave(db, other.id, routed_project_id=project.id)
+
+    h = login("empf@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_plain_employee_cannot_approve_unrouted_request(
+    client, db, make_user, make_employee, login,
+):
+    other_u = make_user("otheremp@x.com", role=UserRole.employee)
+    other = make_employee(employee_code="OE", user_id=other_u.id)
+    req = _make_leave(db, other.id, routed_project_id=None)
+
+    attacker_u = make_user("attacker@x.com", role=UserRole.employee)
+    make_employee(employee_code="AT", user_id=attacker_u.id)
+
+    h = login("attacker@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_head_cannot_approve_own_leave_even_if_self_routed(
+    client, db, make_user, make_employee, make_project, login,
+):
+    head_u = make_user("headg@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HG", user_id=head_u.id)
+    project = make_project(code="SC-G", head_employee_id=head.id)
+    req = _make_leave(db, head.id, routed_project_id=project.id)
+
+    h = login("headg@x.com")
+    res = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_reassigned_head_takes_over_review_authority(
+    client, db, make_user, make_employee, make_project, login,
+):
+    """Spec §15: the PROJECT on the leave row is historical and frozen, but
+    WHO may review it is always the project's CURRENT head_employee_id - a
+    reassignment after the request was filed must be honoured immediately,
+    with no change to the leave row itself."""
+    head_a_u = make_user("headh@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HH", user_id=head_a_u.id)
+    head_b_u = make_user("headi@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HI", user_id=head_b_u.id)
+    project = make_project(code="SC-H", head_employee_id=head_a.id)
+
+    emp_u = make_user("empi@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="EI", user_id=emp_u.id)
+    _fund(db, emp.id)  # casual leave deducts balance - approval needs it funded
+    req = _make_leave(db, emp.id, routed_project_id=project.id)
+
+    # Reassign the project's Head from A to B - simulates the PM's existing
+    # `PUT /projects/{id}/head` action; nothing on the leave row changes.
+    project.head_employee_id = head_b.id
+    db.add(project)
+    db.commit()
+
+    h_a = login("headh@x.com")
+    res_a = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h_a, json={})
+    assert res_a.status_code == 403, res_a.text  # Head A lost authority
+
+    h_b = login("headi@x.com")
+    res_b = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h_b, json={})
+    assert res_b.status_code == 200, res_b.text  # Head B has it now

@@ -39,9 +39,10 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
@@ -58,6 +59,7 @@ from app.modules.leave.effects import (
 )
 from app.modules.leave_balances import ledger
 from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave import routing
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
     DeliverableConflictOut,
@@ -260,6 +262,47 @@ def _notify_manager(db: Session, employee: Employee, type_: str, title: str,
     _push(db, mgr.user_id, type_, title, message, entity_id, target_url)
 
 
+def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
+                            type_: str, title: str, message: str,
+                            queue: str | None = None) -> None:
+    """Notify whoever this request is routed to: the CURRENT Head of
+    `req.routed_project_id` if one is assigned (and isn't the requester
+    themself), else the employee's manager - the existing PM-fallback path,
+    unchanged.
+
+    The Head is resolved fresh here, never read off a value stored at
+    submission time, so a Head reassignment after filing still notifies the
+    right person (spec §15).
+
+    `queue` picks which queue the notification's `target_url` deep-links to.
+    It defaults to `None`, which preserves each existing caller's URL shape
+    exactly: the Head branch still lands on `queue=pending` (the request IS in
+    the pending queue for `leave_submitted`/`leave_cancelled`) and the fallback
+    branch omits `&queue=` entirely, same as before. A caller whose
+    notification is about something NOT in the pending queue - namely
+    `request_leave_cancellation`, which moves the request straight to
+    `cancellation_requested` - passes `queue="cancellation"` so both branches
+    deep-link to the queue that can actually contain it.
+    """
+    head_id = (
+        authz.project_head_employee_id(db, req.routed_project_id)
+        if req.routed_project_id is not None
+        else None
+    )
+    if head_id is not None and head_id != employee.id:
+        head = db.get(Employee, head_id)
+        if head is not None and head.user_id is not None:
+            _push(db, head.user_id, type_, title, message, req.id,
+                  f"/attendance?tab=leave&queue={queue or 'pending'}&id={req.id}")
+            return
+    fallback_url = (
+        f"/attendance?tab=leave&queue={queue}&id={req.id}"
+        if queue is not None
+        else f"/attendance?tab=leave&id={req.id}"
+    )
+    _notify_manager(db, employee, type_, title, message, req.id, fallback_url)
+
+
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
                      message: str, entity_id: uuid.UUID | None = None,
                      target_url: str | None = None) -> None:
@@ -356,11 +399,26 @@ def _apply_scope(db: Session, actor: User, stmt):
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
+    head_project_ids = authz.reviewable_project_ids(db, actor)
+    if head_project_ids:
+        return (
+            stmt.where(
+                or_(
+                    LeaveRequest.employee_id == me.id,
+                    LeaveRequest.routed_project_id.in_(head_project_ids),
+                )
+            ),
+            True,
+        )
     return stmt.where(LeaveRequest.employee_id == me.id), True
 
 
 def _assert_can_read(db: Session, actor: User, req: LeaveRequest) -> None:
     if actor.role == UserRole.project_manager:
+        return
+    if req.routed_project_id is not None and authz.can_review_report(
+        db, actor, {req.routed_project_id}
+    ):
         return
     me = _current_employee(db, actor)
     if me is None:
@@ -374,23 +432,31 @@ def _assert_can_review(db: Session, actor: User, req: LeaveRequest | None = None
     """Who may rule on a leave request - enforced here, in the backend, on every
     decision path. The frontend hides the buttons; this is what actually stops it.
 
-    NOBODY REVIEWS THEIR OWN LEAVE, including a project manager. The role check
-    alone is not enough: project managers are employees too and file their own
-    requests, so without the second check a PM could approve their own leave and
-    grant themselves the balance. `req` is therefore passed on every decision
-    path - approve, reject, and both cancellation decisions - because approving
-    the withdrawal of your own leave is the same self-review problem.
+    PM (any request) or the CURRENT Head of the request's routed project may
+    review. `authz.can_review_report` already encodes exactly that rule (it's
+    the same helper Work Reports uses) so this stays a one-line delegation
+    rather than a second copy of the PM-or-Head check.
+
+    NOBODY REVIEWS THEIR OWN LEAVE, including a project manager or a Head:
+    project managers and Heads are employees too and file their own requests,
+    so without the second check either could approve their own leave and grant
+    themselves the balance. `req` is therefore passed on every decision path -
+    approve, reject, and both cancellation decisions.
     """
-    if actor.role != UserRole.project_manager:
-        raise AppError("forbidden", "Only project managers can review leave requests.", 403)
+    project_ids = {req.routed_project_id} if (req is not None and req.routed_project_id is not None) else set()
+    if not authz.can_review_report(db, actor, project_ids):
+        raise AppError(
+            "forbidden",
+            "Only a project manager or this request's assigned Project Head can review it.",
+            403,
+        )
     if req is None:
         return
     me = _current_employee(db, actor)
     if me is not None and req.employee_id == me.id:
         raise AppError(
             "forbidden",
-            "You can't review your own leave request - another project manager "
-            "has to decide it.",
+            "You can't review your own leave request - another reviewer has to decide it.",
             403,
         )
 
@@ -484,11 +550,17 @@ def list_leave_requests(
     date_to: date | None,
     limit: int,
     offset: int,
+    exclude_self: bool = False,
 ) -> tuple[list[LeaveRequest], int]:
     stmt = select(LeaveRequest)
     stmt, allowed = _apply_scope(db, actor, stmt)
     if not allowed:
         return [], 0
+
+    if exclude_self:
+        me = _current_employee(db, actor)
+        if me is not None:
+            stmt = stmt.where(LeaveRequest.employee_id != me.id)
 
     if employee_id is not None:
         stmt = stmt.where(LeaveRequest.employee_id == employee_id)
@@ -509,13 +581,44 @@ def list_leave_requests(
         .scalars()
         .all()
     )
+    _attach_employee_names(db, rows)
     return list(rows), total
 
 
 def get_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRequest:
     req = _fetch(db, req_id)
     _assert_can_read(db, actor, req)
+    _attach_employee_names(db, [req])
     return req
+
+
+def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
+    """Set `.employee_name` on each row from one batch query.
+
+    `LeaveRequest` has no ORM relationship to `Employee` (by design - a bare
+    `employee_id` column), so the name isn't a mapped attribute. Setting it here
+    is still legal: Pydantic v2's `from_attributes` reads it off the instance at
+    validation time in the router, the same pattern `deliverable_impacts` already
+    uses for `DeliverableConflictOut.employee_name` below.
+
+    This makes the Employee lookup a backend concern for every caller of these
+    two functions, rather than depending on `GET /employees`, which returns only
+    the caller's own row for a plain-employee-role actor (which a Project Head
+    still is) - the bug this exists to fix.
+    """
+    if not rows:
+        return
+    employee_ids = {r.employee_id for r in rows}
+    names = {
+        row.id: f"{row.first_name} {row.last_name}".strip()
+        for row in db.execute(
+            select(Employee.id, Employee.first_name, Employee.last_name).where(
+                Employee.id.in_(employee_ids)
+            )
+        ).all()
+    }
+    for r in rows:
+        r.employee_name = names.get(r.employee_id)
 
 
 # ---------- employee writes -----------------------------------------------
@@ -545,18 +648,17 @@ def create_leave_request(
         end_date=data.end_date,
         reason=data.reason,
         status=LeaveStatus.pending,
+        routed_project_id=routing.resolve_routed_project(db, me.id, data.start_date),
         created_by=actor.id,
         updated_by=actor.id,
     )
     db.add(req)
     db.commit()
     db.refresh(req)
-    _notify_manager(
-        db, me, "leave_submitted",
+    _notify_routed_approver(
+        db, me, req, "leave_submitted",
         f"{me.full_name} submitted a leave request",
         f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
-        req.id,
-        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -622,12 +724,10 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
     )
     db.commit()
     db.refresh(req)
-    _notify_manager(
-        db, me, "leave_cancelled",
+    _notify_routed_approver(
+        db, me, req, "leave_cancelled",
         f"{me.full_name} cancelled a leave request",
         f"{me.full_name} cancelled their leave request ({req.start_date} to {req.end_date}).",
-        req.id,
-        f"/attendance?tab=leave&id={req.id}",
     )
     return req
 
@@ -678,13 +778,12 @@ def request_leave_cancellation(
     )
     db.commit()
     db.refresh(req)
-    _notify_manager(
-        db, me, "leave_cancellation_requested",
+    _notify_routed_approver(
+        db, me, req, "leave_cancellation_requested",
         f"{me.full_name} requested leave cancellation",
         f"{me.employee_code} - {me.full_name} requested cancellation of approved "
         f"leave for {_period(req)}.",
-        req.id,
-        f"/attendance?tab=leave&queue=cancellation&id={req.id}",
+        queue="cancellation",
     )
     return req
 

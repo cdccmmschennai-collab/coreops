@@ -50,6 +50,7 @@ def list_leave_requests(
     date_to: date | None = Query(default=None, alias="to"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    exclude_self: bool = Query(default=False),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestPage:
@@ -62,6 +63,7 @@ def list_leave_requests(
         date_to=date_to,
         limit=limit,
         offset=offset,
+        exclude_self=exclude_self,
     )
     return LeaveRequestPage(
         items=[LeaveRequestOut.model_validate(r) for r in rows],
@@ -149,7 +151,7 @@ def request_leave_cancellation(
 @router.post("/{req_id}/approve-cancellation", response_model=LeaveRequestOut)
 def approve_leave_cancellation(
     req_id: uuid.UUID,
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
@@ -160,7 +162,7 @@ def approve_leave_cancellation(
 @router.post("/{req_id}/reject-cancellation", response_model=LeaveRequestOut)
 def reject_leave_cancellation(
     req_id: uuid.UUID,
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
@@ -172,7 +174,7 @@ def reject_leave_cancellation(
 def approve_leave_request(
     req_id: uuid.UUID,
     body: LeaveReviewBody = LeaveReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
@@ -184,7 +186,7 @@ def approve_leave_request(
 def reject_leave_request(
     req_id: uuid.UUID,
     body: LeaveReviewBody = LeaveReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return LeaveRequestOut.model_validate(
