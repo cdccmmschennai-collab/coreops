@@ -70,6 +70,39 @@ class WorkReportTaskIn(BaseModel):
     spares_count: int = Field(default=0, ge=0)
     pages_count: int = Field(default=0, ge=0)
     records_count: int = Field(default=0, ge=0)
+    # LUMPSUM (LS) rows only — which of the six units above the row's main Count
+    # belongs to, chosen by the employee beside the Count input because a
+    # lumpsum sub-activity configures no relevant_count_field of its own.
+    #
+    # This names a unit; it never carries a value. The number itself still goes
+    # in the matching *_count field above, so "Count [25] [Tags]" arrives as
+    # tags_count=25 + count_field='tags', and the "Other counts" section keeps
+    # writing the other five exactly as it always has.
+    #
+    # Validated in the service against activity_master's VALID_COUNT_FIELDS —
+    # the one list Activity Master itself validates against — so an arbitrary
+    # name from a client is rejected, never persisted. On any row that is not a
+    # lumpsum it is CLEARED rather than rejected (a quantity mode's unit comes
+    # from Activity Master and is not the client's to choose), the same way an
+    # inapplicable benchmark_exception_code is cleared.
+    count_field: str | None = Field(default=None, max_length=20)
+    # The lumpsum Count when the client has NOT named the field it belongs to.
+    #
+    # A count that names its field is already in that field's own *_count above
+    # — there is nowhere else for a count to live, and that is what makes the
+    # export work without a mapping of its own. This exists so the pairing rule
+    # can be enforced HERE rather than trusted to the form:
+    #
+    #     a count with no field  -> rejected (422); the server never guesses
+    #                               which of the six columns was meant
+    #     no count, no field     -> accepted; an activity with nothing to count
+    #                               is an ordinary, valid activity
+    #
+    # Sent together with count_field it is simply written into that field's
+    # column, so an explicit client can use the pair directly. 0 counts as no
+    # count, matching the columns themselves (NOT NULL DEFAULT 0, so an
+    # untouched unit already reads 0).
+    count_value: int | None = Field(default=None, ge=0)
     # Activity Master selection — replaces free-text activity_type going forward.
     # QUANTITY sub-activities are benchmarked against whichever of the six count
     # fields above the master's relevant_count_field names — there is no separate
@@ -139,6 +172,12 @@ class WorkReportTaskOut(BaseModel):
     benchmark_type_snapshot: str | None = None
     # Which count field (tags/docs/bom/spares/pages/records) fed the calc above.
     # Historical rows legitimately still read 'docs' etc.; never rewritten on read.
+    #
+    # On a LUMPSUM row it carries the unit the EMPLOYEE picked beside the Count
+    # input (WorkReportTaskIn.count_field), written at save time rather than at
+    # submit — that is what restores "Count [25] [Tags]" when the report is
+    # reopened for editing. The two never collide: a lumpsum sub-activity has no
+    # benchmark unit of its own to freeze here.
     relevant_count_field_snapshot: str | None = None
     # Structured benchmark exception, as the server currently holds it (migration
     # 0064) — so reopening/editing a report restores the checkbox exactly, and a

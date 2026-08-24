@@ -10917,6 +10917,28 @@
       },
       "ActivityCell": {
         "properties": {
+          "day_part": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Part"
+          },
+          "period_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Status"
+          },
           "project_code": {
             "anyOf": [
               {
@@ -10973,6 +10995,39 @@
           "records": {
             "type": "integer",
             "title": "Records"
+          },
+          "benchmark_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Type"
+          },
+          "benchmark_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Value"
+          },
+          "benchmark_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Unit"
           }
         },
         "type": "object",
@@ -22686,6 +22741,30 @@
             "minimum": 0.0,
             "title": "Records Count",
             "default": 0
+          },
+          "count_field": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count Field"
+          },
+          "count_value": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count Value"
           },
           "sub_activity_id": {
             "anyOf": [

@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+import { COUNT_FIELDS } from "../activity-master/types.ts";
+import type { RelevantCountField } from "../activity-master/types.ts";
+import {
+  COUNT_FIELD_REQUIRED_MESSAGE,
+  countNeedsField,
+  hasCountValue,
+} from "./ls-count.ts";
 import { validateHalfRowCounts } from "./split-period-rows.ts";
 import type {
   WorkReport,
@@ -179,6 +186,17 @@ const countSchema = z
     "Enter a whole number ≥ 0",
   );
 
+// The lumpsum Count row's unit picker. "" = nothing picked; anything else must
+// be one of the six units the application already supports — validated against
+// COUNT_FIELDS, the same list Activity Master and the backend validate against,
+// so there is no second list of allowed fields anywhere.
+const countFieldSchema = z
+  .string()
+  .refine(
+    (v) => v === "" || COUNT_FIELDS.includes(v as RelevantCountField),
+    "Pick one of the supported count fields",
+  );
+
 const taskSchema = z
   .object({
     // Which reporting period the row belongs to. Always "full_day" in the
@@ -223,6 +241,19 @@ const taskSchema = z
     spares_count:  countSchema.default("0"),
     pages_count:   countSchema.default("0"),
     records_count: countSchema.default("0"),
+    // LUMPSUM (LS) sub-activities only — which of the six units above the row's
+    // main Count belongs to, picked in the dropdown beside it. "" = not picked.
+    // It names a unit, never a value: "Count [25] [Tags]" saves as
+    // tags_count="25" + count_field="tags". The server rejects an unknown name
+    // and clears it on any row that is not a lumpsum, so a value left over from
+    // a mode switch can never repoint a benchmarked count.
+    count_field: countFieldSchema.default(""),
+    // The Count input's value while no field has been named for it yet (see
+    // ls-count.ts LUMPSUM_STAGED_COUNT). The employee can type the number
+    // first; naming a field moves it straight into that unit's own count field
+    // above, which is where a saved count always lives. Empty on every row that
+    // has named its field — and on every non-lumpsum row.
+    count_value: countSchema.default(""),
     // Task sub-activities only — the completion checkbox. started_date/
     // due_date/completed_date are never user-entered; they're system-managed
     // (shown read-only from the API, set via the dedicated completion-toggle
@@ -253,6 +284,18 @@ const taskSchema = z
     planning_plant_description: z.string().optional(),
   })
   .superRefine((v, ctx) => {
+    // Conditionally required, never unconditionally: a count that has been
+    // entered must say which field it belongs to, while an activity with no
+    // count at all saves exactly as it always did. Only a lumpsum row can hold
+    // a staged count (nothing else renders the input), so this rule cannot
+    // affect any other activity type.
+    if (countNeedsField(v.count_value, v.count_field)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: COUNT_FIELD_REQUIRED_MESSAGE,
+        path: ["count_field"],
+      });
+    }
     // Legacy rows (pre-Activity Master) keep their free-text activity_type and
     // are exempt — new rows must pick both an Activity and a Sub-Activity.
     if (!v.activity_type.trim() && !v.sub_activity_id.trim()) {
@@ -425,6 +468,8 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   spares_count:   "0",
   pages_count:    "0",
   records_count:  "0",
+  count_field:    "",
+  count_value:    "",
   is_completed:   false,
   benchmark_exception_code: "",
   started_date:   undefined,
@@ -495,6 +540,14 @@ function toTaskBody(t: WorkReportFormValues["tasks"][number]) {
     spares_count:  toCount(t.spares_count),
     pages_count:   toCount(t.pages_count),
     records_count: toCount(t.records_count),
+    // null (not "") when nothing is picked — the column is nullable and the
+    // server treats an unknown field name as a client error.
+    count_field:   orNull(t.count_field),
+    // The unattributed count, sent so the SERVER can reject it rather than
+    // guess which column it meant. A count that has named its field is already
+    // in that field above, so this is null on every well-formed payload — the
+    // form blocks the save before it can be anything else.
+    count_value:   hasCountValue(t.count_value) ? toCount(t.count_value) : null,
     is_completed:  t.is_completed,
     // null (not "") when unset — the column is nullable and the server treats
     // an unknown code as a client error, so an empty string must never be sent.
@@ -637,6 +690,18 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             spares_count:  String(t.spares_count ?? 0),
             pages_count:   String(t.pages_count ?? 0),
             records_count: String(t.records_count ?? 0),
+            // Restores "Count [25] [Tags]" when the report is reopened: the
+            // server stores the picked unit in relevant_count_field_snapshot
+            // (see backend work_reports/schemas.py). On a benchmarked row the
+            // same field holds the MASTER's unit — harmless, because the editor
+            // only ever shows the dropdown for a lumpsum row and the server
+            // clears the value again for every other mode.
+            count_field:   t.relevant_count_field_snapshot ?? "",
+            // A SAVED count always lives in its own unit's field above, so the
+            // staging slot starts empty on every reopened row — including a row
+            // that was saved with no count at all, which stays valid and
+            // editable exactly as it was.
+            count_value:   "",
             is_completed:   t.is_completed ?? false,
             // Restores the checkbox when editing a draft or a reopened report.
             // The server returns what it currently HOLDS (it clears an

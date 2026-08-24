@@ -30,7 +30,9 @@ from app.modules.activity_master.models import (
     COUNT_FIELD_BY_UNIT,
     LEVEL_SUB_ACTIVITY,
     TASK_BENCHMARK_TYPES,
+    VALID_COUNT_FIELDS,
     ActivityMaster,
+    is_lumpsum_unit_row,
 )
 from app.modules.activity_master import access_service
 from app.modules.activity_master.benchmark_exception import (
@@ -498,6 +500,27 @@ def _validate_tasks(
             raise AppError(
                 "validation_error", "Unknown benchmark exception code.", 422
             )
+        # Lumpsum count unit (see WorkReportTaskIn.count_field). An unknown name
+        # is a client error and is rejected outright — the field ends up naming a
+        # real count column, so it is never taken on trust. A known unit on a row
+        # whose mode does not let the employee choose one is CLEARED below rather
+        # than rejected, exactly as an inapplicable exception code is.
+        count_field = getattr(task, "count_field", None) or None
+        if count_field is not None and count_field not in VALID_COUNT_FIELDS:
+            raise AppError("validation_error", "Unknown count field.", 422)
+        # The conditional requirement (mirrored in the form's own schema, which
+        # blocks the save first for a usable message). A count that has been
+        # entered must say which field it belongs to; the server will not guess
+        # a column for it. Checked against what the CLIENT sent, before the
+        # clearing rules below, so an unattributed number is never quietly
+        # dropped. `or None` is deliberate: 0 is no count, not a count of zero.
+        count_value = getattr(task, "count_value", None) or None
+        if count_value is not None and count_field is None:
+            raise AppError(
+                "validation_error",
+                "Please select a field for the entered count.",
+                422,
+            )
         if getattr(task, "sub_activity_id", None) is not None:
             sub = db.get(ActivityMaster, task.sub_activity_id)
             if (
@@ -521,6 +544,13 @@ def _validate_tasks(
             # a quantity does not stop it being a deadline-bearing task).
             is_task_based = sub.benchmark_type in TASK_BENCHMARK_TYPES
             benchmark_period_days = sub.benchmark_period_days
+            # Only a lumpsum row carries an employee-chosen unit. A quantity
+            # mode's unit is a property of its benchmark (Activity Master's
+            # relevant_count_field) and is frozen at submit by _apply_benchmarks,
+            # so anything sent for one of those is dropped here.
+            if not is_lumpsum_unit_row(sub.benchmark_type, sub.relevant_count_field):
+                count_field = None
+                count_value = None
             # Clear an exception the selected sub-activity cannot carry: a task
             # mode, or a counted unit outside the eligible set (Phase 1: TAGS).
             if exception_code is not None and not is_eligible_row(
@@ -529,8 +559,24 @@ def _validate_tasks(
                 exception_code = None
         else:
             # No Activity Master selection at all — nothing to benchmark, so
-            # nothing to except.
+            # nothing to except, and no mode that could take a chosen unit.
             exception_code = None
+            count_field = None
+            count_value = None
+        # A named field with nothing counted against it is not a state worth
+        # storing: it would restore as a picked field with an empty Count and
+        # export an artificial 0 under that column. Selecting a field is only
+        # ever a statement ABOUT a count, so with no count it is simply dropped
+        # — the row stays valid and saves, which is what an activity with
+        # nothing to count needs.
+        if count_field is not None:
+            column = COUNT_FIELD_BY_UNIT[count_field]
+            resolved = (
+                count_value if count_value is not None else getattr(task, column, 0)
+            )
+            if not resolved:
+                count_field = None
+                count_value = None
         # Optional Maintenance Plant selection — independent of the project's
         # own assigned plant; which plant the employee worked at that day.
         maintenance_plant_code: str | None = None
@@ -558,6 +604,8 @@ def _validate_tasks(
             "is_task_based": is_task_based,
             "benchmark_period_days": benchmark_period_days,
             "benchmark_exception_code": exception_code,
+            "count_field": count_field,
+            "count_value": count_value,
             "maintenance_plant_code": maintenance_plant_code,
             "maintenance_plant_description": maintenance_plant_description,
             "planning_plant_code": planning_plant_code,
@@ -1473,6 +1521,14 @@ def _add_task_row(
     life: dict,
 ) -> None:
     """Insert one work_report_tasks row from its validated input + snapshots."""
+    # The six unit columns. A lumpsum row that sent its Count as the explicit
+    # count_field/count_value PAIR has that value written into the named
+    # column here — the one place a count is ever redirected, and only ever to
+    # the column the client itself named (already validated by _validate_tasks).
+    # Every other row's counts are its own, unchanged.
+    counts = {column: getattr(task, column) for column in COUNT_FIELD_BY_UNIT.values()}
+    if snap["count_field"] is not None and snap["count_value"] is not None:
+        counts[COUNT_FIELD_BY_UNIT[snap["count_field"]]] = snap["count_value"]
     db.add(
         WorkReportTask(
             report_id=report.id,
@@ -1482,18 +1538,19 @@ def _add_task_row(
             minutes_spent=task.minutes_spent,
             task_minutes_spent=task.task_minutes_spent,
             activity_type=snap["activity_type"],
-            tags_count=task.tags_count,
-            docs_count=task.docs_count,
-            bom_count=task.bom_count,
-            spares_count=task.spares_count,
-            pages_count=task.pages_count,
-            records_count=task.records_count,
+            **counts,
             sub_activity_id=task.sub_activity_id,
             sub_activity_name=snap["sub_activity_name"],
             activity_name=snap["activity_name"],
             # Already validated/cleared for static eligibility by _validate_tasks;
             # re-checked against the frozen target at submit.
             benchmark_exception_code=snap["benchmark_exception_code"],
+            # The lumpsum row's employee-chosen count unit, already validated
+            # (and cleared to None for every non-lumpsum row) by _validate_tasks.
+            # Written at SAVE time — unlike the quantity modes, whose unit this
+            # column takes from Activity Master at submit — so reopening a draft
+            # restores the picked unit beside the Count it belongs to.
+            relevant_count_field_snapshot=snap["count_field"],
             started_date=life["started_date"],
             due_date=life["due_date"],
             is_completed=life["is_completed"],
@@ -1998,7 +2055,14 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
         row.benchmark_base_value_snapshot = base_value
         row.benchmark_fraction_snapshot = fraction
         row.benchmark_period_days_snapshot = sub.benchmark_period_days
-        row.relevant_count_field_snapshot = sub.relevant_count_field
+        # A LUMPSUM row's unit is the employee's own choice, already written at
+        # save time (_add_task_row); the master has none to freeze, so rewriting
+        # it here would silently drop the selection the moment the report was
+        # submitted. Every other mode keeps the original behaviour exactly —
+        # including a row whose sub-activity was RECONFIGURED into a quantity
+        # mode, which stops being a lumpsum row and is overwritten as before.
+        if not is_lumpsum_unit_row(sub.benchmark_type, sub.relevant_count_field):
+            row.relevant_count_field_snapshot = sub.relevant_count_field
         actual_value = None
         if sub.relevant_count_field:
             column = _COUNT_FIELD_COLUMNS.get(sub.relevant_count_field)

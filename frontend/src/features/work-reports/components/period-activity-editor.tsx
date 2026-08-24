@@ -11,7 +11,7 @@
  */
 import * as React from "react";
 import { type UseFormReturn } from "react-hook-form";
-import { Check, Trash2 } from "lucide-react";
+import { Check, Trash2, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,13 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   COUNT_FIELD_KEY,
   COUNT_FIELD_LABEL,
@@ -46,23 +53,28 @@ import {
   resolveExceptionCode,
 } from "../benchmark-exception";
 import { scaledTarget } from "../benchmark-target";
+import {
+  COUNT_FIELD_OPTIONS,
+  LUMPSUM_STAGED_COUNT,
+  asCountField,
+  countFieldName,
+  hasCountValue,
+  isLumpsumUnitRow,
+  lumpsumCountName,
+  otherCountFields,
+  primaryCountField,
+  type CountFieldName,
+} from "../ls-count";
 import { type WorkReportFormValues } from "../schemas";
 
 // COUNT_FIELD_KEY / COUNT_FIELD_LABEL are imported from activity-master/types:
 // one declaration of the six units, mirroring the backend's COUNT_FIELD_BY_UNIT.
+// Which unit owns the main Count input, and which are left to "Other counts",
+// is decided by ../ls-count (pure, unit-tested) — never inline here.
 
-/** The form field name for a unit, typed against the task row's count fields. */
-export type CountFieldName =
-  | "tags_count" | "docs_count" | "bom_count"
-  | "spares_count" | "pages_count" | "records_count";
-
-export const countFieldName = (u: RelevantCountField): CountFieldName =>
-  COUNT_FIELD_KEY[u] as CountFieldName;
-
-const ALL_COUNT_FIELDS: CountFieldName[] = [
-  "tags_count", "docs_count", "bom_count",
-  "spares_count", "pages_count", "records_count",
-];
+// Re-exported: the classic form imports both from this module.
+export { countFieldName };
+export type { CountFieldName };
 
 // Human labels + badge tone for a work item's derived lifecycle.
 export const LIFECYCLE_LABEL: Record<string, string> = {
@@ -612,6 +624,15 @@ export function PeriodActivityEditor({
                             form.setValue(`tasks.${index}.sub_activity_id`, "");
                             form.setValue(`tasks.${index}.sub_activity_name`, undefined);
                             form.setValue(`tasks.${index}.activity_name`, undefined);
+                            // The lumpsum Count unit belongs to the sub-activity
+                            // that was just dropped, so the pick goes with it —
+                            // the number stays where it was entered rather than
+                            // being silently deleted. A count still waiting for
+                            // a field goes too: its input is about to unmount,
+                            // and an unattributed number the employee can no
+                            // longer see must not sit there blocking the save.
+                            form.setValue(`tasks.${index}.count_field`, "");
+                            form.setValue(`tasks.${index}.count_value`, "");
                           }
                         }}
                         options={activityOptions}
@@ -655,6 +676,16 @@ export function PeriodActivityEditor({
                             // unit and target), so any exception recorded
                             // against the old one no longer describes anything.
                             form.setValue(`tasks.${index}.benchmark_exception_code`, "");
+                            // The Count unit was picked for the OLD sub-activity
+                            // (and the new one may not even be a lumpsum), so a
+                            // real change starts it unpicked, and any count
+                            // still waiting for a field is dropped with it. The
+                            // counts already stored under a unit are left alone
+                            // — the same treatment "Other counts" values get.
+                            if (prev !== v) {
+                              form.setValue(`tasks.${index}.count_field`, "");
+                              form.setValue(`tasks.${index}.count_value`, "");
+                            }
                             // Clear the OLD sub-activity's benchmarked count
                             // when the selection actually changes (see the
                             // classic form for the full rationale).
@@ -725,7 +756,11 @@ export function PeriodActivityEditor({
 
             {/* Row B2: quantity counts. The sub-activity's configured unit
                 is shown prominently with its read-only target; the other
-                five stay collapsed so six equal inputs are never presented. */}
+                five stay collapsed so six equal inputs are never presented.
+                A LUMPSUM row has no configured unit, so it gets the combined
+                "Count [25] [Tags]" row instead — same idea, one input, with the
+                employee naming the unit. Either way the unit on show is removed
+                from "Other counts", so no field ever has two inputs. */}
             {(() => {
               const subId = watchedTasks?.[index]?.sub_activity_id;
               const sub = subId ? subActivityById.get(subId) : undefined;
@@ -735,6 +770,28 @@ export function PeriodActivityEditor({
                 ? sub!.relevant_count_field
                 : null;
               const targetName = unit ? countFieldName(unit) : null;
+              // LUMPSUM (LS): Activity Master configures no unit, so the row
+              // carries the employee's own pick beside its Count.
+              const isLumpsum = isLumpsumUnitRow(
+                sub?.benchmark_type,
+                sub?.relevant_count_field,
+              );
+              // The unit that owns the row's main Count input — the master's on
+              // a benchmarked row, the employee's pick on a lumpsum, null when
+              // neither applies. Decided by the pure rule in ../ls-count, which
+              // also decides what is left for "Other counts", so the two can
+              // never disagree and show the same field twice.
+              const primary = primaryCountField({
+                benchmarkType: sub?.benchmark_type,
+                relevantCountField: sub?.relevant_count_field,
+                selectedCountField: row?.count_field,
+              });
+              // Where the lumpsum Count input reads/writes right now: the named
+              // unit's own field, or the staging slot while nothing is named.
+              const lumpsumValueName = lumpsumCountName(primary);
+              // The clear control appears only once there is something to undo.
+              const canClearLumpsum =
+                !!primary || hasCountValue(row?.[lumpsumValueName]);
               // The period fraction scales every displayed target exactly as
               // the backend freezes it at submit (full day x1, half x0.5),
               // rounded up to a whole unit — half of 35 tags is 18, never 17.5.
@@ -752,7 +809,10 @@ export function PeriodActivityEditor({
                 actual: targetName ? row?.[targetName] : undefined,
               });
 
-              const others = ALL_COUNT_FIELDS.filter((n) => n !== targetName);
+              // Everything except the unit already on show above — this is the
+              // rule that stops a selected Tags/Docs/… appearing a second time
+              // as its own free-text input.
+              const others = otherCountFields(primary);
               // Never hide a stored value: if any collapsed unit already
               // carries a number, the panel opens so it stays visible.
               const othersHaveValues = others.some(
@@ -760,8 +820,11 @@ export function PeriodActivityEditor({
               );
 
               const renderCount = (
-                name: CountFieldName,
-                label: string,
+                name: CountFieldName | typeof LUMPSUM_STAGED_COUNT,
+                // null renders no label of its own — used by the lumpsum Count
+                // row, which carries ONE "Count" heading over both controls so
+                // the input and the field picker line up as a pair.
+                label: string | null,
                 prominent: boolean,
               ) => (
                 <FormField
@@ -769,17 +832,19 @@ export function PeriodActivityEditor({
                   control={form.control}
                   name={`tasks.${index}.${name}`}
                   render={({ field: f }) => (
-                    <FormItem>
-                      <FormLabel
-                        className={
-                          prominent
-                            ? "block text-sm font-semibold leading-none text-foreground"
-                            : "block text-xs leading-none text-muted-foreground"
-                        }
-                      >
-                        {label}
-                        {prominent && <span className="text-destructive"> *</span>}
-                      </FormLabel>
+                    <FormItem className="min-w-0">
+                      {label !== null && (
+                        <FormLabel
+                          className={
+                            prominent
+                              ? "block text-sm font-semibold leading-none text-foreground"
+                              : "block text-xs leading-none text-muted-foreground"
+                          }
+                        >
+                          {label}
+                          {prominent && <span className="text-destructive"> *</span>}
+                        </FormLabel>
+                      )}
                       <FormControl>
                         {/* CountInput (text + numeric keypad), NOT a native
                             number input: scrolling toward Save must never
@@ -800,8 +865,141 @@ export function PeriodActivityEditor({
                 />
               );
 
+              /**
+               * The LUMPSUM Count row: ONE free-typed value on the left, the
+               * field it belongs to on the right.
+               *
+               *     Count
+               *     [ 25            ] [ Tags        ▼ ]
+               *
+               * A SAVED count always lives in its own unit's count field
+               * (tags_count here), which is why the export puts 25 under TAGS
+               * without any mapping of its own, and why "Other counts" drops
+               * Tags while it is selected — one field, one input, never two.
+               *
+               * Both halves are optional: an activity with nothing to count
+               * saves with the row left empty. The pairing is what is enforced
+               * — a number that has been typed must say which field it is
+               * (see countNeedsField, mirrored on the server).
+               *
+               * The input is never frozen. Before a field is named the number
+               * is kept in the staging slot; naming one moves it into that
+               * unit's field, and RENAMING moves it on again — 25 entered
+               * against Tags is 25 against Docs the moment Docs is chosen,
+               * replacing whatever Docs held, because the employee is restating
+               * which field this one count belongs to.
+               */
+              const repointLumpsumCount = (next: RelevantCountField) => {
+                const prev = asCountField(
+                  form.getValues(`tasks.${index}.count_field`),
+                );
+                if (prev === next) return;
+                // Wherever the number is now — the old unit's field, or the
+                // staging slot while it had none.
+                const from = lumpsumCountName(prev);
+                const carried = form.getValues(`tasks.${index}.${from}`);
+                form.setValue(
+                  `tasks.${index}.${from}`,
+                  from === LUMPSUM_STAGED_COUNT ? "" : "0",
+                  { shouldDirty: true },
+                );
+                form.setValue(
+                  `tasks.${index}.${countFieldName(next)}`,
+                  carried?.trim() ? carried : "0",
+                  { shouldDirty: true },
+                );
+                form.setValue(`tasks.${index}.count_field`, next, {
+                  shouldDirty: true,
+                });
+              };
+
+              /** Put the row back to its default state — no count, no field —
+               *  for an employee who decided this activity has nothing to
+               *  count after all. Both halves go together: the number is
+               *  cleared from wherever it currently sits, and the field is
+               *  unnamed, so the row saves as an ordinary countless activity
+               *  and the unit returns to "Other counts". */
+              const clearLumpsumCount = () => {
+                form.setValue(
+                  `tasks.${index}.${lumpsumValueName}`,
+                  // A unit column's default is "0" (it is about to reappear
+                  // under "Other counts"); the staging slot's is empty.
+                  lumpsumValueName === LUMPSUM_STAGED_COUNT ? "" : "0",
+                  { shouldDirty: true },
+                );
+                form.setValue(`tasks.${index}.count_field`, "", {
+                  shouldDirty: true,
+                });
+                form.clearErrors(`tasks.${index}.count_field`);
+              };
+
               return (
                 <div className="space-y-3">
+                  {isLumpsum && (
+                    <div className="rounded-md border border-primary/40 p-3">
+                      {/* One heading over the pair — the field picker is part of
+                          the Count, not a second labelled field beneath it. */}
+                      <p className="mb-2 text-sm font-medium text-foreground">
+                        Count
+                      </p>
+                      {/* Two equal columns so the value and its field read as
+                          paired controls, with the clear control taking only
+                          its own width so the pair stays balanced with or
+                          without it. Capped so the row does not stretch the
+                          width of the card. Stacks on narrow screens. */}
+                      <div className="grid grid-cols-1 gap-3 sm:max-w-xl sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-start">
+                        {renderCount(lumpsumValueName, null, false)}
+                        <FormField
+                          control={form.control}
+                          name={`tasks.${index}.count_field`}
+                          render={({ field: f }) => (
+                            <FormItem className="min-w-0">
+                              <Select
+                                value={f.value || undefined}
+                                onValueChange={(v) => {
+                                  const next = asCountField(v);
+                                  if (next) repointLumpsumCount(next);
+                                }}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select field" />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  {/* Straight from the application's own list of
+                                      supported count fields — never a second,
+                                      hand-written one. */}
+                                  {COUNT_FIELD_OPTIONS.map((o) => (
+                                    <SelectItem key={o.value} value={o.value}>
+                                      {o.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        {/* Back to the default state: no count, no field. Only
+                            offered once there is something to clear, so an
+                            untouched row shows just the two controls. */}
+                        {canClearLumpsum && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 shrink-0 justify-self-start text-muted-foreground"
+                            onClick={clearLumpsumCount}
+                            aria-label="Clear count"
+                            title="Clear count"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {targetName && unit && (
                     <div className="rounded-md border border-primary/40 p-3">
                       <div className="mb-2 flex flex-wrap items-baseline gap-x-2">

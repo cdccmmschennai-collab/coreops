@@ -151,6 +151,31 @@ COUNT_FIELD_BY_UNIT = {
 }
 
 
+def is_lumpsum_unit_row(
+    benchmark_type: str | None, relevant_count_field: str | None
+) -> bool:
+    """True for a LUMPSUM (LS) row whose count unit the EMPLOYEE names on the
+    report form instead of Activity Master naming it.
+
+    A lumpsum activity (TASK_STATUS_ONLY, or the legacy TASK_BASED) is measured
+    by completion within a duration, so the master configures no
+    relevant_count_field. The employee may still have produced something
+    countable, which is what the report form's "Count [25] [Tags]" row records:
+    the number goes in the matching *_count column exactly like every other
+    count, and the chosen unit is frozen in
+    work_report_tasks.relevant_count_field_snapshot.
+
+    Every other mode is excluded, and deliberately so:
+      NUMERIC / NUMERIC_DAILY / TASK_WITH_QUANTITY carry their own
+      relevant_count_field — the unit is a property of the benchmark, not a
+      choice, and letting a row override it would let the actual be counted
+      against a unit the target was never set in.
+
+    Membership-tested against TASK_BENCHMARK_TYPES rather than compared to a
+    literal, so the legacy TASK_BASED value behaves identically."""
+    return benchmark_type in TASK_BENCHMARK_TYPES and relevant_count_field is None
+
+
 class ActivityMaster(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "activity_master"
 

@@ -25,6 +25,7 @@ Excel dates, every text value uppercased on its way into the cell.
 Sheet: 'Weekly Activity Report'."""
 from decimal import Decimal
 from io import BytesIO
+from itertools import groupby
 
 import openpyxl
 from openpyxl.cell.rich_text import CellRichText, TextBlock

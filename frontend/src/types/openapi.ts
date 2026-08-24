@@ -2620,6 +2620,10 @@ export interface components {
         };
         /** ActivityCell */
         ActivityCell: {
+            /** Day Part */
+            day_part?: string | null;
+            /** Period Status */
+            period_status?: string | null;
             /** Project Code */
             project_code: string | null;
             /** Activity Type */
@@ -2638,6 +2642,12 @@ export interface components {
             pages: number;
             /** Records */
             records: number;
+            /** Benchmark Type */
+            benchmark_type?: string | null;
+            /** Benchmark Value */
+            benchmark_value?: number | null;
+            /** Benchmark Unit */
+            benchmark_unit?: string | null;
         };
         /**
          * ActivityCreate
@@ -7090,6 +7100,10 @@ export interface components {
              * @default 0
              */
             records_count: number;
+            /** Count Field */
+            count_field?: string | null;
+            /** Count Value */
+            count_value?: number | null;
             /** Sub Activity Id */
             sub_activity_id?: string | null;
             /**
