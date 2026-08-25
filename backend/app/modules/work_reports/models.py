@@ -266,9 +266,10 @@ class WorkItem(UUIDMixin, TimestampMixin, Base):
     The linked work_report_tasks rows mirror those fields for backward
     compatibility, but this row is the truth.
 
-    due_date is FROZEN at creation (started_on + target_days - 1, calendar days)
-    and never recomputed — a later change to the sub-activity's benchmark master
-    must not move an in-flight deadline.
+    due_date is FROZEN at creation (started_on + (target_days - 1) WORKING days,
+    via calendar.working_days.add_working_days — Phase 2) and never recomputed —
+    a later change to the sub-activity's benchmark master must not move an
+    in-flight deadline.
 
     The lifecycle (IN_PROGRESS / DUE_TODAY / OVERDUE / COMPLETED_ON_TIME /
     COMPLETED_LATE) is DERIVED from these dates on read (see

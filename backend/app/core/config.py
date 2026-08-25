@@ -67,14 +67,14 @@ class Settings(BaseSettings):
     # does NOT change any router prefix or endpoint URL.
     ENABLE_API_DOCS: bool = False
 
-    # Task continuation (work_items). Off by default. When false, TASK_BASED
-    # report rows keep the legacy standalone behaviour: no work items are
-    # created, no continuation suggestions are served, and existing APIs/exports
-    # are untouched. When true, saving a TASK_BASED row creates/links a WorkItem
-    # so one activity can span several daily reports with a fixed deadline. The
-    # frontend reads the mirror flag NEXT_PUBLIC_FEATURE_TASK_CONTINUATION; keep
-    # the two in step per environment.
-    TASK_CONTINUATION_ENABLED: bool = False
+    # Task continuation (work_items). ON by default since Phase 2 (lump-sum
+    # continuation approval) builds directly on this engine. When true, saving
+    # a TASK_BASED/TASK_STATUS_ONLY/TASK_WITH_QUANTITY row creates/links a
+    # WorkItem so one activity can span several daily reports with a fixed
+    # (working-day) deadline. The frontend reads the mirror flag
+    # NEXT_PUBLIC_FEATURE_TASK_CONTINUATION; keep the two in step per
+    # environment.
+    TASK_CONTINUATION_ENABLED: bool = True
 
     # Split-day work reports (work_report_periods, migration 0060). Off by
     # default. Periods are ALWAYS maintained internally (every report gets a

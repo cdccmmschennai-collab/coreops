@@ -17,13 +17,14 @@ Scope: TASK_BASED only. NUMERIC daily-quantity benchmarks never touch this.
 """
 import enum
 import uuid
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.models import ActivityMaster
 from app.modules.activity_master.service import compute_week_bounds
+from app.modules.calendar.working_days import add_working_days
 from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
 from app.shared.errors import AppError
 
@@ -40,11 +41,20 @@ class WorkItemLifecycle(str, enum.Enum):
 
 
 # ---------- pure lifecycle math (no DB) ------------------------------------
-def compute_due_date(started_on: date, target_days: int) -> date:
-    """Fixed deadline in CALENDAR days, start day counting as day 1:
-    due = started_on + (target_days - 1). target_days is clamped to >= 1 so a
-    blank/zero benchmark period can never push the deadline before the start."""
-    return started_on + timedelta(days=max(1, target_days) - 1)
+def compute_due_date(db: Session, started_on: date, target_days: int) -> date:
+    """Fixed deadline in WORKING days, start day counting as day 1: a 1-day
+    allowed duration is due the same day it starts; a 2-day duration is due
+    the NEXT working day (weekends/company holidays skipped by
+    calendar.working_days.add_working_days), and so on. target_days is
+    clamped to >= 1 so a blank/zero benchmark period can never push the
+    deadline before the start.
+
+    Falls back to started_on itself if the company calendar cannot resolve a
+    working day within the lookahead window (a misconfigured calendar) rather
+    than raising mid-save — this should never happen in practice."""
+    steps = max(1, target_days) - 1
+    due = add_working_days(db, started_on, steps)
+    return due if due is not None else started_on
 
 
 def lifecycle_of(
@@ -205,7 +215,7 @@ def resolve_task_work_item(
             sub_activity_id=task_in.sub_activity_id,
             started_on=started_on,
             target_days=target_days,
-            due_date=compute_due_date(started_on, target_days),
+            due_date=compute_due_date(db, started_on, target_days),
             completed_on=started_on if is_completed else None,
             activity_name=snap.get("activity_name"),
             sub_activity_name=snap.get("sub_activity_name"),

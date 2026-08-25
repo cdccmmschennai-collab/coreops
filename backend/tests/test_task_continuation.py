@@ -43,6 +43,16 @@ def flag_on():
 
 
 @pytest.fixture()
+def flag_off():
+    prev = settings.TASK_CONTINUATION_ENABLED
+    settings.TASK_CONTINUATION_ENABLED = False
+    try:
+        yield
+    finally:
+        settings.TASK_CONTINUATION_ENABLED = prev
+
+
+@pytest.fixture()
 def author(make_user, make_employee, make_project, make_project_member, login):
     def _make(*, email="emp@x.com", code="E-1", proj_code="P-1"):
         u = make_user(email, role=UserRole.employee)
@@ -103,39 +113,44 @@ def _get_report(client, header, report_id):
 
 
 # --------------------------------------------------------------------------
-# due-date rule (pure)
+# due-date rule (working days — Phase 2)
 # --------------------------------------------------------------------------
-def test_due_date_one_day():
-    assert compute_due_date(date(2026, 7, 10), 1) == date(2026, 7, 10)
+def test_due_date_one_day(db):
+    assert compute_due_date(db, date(2026, 7, 10), 1) == date(2026, 7, 10)
 
 
-def test_due_date_two_days():
-    assert compute_due_date(date(2026, 7, 10), 2) == date(2026, 7, 11)
+def test_due_date_two_days(db):
+    # Mon 2026-07-13 + 1 more WORKING day -> Tue 2026-07-14 (no weekend in the way).
+    assert compute_due_date(db, date(2026, 7, 13), 2) == date(2026, 7, 14)
 
 
-def test_due_date_three_days():
-    assert compute_due_date(date(2026, 7, 10), 3) == date(2026, 7, 12)
+def test_due_date_three_days(db):
+    assert compute_due_date(db, date(2026, 7, 13), 3) == date(2026, 7, 15)
 
 
-def test_due_date_includes_weekend():
-    # Fri 2026-07-10 + 3 calendar days spans the weekend -> Sun 2026-07-12.
+def test_due_date_skips_weekend(db):
+    # Fri 2026-07-10 + 2 more WORKING days -> Tue 2026-07-14 (Sat/Sun skipped).
     assert date(2026, 7, 10).weekday() == 4  # Friday
-    assert compute_due_date(date(2026, 7, 10), 3) == date(2026, 7, 12)
-    assert compute_due_date(date(2026, 7, 10), 3).weekday() == 6  # Sunday
+    assert compute_due_date(db, date(2026, 7, 10), 3) == date(2026, 7, 14)
+    assert compute_due_date(db, date(2026, 7, 10), 3).weekday() == 1  # Tuesday
 
 
-def test_due_date_target_days_clamped_to_one():
+def test_due_date_target_days_clamped_to_one(db):
     # A zero/blank period must never push the deadline before the start.
-    assert compute_due_date(date(2026, 7, 10), 0) == date(2026, 7, 10)
+    assert compute_due_date(db, date(2026, 7, 10), 0) == date(2026, 7, 10)
 
 
-def test_due_date_matches_frontend_preview():
-    # Frontend preview is addDays(reportDate, periodDays - 1); assert the shared
-    # arithmetic so the one-line UI preview and the server agree.
-    start = date(2026, 7, 10)
-    for period in (1, 2, 3, 5):
-        js_preview = start + timedelta(days=period - 1)
-        assert compute_due_date(start, period) == js_preview
+def test_due_date_skips_company_holiday(db):
+    from app.modules.calendar.models import CalendarEvent, CalendarEventType
+
+    ev = CalendarEvent(
+        event_date=date(2026, 7, 14), title="Holiday", event_type=CalendarEventType.holiday
+    )
+    db.add(ev)
+    db.commit()
+    # Mon 2026-07-13 + 1 working day would normally be Tue 2026-07-14, but
+    # that date is a declared holiday, so it lands on Wed 2026-07-15.
+    assert compute_due_date(db, date(2026, 7, 13), 2) == date(2026, 7, 15)
 
 
 def test_work_items_target_days_zero_rejected(db, author):
@@ -182,11 +197,14 @@ def test_continuation_full_flow(flag_on, client, author, pm_header, db):
     a = author()
     _, sub = _task_sub(client, pm_header, period=3)
     start = TODAY - timedelta(days=4)
+    # 3-day period = start + 2 WORKING days; weekends may push this later than a
+    # naive calendar-day offset would, depending on what weekday `start` lands on.
+    expected_due = compute_due_date(db, start, 3)
     r1 = _post_report(client, a["header"], project_id=a["project"].id,
                       sub_id=sub["id"], on_date=start).json()
     wid = r1["tasks"][0]["work_item_id"]
     due = r1["tasks"][0]["due_date"]
-    assert due == (start + timedelta(days=2)).isoformat()
+    assert due == expected_due.isoformat()
 
     # Open-tasks for a later, non-sequential date lists the item.
     later = TODAY - timedelta(days=1)
@@ -203,7 +221,7 @@ def test_continuation_full_flow(flag_on, client, author, pm_header, db):
     assert db.query(WorkItem).count() == 1
     item = db.query(WorkItem).one()
     assert item.started_on == start
-    assert item.due_date == start + timedelta(days=2)
+    assert item.due_date == expected_due
 
 
 def test_overdue_task_can_be_continued(flag_on, client, author, pm_header, db):
@@ -853,13 +871,14 @@ def test_legacy_row_completion_unchanged(client, author, pm_header):
 
 
 
-def test_flag_off_creates_no_work_item(client, author, pm_header, db):
+def test_flag_off_creates_no_work_item(flag_off, client, author, pm_header, db):
     a = author()
     _, sub = _task_sub(client, pm_header, period=2)
     r = _post_report(client, a["header"], project_id=a["project"].id,
                      sub_id=sub["id"], on_date=TODAY).json()
     assert r["tasks"][0]["work_item_id"] is None
-    # Legacy per-row dates still stamped.
+    # Legacy per-row dates still stamped (calendar-day math — the legacy path
+    # never calls compute_due_date/add_working_days at all).
     assert r["tasks"][0]["due_date"] == (TODAY + timedelta(days=1)).isoformat()
     assert db.query(WorkItem).count() == 0
     # No open-tasks surfaced while disabled.
