@@ -1828,6 +1828,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/continuation-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Continuation Requests */
+        get: operations["list_continuation_requests_api_v1_continuation_requests_get"];
+        put?: never;
+        /** Create Continuation Request */
+        post: operations["create_continuation_request_api_v1_continuation_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/continuation-requests/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pending Continuation Requests */
+        get: operations["list_pending_continuation_requests_api_v1_continuation_requests_pending_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/continuation-requests/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Continuation Request */
+        get: operations["get_continuation_request_api_v1_continuation_requests__request_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/continuation-requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Continuation Request */
+        post: operations["approve_continuation_request_api_v1_continuation_requests__request_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/continuation-requests/{request_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Continuation Request */
+        post: operations["reject_continuation_request_api_v1_continuation_requests__request_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/benchmarks/my-alerts": {
         parameters: {
             query?: never;
@@ -3452,6 +3538,131 @@ export interface components {
             new_password: string;
         };
         /**
+         * ContinuationRequestCreate
+         * @description Body sent when an employee clicks 'Request Continuation Approval'.
+         */
+        ContinuationRequestCreate: {
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+            /**
+             * Continuation Date
+             * Format: date
+             */
+            continuation_date: string;
+        };
+        /** ContinuationRequestOut */
+        ContinuationRequestOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /**
+             * Work Item Id
+             * Format: uuid
+             */
+            work_item_id: string;
+            /**
+             * Project Id
+             * Format: uuid
+             */
+            project_id: string;
+            /**
+             * Sub Activity Id
+             * Format: uuid
+             */
+            sub_activity_id: string;
+            /**
+             * Original Report Date
+             * Format: date
+             */
+            original_report_date: string;
+            /** Allowed Duration Days */
+            allowed_duration_days: number;
+            /**
+             * Due Date
+             * Format: date
+             */
+            due_date: string;
+            /**
+             * Continuation Date
+             * Format: date
+             */
+            continuation_date: string;
+            status: components["schemas"]["ContinuationRequestStatus"];
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Reviewer Id */
+            reviewer_id?: string | null;
+            /** Decision Comment */
+            decision_comment?: string | null;
+            /** Decided At */
+            decided_at?: string | null;
+            /**
+             * Employee Name
+             * @default
+             */
+            employee_name: string;
+            /**
+             * Project Name
+             * @default
+             */
+            project_name: string;
+            /**
+             * Project Code
+             * @default
+             */
+            project_code: string;
+            /** Activity Name */
+            activity_name?: string | null;
+            /**
+             * Sub Activity Name
+             * @default
+             */
+            sub_activity_name: string;
+            /** Reviewer Name */
+            reviewer_name?: string | null;
+            /** Routed To Name */
+            routed_to_name?: string | null;
+            /** Routed To Role */
+            routed_to_role?: string | null;
+        };
+        /** ContinuationRequestPage */
+        ContinuationRequestPage: {
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["ContinuationRequestOut"][];
+            /** Total */
+            total: number;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /**
+         * ContinuationRequestStatus
+         * @enum {string}
+         */
+        ContinuationRequestStatus: "pending" | "approved" | "rejected";
+        /** ContinuationReviewBody */
+        ContinuationReviewBody: {
+            /** Comment */
+            comment?: string | null;
+        };
+        /**
          * DailyBenchmarkRowOut
          * @description One row of 'My Alerts' / 'Team Benchmark Backlog' — a single day's
          *     actual/target/pending for one NUMERIC sub-activity, with pending > 0
@@ -4648,6 +4859,8 @@ export interface components {
              * Format: uuid
              */
             employee_id: string;
+            /** Employee Name */
+            employee_name?: string | null;
             leave_type: components["schemas"]["LeaveType"];
             /**
              * Start Date
@@ -4666,6 +4879,8 @@ export interface components {
             manager_id?: string | null;
             /** Manager Comment */
             manager_comment?: string | null;
+            /** Routed Project Id */
+            routed_project_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -5032,6 +5247,17 @@ export interface components {
              * @default 0
              */
             days_overdue: number;
+            /**
+             * Requires Continuation Approval
+             * @default false
+             */
+            requires_continuation_approval: boolean;
+            /** Continuation Status */
+            continuation_status?: string | null;
+            /** Continuation Request Id */
+            continuation_request_id?: string | null;
+            /** Continuation Routed To */
+            continuation_routed_to?: string | null;
         };
         /** OpenTasksOut */
         OpenTasksOut: {
@@ -9663,6 +9889,7 @@ export interface operations {
                 to?: string | null;
                 limit?: number;
                 offset?: number;
+                exclude_self?: boolean;
             };
             header?: never;
             path?: never;
@@ -11647,6 +11874,193 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_continuation_requests_api_v1_continuation_requests_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinuationRequestPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_continuation_request_api_v1_continuation_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinuationRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinuationRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pending_continuation_requests_api_v1_continuation_requests_pending_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinuationRequestOut"][];
+                };
+            };
+        };
+    };
+    get_continuation_request_api_v1_continuation_requests__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinuationRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_continuation_request_api_v1_continuation_requests__request_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinuationReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinuationRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_continuation_request_api_v1_continuation_requests__request_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContinuationReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinuationRequestOut"];
+                };
             };
             /** @description Validation Error */
             422: {
