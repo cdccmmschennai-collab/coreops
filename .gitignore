@@ -65,3 +65,6 @@ connectors/easytime/dist/
 # had already synced a window it has never seen.
 connectors/easytime/data/
 connectors/easytime/*.lock
+
+# Subagent-driven-development scratch workspaces (ledgers, briefs, reports).
+.superpowers/
