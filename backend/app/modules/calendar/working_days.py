@@ -93,3 +93,56 @@ def previous_working_day(
             return cursor
         cursor -= timedelta(days=1)
     return None
+
+
+def next_working_day(
+    db: Session,
+    reference: date,
+    *,
+    max_lookahead_days: int = DEFAULT_MAX_LOOKBACK_DAYS,
+) -> date | None:
+    """The first working day strictly after ``reference``. Forward mirror of
+    :func:`previous_working_day`. Returns ``None`` if none is found within
+    ``max_lookahead_days`` (a misconfigured calendar)."""
+    latest = reference + timedelta(days=max_lookahead_days)
+    cursor = reference + timedelta(days=1)
+    non_working, working_overrides = load_calendar_overrides(db, cursor, latest)
+    while cursor <= latest:
+        if is_working_day(
+            cursor, non_working=non_working, working_overrides=working_overrides
+        ):
+            return cursor
+        cursor += timedelta(days=1)
+    return None
+
+
+def add_working_days(
+    db: Session,
+    start: date,
+    steps: int,
+    *,
+    max_lookahead_days: int = DEFAULT_MAX_LOOKBACK_DAYS,
+) -> date | None:
+    """``start`` plus ``steps`` WORKING days (``start`` itself is never counted
+    as a step: ``steps=0`` returns ``start`` unchanged). Used for WorkItem due
+    dates: ``due = add_working_days(db, started_on, target_days - 1)``, so a
+    1-day allowed duration is due the same day it starts, and a 2-day duration
+    is due the next WORKING day (weekends/company holidays skipped).
+
+    Returns ``None`` if it cannot resolve within ``max_lookahead_days`` extra
+    days beyond the naive count (a misconfigured calendar) — the caller
+    decides the fallback.
+    """
+    if steps <= 0:
+        return start
+    latest = start + timedelta(days=max_lookahead_days + steps)
+    non_working, working_overrides = load_calendar_overrides(db, start, latest)
+    cursor = start
+    remaining = steps
+    while remaining > 0 and cursor <= latest:
+        cursor += timedelta(days=1)
+        if is_working_day(
+            cursor, non_working=non_working, working_overrides=working_overrides
+        ):
+            remaining -= 1
+    return cursor if remaining == 0 else None
