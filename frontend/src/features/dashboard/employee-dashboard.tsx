@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CalendarOff, FileText, Plus } from "lucide-react";
+import { ArrowRight, CalendarOff, FileText, Hourglass, Plus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ import { StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList, useReportScope } from "@/features/work-reports/hooks";
 import { projectSummary } from "@/features/work-reports/project-summary";
 import { useLeaveList } from "@/features/leave/hooks";
+import { usePendingContinuationRequests } from "@/features/continuation-requests/hooks";
 
 import { greeting, todayISO, weekStartISO } from "./utils";
 
@@ -55,6 +56,9 @@ export function EmployeeDashboard() {
     { enabled: isProjectHead },
   );
   const pendingLeaveCount = pendingLeave.data?.total ?? 0;
+  // Lump-sum activity continuation requests routed to this Head for review.
+  const pendingContinuations = usePendingContinuationRequests({ enabled: isProjectHead });
+  const pendingContinuationCount = pendingContinuations.data?.length ?? 0;
 
   // Greet by employee full name — never the username/email/login id.
   // Resolution order: Employee.full_name (from /auth/me) → username fallback.
@@ -211,6 +215,21 @@ export function EmployeeDashboard() {
               <Button asChild className="justify-start" variant="secondary">
                 <Link href="/reports"><FileText className="h-4 w-4" /> All my reports</Link>
               </Button>
+              {isProjectHead && (
+                <Button asChild className="justify-start" variant="secondary">
+                  {/* Its own page, not an attendance tab: continuing a lump-sum
+                      activity past its allowed duration is a reporting
+                      approval, unrelated to attendance or leave. */}
+                  <Link href="/lump-sum-activity?queue=pending">
+                    <Hourglass className="h-4 w-4" /> Lump-sum Activity Request
+                    {pendingContinuationCount > 0 && (
+                      <Badge variant="warning" className="ml-auto">
+                        {pendingContinuationCount}
+                      </Badge>
+                    )}
+                  </Link>
+                </Button>
+              )}
               {isProjectHead && (
                 <Button asChild className="justify-start" variant="secondary">
                   <Link href="/attendance?tab=leave&queue=pending">

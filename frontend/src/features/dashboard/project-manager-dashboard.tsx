@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, CalendarX2, Clock, ListPlus } from "lucide-react";
+import { ArrowRight, CalendarOff, CalendarX2, Clock, Hourglass, ListPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benc
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { PerformanceTable } from "@/features/employee-performance/components/performance-table";
 import { useActivityRequestPendingCount } from "@/features/activity-requests/hooks";
+import { usePendingContinuationRequests } from "@/features/continuation-requests/hooks";
 import { useLeaveList } from "@/features/leave/hooks";
 import { usePermissionList } from "@/features/permissions/hooks";
 import { useAllDeliverables } from "@/features/project-deliverables/hooks";
@@ -66,6 +67,11 @@ export function ProjectManagerDashboard() {
   // Pending activity requests awaiting the PM's decision — drives the card badge.
   const activityRequestCount = useActivityRequestPendingCount();
   const pendingActivityRequests = activityRequestCount.data?.count ?? 0;
+
+  // Lump-sum activity continuation requests awaiting review. A PM reviews
+  // every project's, so this is unconditional here.
+  const pendingContinuations = usePendingContinuationRequests();
+  const pendingContinuationCount = pendingContinuations.data?.length ?? 0;
 
   // Active deliverables first, then by nearest planned submission date.
   const deliverables = React.useMemo(
@@ -176,6 +182,20 @@ export function ProjectManagerDashboard() {
           </CardHeader>
           <CardContent className="p-4">
             <div className="flex flex-col gap-2">
+              <Button asChild className="justify-start" variant="secondary">
+                {/* Its own page, not an attendance tab: continuing a lump-sum
+                    activity past its allowed duration is a reporting approval,
+                    unrelated to attendance or leave. Hourglass = the duration
+                    ran out, and it stays clear of every calendar icon here. */}
+                <Link href="/lump-sum-activity?queue=pending">
+                  <Hourglass className="h-4 w-4" /> Lump-sum Activity Request
+                  {pendingContinuationCount > 0 && (
+                    <Badge variant="warning" className="ml-auto">
+                      {pendingContinuationCount}
+                    </Badge>
+                  )}
+                </Link>
+              </Button>
               <Button asChild className="justify-start" variant="secondary">
                 <Link href="/attendance?tab=leave&queue=pending">
                   <CalendarOff className="h-4 w-4" /> Pending leave requests
