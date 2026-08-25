@@ -65,6 +65,7 @@ import {
   useWorkReportList,
 } from "../hooks";
 import { scaledTarget } from "../benchmark-target";
+import { openTaskCardState } from "../open-task-state";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_PART_FRACTION,
@@ -84,8 +85,6 @@ import {
   type WorkReportFormValues,
 } from "../schemas";
 import {
-  LIFECYCLE_LABEL,
-  LIFECYCLE_VARIANT,
   PeriodActivityEditor,
   countFieldName,
   type ActivityEditorContext,
@@ -1023,56 +1022,58 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 <div>
                   <h3 className="text-sm font-medium">Open tasks from previous reports</h3>
                   <p className="text-xs text-muted-foreground">
-                    Continue one of these in today&apos;s report. The deadline stays
-                    fixed - you can add today&apos;s work and mark the overall task
-                    complete.
+                    Continue one of these in today&apos;s report - you can add
+                    today&apos;s work and mark the overall task complete. A lump-sum
+                    activity is measured in work days, so days you did not work on it
+                    cost nothing and it stays here until you complete it.
                   </p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {openTasks.map((t) => (
-                    <div
-                      key={t.work_item_id}
-                      className="flex flex-col gap-3 rounded-lg border border-border bg-muted/30 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
-                            {t.project_name || t.project_code || "-"}
-                          </p>
-                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                            {`${t.activity_name ?? "-"} / ${t.sub_activity_name ?? "-"}`}
-                          </p>
+                  {openTasks.map((t) => {
+                    // Lump-sum cards read their work-day state; every other kind
+                    // keeps the calendar due date (see open-task-state.ts).
+                    const card = openTaskCardState(t);
+                    return (
+                      <div
+                        key={t.work_item_id}
+                        className="flex flex-col gap-3 rounded-lg border border-border bg-muted/30 p-4"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium">
+                              {t.project_name || t.project_code || "-"}
+                            </p>
+                            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                              {`${t.activity_name ?? "-"} / ${t.sub_activity_name ?? "-"}`}
+                            </p>
+                          </div>
+                          <Badge variant={card.badgeVariant}>{card.badge}</Badge>
                         </div>
-                        <Badge variant={LIFECYCLE_VARIANT[t.lifecycle] ?? "neutral"}>
-                          {t.lifecycle === "OVERDUE" && t.days_overdue > 0
-                            ? `Overdue ${t.days_overdue}d`
-                            : LIFECYCLE_LABEL[t.lifecycle] ?? t.lifecycle}
-                        </Badge>
+                        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                          <span>Started {t.started_on}</span>
+                          {card.meta && <span>{card.meta}</span>}
+                        </div>
+                        {t.requires_continuation_approval ? (
+                          <ContinuationApprovalCard
+                            task={t}
+                            reportDate={reportDate}
+                            onContinue={() => continueTask(t)}
+                          />
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="self-start"
+                            onClick={() => continueTask(t)}
+                          >
+                            <ArrowRight className="h-4 w-4" />
+                            Continue in today&apos;s report
+                          </Button>
+                        )}
                       </div>
-                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span>Started {t.started_on}</span>
-                        <span>Due {t.due_date}</span>
-                      </div>
-                      {t.requires_continuation_approval ? (
-                        <ContinuationApprovalCard
-                          task={t}
-                          reportDate={reportDate}
-                          onContinue={() => continueTask(t)}
-                        />
-                      ) : (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="self-start"
-                          onClick={() => continueTask(t)}
-                        >
-                          <ArrowRight className="h-4 w-4" />
-                          Continue in today&apos;s report
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <Separator />
               </div>

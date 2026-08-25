@@ -17,8 +17,22 @@ export type WorkReportEditRequestBody = components["schemas"]["WorkReportEditReq
 export type TaskCompletionUpdateBody = components["schemas"]["TaskCompletionUpdate"];
 // Task continuation (feature-flagged): an unfinished work item the current
 // employee can continue in the report being written.
-export type OpenTask = components["schemas"]["OpenTaskOut"];
-export type OpenTasks = components["schemas"]["OpenTasksOut"];
+//
+// `days_used` / `is_lumpsum` are served by GET /work-reports/open-tasks but are
+// not in the checked-in openapi.json yet: regenerating it produces an
+// unreviewable whole-file diff (BOM + escape + number-format churn from a
+// different generator invocation - see the SDD ledger, D-9/D-17). They are
+// declared here instead, matching backend OpenTaskOut exactly, and are optional
+// so the code stays correct against a build served by an older backend.
+export type OpenTask = components["schemas"]["OpenTaskOut"] & {
+  /** Distinct report dates the item has been worked on, excluding this report. */
+  days_used?: number;
+  /** True only for a lump-sum activity - the kind measured in work days. */
+  is_lumpsum?: boolean;
+};
+export type OpenTasks = Omit<components["schemas"]["OpenTasksOut"], "items"> & {
+  items: OpenTask[];
+};
 // Report-filter scope for Heads / Activity Leads (GET /work-reports/scope):
 // accessible projects, led activities per project, and active members.
 // Informational only — the backend enforces the same scope on every endpoint.

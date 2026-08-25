@@ -392,7 +392,18 @@ def test_failed_create_rolls_back_work_item(flag_on, client, author, pm_header, 
 
 
 # --------------------------------------------------------------------------
-# cycle confinement — a task may be continued only within its own Fri-Thu cycle
+# cycle confinement — a NON-LUMP-SUM task may be continued only within its own
+# Fri-Thu cycle.
+#
+# Phase 2 narrowed this rule to non-lump-sum items. A lump-sum activity's
+# allowed duration is spent in work days, which cycle boundaries do not touch,
+# so confining it would let a re-pick mint a fresh work item with a fresh
+# allowance and bypass the continuation-approval gate.
+#
+# The tests below therefore use `count_field="tags"`, which makes the
+# sub-activity count-bearing and so NOT lump-sum (see
+# activity_master.models.is_lumpsum_unit_row) wherever a boundary is crossed —
+# a bare _task_sub() is lump-sum and no longer subject to the rule they assert.
 # --------------------------------------------------------------------------
 def _open_task_ids(client, header, report_date):
     ot = client.get(OPEN_TASKS, headers=header,
@@ -438,11 +449,11 @@ def test_incomplete_task_on_cycle_end_date_is_suggested(flag_on, client, author,
 
 
 def test_previous_cycle_task_not_suggested_next_cycle(flag_on, client, author, pm_header):
-    """3. An unfinished task from the previous cycle disappears from the new one,
-    while still remaining incomplete in the DB (positive control: it IS suggested
-    within its own cycle)."""
+    """3. An unfinished NON-LUMP-SUM task from the previous cycle disappears from
+    the new one, while still remaining incomplete in the DB (positive control: it
+    IS suggested within its own cycle)."""
     a = author()
-    _, sub = _task_sub(client, pm_header, period=1)
+    _, sub = _task_sub(client, pm_header, period=1, count_field="tags", value=1000)
     cur_fri, _ = compute_week_bounds(TODAY)
     prev_fri = cur_fri - timedelta(days=7)
     prev_thu = prev_fri + timedelta(days=6)
@@ -467,13 +478,17 @@ def test_completed_task_current_cycle_not_suggested(flag_on, client, author, pm_
 
 
 def test_same_activity_new_cycle_creates_separate_item(flag_on, client, author, pm_header, db):
-    """5. Selecting the same activity in a later cycle (no work_item_id, because
-    the old task is no longer suggested) creates a fresh work item rather than
-    reusing the previous-cycle one, which stays incomplete."""
+    """5. Selecting the same NON-LUMP-SUM activity in a later cycle (no
+    work_item_id, because the old task is no longer suggested) creates a fresh
+    work item rather than reusing the previous-cycle one, which stays incomplete.
+
+    A lump-sum activity deliberately does NOT behave this way - it is still
+    suggested across the boundary, so it is continued (and gated) rather than
+    restarted with a fresh allowance."""
     import uuid as _uuid
 
     a = author()
-    _, sub = _task_sub(client, pm_header, period=1)
+    _, sub = _task_sub(client, pm_header, period=1, count_field="tags", value=1000)
     cur_fri, _ = compute_week_bounds(TODAY)
     prev_fri = cur_fri - timedelta(days=7)
     r_prev = _post_report(client, a["header"], project_id=a["project"].id,

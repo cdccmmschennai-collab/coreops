@@ -466,6 +466,12 @@ class OpenTaskOut(BaseModel):
     # duration (target_days) is spent on, and what lifecycle/days_overdue below
     # are derived from - skipped calendar days consume nothing.
     days_used: int = 0
+    # True for a LUMP-SUM (NON_QUANTITATIVE) activity - the only kind measured
+    # in work days, the only kind that can require continuation approval, and
+    # the only kind exempt from Fri-Thu cycle confinement in the open-task
+    # query. The form uses it to show work-day state ("Day 2 of 3") instead of
+    # the frozen calendar due date, which no longer decides anything for these.
+    is_lumpsum: bool = False
     # IN_PROGRESS / DUE_TODAY / OVERDUE (completed items are never returned).
     # Lump-sum: measured in WORK DAYS (OVERDUE = allowance spent, so the next
     # work day needs approval). TASK_WITH_QUANTITY: the calendar due_date.

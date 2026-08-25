@@ -53,6 +53,7 @@ import {
   resolveExceptionCode,
 } from "../benchmark-exception";
 import { scaledTarget } from "../benchmark-target";
+import { openTaskInlineSummary } from "../open-task-state";
 import {
   COUNT_FIELD_OPTIONS,
   LUMPSUM_STAGED_COUNT,
@@ -489,8 +490,8 @@ export function PeriodActivityEditor({
             {rowOpenMatch && !startNewRows.has(index) && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-sm">
                 <span className="text-muted-foreground">
-                  You have an open task for this activity (started{" "}
-                  {rowOpenMatch.started_on}, due {rowOpenMatch.due_date}).
+                  You have an open task for this activity (
+                  {openTaskInlineSummary(rowOpenMatch)}).
                   {rowOpenMatch.requires_continuation_approval && (
                     <>
                       {" "}
