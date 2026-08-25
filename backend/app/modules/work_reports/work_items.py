@@ -557,27 +557,22 @@ def get_open_work_items(
     represented here — only real work items. Ordered OVERDUE, DUE_TODAY, then
     IN_PROGRESS by nearest due date.
 
-    Continuation of a NON-lump-sum item (TASK_WITH_QUANTITY and any other
-    count-bearing task benchmark) is confined to a SINGLE Friday-Thursday
-    benchmark cycle: it may be continued only within the cycle that contains its
-    originating started_on. Once report_date crosses into a later cycle the item
-    drops out of the suggestions (it stays incomplete in the DB and keeps
-    appearing as Not-Completed/Overdue in historical benchmark exports — see
-    project rule). Re-selecting the same activity in the new cycle starts a fresh
-    work item.
+    Continuation is confined to a SINGLE Friday-Thursday reporting week, for
+    EVERY kind of work item, lump-sum included: an item may be continued only
+    within the week that contains its originating started_on. Once report_date
+    crosses into a later week the item drops out of the suggestions (it stays
+    incomplete in the DB and keeps appearing as Not-Completed/Overdue in
+    historical benchmark exports — see project rule). Re-selecting the same
+    activity in the new week starts a fresh work item.
 
-    A LUMP-SUM item is deliberately NOT confined that way. Its allowed duration
-    is spent in work days, and work days do not respect cycle boundaries: a
-    2-day lump-sum worked on a Thursday and again the following Monday has
-    crossed into the next cycle (a cycle runs Fri..Thu) while still being on day
-    2 of 2. Dropping it from the suggestions would do more than hide it — the
-    employee would re-pick the activity, get a BRAND-NEW work item with a fresh
-    allowance, and silently walk around the continuation-approval gate (the save
-    gate itself has no cycle rule, so the OLD item stays correctly blocked; it is
-    the fresh one that escapes). So an incomplete lump-sum item stays
-    discoverable for as long as it is incomplete, keeping its identity, its
-    history and its spent work days. (Its calendar due_date is untouched, and the
-    historical readers/exports keep their own cycle semantics — see D-15.)
+    That weekly boundary is intentional product behaviour and is not something
+    the work-day rule below overrides. Work-day counting decides how much of the
+    allowed duration a lump-sum activity has spent WITHIN its reporting week —
+    it does not extend the activity past the end of that week. The consequence
+    is deliberate: an incomplete lump-sum item is not carried forward, and an
+    employee who re-picks the activity next week gets a new work item with a new
+    allowance for that week. Continuation approval therefore governs continuing
+    an activity inside its own reporting week.
 
     Lump-sum items are measured in WORK DAYS, not calendar days: lifecycle and
     days_overdue come from lumpsum_lifecycle/lumpsum_days_over over the count of
@@ -598,10 +593,10 @@ def get_open_work_items(
     form can tell the two presentations apart without re-deriving the rule."""
     from app.modules.activity_master.models import is_lumpsum_unit_row
 
-    # The cycle of the report being written; a NON-lump-sum item may be continued
-    # only if its own start cycle matches (compute_week_bounds is the shared
+    # The reporting week of the report being written; only items whose own start
+    # week matches this may be continued (compute_week_bounds is the shared
     # Fri-Thu calc used everywhere else, so continuation and benchmarks never
-    # diverge). Lump-sum items skip this check entirely — see the docstring.
+    # diverge).
     report_cycle = compute_week_bounds(report_date)
     stmt = (
         select(
@@ -621,20 +616,15 @@ def get_open_work_items(
 
     candidates: list[tuple[WorkItem, uuid.UUID | None, bool]] = []
     for item, activity_id, benchmark_type, relevant_count_field in rows:
-        is_lumpsum = is_lumpsum_unit_row(benchmark_type, relevant_count_field)
-        # Confine a NON-lump-sum item to its own benchmark cycle. started_on is
-        # the frozen originating date (never the latest continuation), so such a
-        # task started last Friday stops being suggested the moment report_date
-        # rolls into the next Friday-Thursday window.
-        #
-        # A lump-sum item is exempt: its allowance is spent in work days, which
-        # skipped days and cycle boundaries do not touch, so it must stay
-        # discoverable until it is completed. Dropping it at the boundary would
-        # let a re-pick mint a fresh work item with a fresh allowance and bypass
-        # the continuation-approval gate.
-        if not is_lumpsum and compute_week_bounds(item.started_on) != report_cycle:
+        # Confine to the item's own reporting week — lump-sum items included.
+        # started_on is the frozen originating date (never the latest
+        # continuation), so a task started last Friday stops being suggested the
+        # moment report_date rolls into the next Friday-Thursday window.
+        if compute_week_bounds(item.started_on) != report_cycle:
             continue
-        candidates.append((item, activity_id, is_lumpsum))
+        candidates.append((
+            item, activity_id, is_lumpsum_unit_row(benchmark_type, relevant_count_field),
+        ))
 
     # Work days each item has already consumed, this report's own date excluded
     # (it is not spent until it is worked). Resolved for every item so days_used

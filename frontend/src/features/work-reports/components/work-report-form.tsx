@@ -1025,7 +1025,8 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                     Continue one of these in today&apos;s report - you can add
                     today&apos;s work and mark the overall task complete. A lump-sum
                     activity is measured in work days, so days you did not work on it
-                    cost nothing and it stays here until you complete it.
+                    cost nothing. Open tasks stay available within their own reporting
+                    week (Friday to Thursday).
                   </p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">

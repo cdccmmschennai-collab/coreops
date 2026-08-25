@@ -20,6 +20,13 @@
  * clamp for a blank benchmark period. `days_used` counts the work days spent
  * BEFORE the report being written, so the report being written is day
  * days_used + 1.
+ *
+ * Work days are how much of the allowance is spent — NOT how long the activity
+ * stays available. Every open item, lump-sum included, is confined by the
+ * backend to the Friday-Thursday reporting week containing its start date, and
+ * an activity re-picked in a later week is a new work item with a new
+ * allowance. So a lump-sum card never survives a week boundary, and the
+ * work-day state it shows is always state within one reporting week.
  */
 import type { OpenTask } from "./types";
 
