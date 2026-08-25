@@ -11,6 +11,7 @@ from app.core.context import set_request_context
 from app.health import router as health_router
 from app.modules.activity_master.router import router as activity_master_router
 from app.modules.activity_requests.router import router as activity_requests_router
+from app.modules.continuation_requests.router import router as continuation_requests_router
 from app.modules.activity_types.router import router as activity_types_router
 from app.modules.audit.router import router as audit_router
 from app.modules.benchmarks.router import router as benchmarks_router
@@ -108,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(activity_types_router, prefix=settings.API_V1_PREFIX)
     app.include_router(activity_master_router, prefix=settings.API_V1_PREFIX)
     app.include_router(activity_requests_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(continuation_requests_router, prefix=settings.API_V1_PREFIX)
     app.include_router(benchmarks_router, prefix=settings.API_V1_PREFIX)
     app.include_router(job_codes_router, prefix=settings.API_V1_PREFIX)
     app.include_router(audit_router, prefix=settings.API_V1_PREFIX)

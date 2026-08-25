@@ -1,0 +1,469 @@
+"""Lump-sum Activity Continuation Approval (Phase 2).
+
+Covers: gate blocking/allowing continuation, request creation + duplicate
+prevention, Head resolution + reassignment, PM (line-manager) fallback,
+approve/reject, unauthorized/self-approval, notifications, and non-regression
+of TASK_WITH_QUANTITY continuation and existing work-item behaviour.
+"""
+from datetime import date, timedelta
+
+import pytest
+
+from app.core.config import settings
+from app.modules.continuation_requests.models import ContinuationRequest
+from app.modules.projects.models import ProjectStatus
+from app.modules.users.models import UserRole
+
+BASE = "/api/v1/work-reports"
+OPEN_TASKS = "/api/v1/work-reports/open-tasks"
+CR = "/api/v1/continuation-requests"
+TODAY = date.today()
+# Work items are started in the PAST and continued on TODAY: a report cannot be
+# dated in the future, so the "continue it later" leg has to be today and the
+# start has to be behind it. A 1-day lump-sum started on START (due = START,
+# since add_working_days(start, 0) is start itself) is always overdue by TODAY.
+START = TODAY - timedelta(days=3)
+
+
+@pytest.fixture()
+def flag_on():
+    prev = settings.TASK_CONTINUATION_ENABLED
+    settings.TASK_CONTINUATION_ENABLED = True
+    try:
+        yield
+    finally:
+        settings.TASK_CONTINUATION_ENABLED = prev
+
+
+@pytest.fixture()
+def author(make_user, make_employee, make_project, make_project_member, login):
+    def _make(*, email="emp@x.com", code="E-1", proj_code="P-1", manager_id=None, head_id=None):
+        u = make_user(email, role=UserRole.employee)
+        e = make_employee(employee_code=code, user_id=u.id, manager_id=manager_id)
+        p = make_project(code=proj_code, status=ProjectStatus.active, head_employee_id=head_id)
+        make_project_member(project_id=p.id, employee_id=e.id)
+        return {"user": u, "emp": e, "project": p, "header": login(email)}
+
+    return _make
+
+
+@pytest.fixture()
+def pm_header(auth_header):
+    return auth_header(email="pm@x.com", role=UserRole.project_manager)
+
+
+def _lumpsum_sub(client, admin, *, name="Lumpsum", period=1):
+    a = client.post(
+        "/api/v1/activity-master/activities", json={"name": f"Activity {name}"}, headers=admin,
+    ).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{a['id']}/sub-activities",
+        json={"name": name, "benchmark_type": "TASK_STATUS_ONLY"}, headers=admin,
+    ).json()
+    client.patch(
+        f"/api/v1/activity-master/sub-activities/{sub['id']}",
+        json={"benchmark_period_days": period}, headers=admin,
+    )
+    return a, sub
+
+
+def _quantity_task_sub(client, admin, *, name="Quantity", period=1):
+    a = client.post(
+        "/api/v1/activity-master/activities", json={"name": f"Activity {name}"}, headers=admin,
+    ).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{a['id']}/sub-activities",
+        json={"name": name, "benchmark_type": "TASK_WITH_QUANTITY",
+              "relevant_count_field": "pages", "benchmark_value": 100,
+              "benchmark_period_days": period},
+        headers=admin,
+    ).json()
+    return a, sub
+
+
+def _post_report(client, header, *, project_id, sub_id, on_date, work_item_id=None, expect=201):
+    task = {"project_id": str(project_id), "description": "work", "sub_activity_id": sub_id}
+    if work_item_id is not None:
+        task["work_item_id"] = str(work_item_id)
+    res = client.post(BASE, headers=header, json={
+        "report_date": on_date.isoformat(), "day_status": "work_at_office",
+        "location": "chennai", "tasks": [task],
+    })
+    assert res.status_code == expect, res.text
+    return res
+
+
+def _start_work_item(client, header, *, project_id, sub_id, on_date):
+    r = _post_report(client, header, project_id=project_id, sub_id=sub_id, on_date=on_date).json()
+    return r["tasks"][0]["work_item_id"]
+
+
+# --------------------------------------------------------------------------
+# 1/2/3: within-duration continues; overdue lump-sum is blocked; approval unblocks
+# --------------------------------------------------------------------------
+
+def test_within_duration_continues_normally(flag_on, client, author, pm_header):
+    a = author()
+    # 6-day duration = START + 5 WORKING days, which is at least 5 calendar
+    # days out - comfortably past TODAY (START is 3 days back) whatever weekday
+    # START lands on, so this continuation is still within the allowed duration.
+    _, sub = _lumpsum_sub(client, pm_header, period=6)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                 on_date=cont_day, work_item_id=wi, expect=201)
+
+
+def test_overdue_lumpsum_requires_approval(flag_on, client, author, pm_header):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)  # due the same day it starts
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    res = _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                       on_date=cont_day, work_item_id=wi, expect=403)
+    assert "allowed duration" in res.json()["error"]["message"].lower()
+
+
+def test_approval_unlocks_continuation(flag_on, client, author, pm_header, db):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+    assert req["status"] == "pending"
+
+    client.post(f"{CR}/{req['id']}/approve", headers=pm_header, json={})
+    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                 on_date=cont_day, work_item_id=wi, expect=201)
+
+
+def test_rejection_keeps_continuation_blocked(flag_on, client, author, pm_header):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+    client.post(f"{CR}/{req['id']}/reject", headers=pm_header, json={"comment": "not justified"})
+
+    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                 on_date=cont_day, work_item_id=wi, expect=403)
+
+
+def test_pending_request_keeps_continuation_blocked(flag_on, client, author, pm_header):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    })
+    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                 on_date=cont_day, work_item_id=wi, expect=403)
+
+
+# --------------------------------------------------------------------------
+# duplicate prevention
+# --------------------------------------------------------------------------
+
+def test_duplicate_pending_request_returns_existing(flag_on, client, author, pm_header, db):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    body = {"work_item_id": wi, "continuation_date": cont_day.isoformat()}
+    r1 = client.post(CR, headers=a["header"], json=body).json()
+    r2 = client.post(CR, headers=a["header"], json=body).json()
+    assert r1["id"] == r2["id"]
+    assert db.query(ContinuationRequest).filter_by(work_item_id=wi).count() == 1
+
+
+# --------------------------------------------------------------------------
+# routing / authorization
+# --------------------------------------------------------------------------
+
+def test_correct_head_receives_request(flag_on, client, make_user, make_employee, make_project,
+                                        make_project_member, login, pm_header):
+    head_u = make_user("head1@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H1", user_id=head_u.id)
+    emp_u = make_user("emp1@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E2", user_id=emp_u.id)
+    project = make_project(code="P-H1", status=ProjectStatus.active, head_employee_id=head.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+    emp_header = login("emp1@x.com")
+    head_header = login("head1@x.com")
+
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, emp_header, project_id=project.id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=emp_header, json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    pending = client.get(f"{CR}/pending", headers=head_header).json()
+    assert any(r["id"] == req["id"] for r in pending)
+
+    other_u = make_user("other1@x.com", role=UserRole.employee)
+    make_employee(employee_code="O1", user_id=other_u.id)
+    other_header = login("other1@x.com")
+    pending_other = client.get(f"{CR}/pending", headers=other_header).json()
+    assert not any(r["id"] == req["id"] for r in pending_other)
+
+
+def test_no_head_falls_back_to_manager_and_pm_can_still_approve(
+    flag_on, client, db, make_user, make_employee, make_project, make_project_member, login, pm_header,
+):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    mgr_u = make_user("mgr1@x.com", role=UserRole.employee)
+    mgr = make_employee(employee_code="M1", user_id=mgr_u.id)
+    emp_u = make_user("emp2@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E3", user_id=emp_u.id, manager_id=mgr.id)
+    project = make_project(code="P-NM", status=ProjectStatus.active, head_employee_id=None)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+    emp_header = login("emp2@x.com")
+
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, emp_header, project_id=project.id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    client.post(CR, headers=emp_header, json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    })
+
+    notif = db.execute(
+        select(Notification).where(
+            Notification.user_id == mgr_u.id, Notification.type == "continuation_requested",
+        )
+    ).scalar_one_or_none()
+    assert notif is not None
+
+    req = db.execute(
+        select(ContinuationRequest).where(ContinuationRequest.employee_id == emp.id)
+    ).scalar_one()
+    res = client.post(f"{CR}/{req.id}/approve", headers=pm_header, json={})
+    assert res.status_code == 200, res.text
+
+
+def test_reassigned_head_takes_over_review_authority(
+    flag_on, client, db, make_user, make_employee, make_project, make_project_member, login, pm_header,
+):
+    head_a_u = make_user("heada@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HA", user_id=head_a_u.id)
+    head_b_u = make_user("headb@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HB", user_id=head_b_u.id)
+    project = make_project(code="P-RH", status=ProjectStatus.active, head_employee_id=head_a.id)
+
+    emp_u = make_user("empr@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ER", user_id=emp_u.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+    emp_header = login("empr@x.com")
+
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, emp_header, project_id=project.id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=emp_header, json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    project.head_employee_id = head_b.id
+    db.add(project)
+    db.commit()
+
+    h_a = login("heada@x.com")
+    res_a = client.post(f"{CR}/{req['id']}/approve", headers=h_a, json={})
+    assert res_a.status_code == 403, res_a.text
+
+    h_b = login("headb@x.com")
+    res_b = client.post(f"{CR}/{req['id']}/approve", headers=h_b, json={})
+    assert res_b.status_code == 200, res_b.text
+
+
+def test_unauthorized_employee_cannot_approve(flag_on, client, author, pm_header, make_user, login):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    make_user("stranger@x.com", role=UserRole.employee)
+    stranger = login("stranger@x.com")
+    res = client.post(f"{CR}/{req['id']}/approve", headers=stranger, json={})
+    assert res.status_code == 403, res.text
+
+
+def test_self_approval_blocked(flag_on, client, author, pm_header, db):
+    """The Project Head IS the requesting employee (self-routed) - the review
+    endpoint must still 403, mirroring leave's self-review guard."""
+    a = author()
+    a["project"].head_employee_id = a["emp"].id
+    db.add(a["project"])
+    db.commit()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+    res = client.post(f"{CR}/{req['id']}/approve", headers=a["header"], json={})
+    assert res.status_code == 403, res.text
+
+
+# --------------------------------------------------------------------------
+# decisions: approve / reject + notifications
+# --------------------------------------------------------------------------
+
+def test_head_can_approve_and_notifies_employee(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    a = author()
+    head_u = make_user("head3@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H3", user_id=head_u.id)
+    a["project"].head_employee_id = head.id
+    db.add(a["project"])
+    db.commit()
+    head_header = login("head3@x.com")
+
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    res = client.post(f"{CR}/{req['id']}/approve", headers=head_header, json={"comment": "go ahead"})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+    assert res.json()["reviewer_id"] == str(head.id)
+
+    notif = db.execute(
+        select(Notification).where(
+            Notification.user_id == a["user"].id, Notification.type == "continuation_approved",
+        )
+    ).scalar_one_or_none()
+    assert notif is not None
+
+
+def test_head_can_reject_and_notifies_employee(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    a = author()
+    head_u = make_user("head4@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H4", user_id=head_u.id)
+    a["project"].head_employee_id = head.id
+    db.add(a["project"])
+    db.commit()
+    head_header = login("head4@x.com")
+
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    res = client.post(f"{CR}/{req['id']}/reject", headers=head_header, json={"comment": "not justified"})
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "rejected"
+
+    notif = db.execute(
+        select(Notification).where(
+            Notification.user_id == a["user"].id, Notification.type == "continuation_rejected",
+        )
+    ).scalar_one_or_none()
+    assert notif is not None
+
+    pending = client.get(f"{CR}/pending", headers=head_header).json()
+    assert not any(r["id"] == req["id"] for r in pending)
+
+
+def test_pending_and_all_requests_reflect_decisions(flag_on, client, author, pm_header):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    pending_before = client.get(f"{CR}/pending", headers=pm_header).json()
+    assert any(r["id"] == req["id"] for r in pending_before)
+
+    client.post(f"{CR}/{req['id']}/approve", headers=pm_header, json={})
+
+    pending_after = client.get(f"{CR}/pending", headers=pm_header).json()
+    assert not any(r["id"] == req["id"] for r in pending_after)
+
+    history = client.get(CR, headers=pm_header, params={"status": "approved"}).json()
+    assert any(r["id"] == req["id"] for r in history["items"])
+    assert history["total"] >= 1
+
+
+def test_task_with_quantity_continuation_never_gated(flag_on, client, author, pm_header):
+    """TASK_WITH_QUANTITY must continue exactly as before Phase 2 - never
+    gated by the lump-sum continuation-approval check, even when overdue."""
+    a = author()
+    _, sub = _quantity_task_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                 on_date=cont_day, work_item_id=wi, expect=201)
+
+
+# --------------------------------------------------------------------------
+# read endpoints
+# --------------------------------------------------------------------------
+
+def test_employee_can_read_own_request_head_and_pm_can_too(flag_on, client, db, author, pm_header,
+                                                            make_user, make_employee, login):
+    a = author()
+    head_u = make_user("head5@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H5", user_id=head_u.id)
+    a["project"].head_employee_id = head.id
+    db.add(a["project"])
+    db.commit()
+    head_header = login("head5@x.com")
+
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    assert client.get(f"{CR}/{req['id']}", headers=a["header"]).status_code == 200
+    assert client.get(f"{CR}/{req['id']}", headers=head_header).status_code == 200
+    assert client.get(f"{CR}/{req['id']}", headers=pm_header).status_code == 200
+
+
+def test_stranger_cannot_read_request(flag_on, client, author, pm_header, make_user, login):
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+    }).json()
+
+    make_user("stranger2@x.com", role=UserRole.employee)
+    stranger = login("stranger2@x.com")
+    res = client.get(f"{CR}/{req['id']}", headers=stranger)
+    assert res.status_code == 403, res.text

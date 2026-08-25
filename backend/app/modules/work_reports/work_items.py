@@ -264,6 +264,25 @@ def resolve_task_work_item(
             422,
         )
 
+    # Lump-sum continuation approval (Phase 2). Only a brand-NEW continuation
+    # entry (never a resave of a row this report already had) on an OVERDUE
+    # lump-sum item is gated - TASK_WITH_QUANTITY rows (snap["is_lumpsum_task"]
+    # is False for them) are never touched by this check.
+    if (
+        not is_resave
+        and snap.get("is_lumpsum_task")
+        and report.report_date > item.due_date
+    ):
+        from app.modules.continuation_requests.service import has_approved_continuation
+
+        if not has_approved_continuation(db, work_item_id=item.id):
+            raise AppError(
+                "forbidden",
+                "This lump-sum activity's allowed duration has passed. Request "
+                "continuation approval from the Project Head before continuing.",
+                403,
+            )
+
     _apply_completion(db, item, is_completed=is_completed, report=report, editable=editable)
     return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}
 
@@ -439,13 +458,28 @@ def get_open_work_items(
     started_on. Once report_date crosses into a later cycle the item drops out of
     the suggestions (it stays incomplete in the DB and keeps appearing as
     Not-Completed/Overdue in historical benchmark exports — see project rule).
-    Re-selecting the same activity in the new cycle starts a fresh work item."""
+    Re-selecting the same activity in the new cycle starts a fresh work item.
+
+    Lump-sum continuation approval (Phase 2): an OVERDUE item whose
+    sub-activity is a lump-sum/NON_QUANTITATIVE task (no relevant_count_field -
+    see activity_master.models.is_lumpsum_unit_row) additionally carries
+    requires_continuation_approval / continuation_status / continuation_request_id
+    / continuation_routed_to, resolved from continuation_requests. A
+    TASK_WITH_QUANTITY item is never gated - those four fields stay
+    False/None/None/None for it, exactly as before Phase 2."""
+    from app.modules.activity_master.models import is_lumpsum_unit_row
+
     # The cycle of the report being written; only items whose own start cycle
     # matches this may be continued (compute_week_bounds is the shared Fri-Thu
     # calc used everywhere else, so continuation and benchmarks never diverge).
     report_cycle = compute_week_bounds(report_date)
     stmt = (
-        select(WorkItem, ActivityMaster.parent_id.label("activity_id"))
+        select(
+            WorkItem,
+            ActivityMaster.parent_id.label("activity_id"),
+            ActivityMaster.benchmark_type.label("benchmark_type"),
+            ActivityMaster.relevant_count_field.label("relevant_count_field"),
+        )
         .join(ActivityMaster, ActivityMaster.id == WorkItem.sub_activity_id)
         .where(
             WorkItem.employee_id == employee_id,
@@ -456,7 +490,8 @@ def get_open_work_items(
     rows = db.execute(stmt).all()
 
     out: list[dict] = []
-    for item, activity_id in rows:
+    lumpsum_ids: set[uuid.UUID] = set()
+    for item, activity_id, benchmark_type, relevant_count_field in rows:
         # Confine to the item's own benchmark cycle. started_on is the frozen
         # originating date (never the latest continuation), so a task started
         # last Friday stops being suggested the moment report_date rolls into the
@@ -464,6 +499,8 @@ def get_open_work_items(
         if compute_week_bounds(item.started_on) != report_cycle:
             continue
         lc = lifecycle_of(item.due_date, item.completed_on, today=report_date)
+        if is_lumpsum_unit_row(benchmark_type, relevant_count_field):
+            lumpsum_ids.add(item.id)
         out.append({
             "work_item_id": item.id,
             "project_id": item.project_id,
@@ -480,9 +517,33 @@ def get_open_work_items(
             "days_overdue": days_overdue_of(
                 item.due_date, item.completed_on, today=report_date
             ),
+            "requires_continuation_approval": False,
+            "continuation_status": None,
+            "continuation_request_id": None,
+            "continuation_routed_to": None,
         })
     out.sort(key=lambda r: (
         _LIFECYCLE_ORDER.get(WorkItemLifecycle(r["lifecycle"]), 9),
         r["due_date"],
     ))
+
+    overdue_lumpsum_ids = {
+        r["work_item_id"] for r in out
+        if r["work_item_id"] in lumpsum_ids and r["lifecycle"] == WorkItemLifecycle.overdue.value
+    }
+    if overdue_lumpsum_ids:
+        from app.modules.continuation_requests.service import latest_requests_by_work_item
+
+        latest = latest_requests_by_work_item(db, overdue_lumpsum_ids)
+        for r in out:
+            if r["work_item_id"] not in overdue_lumpsum_ids:
+                continue
+            req = latest.get(r["work_item_id"])
+            if req is None:
+                r["requires_continuation_approval"] = True
+                continue
+            r["continuation_request_id"] = req.id
+            r["continuation_status"] = req.status
+            r["requires_continuation_approval"] = req.status != "approved"
+            r["continuation_routed_to"] = req.routed_to_name
     return out

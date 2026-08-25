@@ -112,6 +112,30 @@ def _get_report(client, header, report_id):
     return res.json()
 
 
+def _grant_continuation(db, work_item_id, continuation_date):
+    """Phase 2: continuing an OVERDUE lump-sum work item needs an APPROVED
+    ContinuationRequest. The tests below are about work-item mechanics, not the
+    approval workflow (tests/test_continuation_requests.py covers that end to
+    end), so they grant the approval directly rather than driving the API."""
+    import uuid as _uuid
+
+    from app.modules.continuation_requests.models import ContinuationRequest
+
+    item = db.get(WorkItem, _uuid.UUID(str(work_item_id)))
+    db.add(ContinuationRequest(
+        employee_id=item.employee_id,
+        work_item_id=item.id,
+        project_id=item.project_id,
+        sub_activity_id=item.sub_activity_id,
+        original_report_date=item.started_on,
+        allowed_duration_days=item.target_days,
+        due_date=item.due_date,
+        continuation_date=continuation_date,
+        status="approved",
+    ))
+    db.commit()
+
+
 # --------------------------------------------------------------------------
 # due-date rule (working days — Phase 2)
 # --------------------------------------------------------------------------
@@ -259,6 +283,7 @@ def test_overdue_task_can_be_continued(flag_on, client, author, pm_header, db):
                     params={"report_date": TODAY.isoformat()}).json()
     assert ot["items"][0]["lifecycle"] == "OVERDUE"
     assert ot["items"][0]["days_overdue"] == 3
+    _grant_continuation(db, wid, TODAY)
     _post_report(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=TODAY, work_item_id=wid)
     assert db.query(WorkItem).count() == 1
@@ -489,7 +514,7 @@ def test_completed_on_due_date_is_on_time(flag_on, client, author, pm_header):
     assert res["work_item_lifecycle"] == "COMPLETED_ON_TIME"
 
 
-def test_completed_after_due_is_late(flag_on, client, author, pm_header):
+def test_completed_after_due_is_late(flag_on, client, author, pm_header, db):
     a = author()
     _, sub = _task_sub(client, pm_header, period=1)  # due == start
     start = TODAY - timedelta(days=3)
@@ -498,6 +523,7 @@ def test_completed_after_due_is_late(flag_on, client, author, pm_header):
     wid = r1["tasks"][0]["work_item_id"]
     # Continue on a later report (dated after the due date) and complete THERE,
     # so completed_on (that report's date) > due_date -> COMPLETED_LATE.
+    _grant_continuation(db, wid, TODAY)
     r2 = _post_report(client, a["header"], project_id=a["project"].id,
                       sub_id=sub["id"], on_date=TODAY, work_item_id=wid).json()
     res = _complete_via_endpoint(client, a["header"], r2["tasks"][0]["id"]).json()
@@ -677,6 +703,7 @@ def test_overdue_reader_dedupes(flag_on, client, author, pm_header, db):
     r0 = _post_report(client, a["header"], project_id=a["project"].id,
                       sub_id=sub["id"], on_date=d0).json()
     wid = r0["tasks"][0]["work_item_id"]
+    _grant_continuation(db, wid, d0 + timedelta(days=1))
     _post_report(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=d0 + timedelta(days=1), work_item_id=wid)
     # Evaluate "today" three days later so due (d0) is in-cycle and past.
@@ -748,6 +775,7 @@ def test_start_10_complete_on_11_separates_daily_and_overall(
     r10 = _post_report(client, a["header"], project_id=a["project"].id,
                        sub_id=sub["id"], on_date=d10).json()
     wid = r10["tasks"][0]["work_item_id"]
+    _grant_continuation(db, wid, d11)
     r11 = _post_report(client, a["header"], project_id=a["project"].id,
                        sub_id=sub["id"], on_date=d11, work_item_id=wid,
                        is_completed=True).json()
@@ -834,7 +862,7 @@ def test_open_task_completed_via_current_continuation(
 
 
 def test_patch_and_form_completion_produce_identical_state(
-    flag_on, client, author, pm_header
+    flag_on, client, author, pm_header, db
 ):
     """Scenario 5: form-save completion and PATCH completion yield identical row
     and work-item state."""
@@ -845,6 +873,7 @@ def test_patch_and_form_completion_produce_identical_state(
         r0 = _post_report(client, a["header"], project_id=a["project"].id,
                           sub_id=sub["id"], on_date=d0).json()
         wid = r0["tasks"][0]["work_item_id"]
+        _grant_continuation(db, wid, TODAY)
         if via == "form":
             r1 = _post_report(client, a["header"], project_id=a["project"].id,
                               sub_id=sub["id"], on_date=TODAY, work_item_id=wid,

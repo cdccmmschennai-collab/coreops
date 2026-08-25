@@ -464,6 +464,13 @@ class OpenTaskOut(BaseModel):
     # IN_PROGRESS / DUE_TODAY / OVERDUE (completed items are never returned).
     lifecycle: str
     days_overdue: int = 0
+    # Lump-sum continuation approval (Phase 2). Always False/None for a
+    # TASK_WITH_QUANTITY item - only a lump-sum (NON_QUANTITATIVE) activity can
+    # require approval to continue past its allowed duration.
+    requires_continuation_approval: bool = False
+    continuation_status: str | None = None
+    continuation_request_id: uuid.UUID | None = None
+    continuation_routed_to: str | None = None
 
 
 class OpenTasksOut(BaseModel):
