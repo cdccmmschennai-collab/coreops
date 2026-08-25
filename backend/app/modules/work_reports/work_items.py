@@ -14,6 +14,21 @@ sites* in work_reports/service.py — this module never reads the flag, so it
 stays unit-testable and legacy behaviour is decided in one place.
 
 Scope: TASK_BASED only. NUMERIC daily-quantity benchmarks never touch this.
+
+Two different meanings of "duration" live here, deliberately:
+
+  * due_date — a CALENDAR deadline, frozen at creation (started_on plus
+    target_days - 1 working days). It is history: it drives on-time vs late
+    completion and every historical reader/export, and never moves.
+  * allowed duration for a LUMP-SUM activity — counted in WORK DAYS: the
+    number of distinct report dates on which the employee actually worked on
+    that activity. Skipped calendar days consume nothing, so a 2-day lump-sum
+    started on the 25th and worked again on the 30th is still on day 2. Only
+    the next work day after the allowance is used up needs Project Head
+    continuation approval. See count_work_days / lumpsum_lifecycle below.
+
+TASK_WITH_QUANTITY items are never measured in work days — they keep the
+calendar due_date lifecycle exactly as before.
 """
 import enum
 import uuid
@@ -82,6 +97,89 @@ def days_overdue_of(
     if completed_on is not None or today <= due_date:
         return 0
     return (today - due_date).days
+
+
+# ---------- lump-sum work-day usage (the allowed-duration rule) ------------
+def count_work_days(
+    db: Session, *, item_id: uuid.UUID, excluding: date | None = None
+) -> int:
+    """How many distinct report dates this work item has actually been worked
+    on. This — not the calendar span — is what a lump-sum activity's allowed
+    duration is spent on: a day with no entry for the item consumes nothing.
+
+    `excluding` drops one report date from the count, always the report being
+    written: a day is consumed by having been worked, and the day under
+    consideration is not consumed yet. It also makes the count independent of
+    whether the caller has already inserted/deleted that report's own rows.
+    """
+    stmt = (
+        select(func.count(func.distinct(DailyWorkReport.report_date)))
+        .select_from(WorkReportTask)
+        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
+        .where(WorkReportTask.work_item_id == item_id)
+    )
+    if excluding is not None:
+        stmt = stmt.where(DailyWorkReport.report_date != excluding)
+    return db.execute(stmt).scalar_one()
+
+
+def count_work_days_by_item(
+    db: Session, item_ids, *, excluding: date | None = None
+) -> dict[uuid.UUID, int]:
+    """count_work_days for many items in one query. Items with no entry left
+    after `excluding` are simply absent from the mapping (read them as 0)."""
+    ids = list(item_ids)
+    if not ids:
+        return {}
+    stmt = (
+        select(
+            WorkReportTask.work_item_id,
+            func.count(func.distinct(DailyWorkReport.report_date)),
+        )
+        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
+        .where(WorkReportTask.work_item_id.in_(ids))
+        .group_by(WorkReportTask.work_item_id)
+    )
+    if excluding is not None:
+        stmt = stmt.where(DailyWorkReport.report_date != excluding)
+    return {wid: n for wid, n in db.execute(stmt).all()}
+
+
+def lumpsum_allowance_exhausted(days_used: int, target_days: int) -> bool:
+    """Whether a lump-sum item has already spent its allowed duration, so the
+    NEXT work day on it needs continuation approval. `days_used` counts work
+    days consumed BEFORE the day being considered (count_work_days with
+    excluding=that date). target_days is clamped to >= 1 exactly as
+    compute_due_date clamps it, so a blank benchmark period still grants one
+    work day."""
+    return days_used >= max(1, target_days)
+
+
+def lumpsum_lifecycle(days_used: int, target_days: int) -> WorkItemLifecycle:
+    """Lifecycle of an OPEN lump-sum item relative to the report being written,
+    in work days rather than calendar days:
+
+      IN_PROGRESS — work days remain after this one.
+      DUE_TODAY   — this is the last day of the allowed duration.
+      OVERDUE     — the allowance is spent; continuing needs approval.
+
+    Completed items never reach here (get_open_work_items filters them out) —
+    on-time vs late completion stays a CALENDAR question, answered by
+    lifecycle_of against the frozen due_date."""
+    allowed = max(1, target_days)
+    if days_used >= allowed:
+        return WorkItemLifecycle.overdue
+    if days_used == allowed - 1:
+        return WorkItemLifecycle.due_today
+    return WorkItemLifecycle.in_progress
+
+
+def lumpsum_days_over(days_used: int, target_days: int) -> int:
+    """Work days already taken BEYOND the allowed duration — the work-day
+    counterpart of days_overdue_of. 0 while the allowance holds, and still 0 on
+    the first blocked day (nothing beyond it has been worked yet); it only
+    grows once approved continuation days are actually used."""
+    return max(0, days_used - max(1, target_days))
 
 
 def mirror_fields(item: WorkItem, report_date: date) -> dict:
@@ -264,24 +362,30 @@ def resolve_task_work_item(
             422,
         )
 
-    # Lump-sum continuation approval (Phase 2). Only a brand-NEW continuation
-    # entry (never a resave of a row this report already had) on an OVERDUE
-    # lump-sum item is gated - TASK_WITH_QUANTITY rows (snap["is_lumpsum_task"]
-    # is False for them) are never touched by this check.
-    if (
-        not is_resave
-        and snap.get("is_lumpsum_task")
-        and report.report_date > item.due_date
-    ):
-        from app.modules.continuation_requests.service import has_approved_continuation
-
-        if not has_approved_continuation(db, work_item_id=item.id):
-            raise AppError(
-                "forbidden",
-                "This lump-sum activity's allowed duration has passed. Request "
-                "continuation approval from the Project Head before continuing.",
-                403,
+    # Lump-sum continuation approval. Only a brand-NEW continuation entry
+    # (never a resave of a row this report already had) is gated, and only once
+    # the item's allowed duration is spent in WORK DAYS - the distinct report
+    # dates it has actually been worked on, so skipped days cost nothing and
+    # this report's own date is not counted before it is worked. The calendar
+    # due_date is deliberately NOT consulted here. TASK_WITH_QUANTITY rows
+    # (snap["is_lumpsum_task"] is False for them) are never touched by this
+    # check.
+    if not is_resave and snap.get("is_lumpsum_task"):
+        days_used = count_work_days(
+            db, item_id=item.id, excluding=report.report_date
+        )
+        if lumpsum_allowance_exhausted(days_used, item.target_days):
+            from app.modules.continuation_requests.service import (
+                has_approved_continuation,
             )
+
+            if not has_approved_continuation(db, work_item_id=item.id):
+                raise AppError(
+                    "forbidden",
+                    "This lump-sum activity's allowed duration has passed. Request "
+                    "continuation approval from the Project Head before continuing.",
+                    403,
+                )
 
     _apply_completion(db, item, is_completed=is_completed, report=report, editable=editable)
     return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}
@@ -460,13 +564,22 @@ def get_open_work_items(
     Not-Completed/Overdue in historical benchmark exports — see project rule).
     Re-selecting the same activity in the new cycle starts a fresh work item.
 
-    Lump-sum continuation approval (Phase 2): an OVERDUE item whose
-    sub-activity is a lump-sum/NON_QUANTITATIVE task (no relevant_count_field -
-    see activity_master.models.is_lumpsum_unit_row) additionally carries
+    Lump-sum items are measured in WORK DAYS, not calendar days: lifecycle and
+    days_overdue come from lumpsum_lifecycle/lumpsum_days_over over the count of
+    distinct dates the item has actually been worked on (excluding report_date,
+    which is not consumed until it is worked). So a lump-sum item whose calendar
+    due date has long passed still reads IN_PROGRESS/DUE_TODAY while allowed
+    work days remain, and OVERDUE means "allowance spent - the next work day
+    needs approval". A TASK_WITH_QUANTITY item keeps the calendar due_date
+    lifecycle unchanged.
+
+    Lump-sum continuation approval: an OVERDUE item whose sub-activity is a
+    lump-sum/NON_QUANTITATIVE task (no relevant_count_field - see
+    activity_master.models.is_lumpsum_unit_row) additionally carries
     requires_continuation_approval / continuation_status / continuation_request_id
     / continuation_routed_to, resolved from continuation_requests. A
     TASK_WITH_QUANTITY item is never gated - those four fields stay
-    False/None/None/None for it, exactly as before Phase 2."""
+    False/None/None/None for it."""
     from app.modules.activity_master.models import is_lumpsum_unit_row
 
     # The cycle of the report being written; only items whose own start cycle
@@ -489,8 +602,7 @@ def get_open_work_items(
     )
     rows = db.execute(stmt).all()
 
-    out: list[dict] = []
-    lumpsum_ids: set[uuid.UUID] = set()
+    candidates: list[tuple[WorkItem, uuid.UUID | None, bool]] = []
     for item, activity_id, benchmark_type, relevant_count_field in rows:
         # Confine to the item's own benchmark cycle. started_on is the frozen
         # originating date (never the latest continuation), so a task started
@@ -498,9 +610,30 @@ def get_open_work_items(
         # next Friday-Thursday window.
         if compute_week_bounds(item.started_on) != report_cycle:
             continue
-        lc = lifecycle_of(item.due_date, item.completed_on, today=report_date)
-        if is_lumpsum_unit_row(benchmark_type, relevant_count_field):
+        candidates.append((
+            item, activity_id, is_lumpsum_unit_row(benchmark_type, relevant_count_field),
+        ))
+
+    # Work days each item has already consumed, this report's own date excluded
+    # (it is not spent until it is worked). Resolved for every item so days_used
+    # is honest on the wire; only lump-sum items are MEASURED by it.
+    used_by_item = count_work_days_by_item(
+        db, [item.id for item, _, _ in candidates], excluding=report_date
+    )
+
+    out: list[dict] = []
+    lumpsum_ids: set[uuid.UUID] = set()
+    for item, activity_id, is_lumpsum in candidates:
+        days_used = used_by_item.get(item.id, 0)
+        if is_lumpsum:
             lumpsum_ids.add(item.id)
+            lc = lumpsum_lifecycle(days_used, item.target_days)
+            days_over = lumpsum_days_over(days_used, item.target_days)
+        else:
+            lc = lifecycle_of(item.due_date, item.completed_on, today=report_date)
+            days_over = days_overdue_of(
+                item.due_date, item.completed_on, today=report_date
+            )
         out.append({
             "work_item_id": item.id,
             "project_id": item.project_id,
@@ -513,10 +646,9 @@ def get_open_work_items(
             "started_on": item.started_on,
             "due_date": item.due_date,
             "target_days": item.target_days,
+            "days_used": days_used,
             "lifecycle": lc.value,
-            "days_overdue": days_overdue_of(
-                item.due_date, item.completed_on, today=report_date
-            ),
+            "days_overdue": days_over,
             "requires_continuation_approval": False,
             "continuation_status": None,
             "continuation_request_id": None,

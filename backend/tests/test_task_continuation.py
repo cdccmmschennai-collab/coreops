@@ -278,11 +278,17 @@ def test_overdue_task_can_be_continued(flag_on, client, author, pm_header, db):
     r1 = _post_report(client, a["header"], project_id=a["project"].id,
                       sub_id=sub["id"], on_date=start).json()
     wid = r1["tasks"][0]["work_item_id"]
-    # Still listed (overdue) and still continuable.
+    # Still listed and still continuable. This sub-activity is lump-sum
+    # (TASK_BASED with no relevant_count_field), so OVERDUE means "the allowed
+    # duration is spent in WORK DAYS": the one day it was worked used up its
+    # 1-day allowance. days_overdue counts work days taken BEYOND that, which is
+    # 0 until an approved continuation day is actually worked — the three
+    # calendar days since the start consume nothing.
     ot = client.get(OPEN_TASKS, headers=a["header"],
                     params={"report_date": TODAY.isoformat()}).json()
     assert ot["items"][0]["lifecycle"] == "OVERDUE"
-    assert ot["items"][0]["days_overdue"] == 3
+    assert ot["items"][0]["days_used"] == 1
+    assert ot["items"][0]["days_overdue"] == 0
     _grant_continuation(db, wid, TODAY)
     _post_report(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=TODAY, work_item_id=wid)

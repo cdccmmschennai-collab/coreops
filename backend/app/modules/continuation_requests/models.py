@@ -91,9 +91,13 @@ class ContinuationRequest(UUIDMixin, Base):
             "status IN ('pending', 'approved', 'rejected')",
             name="continuation_requests_status_valid",
         ),
-        CheckConstraint(
-            "continuation_date > due_date", name="continuation_requests_date_after_due"
-        ),
+        # There is deliberately NO "continuation_date > due_date" check: the
+        # allowed duration is spent in WORK DAYS (distinct dates actually
+        # worked), so a request can legitimately be raised on a date at or
+        # before the frozen calendar due_date - e.g. a 3-day lump-sum started on
+        # a Friday and worked Fri/Sat/Sun has spent its allowance by Monday,
+        # while due_date skipped the weekend to Tuesday. Migration 0075 dropped
+        # that constraint; work_items.count_work_days is the real rule.
         Index("continuation_requests_employee_idx", "employee_id"),
         Index("continuation_requests_work_item_idx", "work_item_id"),
         Index("continuation_requests_project_idx", "project_id"),

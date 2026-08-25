@@ -22,6 +22,10 @@ from app.modules.employees.service import _current_employee
 from app.modules.projects.models import Project
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import WorkItem
+from app.modules.work_reports.work_items import (
+    count_work_days,
+    lumpsum_allowance_exhausted,
+)
 from app.shared.errors import AppError
 
 # The reviewer surface for this feature is its own top-level page, reached from
@@ -142,9 +146,10 @@ def _attach_names(db: Session, rows: list[ContinuationRequest]) -> None:
 
 def has_approved_continuation(db: Session, *, work_item_id: uuid.UUID) -> bool:
     """Whether an APPROVED continuation request exists for this work item -
-    the single predicate work_items.resolve_task_work_item gates on. Approval
-    is permanent for the life of the item (its due_date never moves and it
-    stays overdue until completed), so this never expires."""
+    the single predicate work_items.resolve_task_work_item gates on once the
+    item's allowed duration is spent in work days. Approval is permanent for
+    the life of the item: work days only accumulate, so an item that has spent
+    its allowance never falls back inside it."""
     return db.execute(
         select(ContinuationRequest.id).where(
             ContinuationRequest.work_item_id == work_item_id,
@@ -215,7 +220,15 @@ def create_continuation_request(
         raise AppError("forbidden", "You can only request continuation for your own tasks.", 403)
     if item.completed_on is not None:
         raise AppError("validation_error", "This task is already completed.", 422)
-    if data.continuation_date <= item.due_date:
+    # The allowed duration is spent in WORK DAYS - the distinct report dates the
+    # activity was actually worked on - not in calendar days since it started.
+    # The continuation date itself is excluded: it is the day being asked for,
+    # not a day already used. Same predicate the save-time gate applies, so the
+    # request surface and the block can never disagree.
+    days_used = count_work_days(
+        db, item_id=item.id, excluding=data.continuation_date
+    )
+    if not lumpsum_allowance_exhausted(days_used, item.target_days):
         raise AppError(
             "validation_error",
             "This task is still within its allowed duration - no approval is needed yet.",

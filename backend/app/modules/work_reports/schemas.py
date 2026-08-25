@@ -461,10 +461,19 @@ class OpenTaskOut(BaseModel):
     started_on: date
     due_date: date
     target_days: int
+    # Distinct report dates this item has already been worked on, excluding the
+    # report being written. For a LUMP-SUM item this is what its allowed
+    # duration (target_days) is spent on, and what lifecycle/days_overdue below
+    # are derived from - skipped calendar days consume nothing.
+    days_used: int = 0
     # IN_PROGRESS / DUE_TODAY / OVERDUE (completed items are never returned).
+    # Lump-sum: measured in WORK DAYS (OVERDUE = allowance spent, so the next
+    # work day needs approval). TASK_WITH_QUANTITY: the calendar due_date.
     lifecycle: str
+    # Lump-sum: work days taken BEYOND the allowed duration. Otherwise calendar
+    # days past due_date.
     days_overdue: int = 0
-    # Lump-sum continuation approval (Phase 2). Always False/None for a
+    # Lump-sum continuation approval. Always False/None for a
     # TASK_WITH_QUANTITY item - only a lump-sum (NON_QUANTITATIVE) activity can
     # require approval to continue past its allowed duration.
     requires_continuation_approval: bool = False
