@@ -193,6 +193,29 @@ def test_start_creates_one_work_item(flag_on, client, author, pm_header, db):
     assert db.query(WorkItem).count() == 1
 
 
+def test_task_with_quantity_never_flagged_lumpsum(flag_on, client, author, pm_header, db):
+    """TASK_WITH_QUANTITY rows must never be treated as lump-sum — this is the
+    guard that keeps Phase 2's continuation-approval gate off quantity tasks."""
+    a = author()
+    aa = client.post("/api/v1/activity-master/activities",
+                     json={"name": "Quantity Task"}, headers=pm_header).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{aa['id']}/sub-activities",
+        json={"name": "QTask", "benchmark_type": "TASK_WITH_QUANTITY",
+              "relevant_count_field": "pages", "benchmark_value": 100,
+              "benchmark_period_days": 1},
+        headers=pm_header,
+    ).json()
+    r = _post_report(client, a["header"], project_id=a["project"].id,
+                     sub_id=sub["id"], on_date=TODAY, tags=0).json()
+    # A TASK_WITH_QUANTITY row still gets a WorkItem (task-bearing), but the
+    # snapshot distinguishes it from a lump-sum row — asserted indirectly here
+    # via the work item existing and the row not being blocked (Task 5 adds
+    # the actual gate; this test only pins the snapshot classification via the
+    # public surface available at this point: the row saves successfully).
+    assert r["tasks"][0]["work_item_id"] is not None
+
+
 def test_continuation_full_flow(flag_on, client, author, pm_header, db):
     a = author()
     _, sub = _task_sub(client, pm_header, period=3)

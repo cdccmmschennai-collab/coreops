@@ -485,6 +485,10 @@ def _validate_tasks(
         activity_name: str | None = None
         activity_type = getattr(task, "activity_type", None)
         is_task_based = False
+        # Narrower than is_task_based: TASK_WITH_QUANTITY is task-bearing but is
+        # NOT lump-sum, and the continuation-approval gate keys off this flag
+        # alone so quantity tasks are provably never gated.
+        is_lumpsum_task = False
         benchmark_period_days: int | None = None
         # Structured benchmark exception (migration 0063). An unknown code is a
         # client error and is rejected outright; a known code on a row whose
@@ -543,6 +547,9 @@ def _validate_tasks(
             # quantity side is handled separately by the benchmark calc — having
             # a quantity does not stop it being a deadline-bearing task).
             is_task_based = sub.benchmark_type in TASK_BENCHMARK_TYPES
+            is_lumpsum_task = is_lumpsum_unit_row(
+                sub.benchmark_type, sub.relevant_count_field
+            )
             benchmark_period_days = sub.benchmark_period_days
             # Only a lumpsum row carries an employee-chosen unit. A quantity
             # mode's unit is a property of its benchmark (Activity Master's
@@ -563,6 +570,7 @@ def _validate_tasks(
             exception_code = None
             count_field = None
             count_value = None
+            is_lumpsum_task = False
         # A named field with nothing counted against it is not a state worth
         # storing: it would restore as a picked field with an empty Count and
         # export an artificial 0 under that column. Selecting a field is only
@@ -602,6 +610,7 @@ def _validate_tasks(
             "activity_name": activity_name,
             "activity_type": activity_type,
             "is_task_based": is_task_based,
+            "is_lumpsum_task": is_lumpsum_task,
             "benchmark_period_days": benchmark_period_days,
             "benchmark_exception_code": exception_code,
             "count_field": count_field,
