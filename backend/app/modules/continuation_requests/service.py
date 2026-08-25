@@ -188,6 +188,89 @@ def _pending_for_work_item(db: Session, work_item_id: uuid.UUID) -> Continuation
     ).scalar_one_or_none()
 
 
+def latest_request_for_work_item(
+    db: Session, work_item_id: uuid.UUID
+) -> ContinuationRequest | None:
+    """The single most recent continuation request for one work item (any
+    status), or None if none exists yet. Thin wrapper over
+    latest_requests_by_work_item for the one-item case the save-time gate
+    needs — reuses its "most recent by requested_at" logic rather than
+    duplicating it."""
+    return latest_requests_by_work_item(db, [work_item_id]).get(work_item_id)
+
+
+def get_or_create_pending_for_continuation(
+    db: Session, *, item: WorkItem, continuation_date,
+) -> tuple[ContinuationRequest, bool]:
+    """Called from the report-save gate (work_items.resolve_task_work_item),
+    NOT from the HTTP endpoint — when an over-allowance lump-sum
+    continuation is being saved and no pending/approved/rejected request
+    already governs this work item. Auto-creates a pending request so the
+    employee never has to file one separately; idempotent against the same
+    partial-unique-index race the explicit endpoint already handles.
+
+    Returns (request, created_now). created_now is False when an existing
+    pending request was reused — the caller uses this to decide whether a
+    notification is owed.
+
+    CRITICAL: this function must NEVER call db.commit() or send a
+    notification itself. It runs INSIDE work_reports.service's
+    create_work_report/update_work_report transaction, before that
+    function's own single terminal db.commit() — an early commit here would
+    partially commit a report save that might still fail validation on a
+    later row. Use db.add(...) + db.flush() only, exactly like the START
+    branch of resolve_task_work_item does for a fresh WorkItem. The caller
+    (work_reports.service, after ITS OWN commit succeeds) is responsible for
+    calling notify_new_pending_request for any (request, True) this
+    returns — mirroring how leave/service.py always commits the main entity
+    first and calls its notify_* helpers afterward.
+    """
+    existing = _pending_for_work_item(db, item.id)
+    if existing is not None:
+        return existing, False
+    req = ContinuationRequest(
+        employee_id=item.employee_id,
+        work_item_id=item.id,
+        project_id=item.project_id,
+        sub_activity_id=item.sub_activity_id,
+        original_report_date=item.started_on,
+        allowed_duration_days=item.target_days,
+        due_date=item.due_date,
+        continuation_date=continuation_date,
+        status=ContinuationRequestStatus.pending.value,
+    )
+    db.add(req)
+    try:
+        db.flush()
+    except IntegrityError:
+        # Lost the race to a concurrent duplicate create/save — the partial
+        # unique index rejected the second pending row within this same
+        # transaction. Fall back to the winner (mirrors
+        # create_continuation_request's own IntegrityError handling, but at
+        # flush time since this path never commits on its own).
+        db.rollback()
+        existing = _pending_for_work_item(db, item.id)
+        if existing is None:
+            raise
+        return existing, False
+    return req, True
+
+
+def notify_new_pending_request(db: Session, req: ContinuationRequest) -> None:
+    """Fire the same 'continuation_requested' notification
+    create_continuation_request sends, for a request that was instead
+    auto-created inside a report save. Call this ONLY after the caller's own
+    outer transaction has already committed (see
+    get_or_create_pending_for_continuation's docstring) — _notify_reviewer
+    does its own internal commit via _push, which is safe once there is
+    nothing else left uncommitted in this session."""
+    employee = db.get(Employee, req.employee_id)
+    if employee is None:
+        return
+    sub = db.get(ActivityMaster, req.sub_activity_id)
+    _notify_reviewer(db, employee, req, sub.name if sub else "this activity")
+
+
 def _fetch(db: Session, req_id: uuid.UUID) -> ContinuationRequest:
     req = db.get(ContinuationRequest, req_id)
     if req is None:

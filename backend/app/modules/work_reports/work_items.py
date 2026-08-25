@@ -277,6 +277,7 @@ def resolve_task_work_item(
     editable: bool,
     seen: set[uuid.UUID],
     existing_links: set[uuid.UUID] | None = None,
+    new_continuation_requests: list | None = None,
 ) -> dict:
     """Decide the work-item link + mirrored date/completion fields for one saved
     TASK_BASED task row. Returns a dict of WorkReportTask kwargs:
@@ -297,6 +298,14 @@ def resolve_task_work_item(
 
     Duplicate work_item_id within one report is rejected via `seen`.
     Only ever called for TASK_BASED rows with the feature flag ON.
+
+    `new_continuation_requests`, when passed, is an accumulator list the
+    caller (work_reports.service) owns for the whole report save: a brand-new
+    continuation of an over-allowance lump-sum item auto-creates a pending
+    ContinuationRequest (see the "Lump-sum continuation approval" block
+    below) and appends it here so the caller can fire its
+    'continuation_requested' notification AFTER the report's own transaction
+    commits — this function itself never commits and never notifies.
     """
     existing_links = existing_links or set()
     work_item_id = getattr(task_in, "work_item_id", None)
@@ -363,29 +372,44 @@ def resolve_task_work_item(
         )
 
     # Lump-sum continuation approval. Only a brand-NEW continuation entry
-    # (never a resave of a row this report already had) is gated, and only once
-    # the item's allowed duration is spent in WORK DAYS - the distinct report
-    # dates it has actually been worked on, so skipped days cost nothing and
-    # this report's own date is not counted before it is worked. The calendar
-    # due_date is deliberately NOT consulted here. TASK_WITH_QUANTITY rows
-    # (snap["is_lumpsum_task"] is False for them) are never touched by this
-    # check.
+    # (never a resave of a row this report already had) is gated, and only
+    # once the item's allowed duration is spent in WORK DAYS. TASK_WITH_QUANTITY
+    # rows (snap["is_lumpsum_task"] is False for them) are never touched.
+    #
+    # A rejected continuation stays blocked (403) — the employee gets no
+    # benefit from an unapproved continuation. Otherwise (no request yet, or
+    # one still pending) the save PROCEEDS and a pending request is
+    # auto-created if one doesn't already exist — the employee is never
+    # locked out of entering today's work while a decision is pending; they
+    # just get a clear "pending Project Head approval" state (surfaced by
+    # get_open_work_items / OpenTaskOut, unchanged by this task). An
+    # approved request also proceeds, exactly as before.
     if not is_resave and snap.get("is_lumpsum_task"):
         days_used = count_work_days(
             db, item_id=item.id, excluding=report.report_date
         )
         if lumpsum_allowance_exhausted(days_used, item.target_days):
             from app.modules.continuation_requests.service import (
-                has_approved_continuation,
+                get_or_create_pending_for_continuation,
+                latest_request_for_work_item,
             )
 
-            if not has_approved_continuation(db, work_item_id=item.id):
+            latest = latest_request_for_work_item(db, item.id)
+            if latest is not None and latest.status == "rejected":
                 raise AppError(
                     "forbidden",
-                    "This lump-sum activity's allowed duration has passed. Request "
-                    "continuation approval from the Project Head before continuing.",
+                    "The Project Head rejected continuation of this "
+                    "activity beyond its allowed duration. It cannot be "
+                    "continued further.",
                     403,
                 )
+            if latest is None or latest.status == "pending":
+                req, created = get_or_create_pending_for_continuation(
+                    db, item=item, continuation_date=report.report_date,
+                )
+                if created and new_continuation_requests is not None:
+                    new_continuation_requests.append(req)
+            # latest.status == "approved": nothing to do, save proceeds.
 
     _apply_completion(db, item, is_completed=is_completed, report=report, editable=editable)
     return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}

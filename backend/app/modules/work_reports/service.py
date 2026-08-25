@@ -45,6 +45,7 @@ from app.modules.activity_master.service import (
     compute_overdue,
     scaled_target,
 )
+from app.modules.continuation_requests import service as continuation_requests_service
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
@@ -312,6 +313,7 @@ def _lifecycle_row_kwargs(
     snap: dict,
     *,
     seen: set,
+    new_continuation_requests: list,
     legacy_completed_dates: dict | None = None,
     existing_links: set | None = None,
 ) -> dict:
@@ -324,7 +326,10 @@ def _lifecycle_row_kwargs(
     dates from _task_based_dates, completion stamped on the row itself, no work
     item. A saved report being edited is always an editable draft here, so
     completion corrections are allowed (editable=True). `existing_links` are the
-    work items this report already linked before the save (empty on create)."""
+    work items this report already linked before the save (empty on create).
+    `new_continuation_requests` is the caller's whole-report-save accumulator
+    for auto-created pending ContinuationRequests — see
+    resolve_task_work_item's docstring; passed straight through."""
     if (
         settings.TASK_CONTINUATION_ENABLED
         and snap["is_task_based"]
@@ -333,6 +338,7 @@ def _lifecycle_row_kwargs(
         return wi.resolve_task_work_item(
             db, report=report, task_in=task, snap=snap, editable=True,
             seen=seen, existing_links=existing_links,
+            new_continuation_requests=new_continuation_requests,
         )
     started_date, due_date = _task_based_dates(report.report_date, snap)
     completed_date = None
@@ -1491,12 +1497,16 @@ def _insert_period_tasks(
     snapshots: list[dict],
     *,
     seen_work_items: set,
+    new_continuation_requests: list,
     legacy_completed_dates: dict | None = None,
     existing_links: set | None = None,
 ) -> None:
     """Create the period rows + their task rows for a report whose old rows (if
     any) have already been removed. `snapshots` is _validate_tasks output for
-    the flattened task list, in period order."""
+    the flattened task list, in period order. `new_continuation_requests` is
+    the caller's whole-report-save accumulator, passed straight through to
+    every _lifecycle_row_kwargs call (see resolve_task_work_item's
+    docstring)."""
     snap_iter = iter(snapshots)
     for spec in period_specs:
         period = WorkReportPeriod(
@@ -1515,6 +1525,7 @@ def _insert_period_tasks(
             life = _lifecycle_row_kwargs(
                 db, report, task, snap,
                 seen=seen_work_items,
+                new_continuation_requests=new_continuation_requests,
                 legacy_completed_dates=legacy_completed_dates,
                 existing_links=existing_links,
             )
@@ -1742,8 +1753,10 @@ def create_work_report(
     db.add(report)
     db.flush()
     seen_work_items: set = set()
+    new_continuation_requests: list = []
     _insert_period_tasks(
-        db, report, norm["periods"], snapshots, seen_work_items=seen_work_items
+        db, report, norm["periods"], snapshots, seen_work_items=seen_work_items,
+        new_continuation_requests=new_continuation_requests,
     )
     try:
         db.commit()
@@ -1751,6 +1764,12 @@ def create_work_report(
         db.rollback()
         raise AppError("conflict", "A work report for this date already exists.", 409)
     db.refresh(report)
+    # Only after the report's own transaction has committed: notify the
+    # reviewer for any pending continuation request auto-created above (see
+    # get_or_create_pending_for_continuation's docstring — never fire this
+    # before the outer commit).
+    for req in new_continuation_requests:
+        continuation_requests_service.notify_new_pending_request(db, req)
     return _decorate(db, actor, [report])[0]
 
 
@@ -1799,6 +1818,14 @@ def update_work_report(
     # regardless of what tasks the client sent.
     no_activity = report.day_status in NO_ACTIVITY_DAY_STATUSES
 
+    # Whichever of the two task-writing branches below actually runs (a single
+    # update_work_report call exercises at most one of them) gets its own
+    # fresh accumulator; notifications for anything collected fire once,
+    # AFTER this function's own terminal db.commit() succeeds (see
+    # get_or_create_pending_for_continuation's docstring).
+    periods_new_continuation_requests: list = []
+    legacy_new_continuation_requests: list = []
+
     if periods_update:
         # Periods payload (new clients): wholesale rewrite of the report's
         # periods + task rows, mirroring the legacy tasks-replace semantics.
@@ -1833,6 +1860,7 @@ def update_work_report(
         _insert_period_tasks(
             db, report, norm["periods"], snapshots,
             seen_work_items=seen_work_items,
+            new_continuation_requests=periods_new_continuation_requests,
             legacy_completed_dates=old_completed_dates,
             existing_links=old_item_ids,
         )
@@ -1896,7 +1924,9 @@ def update_work_report(
         for task, snap in zip(data.tasks, snapshots):
             life = _lifecycle_row_kwargs(
                 db, report, task, snap,
-                seen=seen_work_items, legacy_completed_dates=old_completed_dates,
+                seen=seen_work_items,
+                new_continuation_requests=legacy_new_continuation_requests,
+                legacy_completed_dates=old_completed_dates,
                 existing_links=old_item_ids,
             )
             _add_task_row(db, report, period.id, task, snap, life)
@@ -1939,6 +1969,13 @@ def update_work_report(
     db.add(report)
     db.commit()
     db.refresh(report)
+    # Only after this function's own transaction has committed: notify the
+    # reviewer for any pending continuation request auto-created above (at
+    # most one of the two accumulators is non-empty per call — see
+    # get_or_create_pending_for_continuation's docstring for why this must
+    # never fire before the outer commit).
+    for req in periods_new_continuation_requests + legacy_new_continuation_requests:
+        continuation_requests_service.notify_new_pending_request(db, req)
     return _decorate(db, actor, [report])[0]
 
 

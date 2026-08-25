@@ -114,14 +114,41 @@ def test_within_duration_continues_normally(flag_on, client, author, pm_header):
                  on_date=cont_day, work_item_id=wi, expect=201)
 
 
-def test_overdue_lumpsum_requires_approval(flag_on, client, author, pm_header):
-    a = author()
+def test_overdue_lumpsum_continuation_auto_requests_and_saves(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    """The employee can always continue an overdue lump-sum item in today's
+    report: the save succeeds, and a pending ContinuationRequest is
+    auto-created behind the scenes (same table/dedup rule/notification the
+    explicit endpoint uses) instead of hard-blocking the save."""
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    head_u = make_user("head6@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H6", user_id=head_u.id)
+    a = author(email="emp6@x.com", code="E6", proj_code="P-6", head_id=head.id)
+
     _, sub = _lumpsum_sub(client, pm_header, period=1)  # due the same day it starts
     wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
     cont_day = TODAY
     res = _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-                       on_date=cont_day, work_item_id=wi, expect=403)
-    assert "allowed duration" in res.json()["error"]["message"].lower()
+                       on_date=cont_day, work_item_id=wi, expect=201)
+    assert res.json()["tasks"][0]["work_item_id"] == wi
+
+    reqs = db.execute(
+        select(ContinuationRequest).where(ContinuationRequest.work_item_id == wi)
+    ).scalars().all()
+    assert len(reqs) == 1
+    assert reqs[0].status == "pending"
+    assert reqs[0].continuation_date == cont_day
+
+    notif = db.execute(
+        select(Notification).where(
+            Notification.user_id == head_u.id, Notification.type == "continuation_requested",
+        )
+    ).scalar_one_or_none()
+    assert notif is not None
 
 
 def test_approval_unlocks_continuation(flag_on, client, author, pm_header, db):
@@ -151,21 +178,64 @@ def test_rejection_keeps_continuation_blocked(flag_on, client, author, pm_header
     }).json()
     client.post(f"{CR}/{req['id']}/reject", headers=pm_header, json={"comment": "not justified"})
 
-    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-                 on_date=cont_day, work_item_id=wi, expect=403)
+    res = _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                       on_date=cont_day, work_item_id=wi, expect=403)
+    assert "rejected" in res.json()["error"]["message"].lower()
 
 
-def test_pending_request_keeps_continuation_blocked(flag_on, client, author, pm_header):
+def test_pending_continuation_lets_further_days_through(flag_on, client, db, author, pm_header):
+    """A pending request does not freeze the employee out: while it awaits a
+    decision, further days' continuations also succeed, and no second
+    request is created (still exactly one row for this work item)."""
     a = author()
     _, sub = _lumpsum_sub(client, pm_header, period=1)
     wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
-    cont_day = TODAY
+    day_1 = TODAY - timedelta(days=1)
+    day_2 = TODAY
 
     client.post(CR, headers=a["header"], json={
-        "work_item_id": wi, "continuation_date": cont_day.isoformat(),
+        "work_item_id": wi, "continuation_date": day_1.isoformat(),
     })
     _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-                 on_date=cont_day, work_item_id=wi, expect=403)
+                 on_date=day_1, work_item_id=wi, expect=201)
+    _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                 on_date=day_2, work_item_id=wi, expect=201)
+
+    assert db.query(ContinuationRequest).filter_by(work_item_id=wi).count() == 1
+
+
+def test_update_report_path_auto_requests_continuation(flag_on, client, db, author, pm_header):
+    """The auto-request gate must fire through the report-UPDATE path too
+    (PATCH /work-reports/{id}), not just through create_work_report — this
+    exercises update_work_report's legacy "tasks" branch, which threads its
+    own new_continuation_requests accumulator separately from create's."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)  # due the same day it starts
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    # A draft report for cont_day with no activity yet (a leave-type day).
+    created = client.post(BASE, headers=a["header"], json={
+        "report_date": cont_day.isoformat(), "day_status": "leave", "location": "chennai",
+    })
+    assert created.status_code == 201, created.text
+    report_id = created.json()["id"]
+
+    # Still a draft: update it in place to add the continuation task, past the
+    # item's allowed duration.
+    res = client.patch(f"{BASE}/{report_id}", headers=a["header"], json={
+        "day_status": "work_at_office",
+        "tasks": [{
+            "project_id": str(a["project"].id), "description": "work",
+            "sub_activity_id": sub["id"], "work_item_id": wi,
+        }],
+    })
+    assert res.status_code == 200, res.text
+    assert res.json()["tasks"][0]["work_item_id"] == wi
+
+    reqs = db.query(ContinuationRequest).filter_by(work_item_id=wi).all()
+    assert len(reqs) == 1
+    assert reqs[0].status == "pending"
 
 
 # --------------------------------------------------------------------------
