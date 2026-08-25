@@ -52,6 +52,7 @@ import {
 import type { ActivityRequest } from "@/features/activity-requests/types";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
+import { ContinuationApprovalCard } from "@/features/continuation-requests/components/continuation-approval-card";
 import { AppError } from "@/lib/api-client";
 import { features } from "@/lib/env";
 import { formatInt } from "@/lib/format";
@@ -1052,16 +1053,24 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                         <span>Started {t.started_on}</span>
                         <span>Due {t.due_date}</span>
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        className="self-start"
-                        onClick={() => continueTask(t)}
-                      >
-                        <ArrowRight className="h-4 w-4" />
-                        Continue in today&apos;s report
-                      </Button>
+                      {t.requires_continuation_approval ? (
+                        <ContinuationApprovalCard
+                          task={t}
+                          reportDate={reportDate}
+                          onContinue={() => continueTask(t)}
+                        />
+                      ) : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="self-start"
+                          onClick={() => continueTask(t)}
+                        >
+                          <ArrowRight className="h-4 w-4" />
+                          Continue in today&apos;s report
+                        </Button>
+                      )}
                     </div>
                   ))}
                 </div>

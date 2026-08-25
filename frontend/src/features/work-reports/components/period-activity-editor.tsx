@@ -491,13 +491,23 @@ export function PeriodActivityEditor({
                 <span className="text-muted-foreground">
                   You have an open task for this activity (started{" "}
                   {rowOpenMatch.started_on}, due {rowOpenMatch.due_date}).
+                  {rowOpenMatch.requires_continuation_approval && (
+                    <>
+                      {" "}
+                      This task needs Project Head approval before it can be continued - see
+                      the card above.
+                    </>
+                  )}
                 </span>
                 <div className="flex items-center gap-2">
+                  {/* UI-only defence in depth: the authoritative block is the
+                      server-side continuation gate, which 403s the save. */}
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
                     onClick={() => attachToRow(index, rowOpenMatch)}
+                    disabled={rowOpenMatch.requires_continuation_approval}
                   >
                     Continue existing task
                   </Button>
