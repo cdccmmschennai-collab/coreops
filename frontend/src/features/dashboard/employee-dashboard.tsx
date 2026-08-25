@@ -197,57 +197,72 @@ export function EmployeeDashboard() {
           )}
         </Card>
 
-        {/* quick actions */}
-        <Card>
-          <CardHeader className="border-b border-border px-5 py-3.5">
-            <CardTitle className="text-base">Quick actions</CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
-            <div className="flex flex-col gap-2">
-              <Button asChild className="justify-start" variant="secondary">
-                <Link href="/work-reports/new">
-                  <Plus className="h-4 w-4" /> New work report
-                </Link>
-              </Button>
-              <Button asChild className="justify-start" variant="secondary">
-                <Link href="/attendance"><ArrowRight className="h-4 w-4" /> View attendance</Link>
-              </Button>
-              <Button asChild className="justify-start" variant="secondary">
-                <Link href="/reports"><FileText className="h-4 w-4" /> All my reports</Link>
-              </Button>
-              {isProjectHead && (
+        {/* right column: team requests (Heads only) + quick actions */}
+        <div className="flex flex-col gap-4">
+          {/* Team Requests — queues this Head reviews FOR OTHERS. Deliberately
+              separate from Quick actions, which is only ever things you do for
+              yourself. Hidden entirely for a non-Head employee. */}
+          {isProjectHead && (
+            <Card>
+              <CardHeader className="border-b border-border px-5 py-3.5">
+                <CardTitle className="text-base">Team Requests</CardTitle>
+              </CardHeader>
+              <CardContent className="p-4">
+                <div className="flex flex-col gap-2">
+                  <Button asChild className="justify-start" variant="secondary">
+                    <Link href="/attendance?tab=leave&queue=pending">
+                      <CalendarOff className="h-4 w-4" /> Pending leave requests
+                      {pendingLeaveCount > 0 && (
+                        <Badge variant="warning" className="ml-auto">
+                          {pendingLeaveCount}
+                        </Badge>
+                      )}
+                    </Link>
+                  </Button>
+                  <Button asChild className="justify-start" variant="secondary">
+                    {/* Its own page, not an attendance tab: continuing a
+                        lump-sum activity past its allowed duration is a
+                        reporting approval, unrelated to attendance or leave. */}
+                    <Link href="/lump-sum-activity?queue=pending">
+                      <Hourglass className="h-4 w-4" /> Lump-sum Activity Request
+                      {pendingContinuationCount > 0 && (
+                        <Badge variant="warning" className="ml-auto">
+                          {pendingContinuationCount}
+                        </Badge>
+                      )}
+                    </Link>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* quick actions — the same four self-service shortcuts for every
+              employee, Head or not. No review/approval queues here. */}
+          <Card>
+            <CardHeader className="border-b border-border px-5 py-3.5">
+              <CardTitle className="text-base">Quick actions</CardTitle>
+            </CardHeader>
+            <CardContent className="p-4">
+              <div className="flex flex-col gap-2">
                 <Button asChild className="justify-start" variant="secondary">
-                  {/* Its own page, not an attendance tab: continuing a lump-sum
-                      activity past its allowed duration is a reporting
-                      approval, unrelated to attendance or leave. */}
-                  <Link href="/lump-sum-activity?queue=pending">
-                    <Hourglass className="h-4 w-4" /> Lump-sum Activity Request
-                    {pendingContinuationCount > 0 && (
-                      <Badge variant="warning" className="ml-auto">
-                        {pendingContinuationCount}
-                      </Badge>
-                    )}
+                  <Link href="/work-reports/new">
+                    <Plus className="h-4 w-4" /> New work report
                   </Link>
                 </Button>
-              )}
-              {isProjectHead && (
                 <Button asChild className="justify-start" variant="secondary">
-                  <Link href="/attendance?tab=leave&queue=pending">
-                    <CalendarOff className="h-4 w-4" /> Pending leave requests
-                    {pendingLeaveCount > 0 && (
-                      <Badge variant="warning" className="ml-auto">
-                        {pendingLeaveCount}
-                      </Badge>
-                    )}
-                  </Link>
+                  <Link href="/attendance"><ArrowRight className="h-4 w-4" /> View attendance</Link>
                 </Button>
-              )}
-              <Button asChild className="justify-start" variant="secondary">
-                <Link href="/attendance?leave=request"><CalendarOff className="h-4 w-4" /> Leave request</Link>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+                <Button asChild className="justify-start" variant="secondary">
+                  <Link href="/reports"><FileText className="h-4 w-4" /> All my reports</Link>
+                </Button>
+                <Button asChild className="justify-start" variant="secondary">
+                  <Link href="/attendance?leave=request"><CalendarOff className="h-4 w-4" /> Leave request</Link>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </>
   );
