@@ -3,6 +3,10 @@ export type NotificationType =
   | "leave_approved"
   | "leave_rejected"
   | "leave_cancelled"
+  // Lump-sum activity continuation approval.
+  | "continuation_requested"
+  | "continuation_approved"
+  | "continuation_rejected"
   | "report_submitted"
   | "report_approved"
   | "report_rejected"

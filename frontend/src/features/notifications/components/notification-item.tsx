@@ -11,7 +11,10 @@ import {
   Clock,
   FileText,
   FolderKanban,
+  Hourglass,
+  UserCheck,
   UserPlus,
+  UserX,
   X,
   XCircle,
 } from "lucide-react";
@@ -45,6 +48,11 @@ const TYPE_CONFIG: Record<
   leave_approved:        { Icon: CheckCircle,   color: "green" },
   leave_rejected:        { Icon: XCircle,       color: "red" },
   leave_cancelled:       { Icon: X,             color: "amber" },
+  // Lump-sum activity continuation approval. Hourglass matches the dashboard
+  // shortcut's icon so the two read as the same feature.
+  continuation_requested:{ Icon: Hourglass,     color: "amber" },
+  continuation_approved: { Icon: UserCheck,     color: "green" },
+  continuation_rejected: { Icon: UserX,         color: "red" },
   report_submitted:      { Icon: FileText,      color: "blue" },
   report_approved:       { Icon: CheckCircle,   color: "green" },
   report_rejected:       { Icon: XCircle,       color: "red" },
