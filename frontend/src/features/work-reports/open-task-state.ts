@@ -201,8 +201,15 @@ export function overallTaskBadge(row: OverallTaskRow): OverallTaskBadge | null {
 }
 
 /**
- * Continuation-approval state of ONE editor row, and the single thing it
- * blocks.
+ * Continuation-approval state of ONE editor row. It is a LABEL, not a gate: it
+ * decides what the row says about itself and nothing else. A pending
+ * continuation does not disable the completion checkbox, and never blocked
+ * saving or submitting - the Project Head's decision settles whether that
+ * continuation work is ultimately accepted, not whether the employee may fill
+ * in and finish the report describing it. (The backend agrees: work_items
+ * _apply_completion / complete_via_endpoint both complete normally while a
+ * request is pending, and a rejection later withdraws the day's rows and the
+ * completion stamped on them.)
  *
  * A row can learn its state from two places and they must agree: a SAVED row
  * carries `continuation_approval_status` from the API, while a row the employee
@@ -228,18 +235,19 @@ export function continuationRowStatus(
 }
 
 /**
- * Whether this row's activity may be marked fully completed.
+ * The whole of what a PENDING continuation says on a row - two short lines and
+ * no more. Kept here rather than inline in ContinuationRowStatus so the copy is
+ * a pure value the unit tests can pin, and so the compact (editor) and full
+ * (report detail) presentations cannot drift apart.
  *
- * A pending continuation blocks exactly ONE thing - closing the activity on work
- * the Project Head has not accepted yet. It deliberately does NOT block saving
- * or submitting the report: the day's work is recorded, the report is submitted,
- * and only the completion waits for the decision. Mirrors the backend
- * (work_items._apply_completion, which ignores the tick rather than refusing the
- * save).
+ * Deliberately says nothing about being blocked, because nothing is: earlier
+ * copy explained that the entry was not recorded work yet, that completion was
+ * held, that the report could still be submitted and that a rejection would
+ * remove the entry. That is four caveats on a row whose only fact is that a
+ * decision is outstanding.
  */
-export function completionBlockedByContinuation(status: ContinuationStatus): boolean {
-  return status === "pending";
-}
+export const CONTINUATION_PENDING_TITLE = "Continuation requested";
+export const CONTINUATION_PENDING_DETAIL = "Awaiting Project Head approval.";
 
 /** The parenthetical in the inline "You have an open task for this activity"
  * prompt, which offers Continue-existing vs Start-new on a manual pick. Same

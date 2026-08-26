@@ -813,11 +813,12 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
             # editable, and this is the latest linked entry (no later report to
             # backdate over). Earlier/older linked rows get a read-only view.
             #
-            # A row whose own continuation is still PENDING also gets a read-only
-            # view: closing an activity on work the Project Head has not accepted
-            # is the one thing a pending continuation blocks, and the completion
-            # endpoint refuses it, so the control must not be offered. This does
-            # NOT affect the report - it is submitted either way.
+            # An undecided continuation is deliberately NOT part of this verdict.
+            # Pending approval settles whether that continuation work is accepted,
+            # not whether the employee may say the activity is finished - so the
+            # employee who finishes an over-allowance lump-sum day completes it
+            # here like any other, and a later rejection withdraws the day's rows
+            # and the completion stamped on them.
             is_latest = (
                 report is not None
                 and latest_entry_date.get(item.id) == report.report_date
@@ -827,7 +828,6 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
                 and report is not None
                 and report.status in _EDITABLE
                 and is_latest
-                and row.continuation_approval_status != "pending"
             )
         by_report[row.report_id].append(row)
     for report in reports:
@@ -2488,8 +2488,9 @@ def withdraw_continuation_rows(
         if item is None:
             continue
         # 1. A completion stamped on a withdrawn day would outlive the work that
-        #    justified it. (_guard_complete_here refuses to complete an activity
-        #    while its continuation is undecided, so this is belt and braces.)
+        #    justified it. The employee IS allowed to tick "fully completed" on a
+        #    day whose continuation is still pending, so this is the live path
+        #    that undoes such a completion when the decision goes the other way.
         if item.completed_on is not None and item.completed_on in removed_dates_by_item.get(
             item_id, set()
         ):

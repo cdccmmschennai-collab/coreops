@@ -13,15 +13,21 @@
  * All three states render here, and they are the SAME three the backend stores
  * on continuation_requests - there is no second status anywhere:
  *
- *   pending  - entered, submitted, awaiting the Project Head. The report is
- *              submitted regardless; only the activity's completion waits.
+ *   pending  - entered, submitted, awaiting the Project Head. Two lines and no
+ *              caveats: nothing about this state holds up completing the
+ *              activity, saving, or submitting. The decision settles whether the
+ *              continuation work is accepted, not what the employee may fill in.
  *   approved - ordinary recorded work.
  *   rejected - the rows were withdrawn from the activity list, so what renders
  *              is the surviving request record (report detail passes the
  *              reviewer's note through `note`), which is what keeps a refused
  *              continuation from vanishing out of the employee's history.
  */
-import type { ContinuationStatus } from "@/features/work-reports/open-task-state";
+import {
+  CONTINUATION_PENDING_DETAIL,
+  CONTINUATION_PENDING_TITLE,
+  type ContinuationStatus,
+} from "@/features/work-reports/open-task-state";
 import type { WorkReportTask } from "@/features/work-reports/types";
 
 interface Props {
@@ -70,17 +76,13 @@ export function ContinuationRowStatus({ task, compact = false, note }: Props) {
 
   return compact ? (
     <span className="text-xs font-medium text-warning">
-      Continuation requested - awaiting Project Head approval
+      {CONTINUATION_PENDING_TITLE} - {CONTINUATION_PENDING_DETAIL}
     </span>
   ) : (
     <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm">
-      <p className="font-medium">Continuation requested</p>
+      <p className="font-medium">{CONTINUATION_PENDING_TITLE}</p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Awaiting Project Head approval. This entry is beyond the activity&apos;s
-        allowed duration, so it is not recorded work yet - and the activity
-        cannot be marked complete until the continuation is approved. The report
-        itself is submitted either way. If it is rejected, this entry is removed
-        from the report.
+        {CONTINUATION_PENDING_DETAIL}
       </p>
     </div>
   );

@@ -42,16 +42,11 @@ export function ContinuationApprovalCard({ task }: Props) {
             ? `Awaiting Project Head approval from ${task.continuation_routed_to}.`
             : "Awaiting Project Head approval."}
         </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Days you enter for this activity are held under this same review - they
-          are not recorded work until it is approved, and the activity cannot be
-          marked complete meanwhile. If it is rejected, those entries are removed
-          from their reports.
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          You can still submit your report as usual - only this activity is
-          waiting.
-        </p>
+        {/* Two lines and no caveats, the same copy the row status shows. The
+            paragraphs that used to follow ("not recorded work until approved",
+            "cannot be marked complete meanwhile", "you can still submit") were
+            explaining restrictions - and the only one that was ever true of the
+            report is that there is none. */}
         <div className="mt-1">
           <ContinuationStatusBadge status="pending" />
         </div>

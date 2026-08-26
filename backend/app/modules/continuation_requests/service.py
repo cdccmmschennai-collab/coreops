@@ -266,16 +266,6 @@ def _pending_for_work_item(db: Session, work_item_id: uuid.UUID) -> Continuation
     ).scalar_one_or_none()
 
 
-def pending_request_for_work_item(
-    db: Session, work_item_id: uuid.UUID
-) -> ContinuationRequest | None:
-    """The undecided request for this work item, if any. The one predicate
-    behind "is this activity's continuation still awaiting a decision?" -
-    consumed by work_items.has_pending_continuation (which blocks completing an
-    activity on unapproved work) as well as by the create/save paths here."""
-    return _pending_for_work_item(db, work_item_id)
-
-
 def latest_request_for_work_item(
     db: Session, work_item_id: uuid.UUID
 ) -> ContinuationRequest | None:

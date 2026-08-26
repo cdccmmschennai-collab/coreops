@@ -1,22 +1,25 @@
 /**
- * Pure-logic tests for the ONE rule this correction turns on: a pending
- * lump-sum continuation blocks marking that ACTIVITY complete, and blocks
- * nothing else.
+ * Pure-logic tests for a row's lump-sum continuation state - which is a LABEL
+ * and nothing more.
  *
- * The bug it pins: ticking "Mark task fully completed" on an activity whose
- * continuation was still awaiting the Project Head made the whole report save
- * fail, so a report carrying two ordinary activities and one pending
- * continuation could not be submitted at all. The editor now derives the row's
- * continuation state here and disables only that checkbox; the Submit button is
- * never touched by it.
+ * A pending continuation gates nothing: not the completion checkbox, not the
+ * save, not the submit. An employee who finishes an over-allowance lump-sum
+ * activity on the continuation day ticks "Mark task fully completed" and submits
+ * exactly as on any other day, and the Project Head's decision then settles
+ * whether that work is accepted. This file exists to keep a gate from growing
+ * back: there is no `completionBlockedByContinuation` any more, so a row's
+ * status can only decide what the row SAYS.
+ *
+ * What it says is pinned here too - the two lines and no more, so the four
+ * caveats the pending banner used to carry cannot creep back in.
  *
  * The editor reads a row's state from two places that must agree - the SAVED
  * status the API serves, and (for a row just attached in this editor, which has
  * no saved status yet) the open work item it continues. Both paths are pinned.
  *
  * Harness: `node --test` over src/**​/*.test.ts (see package.json test:unit).
- * The backend enforces the same split independently - see backend
- * tests/test_ls_continuation_lifecycle.py, section 12.
+ * The backend enforces the same rule independently - see backend
+ * tests/test_ls_continuation_lifecycle.py, section 3.
  *
  *     npm run test:unit
  */
@@ -24,9 +27,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  completionBlockedByContinuation,
+  CONTINUATION_PENDING_DETAIL,
+  CONTINUATION_PENDING_TITLE,
   continuationRowStatus,
 } from "./open-task-state.ts";
+import * as openTaskState from "./open-task-state.ts";
 import type { OpenTask } from "./types.ts";
 
 /** An open lump-sum work item with `used` work days already spent. */
@@ -115,11 +120,30 @@ test("no open task and no saved status means no approval state", () => {
 });
 
 // --------------------------------------------------------------------------
-// what the state blocks - and what it must never block
+// what the state blocks: nothing
 // --------------------------------------------------------------------------
-test("only a pending continuation holds up marking the activity complete", () => {
-  assert.equal(completionBlockedByContinuation("pending"), true);
-  assert.equal(completionBlockedByContinuation("approved"), false);
-  assert.equal(completionBlockedByContinuation("rejected"), false);
-  assert.equal(completionBlockedByContinuation(null), false);
+test("no continuation state gates anything - the helper that did is gone", () => {
+  // The editor cannot disable the completion checkbox from a row's status if
+  // there is no predicate to disable it by. Pinning the absence is what keeps
+  // "pending therefore blocked" from being reintroduced.
+  assert.equal(
+    "completionBlockedByContinuation" in openTaskState,
+    false,
+    "a pending continuation must not gate completion, save or submit",
+  );
+});
+
+// --------------------------------------------------------------------------
+// what a pending row SAYS - two lines, no caveats
+// --------------------------------------------------------------------------
+test("the pending banner is exactly the two lines", () => {
+  assert.equal(CONTINUATION_PENDING_TITLE, "Continuation requested");
+  assert.equal(CONTINUATION_PENDING_DETAIL, "Awaiting Project Head approval.");
+});
+
+test("the pending copy claims nothing is blocked", () => {
+  const copy = `${CONTINUATION_PENDING_TITLE} ${CONTINUATION_PENDING_DETAIL}`.toLowerCase();
+  for (const claim of ["complete", "submit", "recorded work", "removed", "cannot"]) {
+    assert.equal(copy.includes(claim), false, `pending copy still says "${claim}"`);
+  }
 });

@@ -55,7 +55,6 @@ import {
 } from "../benchmark-exception";
 import { scaledTarget } from "../benchmark-target";
 import {
-  completionBlockedByContinuation,
   continuationRowStatus,
   openTaskInlineSummary,
 } from "../open-task-state";
@@ -452,9 +451,11 @@ export function PeriodActivityEditor({
         const rowOpenMatch = !rowWorkItemId ? rowOpenItem : undefined;
         // One derivation of this row's continuation state, from the saved status
         // when there is one and from the open item it continues when there is
-        // not (a row just attached in this editor has nothing saved yet). It
-        // gates the completion checkbox below and nothing else - a pending
-        // continuation never blocks saving or submitting the report.
+        // not (a row just attached in this editor has nothing saved yet). It is
+        // purely a label - it gates nothing. A pending continuation does not
+        // disable the completion checkbox and never blocked saving or
+        // submitting: approval decides whether that work is accepted, not what
+        // the employee is allowed to fill in.
         const rowContinuationStatus = continuationRowStatus(
           (watchedTasks?.[index]?.continuation_approval_status ?? null) as
             | "pending"
@@ -463,7 +464,6 @@ export function PeriodActivityEditor({
             | null,
           isContinuation ? rowOpenItem : undefined,
         );
-        const completionOnHold = completionBlockedByContinuation(rowContinuationStatus);
 
         return (
           <div
@@ -1194,7 +1194,7 @@ export function PeriodActivityEditor({
                     name={`tasks.${index}.is_completed`}
                     render={({ field: f }) => (
                       <FormItem className="mt-3">
-                        {!f.value && !completionOnHold && (
+                        {!f.value && (
                           <p className="mb-2 text-xs text-muted-foreground">
                             Leave unchecked if unfinished; the task will
                             continue in your next report.
@@ -1203,37 +1203,22 @@ export function PeriodActivityEditor({
                         <label className="flex items-center gap-2 text-sm">
                           <FormControl>
                             <Checkbox
-                              checked={completionOnHold ? false : f.value}
-                              disabled={completionOnHold}
+                              checked={f.value}
                               onChange={(e) => f.onChange(e.target.checked)}
                             />
                           </FormControl>
-                          <span
-                            className={
-                              completionOnHold
-                                ? "font-medium text-muted-foreground"
-                                : "font-medium text-foreground"
-                            }
-                          >
+                          <span className="font-medium text-foreground">
                             Mark task fully completed
                           </span>
                         </label>
-                        {/* The ONE thing a pending continuation holds up. The
-                            report itself submits normally - saying so here is
-                            what stops "awaiting approval" from reading as
-                            "you cannot submit". */}
-                        {completionOnHold ? (
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            You can mark this activity complete once the Project
-                            Head approves the continuation. Your report can be
-                            submitted as usual meanwhile.
+                        {/* An activity awaiting a continuation decision is
+                            completed like any other. The row's own status line
+                            above says a decision is outstanding; it is not a
+                            reason to hold up the checkbox. */}
+                        {f.value && (
+                          <p className="mt-2 text-xs font-medium text-foreground">
+                            Task completed - it will no longer carry forward.
                           </p>
-                        ) : (
-                          f.value && (
-                            <p className="mt-2 text-xs font-medium text-foreground">
-                              Task completed - it will no longer carry forward.
-                            </p>
-                          )
                         )}
                         <FormMessage />
                       </FormItem>

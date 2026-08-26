@@ -1,4 +1,4 @@
-"""The approval LIFECYCLE of a lump-sum continuation: PENDING -> APPROVED /
+﻿"""The approval LIFECYCLE of a lump-sum continuation: PENDING -> APPROVED /
 REJECTED.
 
 Phase 3 correction. The weekly foundation (Fri-Thu confinement, work-day
@@ -279,9 +279,13 @@ def test_editing_the_report_keeps_the_row_tied_to_its_decision(client, team, db)
 # ==========================================================================
 # 3. a PENDING continuation is not treated as approved valid work
 # ==========================================================================
-def test_pending_continuation_cannot_complete_the_activity(client, team, db):
-    """The concrete meaning of "not accepted work yet": unapproved work cannot
-    close the activity."""
+def test_pending_continuation_can_still_complete_the_activity(client, team, db):
+    """PATCH /tasks/{id}/completion, the explicit "mark this complete" action.
+
+    A pending decision is about whether the continuation work is ACCEPTED, not
+    about whether the employee may say the task is finished. Refusing here (the
+    old behaviour) told an employee who had genuinely finished the activity that
+    they could not record that fact until someone else acted."""
     import uuid as _uuid
 
     a, pm = team["author"], team["pm"]
@@ -294,22 +298,24 @@ def test_pending_continuation_cannot_complete_the_activity(client, team, db):
 
     done = client.patch(f"{BASE}/tasks/{row_id}/completion", headers=a["header"],
                         json={"is_completed": True})
-    assert done.status_code == 422, done.text
-    assert "approval" in done.json()["error"]["message"].lower()
-    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on is None
+    assert done.status_code == 200, done.text
+    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on == _d(2)
+    # Completing is not deciding: the request is still the Project Head's to make.
+    reqs = _requests(db, a["emp"].id)
+    assert len(reqs) == 1 and reqs[0].status == "pending"
 
 
-def test_pending_continuation_ignores_the_completion_tick_but_saves_the_report(
+def test_pending_continuation_accepts_the_completion_tick_and_saves_the_report(
     client, team, db
 ):
-    """The same rule through the report form's completion checkbox - but the
-    checkbox is a rule about ONE ACTIVITY, never about the report.
+    """The scenario this correction exists for, through the report form.
 
-    Refusing the whole save (the old behaviour) meant one pending lump-sum
-    continuation could block an entire multi-activity report, and rolled back the
-    request that would have told the Project Head about it. The tick is ignored
-    instead: the day's work is saved, the report is created, the activity stays
-    open, and the request is raised."""
+    Aug 24: an LS activity with a one-work-day allowance is started and left
+    unfinished. Aug 25: the employee continues it, which auto-raises the
+    continuation request - and finishes it. Ticking "Mark task fully completed"
+    on that continuation report must save, and must actually complete the
+    activity. Previously the tick was silently swallowed, so the employee's
+    report claimed nothing about a task they had in fact finished."""
     import uuid as _uuid
 
     a, pm = team["author"], team["pm"]
@@ -320,13 +326,76 @@ def test_pending_continuation_ignores_the_completion_tick_but_saves_the_report(
     res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
                on_date=_d(2), work_item_id=wid, is_completed=True)
     row = _row(res)
+    # The row is stamped with the pending request AND is completed - both facts
+    # are true at once, which is the whole point.
     assert row["continuation_approval_status"] == "pending"
-    # The tick did not close the activity, and the row does not claim it did.
-    assert row["row_is_completed"] is False
-    assert row["overall_completed_on"] is None
-    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on is None
-    # ...and the Project Head's request survived the save that used to roll it back.
-    assert len(_requests(db, a["emp"].id)) == 1
+    assert row["row_is_completed"] is True
+    assert row["overall_completed_on"] == _d(2).isoformat()
+    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on == _d(2)
+
+    # The report submits, and submitting still does not decide the request.
+    submitted = _submit(client, a["header"], res.json()["id"])
+    assert submitted["status"] == "submitted"
+    assert submitted["tasks"][0]["continuation_approval_status"] == "pending"
+    assert submitted["tasks"][0]["row_is_completed"] is True
+
+    reqs = _requests(db, a["emp"].id)
+    assert len(reqs) == 1 and reqs[0].status == "pending"
+
+
+def test_approval_keeps_the_completed_continuation_row_valid(client, team, db):
+    """Approving after the employee already completed on the pending day changes
+    nothing about the completion - it only turns the row into accepted work."""
+    import uuid as _uuid
+
+    a, h, pm = team["author"], team["head"], team["pm"]
+    _, sub = _lumpsum_sub(client, pm, period=1)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+               on_date=_d(2), work_item_id=wid, is_completed=True)
+    report_id = res.json()["id"]
+    req = _requests(db, a["emp"].id)[0]
+
+    ok = client.post(f"{CR}/{req.id}/approve", headers=h["header"], json={})
+    assert ok.status_code == 200, ok.text
+
+    after = _get(client, a["header"], report_id)
+    assert len(after["tasks"]) == 1
+    assert after["tasks"][0]["continuation_approval_status"] == "approved"
+    assert after["tasks"][0]["row_is_completed"] is True
+    # Same work item, same completion date - approval grants nothing new.
+    item = db.get(WorkItem, _uuid.UUID(wid))
+    db.refresh(item)
+    assert item.completed_on == _d(2)
+    assert item.started_on == _d(0)
+
+
+def test_rejection_undoes_a_completion_made_on_the_rejected_day(client, team, db):
+    """The other side of allowing completion while pending: a refused day must
+    not leave the activity looking finished. The existing withdrawal already
+    clears a completion stamped on a withdrawn day - this pins that it does."""
+    import uuid as _uuid
+
+    a, h, pm = team["author"], team["head"], team["pm"]
+    _, sub = _lumpsum_sub(client, pm, period=1)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+               on_date=_d(2), work_item_id=wid, is_completed=True)
+    report_id = res.json()["id"]
+    req = _requests(db, a["emp"].id)[0]
+
+    no = client.post(f"{CR}/{req.id}/reject", headers=h["header"],
+                     json={"comment": "not approved"})
+    assert no.status_code == 200, no.text
+
+    after = _get(client, a["header"], report_id)
+    assert after["tasks"] == []
+    item = db.get(WorkItem, _uuid.UUID(wid))
+    db.refresh(item)
+    assert item.completed_on is None
+    assert item.started_on == _d(0)
 
 
 # ==========================================================================
@@ -660,10 +729,10 @@ def test_case_c_pending_continuation_alone_still_submits(client, team, db):
     got = _submit(client, a["header"], res.json()["id"])
     assert got["status"] == "submitted"
     assert got["tasks"][0]["continuation_approval_status"] == "pending"
-    # The activity itself is NOT closed, and the completion control is withdrawn
-    # rather than offered-and-refused.
-    assert got["tasks"][0]["can_complete_here"] is False
-    assert db.get(WorkItem, _uuid_of(wid)).completed_on is None
+    # The tick is honoured: the employee finished the activity and the report
+    # says so. Only the continuation's acceptance is still the Head's to decide.
+    assert got["tasks"][0]["row_is_completed"] is True
+    assert db.get(WorkItem, _uuid_of(wid)).completed_on == _d(2)
     assert len(_requests(db, a["emp"].id)) == 1
 
 
@@ -696,9 +765,9 @@ def test_cases_d_e_mixed_report_submits_with_only_the_ls_row_pending(
 def test_case_f_pending_continuation_beside_a_completed_activity_submits(
     client, team, db
 ):
-    """Case F - another task activity completed on the same report. The
-    completion that CAN be honoured is honoured; the one that cannot is not, and
-    neither decides whether the report submits."""
+    """Case F - another task activity completed on the same report. BOTH
+    completions are honoured, including the lump-sum one whose continuation is
+    still pending, and neither decides whether the report submits."""
     a, pm = team["author"], team["pm"]
     _, ls = _lumpsum_sub(client, pm, period=1)
     _, qty = _quantity_sub(client, pm, period=1)
@@ -715,9 +784,9 @@ def test_case_f_pending_continuation_beside_a_completed_activity_submits(
     assert got["status"] == "submitted"
     by_sub = {t["sub_activity_id"]: t for t in got["tasks"]}
     assert by_sub[qty["id"]]["row_is_completed"] is True
-    assert by_sub[ls["id"]]["row_is_completed"] is False
+    assert by_sub[ls["id"]]["row_is_completed"] is True
     assert by_sub[ls["id"]]["continuation_approval_status"] == "pending"
-    assert db.get(WorkItem, _uuid_of(wid)).completed_on is None
+    assert db.get(WorkItem, _uuid_of(wid)).completed_on == _d(2)
 
 
 def test_head_is_notified_when_the_mixed_report_is_saved(client, team, db):
