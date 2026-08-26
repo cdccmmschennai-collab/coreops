@@ -492,23 +492,31 @@ export function PeriodActivityEditor({
                 <span className="text-muted-foreground">
                   You have an open task for this activity (
                   {openTaskInlineSummary(rowOpenMatch)}).
-                  {rowOpenMatch.requires_continuation_approval && (
-                    <>
-                      {" "}
-                      This task needs Project Head approval before it can be continued - see
-                      the card above.
-                    </>
-                  )}
+                  {rowOpenMatch.requires_continuation_approval &&
+                    (rowOpenMatch.continuation_status === "rejected" ? (
+                      <>
+                        {" "}
+                        Project Head rejected continuation of this task - it cannot
+                        be continued further.
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        This task&apos;s allowed duration has passed; continuing it
+                        will be sent to your Project Head for approval.
+                      </>
+                    ))}
                 </span>
                 <div className="flex items-center gap-2">
                   {/* UI-only defence in depth: the authoritative block is the
-                      server-side continuation gate, which 403s the save. */}
+                      server-side continuation gate, which 403s the save
+                      (now scoped to a rejected request specifically). */}
                   <Button
                     type="button"
                     size="sm"
                     variant="secondary"
                     onClick={() => attachToRow(index, rowOpenMatch)}
-                    disabled={rowOpenMatch.requires_continuation_approval}
+                    disabled={rowOpenMatch.continuation_status === "rejected"}
                   >
                     Continue existing task
                   </Button>

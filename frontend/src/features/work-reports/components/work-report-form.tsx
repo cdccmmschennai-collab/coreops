@@ -1054,24 +1054,22 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                           <span>Started {t.started_on}</span>
                           {card.meta && <span>{card.meta}</span>}
                         </div>
-                        {t.requires_continuation_approval ? (
-                          <ContinuationApprovalCard
-                            task={t}
-                            reportDate={reportDate}
-                            onContinue={() => continueTask(t)}
-                          />
-                        ) : (
+                        <>
+                          {t.requires_continuation_approval && (
+                            <ContinuationApprovalCard task={t} />
+                          )}
                           <Button
                             type="button"
                             size="sm"
                             variant="secondary"
                             className="self-start"
                             onClick={() => continueTask(t)}
+                            disabled={t.continuation_status === "rejected"}
                           >
                             <ArrowRight className="h-4 w-4" />
                             Continue in today&apos;s report
                           </Button>
-                        )}
+                        </>
                       </div>
                     );
                   })}
