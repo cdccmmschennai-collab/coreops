@@ -40,6 +40,7 @@ import {
   type RelevantCountField,
   type SubActivityFlat,
 } from "@/features/activity-master/types";
+import { ContinuationRowStatus } from "@/features/continuation-requests/components/continuation-row-status";
 import { useMaintenancePlantOptions } from "@/features/plant-master/hooks";
 import { formatInt } from "@/lib/format";
 
@@ -471,12 +472,25 @@ export function PeriodActivityEditor({
                 changing them on a continuation). */}
             {isContinuation && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm">
-                <span>
-                  Continuing task started on{" "}
-                  <span className="font-medium">{rowStarted ?? "—"}</span>
-                  {watchedTasks?.[index]?.due_date && (
-                    <> · due {watchedTasks[index].due_date}</>
-                  )}
+                <span className="flex flex-wrap items-center gap-x-2">
+                  <span>
+                    Continuing task started on{" "}
+                    <span className="font-medium">{rowStarted ?? "—"}</span>
+                    {watchedTasks?.[index]?.due_date && (
+                      <> · due {watchedTasks[index].due_date}</>
+                    )}
+                  </span>
+                  {/* A saved continuation past the allowed duration says whether
+                      it is still awaiting the Project Head, so re-opening the
+                      report never presents pending work as accepted. */}
+                  <ContinuationRowStatus
+                    task={{
+                      continuation_approval_status:
+                        (watchedTasks?.[index]?.continuation_approval_status ??
+                          null) as "pending" | "approved" | null,
+                    }}
+                    compact
+                  />
                 </span>
                 {rowLifecycle && (
                   <Badge variant={LIFECYCLE_VARIANT[rowLifecycle] ?? "neutral"}>

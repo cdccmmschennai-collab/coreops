@@ -1,15 +1,57 @@
 import type { components } from "@/types/openapi";
 
-// Types come straight from the live API contract (openapi-typescript output).
-export type WorkReport = components["schemas"]["WorkReportOut"];
+// Types come straight from the live API contract (openapi-typescript output),
+// except where a field the API already serves is not in the checked-in
+// openapi.json yet - see WorkReportTask below.
+export type WorkReportPeriod = Omit<
+  components["schemas"]["WorkReportPeriodOut"],
+  "tasks"
+> & { tasks: WorkReportTask[] };
+export type WorkReport = Omit<
+  components["schemas"]["WorkReportOut"],
+  "tasks" | "periods"
+> & { tasks: WorkReportTask[]; periods: WorkReportPeriod[] };
 export type WorkReportStatus = components["schemas"]["WorkReportStatus"];
 // Adds the virtual "requested" value used ONLY by the list Status filter: a
 // submitted report with a pending edit request. It is not a persisted status —
 // the backend translates it to `submitted AND edit_requested_at IS NOT NULL`
 // (see work_reports/schemas.py WorkReportStatusFilter).
 export type WorkReportStatusFilter = WorkReportStatus | "requested";
-export type WorkReportPage = components["schemas"]["WorkReportPage"];
-export type WorkReportTask = components["schemas"]["WorkReportTaskOut"];
+export type WorkReportPage = Omit<
+  components["schemas"]["WorkReportPage"],
+  "items"
+> & { items: WorkReport[] };
+// `continuation_request_id` / `continuation_approval_status` are served by the
+// API (backend WorkReportTaskOut, migration 0076) but are not in the checked-in
+// openapi.json yet - regenerating it produces the same unreviewable whole-file
+// diff described for OpenTask below. Declared here instead, optional so the code
+// stays correct against a build served by an older backend, where every row
+// simply reads "no approval was involved".
+//
+// The status is the linked request's CURRENT status, resolved server-side on
+// every read:
+//   null       - this row needed no approval;
+//   "pending"  - entered and submitted, but not accepted work yet;
+//   "approved" - ordinary recorded work.
+// "rejected" never reaches the client: rejecting withdraws these rows from the
+// report.
+//
+// `overall_is_lumpsum` / `overall_target_days` / `overall_days_used` are served
+// alongside them (same backend schema, same reason for being declared here) and
+// say how the row's overall task is MEASURED: a lump-sum activity spends its
+// allowed duration in WORK DAYS, so its state is "Day N of M" / "Duration
+// exceeded" rather than a calendar overdue count. `overall_days_used` counts the
+// work days spent BEFORE this report's date - exactly OpenTask.days_used'
+// convention - so this report is day used + 1. Null for a non-lump-sum row and
+// for a completed one, neither of which is measured in work days. All optional,
+// so an older backend simply falls back to the calendar presentation.
+export type WorkReportTask = components["schemas"]["WorkReportTaskOut"] & {
+  continuation_request_id?: string | null;
+  continuation_approval_status?: "pending" | "approved" | null;
+  overall_is_lumpsum?: boolean;
+  overall_target_days?: number | null;
+  overall_days_used?: number | null;
+};
 export type WorkReportTaskInput = components["schemas"]["WorkReportTaskIn"];
 export type WorkReportCreateBody = components["schemas"]["WorkReportCreate"];
 export type WorkReportUpdateBody = components["schemas"]["WorkReportUpdate"];

@@ -871,8 +871,21 @@ def get_task_status_activities(
     longer surface a separate "due today" state, since the panel is scoped to
     the week rather than to overdue-only rows. `days_overdue` is kept for the
     schema but only non-zero for an uncompleted task already past its due_date
-    within this same week (not displayed on the employee card)."""
+    within this same week (not displayed on the employee card).
+
+    A LUMP-SUM row is measured in WORK DAYS instead, by the same helpers the
+    Open Task card and the Report Detail badge use (work_items.days_used_before
+    / lumpsum_days_over): `days_used` counts the work days spent BEFORE today,
+    so today is day days_used + 1, and `days_overdue` only becomes non-zero once
+    the allowance is actually spent. Its frozen calendar due_date decides
+    nothing here. Every other TASK_BASED row keeps the calendar lifecycle."""
+    from app.modules.activity_master.models import is_lumpsum_unit_row
     from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
+    from app.modules.work_reports.work_items import (
+        days_used_before,
+        lumpsum_days_over,
+        work_day_dates_by_item,
+    )
 
     today = today or date.today()
     week_start, week_end = compute_week_bounds(today)
@@ -902,6 +915,9 @@ def get_task_status_activities(
             ),
             completed_flag.label("is_completed"),
             hours_expr.label("hours_minutes"),
+            WorkItem.target_days,
+            ActivityMaster.benchmark_type,
+            ActivityMaster.relevant_count_field,
         )
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
         .join(ActivityMaster, WorkReportTask.sub_activity_id == ActivityMaster.id)
@@ -945,10 +961,26 @@ def get_task_status_activities(
             "hours_minutes": int(r.hours_minutes or 0),
             "status": "completed" if r.is_completed else "pending",
             "days_overdue": (today - r.due_date).days if overdue else 0,
+            # Work-day measurement needs a work item; a legacy NULL-linked row
+            # has no work days to count and stays on the calendar lifecycle.
+            "is_lumpsum": r.work_item_id is not None
+            and is_lumpsum_unit_row(r.benchmark_type, r.relevant_count_field),
+            "target_days": r.target_days,
+            "days_used": None,
         }
         if r.work_item_id is not None:
             by_item[r.work_item_id] = entry
         out.append(entry)
+
+    # Lump-sum rows: replace the calendar verdict with the work-day one.
+    lumpsum = [r for r in out if r["is_lumpsum"] and r["status"] != "completed"]
+    if lumpsum:
+        dates_by_item = work_day_dates_by_item(db, [r["work_item_id"] for r in lumpsum])
+        for r in lumpsum:
+            used = days_used_before(dates_by_item.get(r["work_item_id"], ()), today)
+            r["days_used"] = used
+            r["days_overdue"] = lumpsum_days_over(used, r["target_days"] or 1)
+
     out.sort(key=lambda r: (r["due_date"], r["sub_activity_name"]))
     return out
 

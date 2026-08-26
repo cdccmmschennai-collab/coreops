@@ -1022,11 +1022,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                 <div>
                   <h3 className="text-sm font-medium">Open tasks from previous reports</h3>
                   <p className="text-xs text-muted-foreground">
-                    Continue one of these in today&apos;s report - you can add
-                    today&apos;s work and mark the overall task complete. A lump-sum
-                    activity is measured in work days, so days you did not work on it
-                    cost nothing. Open tasks stay available within their own reporting
-                    week (Friday to Thursday).
+                    Continue an activity from a previous report.
                   </p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">

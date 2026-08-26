@@ -46,6 +46,7 @@ from app.modules.activity_master.service import (
     scaled_target,
 )
 from app.modules.continuation_requests import service as continuation_requests_service
+from app.modules.continuation_requests.models import ContinuationRequest
 from app.modules.work_reports import work_items as wi
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
@@ -351,6 +352,9 @@ def _lifecycle_row_kwargs(
         completed_date = preserved or _today()
     return {
         "work_item_id": None,
+        # Legacy standalone rows never carry a work item, so nothing about them
+        # can need continuation approval.
+        "continuation_request_id": None,
         "started_date": started_date,
         "due_date": due_date,
         "is_completed": task.is_completed,
@@ -667,6 +671,13 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
     items: dict[uuid.UUID, wi.WorkItem] = {}
     latest_entry_date: dict[uuid.UUID, date] = {}
     completion_rids: dict[uuid.UUID, uuid.UUID] = {}
+    # Lump-sum items are measured in WORK DAYS, not against their frozen
+    # calendar due_date (work_items §"Two different meanings of duration"), so
+    # the overall-task state of a lump-sum row needs the same two inputs the
+    # open-task list uses: is this item lump-sum, and which dates has it been
+    # worked on. Both are batched here — one query each for the whole page.
+    is_lumpsum_item: dict[uuid.UUID, bool] = {}
+    work_day_dates: dict[uuid.UUID, set[date]] = {}
     if item_ids:
         items = {
             it.id: it
@@ -674,6 +685,8 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
                 select(wi.WorkItem).where(wi.WorkItem.id.in_(item_ids))
             ).scalars()
         }
+        is_lumpsum_item = wi.lumpsum_flags_by_item(db, item_ids)
+        work_day_dates = wi.work_day_dates_by_item(db, item_ids)
         for iid, d in db.execute(
             select(WorkReportTask.work_item_id, func.max(DailyWorkReport.report_date))
             .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
@@ -682,7 +695,26 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
         ).all():
             latest_entry_date[iid] = d
         completion_rids = wi.completion_report_ids(db, item_ids)
+    # Approval state of the lump-sum continuation rows, read off the request each
+    # one is stamped with (migration 0076) rather than stored on the row, so a
+    # decision is reflected everywhere the moment it is made. Only rows that
+    # needed approval carry an id at all; every other row reads None.
+    continuation_statuses: dict[uuid.UUID, str] = {}
+    cont_ids = {row.continuation_request_id for row in rows if row.continuation_request_id}
+    if cont_ids:
+        continuation_statuses = dict(
+            db.execute(
+                select(ContinuationRequest.id, ContinuationRequest.status).where(
+                    ContinuationRequest.id.in_(cont_ids)
+                )
+            ).all()
+        )
     for row in rows:
+        row.continuation_approval_status = (
+            continuation_statuses.get(row.continuation_request_id)
+            if row.continuation_request_id
+            else None
+        )
         # Transient, computed fresh on every read (never stored) — same
         # pattern as report.can_review below.
         row.day_part = period_parts.get(row.period_id)
@@ -696,12 +728,32 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
         row.completed_on_this_report = False
         row.completion_report_id = None
         row.can_complete_here = None
+        row.overall_is_lumpsum = False
+        row.overall_target_days = None
+        row.overall_days_used = None
         item = items.get(row.work_item_id) if row.work_item_id else None
         if item is not None:
             report = report_by_id.get(row.report_id)
-            row.work_item_lifecycle = wi.lifecycle_of(
-                item.due_date, item.completed_on, today=today
-            ).value
+            row.overall_is_lumpsum = is_lumpsum_item.get(item.id, False)
+            row.overall_target_days = item.target_days
+            # An OPEN lump-sum item's state is its position in the allowance,
+            # counted in work days as of THIS report's date — not the calendar
+            # distance to a due_date that decides nothing for it. A 2-work-day
+            # activity worked once must read "day 1 of 2 / in progress", however
+            # far its frozen deadline is in the past. Completion stays a
+            # calendar question (work_items.lumpsum_lifecycle docstring), so a
+            # completed item still goes through lifecycle_of.
+            if row.overall_is_lumpsum and item.completed_on is None and report is not None:
+                row.overall_days_used = wi.days_used_before(
+                    work_day_dates.get(item.id, ()), report.report_date
+                )
+                row.work_item_lifecycle = wi.lumpsum_lifecycle(
+                    row.overall_days_used, item.target_days
+                ).value
+            else:
+                row.work_item_lifecycle = wi.lifecycle_of(
+                    item.due_date, item.completed_on, today=today
+                ).value
             row.overall_lifecycle = row.work_item_lifecycle
             row.overall_completed_on = item.completed_on
             row.completion_report_id = completion_rids.get(item.id)
@@ -1576,6 +1628,9 @@ def _add_task_row(
             is_completed=life["is_completed"],
             completed_date=life["completed_date"],
             work_item_id=life["work_item_id"],
+            # Set only on a lump-sum day that needed Project Head approval to be
+            # entered; the row's approval state is read off that request.
+            continuation_request_id=life["continuation_request_id"],
             maintenance_plant_id=task.maintenance_plant_id,
             maintenance_plant_code=snap["maintenance_plant_code"],
             maintenance_plant_description=snap["maintenance_plant_description"],
@@ -2253,6 +2308,152 @@ def grant_edit_work_report(
         f"You can now edit and resubmit your work report for {report.report_date}.",
     )
     return _decorate(db, actor, [report])[0]
+
+
+# ---------- rejected lump-sum continuation ---------------------------------
+def _report_still_submittable(db: Session, report: DailyWorkReport) -> bool:
+    """Whether this report would still pass its own submit-time invariants.
+
+    Deliberately re-runs the exact checks submit_work_report runs (at least one
+    activity on a working day; every working period carrying an activity) rather
+    than restating them, so the two can never drift: a report that could not be
+    submitted in its current shape must not be left sitting in the submitted
+    state."""
+    if report.day_status not in NO_ACTIVITY_DAY_STATUSES:
+        has_task = db.execute(
+            select(WorkReportTask.id).where(WorkReportTask.report_id == report.id).limit(1)
+        ).scalar_one_or_none()
+        if has_task is None:
+            return False
+    try:
+        _assert_periods_submittable(db, report)
+    except AppError:
+        return False
+    return True
+
+
+def withdraw_continuation_rows(
+    db: Session,
+    *,
+    continuation_request_id: uuid.UUID,
+    reviewer_user_id: uuid.UUID | None = None,
+    note: str | None = None,
+) -> list[dict]:
+    """Remove from their reports every task row entered under a continuation
+    request the Project Head has just REJECTED.
+
+    A rejected continuation is work that was never accepted, so it must not
+    survive on the report as though it were - that is the whole point of the
+    rejection. Only the rows the decision was about are touched: they are the
+    rows stamped with this request's id (migration 0076), which is precisely the
+    lump-sum days entered past the allowed duration. Every other activity on the
+    same report - a different project, a different activity, an earlier
+    within-allowance day of this same one - is untouched. The report itself is
+    never deleted.
+
+    A report left in a shape it could not have been submitted in (no activities
+    at all, or a working period with none) is reopened into the editable
+    'granted' state, the same state grant_edit_work_report uses, so the employee
+    can correct and resubmit it. A report that still stands on its remaining
+    activities keeps its submitted status and just loses the withdrawn minutes.
+
+    Returns one summary dict per affected report for the caller's notification.
+    Does NOT commit: the caller decides the transaction, so the rejection and
+    the withdrawal land together or not at all.
+    """
+    rows = db.execute(
+        select(WorkReportTask).where(
+            WorkReportTask.continuation_request_id == continuation_request_id
+        )
+    ).scalars().all()
+    if not rows:
+        return []
+
+    reports = {
+        r.id: r
+        for r in db.execute(
+            select(DailyWorkReport).where(
+                DailyWorkReport.id.in_({row.report_id for row in rows})
+            )
+        ).scalars()
+    }
+    item_ids = {row.work_item_id for row in rows if row.work_item_id is not None}
+    removed_dates_by_item: dict[uuid.UUID, set[date]] = {}
+    removed_by_report: dict[uuid.UUID, int] = {}
+    for row in rows:
+        report = reports.get(row.report_id)
+        if row.work_item_id is not None and report is not None:
+            removed_dates_by_item.setdefault(row.work_item_id, set()).add(
+                report.report_date
+            )
+        removed_by_report[row.report_id] = removed_by_report.get(row.report_id, 0) + 1
+        db.delete(row)
+    db.flush()
+
+    out: list[dict] = []
+    for report_id, count in removed_by_report.items():
+        report = reports.get(report_id)
+        if report is None:
+            continue
+        report.total_minutes = int(
+            db.execute(
+                select(
+                    func.coalesce(
+                        func.sum(
+                            func.coalesce(WorkReportTask.minutes_spent, 0)
+                            + func.coalesce(WorkReportTask.task_minutes_spent, 0)
+                        ),
+                        0,
+                    )
+                ).where(WorkReportTask.report_id == report.id)
+            ).scalar_one()
+        )
+        reopened = False
+        if report.status == WorkReportStatus.submitted and not _report_still_submittable(
+            db, report
+        ):
+            report.status = WorkReportStatus.granted
+            report.reviewed_by = reviewer_user_id
+            report.reviewed_at = _now()
+            report.review_note = note
+            report.edit_requested_at = None
+            report.edit_request_note = None
+            reopened = True
+        db.add(report)
+        out.append({
+            "report_id": report.id,
+            "report_date": report.report_date,
+            "rows_removed": count,
+            "reopened": reopened,
+        })
+
+    # The work item itself survives - it keeps its identity, its start date and
+    # the work days it legitimately spent. Only two things can need repair.
+    for item_id in item_ids:
+        item = db.get(wi.WorkItem, item_id)
+        if item is None:
+            continue
+        # 1. A completion stamped on a withdrawn day would outlive the work that
+        #    justified it. (_guard_complete_here refuses to complete an activity
+        #    while its continuation is undecided, so this is belt and braces.)
+        if item.completed_on is not None and item.completed_on in removed_dates_by_item.get(
+            item_id, set()
+        ):
+            item.completed_on = None
+            db.add(item)
+        # 2. An item with no entry left anywhere is an orphan - the same cleanup
+        #    reconcile_removed_links performs. Unreachable in practice: an item
+        #    can only reach the approval gate by having already spent its
+        #    allowance on earlier days, and those rows are not withdrawn.
+        remaining = db.execute(
+            select(func.count())
+            .select_from(WorkReportTask)
+            .where(WorkReportTask.work_item_id == item_id)
+        ).scalar_one()
+        if remaining == 0:
+            db.delete(item)
+    db.flush()
+    return out
 
 
 def delete_work_report(db: Session, actor: User, report_id: uuid.UUID) -> None:

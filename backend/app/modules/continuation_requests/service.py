@@ -21,7 +21,7 @@ from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.projects.models import Project
 from app.modules.users.models import User, UserRole
-from app.modules.work_reports.models import WorkItem
+from app.modules.work_reports.models import DailyWorkReport, WorkItem, WorkReportTask
 from app.modules.work_reports.work_items import (
     count_work_days,
     lumpsum_allowance_exhausted,
@@ -82,12 +82,49 @@ def _notify_reviewer(db: Session, employee: Employee, req: ContinuationRequest, 
     )
 
 
+def affected_report_id(db: Session, req: ContinuationRequest) -> uuid.UUID | None:
+    """The report holding the work entered under this request - the rows stamped
+    with its id (migration 0076), which are exactly the days the decision is
+    about. Prefers the report for the continuation date itself when the activity
+    was continued on more than one day, else the earliest of them.
+
+    None when nothing was ever entered under the request: one raised through the
+    explicit endpoint and decided before the employee reported that day has no
+    row, and so no report to send them to.
+
+    Must be read BEFORE a rejection withdraws those rows."""
+    rows = db.execute(
+        select(DailyWorkReport.id, DailyWorkReport.report_date)
+        .join(WorkReportTask, WorkReportTask.report_id == DailyWorkReport.id)
+        .where(WorkReportTask.continuation_request_id == req.id)
+        .distinct()
+    ).all()
+    if not rows:
+        return None
+    by_date = sorted(rows, key=lambda r: r[1])
+    exact = next((rid for rid, d in by_date if d == req.continuation_date), None)
+    return exact if exact is not None else by_date[0][0]
+
+
+def _employee_target_url(db: Session, req: ContinuationRequest) -> str:
+    """Where an approve/reject notification takes the EMPLOYEE.
+
+    The employee's question is "what happened to my work?", so the destination is
+    the REPORT the decision landed on - approved work is labelled as approved
+    there, and rejected work is gone from it with the withdrawal note explaining
+    why. The reviewer's request page (REVIEW_URL/{id}) answers a different
+    question (the full request record) and stays the reviewer's destination; it
+    is only used here as a fallback when no report can be resolved."""
+    report_id = affected_report_id(db, req)
+    return f"/work-reports/{report_id}" if report_id else f"{REVIEW_URL}/{req.id}"
+
+
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str, message: str,
-                     req_id: uuid.UUID) -> None:
+                     req_id: uuid.UUID, target_url: str) -> None:
     emp = db.get(Employee, employee_id)
     if emp is None or emp.user_id is None:
         return
-    _push(db, emp.user_id, type_, title, message, req_id, f"{REVIEW_URL}/{req_id}")
+    _push(db, emp.user_id, type_, title, message, req_id, target_url)
 
 
 # -- name/routing display resolution -----------------------------------------
@@ -188,15 +225,33 @@ def _pending_for_work_item(db: Session, work_item_id: uuid.UUID) -> Continuation
     ).scalar_one_or_none()
 
 
+def pending_request_for_work_item(
+    db: Session, work_item_id: uuid.UUID
+) -> ContinuationRequest | None:
+    """The undecided request for this work item, if any. The one predicate
+    behind "is this activity's continuation still awaiting a decision?" -
+    consumed by work_items.has_pending_continuation (which blocks completing an
+    activity on unapproved work) as well as by the create/save paths here."""
+    return _pending_for_work_item(db, work_item_id)
+
+
 def latest_request_for_work_item(
     db: Session, work_item_id: uuid.UUID
 ) -> ContinuationRequest | None:
     """The single most recent continuation request for one work item (any
-    status), or None if none exists yet. Thin wrapper over
-    latest_requests_by_work_item for the one-item case the save-time gate
-    needs — reuses its "most recent by requested_at" logic rather than
-    duplicating it."""
-    return latest_requests_by_work_item(db, [work_item_id]).get(work_item_id)
+    status), or None if none exists yet - the request that governs the item's
+    CURRENT continuation state.
+
+    Deliberately does NOT go through latest_requests_by_work_item: that one
+    attaches display names (four extra queries) for the open-tasks surface,
+    and this is called on the report-save hot path for every lump-sum row that
+    has spent its allowance, where no name is ever read."""
+    return db.execute(
+        select(ContinuationRequest)
+        .where(ContinuationRequest.work_item_id == work_item_id)
+        .order_by(ContinuationRequest.requested_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
 
 
 def get_or_create_pending_for_continuation(
@@ -287,6 +342,30 @@ def notify_new_pending_request(db: Session, req: ContinuationRequest) -> None:
         return
     sub = db.get(ActivityMaster, req.sub_activity_id)
     _notify_reviewer(db, employee, req, sub.name if sub else "this activity")
+
+
+def _withdrawal_summary(withdrawn: list[dict]) -> str:
+    """The sentence appended to the rejection notification telling the employee
+    what happened to the work they had already entered. Silent when nothing was
+    withdrawn - a request raised through the explicit endpoint before any entry
+    was saved has no rows to remove, and inventing a sentence about it would be
+    a lie."""
+    if not withdrawn:
+        return ""
+    dates = ", ".join(str(w["report_date"]) for w in sorted(
+        withdrawn, key=lambda w: w["report_date"]
+    ))
+    reopened = [w for w in withdrawn if w["reopened"]]
+    msg = f" The entry has been removed from your report for {dates}."
+    if reopened:
+        msg += (
+            " That report has been reopened for editing because it has no other "
+            "activity left."
+            if len(reopened) == 1
+            else " Those reports have been reopened for editing because they have "
+                 "no other activity left."
+        )
+    return msg
 
 
 def _fetch(db: Session, req_id: uuid.UUID) -> ContinuationRequest:
@@ -458,6 +537,13 @@ def approve_continuation_request(
     if req.status != ContinuationRequestStatus.pending.value:
         raise AppError("validation_error", "This request has already been decided.", 422)
 
+    # Approval is a decision about the SAME lump-sum activity, nothing more: it
+    # deliberately touches no WorkItem. The rows already entered under this
+    # request keep their continuation_request_id and simply start reading as
+    # approved work, still linked to the original work item, with its original
+    # started_on/due_date and its already-spent work days. No new work item is
+    # created and no fresh allowance is granted - continuing further days rides
+    # on this same approval (latest_request_for_work_item returns it).
     reviewer = _current_employee(db, actor)
     req.status = ContinuationRequestStatus.approved.value
     req.reviewer_id = reviewer.id if reviewer else None
@@ -473,7 +559,7 @@ def approve_continuation_request(
         db, req.employee_id, "continuation_approved", "Continuation approved",
         f"Your request to continue '{sub.name if sub else 'this activity'}' beyond "
         "its allowed duration was approved. You can continue reporting it.",
-        req.id,
+        req.id, _employee_target_url(db, req),
     )
     return req
 
@@ -492,16 +578,41 @@ def reject_continuation_request(
     req.decision_comment = comment
     req.decided_at = datetime.now(timezone.utc)
     db.add(req)
+
+    # A rejected continuation is not accepted work, so it must not stay on the
+    # report looking like accepted work. Withdraw exactly the rows entered under
+    # this request - never the whole report, never another activity on it. Done
+    # BEFORE the commit so the decision and its consequence are one transaction:
+    # a rejection that recorded itself but left the work behind is the bug this
+    # phase exists to fix. work_reports.service is imported lazily because it
+    # imports this module at load time.
+    from app.modules.work_reports import service as work_reports_service
+
+    sub = db.get(ActivityMaster, req.sub_activity_id)
+    sub_name = sub.name if sub else "this activity"
+    # Resolved BEFORE the withdrawal deletes the stamped rows it is read from.
+    target_url = _employee_target_url(db, req)
+    withdrawn = work_reports_service.withdraw_continuation_rows(
+        db,
+        continuation_request_id=req.id,
+        reviewer_user_id=actor.id,
+        note=(
+            f"Continuation of '{sub_name}' beyond its allowed duration was "
+            "rejected, and the entry was removed from this report."
+        ),
+    )
+
     db.commit()
     db.refresh(req)
 
     _attach_names(db, [req])
-    sub = db.get(ActivityMaster, req.sub_activity_id)
     _notify_employee(
         db, req.employee_id, "continuation_rejected", "Continuation rejected",
-        f"Your request to continue '{sub.name if sub else 'this activity'}' beyond "
-        "its allowed duration was rejected"
-        + (f": {comment}" if comment else ".") + " You cannot continue this activity.",
-        req.id,
+        f"Your request to continue '{sub_name}' beyond its allowed duration was "
+        "rejected"
+        + (f": {comment}" if comment else ".")
+        + " You cannot continue this activity."
+        + _withdrawal_summary(withdrawn),
+        req.id, target_url,
     )
     return req

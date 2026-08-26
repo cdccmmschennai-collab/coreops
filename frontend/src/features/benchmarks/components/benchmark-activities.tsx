@@ -16,6 +16,7 @@ import { nowInIST } from "@/lib/ist";
 
 import { useMyAlerts } from "../hooks";
 import { computeReconciliation, rowKey } from "../reconciliation";
+import { benchmarkTaskState, type BenchmarkTaskStatus } from "../task-status";
 
 const UNIT_LABEL: Record<string, string> = {
   tags: "Tags",
@@ -48,13 +49,8 @@ function todayMidnight(): Date {
   const n = nowInIST();
   return new Date(n.getFullYear(), n.getMonth(), n.getDate());
 }
-// Whole-day difference between a due date and today (local). >0 future, 0 today,
-// <0 past.
-function dueDayDiff(iso: string): number {
-  return Math.round((parseLocal(iso).getTime() - todayMidnight().getTime()) / 86_400_000);
-}
 
-type Status = "in_progress" | "overdue";
+type Status = BenchmarkTaskStatus;
 
 interface ActivityItem {
   id: string;
@@ -64,17 +60,6 @@ interface ActivityItem {
   subActivity: string;
   status: Status;
   details: React.ReactNode;
-}
-
-// Task-based relative status — actionable wording only (no raw due/completed
-// dates): "Due Today" / "Due in N Days" while on time, "N Days Overdue" once
-// the due date has passed.
-function taskStatus(due: string): { status: Status; detail: string } {
-  const diff = dueDayDiff(due);
-  if (diff > 0) return { status: "in_progress", detail: diff === 1 ? "Due in 1 Day" : `Due in ${diff} Days` };
-  if (diff === 0) return { status: "in_progress", detail: "Due Today" };
-  const n = -diff;
-  return { status: "overdue", detail: n === 1 ? "1 Day Overdue" : `${n} Days Overdue` };
 }
 
 function StatusPill({ status }: { status: Status }) {
@@ -98,9 +83,10 @@ function StatusPill({ status }: { status: Status }) {
  *                      a row disappears automatically once caught up. Always
  *                      "In Progress"; Details = "{actual} / {target} • {n} left".
  *   TASK_BASED rows  — only INCOMPLETE tasks (a completed task is dropped
- *                      immediately). Relative status: "In Progress" with "Due
- *                      in N Days" while on time, "Overdue" with "N Days Overdue"
- *                      once past due.
+ *                      immediately). Status comes from benchmarkTaskState: the
+ *                      calendar due date for an ordinary task, WORK DAYS for a
+ *                      lump-sum one ("Day 2 of 2", Overdue only once the
+ *                      allowance is spent).
  *
  * Both sources are current-cycle-only (Fri..Thu) and reset every Friday with
  * the ledger.
@@ -147,7 +133,7 @@ export function BenchmarkActivities() {
       .filter((t) => t.status !== "completed")
       .sort((a, b) => a.due_date.localeCompare(b.due_date))
       .map((t) => {
-        const { status, detail } = taskStatus(t.due_date);
+        const { status, detail } = benchmarkTaskState(t, todayMidnight());
         return {
           id: t.work_report_task_id,
           date: t.report_date,

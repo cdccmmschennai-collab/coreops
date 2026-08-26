@@ -274,6 +274,12 @@ const taskSchema = z
     work_item_id: z.string().optional().default(""),
     // Display-only lifecycle for a linked row (from the API in edit mode).
     work_item_lifecycle: z.string().optional(),
+    // Display-only approval state of a lump-sum day entered past the activity's
+    // allowed duration (from the API in edit mode): "pending" while the Project
+    // Head has not decided, "approved" once they have, undefined when the row
+    // needed no approval. Never sent to the backend - the server resolves it
+    // from the row's linked continuation request on every read.
+    continuation_approval_status: z.string().optional(),
     // Maintenance Plant the employee worked at — independent of the
     // project's own assigned plant. Optional: pick it directly; Planning Plant
     // code/description auto-derive (display-only, never sent to the backend).
@@ -477,6 +483,7 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   completed_date: undefined,
   work_item_id:       "",
   work_item_lifecycle: undefined,
+  continuation_approval_status: undefined,
   maintenance_plant_id:          "",
   maintenance_plant_code:        undefined,
   maintenance_plant_description: undefined,
@@ -712,6 +719,7 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             completed_date: t.completed_date ?? undefined,
             work_item_id:       t.work_item_id ?? "",
             work_item_lifecycle: t.work_item_lifecycle ?? undefined,
+            continuation_approval_status: t.continuation_approval_status ?? undefined,
             maintenance_plant_id:          t.maintenance_plant_id ?? "",
             maintenance_plant_code:        t.maintenance_plant_code ?? undefined,
             maintenance_plant_description: t.maintenance_plant_description ?? undefined,

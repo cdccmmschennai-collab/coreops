@@ -202,6 +202,11 @@ class WorkReportTaskOut(BaseModel):
     # Computed fresh on every read (never stored) — see
     # activity_master.service.compute_overdue. For a work-item-linked row these
     # mirror the authoritative WorkItem (see work_items.mirror_fields).
+    # ALWAYS the CALENDAR verdict against the row's frozen due_date, which is
+    # what a legacy standalone row (no work item, no work-day history) has and
+    # what a non-lump-sum task is genuinely governed by. For a LUMP-SUM work
+    # item the calendar deadline is history and decides nothing — read
+    # overall_lifecycle / overall_days_used below instead.
     is_overdue: bool = False
     days_overdue: int = 0
     # Task continuation (feature-flagged). work_item_id links this daily entry to
@@ -210,6 +215,19 @@ class WorkReportTaskOut(BaseModel):
     # fresh on read. Both null for legacy standalone rows.
     work_item_id: uuid.UUID | None = None
     work_item_lifecycle: str | None = None
+    # Lump-sum continuation approval (migration 0076). Set only on a row entered
+    # past the work item's allowed duration - a day that needed Project Head
+    # approval to exist. continuation_approval_status is the linked request's
+    # CURRENT status, resolved fresh on read, never stored on the row:
+    #   None       - this row needed no approval (every non-lump-sum row, and
+    #                every lump-sum day still inside its allowance).
+    #   "pending"  - entered and submitted, but NOT accepted work yet. The UI
+    #                must say so rather than showing it as ordinary work.
+    #   "approved" - ordinary recorded work, on the same work item as before.
+    # "rejected" never appears here: rejecting withdraws these rows from the
+    # report entirely (work_reports.service.withdraw_continuation_rows).
+    continuation_request_id: uuid.UUID | None = None
+    continuation_approval_status: str | None = None
     # Explicit daily-row vs overall-task completion (task continuation), so the
     # UI never has to overload is_completed/completed_date (which are row-level).
     #   row_*            — completion state of THIS report row.
@@ -230,6 +248,28 @@ class WorkReportTaskOut(BaseModel):
     completed_on_this_report: bool = False
     completion_report_id: uuid.UUID | None = None
     can_complete_here: bool | None = None
+    # How the overall task above is MEASURED, so the client presents the state
+    # in the unit that actually governs it instead of re-deriving a rule:
+    #   overall_is_lumpsum   - True for a lump-sum activity, whose allowed
+    #                          duration is spent in WORK DAYS (distinct report
+    #                          dates worked), not calendar days. For everything
+    #                          else the frozen due_date is still the rule and
+    #                          is_overdue/days_overdue above still describe it.
+    #   overall_target_days  - the item's snapshotted allowed duration.
+    #   overall_days_used    - work days spent BEFORE this report's date, so
+    #                          this report is day overall_days_used + 1 of
+    #                          overall_target_days. Same convention as
+    #                          OpenTaskOut.days_used. Null on a non-lump-sum row
+    #                          and on a completed one (neither is measured this
+    #                          way).
+    # overall_lifecycle for an OPEN lump-sum row comes from these
+    # (work_items.lumpsum_lifecycle), never from the calendar due_date:
+    # IN_PROGRESS while work days remain, DUE_TODAY on the last allowed one,
+    # OVERDUE once the allowance is spent (the state that needs continuation
+    # approval). Completion stays a calendar verdict for every kind of item.
+    overall_is_lumpsum: bool = False
+    overall_target_days: int | None = None
+    overall_days_used: int | None = None
     # Maintenance Plant the employee worked at, frozen at save time (see
     # work_reports/service.py `_validate_tasks`). Independent of the
     # project's own assigned plant.

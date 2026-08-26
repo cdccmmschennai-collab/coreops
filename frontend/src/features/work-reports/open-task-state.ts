@@ -1,5 +1,8 @@
 /**
- * How one Open Task card presents itself — pure, no React.
+ * How a work item presents itself — pure, no React. One Open Task card
+ * (openTaskCardState) and one saved report row's "Overall task" badge
+ * (overallTaskBadge) ask the same question of the same item, so they share
+ * these helpers rather than each deriving the rule.
  *
  * The two kinds of open work item are measured by different clocks, and until
  * now the card showed only one of them:
@@ -131,6 +134,69 @@ export function openTaskCardState(task: OpenTask): OpenTaskCardState {
         : CALENDAR_LABEL[task.lifecycle] ?? task.lifecycle,
     badgeVariant: CALENDAR_VARIANT[task.lifecycle] ?? "neutral",
     meta: `Due ${task.due_date}`,
+  };
+}
+
+/**
+ * The "Overall task" badge on a SAVED report row (Report Detail), which is the
+ * same question the Open Task card asks about the same work item — how much of
+ * the allowed duration is spent — so it is answered by the same helpers rather
+ * than by a second rule.
+ *
+ * The row is measured by whatever governs its item:
+ *   * lump-sum, still open -> WORK DAYS. `overall_days_used` counts the days
+ *     spent BEFORE this report (backend work_items.days_used_before, the same
+ *     convention as OpenTask.days_used), so this report is day used + 1:
+ *     "Day 1 of 2", "Day 2 of 2", then "Duration exceeded" once the allowance
+ *     is spent and continuing needs Project Head approval.
+ *   * anything else -> the CALENDAR lifecycle it has always had, including
+ *     "Overdue by Nd" from the frozen due date.
+ *
+ * Completion is a calendar verdict for BOTH kinds (the backend sends
+ * COMPLETED_ON_TIME / COMPLETED_LATE and no work-day fields), so a completed
+ * row falls through to the calendar branch by construction.
+ *
+ * Returns null when the server sent no lifecycle at all — a legacy standalone
+ * row, which the caller renders its own way.
+ */
+export interface OverallTaskBadge {
+  text: string;
+  variant: BadgeVariant;
+}
+
+export interface OverallTaskRow {
+  overall_lifecycle?: string | null;
+  overall_is_lumpsum?: boolean | null;
+  overall_target_days?: number | null;
+  overall_days_used?: number | null;
+  days_overdue?: number | null;
+}
+
+export function overallTaskBadge(row: OverallTaskRow): OverallTaskBadge | null {
+  const lifecycle = row.overall_lifecycle;
+  if (!lifecycle) return null;
+
+  if (row.overall_is_lumpsum === true && row.overall_days_used != null) {
+    const target = row.overall_target_days ?? 1;
+    const used = Math.max(0, row.overall_days_used);
+    const allowed = allowedWorkDays(target);
+    if (allowanceExhausted(used, target)) {
+      return { text: "Duration exceeded", variant: "danger" };
+    }
+    return {
+      text: workDayPositionLabel(used, target),
+      // The last allowed work day is worth flagging; earlier ones are not.
+      variant: used === allowed - 1 ? "warning" : "neutral",
+    };
+  }
+
+  const overdueDays = row.days_overdue ?? 0;
+  return {
+    text:
+      lifecycle === "OVERDUE" && overdueDays > 0
+        ? `Overdue by ${overdueDays}d`
+        : CALENDAR_LABEL[lifecycle] ?? lifecycle,
+    variant: CALENDAR_VARIANT[lifecycle] ?? "neutral",
   };
 }
 

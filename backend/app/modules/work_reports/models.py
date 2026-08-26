@@ -424,6 +424,27 @@ class WorkReportTask(UUIDMixin, Base):
     work_item_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("work_items.id", ondelete="RESTRICT"), nullable=True
     )
+    # The continuation request that GOVERNS this row (migration 0076). Set only
+    # on a lump-sum continuation entered once the work item's allowed duration
+    # was spent - i.e. a row that needed Project Head approval to exist. NULL is
+    # the normal state and means "no approval was needed".
+    #
+    # This row's approval state is derived from the linked request's status, not
+    # stored here, so there is exactly one source of truth:
+    #   pending  - the work is entered and submitted but NOT accepted work yet;
+    #   approved - ordinary recorded work, on the SAME work item as before;
+    #   rejected - never reached: rejecting withdraws these rows from the report
+    #              (continuation_requests.service.reject_continuation_request).
+    # One request governs every row dated on or after its continuation_date -
+    # the employee may keep reporting while a decision is pending, and all of
+    # those days ride on that single decision.
+    #
+    # SET NULL: losing a request record must never delete report history.
+    continuation_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("continuation_requests.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # Independent of the project's own assigned plant (projects.maintenance_plant_id)
     # — the employee picks which plant they actually worked at that day. Pick the
     # Maintenance Plant directly; Planning Plant code/description auto-derive and
@@ -467,4 +488,5 @@ class WorkReportTask(UUIDMixin, Base):
         Index("work_report_tasks_sub_activity_idx", "sub_activity_id"),
         Index("work_report_tasks_maintenance_plant_idx", "maintenance_plant_id"),
         Index("work_report_tasks_work_item_idx", "work_item_id"),
+        Index("work_report_tasks_continuation_request_idx", "continuation_request_id"),
     )

@@ -36,15 +36,17 @@ export function ContinuationApprovalCard({ task }: Props) {
   if (status === "pending") {
     return (
       <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm">
-        <p className="font-medium">Continuation Approval Pending</p>
+        <p className="font-medium">Continuation requested</p>
         <p className="mt-1 text-xs text-muted-foreground">
           {task.continuation_routed_to
-            ? `Your request has been sent to: ${task.continuation_routed_to}`
-            : "Your request has been sent for review."}
+            ? `Awaiting Project Head approval from ${task.continuation_routed_to}.`
+            : "Awaiting Project Head approval."}
         </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Your existing entries for this activity are saved; further updates will
-          remain pending the same review.
+          Days you enter for this activity are held under this same review - they
+          are not recorded work until it is approved, and the activity cannot be
+          marked complete meanwhile. If it is rejected, those entries are removed
+          from their reports.
         </p>
         <div className="mt-1">
           <ContinuationStatusBadge status="pending" />

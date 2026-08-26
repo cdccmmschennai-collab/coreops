@@ -100,49 +100,101 @@ def days_overdue_of(
 
 
 # ---------- lump-sum work-day usage (the allowed-duration rule) ------------
-def count_work_days(
-    db: Session, *, item_id: uuid.UUID, excluding: date | None = None
-) -> int:
-    """How many distinct report dates this work item has actually been worked
-    on. This — not the calendar span — is what a lump-sum activity's allowed
-    duration is spent on: a day with no entry for the item consumes nothing.
+def work_day_dates_by_item(
+    db: Session, item_ids
+) -> dict[uuid.UUID, set[date]]:
+    """The distinct report dates each work item has actually been worked on.
 
-    `excluding` drops one report date from the count, always the report being
-    written: a day is consumed by having been worked, and the day under
-    consideration is not consumed yet. It also makes the count independent of
-    whether the caller has already inserted/deleted that report's own rows.
+    This set — not the calendar span — is the whole raw material of the lump-sum
+    allowed-duration rule, and it is fetched in ONE place so every reader of
+    "work days" is reading the same thing. A day with no entry for the item is
+    simply not in the set and consumes nothing.
+
+    Items with no entry at all are absent from the mapping (read them as an
+    empty set). The sets are small by construction: an item lives inside a
+    single Friday-Thursday reporting week.
     """
-    stmt = (
-        select(func.count(func.distinct(DailyWorkReport.report_date)))
-        .select_from(WorkReportTask)
+    ids = list(item_ids)
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(WorkReportTask.work_item_id, DailyWorkReport.report_date)
         .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
-        .where(WorkReportTask.work_item_id == item_id)
-    )
-    if excluding is not None:
-        stmt = stmt.where(DailyWorkReport.report_date != excluding)
-    return db.execute(stmt).scalar_one()
+        .where(WorkReportTask.work_item_id.in_(ids))
+        .distinct()
+    ).all()
+    out: dict[uuid.UUID, set[date]] = {}
+    for wid, d in rows:
+        out.setdefault(wid, set()).add(d)
+    return out
 
 
 def count_work_days_by_item(
     db: Session, item_ids, *, excluding: date | None = None
 ) -> dict[uuid.UUID, int]:
-    """count_work_days for many items in one query. Items with no entry left
-    after `excluding` are simply absent from the mapping (read them as 0)."""
+    """How many work days each item has spent, over work_day_dates_by_item.
+
+    `excluding` drops one report date from the count, always the report being
+    written: a day is consumed by having been worked, and the day under
+    consideration is not consumed yet. It also makes the count independent of
+    whether the caller has already inserted/deleted that report's own rows.
+
+    Items with no entry at all are absent from the mapping (read them as 0); an
+    item left with nothing after `excluding` reports 0 explicitly."""
+    return {
+        wid: sum(1 for d in dates if d != excluding)
+        for wid, dates in work_day_dates_by_item(db, item_ids).items()
+    }
+
+
+def count_work_days(
+    db: Session, *, item_id: uuid.UUID, excluding: date | None = None
+) -> int:
+    """count_work_days_by_item for a single item — see it for the rule."""
+    return count_work_days_by_item(db, [item_id], excluding=excluding).get(item_id, 0)
+
+
+def days_used_before(dates, report_date: date) -> int:
+    """Work days a lump-sum item had already spent BEFORE `report_date`, from an
+    already-fetched date set (work_day_dates_by_item).
+
+    Same quantity, and the same convention, as
+    count_work_days(excluding=report_date) returns for the report being written
+    — days consumed before the day under consideration — so it feeds
+    lumpsum_lifecycle / lumpsum_allowance_exhausted / lumpsum_days_over
+    unchanged. It exists so a whole page of ALREADY-SAVED rows, each with its
+    own report date, can be positioned in its item's allowance from one query
+    instead of one query per row.
+
+    Strictly earlier dates, deliberately: a saved row's place in the allowance
+    is decided by the days worked before it. Counting later continuations too
+    (what `excluding` does) would retroactively push an early, within-allowance
+    row into "duration exceeded" the moment the activity was continued again."""
+    return sum(1 for d in dates if d < report_date)
+
+
+def lumpsum_flags_by_item(db: Session, item_ids) -> dict[uuid.UUID, bool]:
+    """Which of these work items are LUMP-SUM — the ones measured in work days
+    rather than against the calendar due_date. Resolved from the sub-activity's
+    live Activity Master row through the one shared predicate
+    (activity_master.models.is_lumpsum_unit_row), never re-derived from a row
+    snapshot: benchmark_type_snapshot is written at submit, so a draft row has
+    none and would silently read as non-lump-sum."""
+    from app.modules.activity_master.models import is_lumpsum_unit_row
+
     ids = list(item_ids)
     if not ids:
         return {}
-    stmt = (
+    rows = db.execute(
         select(
-            WorkReportTask.work_item_id,
-            func.count(func.distinct(DailyWorkReport.report_date)),
+            WorkItem.id,
+            ActivityMaster.benchmark_type,
+            ActivityMaster.relevant_count_field,
         )
-        .join(DailyWorkReport, WorkReportTask.report_id == DailyWorkReport.id)
-        .where(WorkReportTask.work_item_id.in_(ids))
-        .group_by(WorkReportTask.work_item_id)
-    )
-    if excluding is not None:
-        stmt = stmt.where(DailyWorkReport.report_date != excluding)
-    return {wid: n for wid, n in db.execute(stmt).all()}
+        .join(ActivityMaster, ActivityMaster.id == WorkItem.sub_activity_id)
+        .where(WorkItem.id.in_(ids))
+    ).all()
+    return {iid: is_lumpsum_unit_row(btype, rcf) for iid, btype, rcf in rows}
 
 
 def lumpsum_allowance_exhausted(days_used: int, target_days: int) -> bool:
@@ -219,10 +271,33 @@ def has_later_linked_entry(
     return n > 0
 
 
+def has_pending_continuation(db: Session, *, work_item_id: uuid.UUID) -> bool:
+    """Whether a continuation request for this work item is still awaiting a
+    Project Head decision. Lives here (rather than being inlined at the two call
+    sites) so "is this item's continuation undecided?" has one answer."""
+    from app.modules.continuation_requests.service import pending_request_for_work_item
+
+    return pending_request_for_work_item(db, work_item_id) is not None
+
+
 def _guard_complete_here(db: Session, *, item: WorkItem, report_date: date) -> None:
     """Shared rule for both completion paths: this report may only be the one that
     completes the task if it isn't already completed on a different report and no
-    later continuation exists (which would make completing here a backdate)."""
+    later continuation exists (which would make completing here a backdate).
+
+    An undecided continuation also blocks completion. Continuing past the allowed
+    duration is work the Project Head has not accepted yet, and completing the
+    activity on the strength of it would turn a pending request into a finished
+    activity - exactly the "pending is treated as approved" confusion this phase
+    removes. It also keeps rejection simple: withdrawing the rejected rows can
+    never have to un-complete an activity that was closed using them."""
+    if has_pending_continuation(db, work_item_id=item.id):
+        raise AppError(
+            "validation_error",
+            "This activity's continuation is awaiting Project Head approval. "
+            "You can mark it complete once the continuation is approved.",
+            422,
+        )
     if item.completed_on is not None and item.completed_on != report_date:
         raise AppError(
             "validation_error",
@@ -331,7 +406,12 @@ def resolve_task_work_item(
         )
         db.add(item)
         db.flush()  # assign item.id for the row FK
-        return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}
+        # A fresh item is on day 1 of its allowance — nothing to approve.
+        return {
+            "work_item_id": item.id,
+            "continuation_request_id": None,
+            **mirror_fields(item, report.report_date),
+        }
 
     # LINK — continue an existing work item.
     if work_item_id in seen:
@@ -371,20 +451,27 @@ def resolve_task_work_item(
             422,
         )
 
-    # Lump-sum continuation approval. Only a brand-NEW continuation entry
-    # (never a resave of a row this report already had) is gated, and only
-    # once the item's allowed duration is spent in WORK DAYS. TASK_WITH_QUANTITY
-    # rows (snap["is_lumpsum_task"] is False for them) are never touched.
+    # Lump-sum continuation approval. Only once the item's allowed duration is
+    # spent in WORK DAYS, and only for lump-sum rows — TASK_WITH_QUANTITY rows
+    # (snap["is_lumpsum_task"] is False for them) are never touched.
     #
     # A rejected continuation stays blocked (403) — the employee gets no
     # benefit from an unapproved continuation. Otherwise (no request yet, or
     # one still pending) the save PROCEEDS and a pending request is
-    # auto-created if one doesn't already exist — the employee is never
-    # locked out of entering today's work while a decision is pending; they
-    # just get a clear "pending Project Head approval" state (surfaced by
-    # get_open_work_items / OpenTaskOut, unchanged by this task). An
-    # approved request also proceeds, exactly as before.
-    if not is_resave and snap.get("is_lumpsum_task"):
+    # auto-created if one doesn't already exist — the employee is never locked
+    # out of entering today's work while a decision is pending. What the save
+    # does NOT do is make that work accepted: the row is stamped with the
+    # governing request's id, so its approval state is read straight off the
+    # request (pending / approved) and a later rejection can withdraw exactly
+    # these rows. An approved request proceeds exactly as before.
+    #
+    # Only a brand-NEW continuation entry is GATED (a resave of a row this
+    # report already had must not be blocked), but the STAMP is resolved for
+    # resaves too: the report's rows are deleted and rewritten on every update,
+    # so skipping the stamp on a resave would quietly detach an already-pending
+    # continuation from its decision.
+    continuation_request_id = None
+    if snap.get("is_lumpsum_task"):
         days_used = count_work_days(
             db, item_id=item.id, excluding=report.report_date
         )
@@ -395,24 +482,39 @@ def resolve_task_work_item(
             )
 
             latest = latest_request_for_work_item(db, item.id)
-            if latest is not None and latest.status == "rejected":
-                raise AppError(
-                    "forbidden",
-                    "The Project Head rejected continuation of this "
-                    "activity beyond its allowed duration. It cannot be "
-                    "continued further.",
-                    403,
-                )
-            if latest is None or latest.status == "pending":
-                req, created = get_or_create_pending_for_continuation(
-                    db, item=item, continuation_date=report.report_date,
-                )
-                if created and new_continuation_requests is not None:
-                    new_continuation_requests.append(req)
-            # latest.status == "approved": nothing to do, save proceeds.
+            if not is_resave:
+                if latest is not None and latest.status == "rejected":
+                    raise AppError(
+                        "forbidden",
+                        "The Project Head rejected continuation of this "
+                        "activity beyond its allowed duration. It cannot be "
+                        "continued further.",
+                        403,
+                    )
+                if latest is None or latest.status == "pending":
+                    req, created = get_or_create_pending_for_continuation(
+                        db, item=item, continuation_date=report.report_date,
+                    )
+                    if created and new_continuation_requests is not None:
+                        new_continuation_requests.append(req)
+                    latest = req
+                # latest.status == "approved": nothing to do, save proceeds.
+            # A request governs every row dated on or after the day it was
+            # raised. Earlier rows are within-allowance work that never needed
+            # a decision and must stay untouched by one.
+            if (
+                latest is not None
+                and latest.status != "rejected"
+                and report.report_date >= latest.continuation_date
+            ):
+                continuation_request_id = latest.id
 
     _apply_completion(db, item, is_completed=is_completed, report=report, editable=editable)
-    return {"work_item_id": item.id, **mirror_fields(item, report.report_date)}
+    return {
+        "work_item_id": item.id,
+        "continuation_request_id": continuation_request_id,
+        **mirror_fields(item, report.report_date),
+    }
 
 
 def _apply_completion(

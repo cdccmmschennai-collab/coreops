@@ -647,3 +647,167 @@ def test_stranger_cannot_read_request(flag_on, client, author, pm_header, make_u
     stranger = login("stranger2@x.com")
     res = client.get(f"{CR}/{req['id']}", headers=stranger)
     assert res.status_code == 403, res.text
+
+
+# --------------------------------------------------------------------------
+# notification destination (UX): the employee is taken to the affected REPORT
+# --------------------------------------------------------------------------
+# The decision notification answers "what happened to my work?", so it deep-links
+# to the report the work was entered on, not to the reviewer's request record.
+# /lump-sum-activity/{id} stays the REVIEWER's page and is only the fallback for
+# a request with no entry behind it.
+
+def _notif_url(db, user_id, type_):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    n = db.execute(
+        select(Notification).where(
+            Notification.user_id == user_id, Notification.type == type_,
+        )
+    ).scalar_one_or_none()
+    assert n is not None, f"no {type_} notification"
+    return n.target_url
+
+
+def _continued_report(client, db, author_fixture, pm_header, make_user, make_employee, login,
+                      *, suffix):
+    """An employee with a Head, a 1-day lump-sum already started, and a SUBMITTED
+    continuation report for TODAY - which auto-raises the pending request. Returns
+    (author, head_header, report_id, request_id).
+
+    Submitted, because that is when a Head normally decides: a report still in
+    draft when the decision lands is the edge case below."""
+    a = author_fixture(email=f"emp{suffix}@x.com", code=f"E{suffix}", proj_code=f"P-{suffix}")
+    head_u = make_user(f"head{suffix}@x.com", role=UserRole.employee)
+    head = make_employee(employee_code=f"H{suffix}", user_id=head_u.id)
+    a["project"].head_employee_id = head.id
+    db.add(a["project"])
+    db.commit()
+
+    _, sub = _lumpsum_sub(client, pm_header, name=f"Lumpsum{suffix}", period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id,
+                          sub_id=sub["id"], on_date=START)
+    saved = _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                         on_date=TODAY, work_item_id=wi).json()
+    row = saved["tasks"][0]
+    assert row["continuation_approval_status"] == "pending"
+    assert client.post(f"{BASE}/{saved['id']}/submit", headers=a["header"]).status_code == 200
+    return a, login(f"head{suffix}@x.com"), saved["id"], row["continuation_request_id"]
+
+
+def test_approved_notification_links_to_the_affected_report(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    a, head_header, report_id, req_id = _continued_report(
+        client, db, author, pm_header, make_user, make_employee, login, suffix="20",
+    )
+    res = client.post(f"{CR}/{req_id}/approve", headers=head_header, json={"comment": "ok"})
+    assert res.status_code == 200, res.text
+
+    assert _notif_url(db, a["user"].id, "continuation_approved") == f"/work-reports/{report_id}"
+
+
+def test_rejected_notification_links_to_the_affected_report(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    """Resolved BEFORE the rejection withdraws the stamped rows - otherwise there
+    would be nothing left to resolve the report from."""
+    a, head_header, report_id, req_id = _continued_report(
+        client, db, author, pm_header, make_user, make_employee, login, suffix="21",
+    )
+    res = client.post(f"{CR}/{req_id}/reject", headers=head_header, json={"comment": "no"})
+    assert res.status_code == 200, res.text
+
+    assert _notif_url(db, a["user"].id, "continuation_rejected") == f"/work-reports/{report_id}"
+    # The rejection itself is unchanged: the row is withdrawn from the report,
+    # which is reopened carrying the note the report page shows the author.
+    detail = client.get(f"{BASE}/{report_id}", headers=a["header"]).json()
+    assert detail["tasks"] == []
+    assert detail["status"] == "granted"
+    assert "rejected" in (detail["review_note"] or "")
+
+
+def test_rejected_draft_report_still_links_to_the_report(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    """A report still in DRAFT when the rejection lands: the row is withdrawn and
+    the destination is still the report, but nothing reopens it (it was never
+    submitted) so it carries no withdrawal note - the notification's own message
+    is what explains the removal."""
+    a = author(email="emp25@x.com", code="E25", proj_code="P-25")
+    head_u = make_user("head25@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H25", user_id=head_u.id)
+    a["project"].head_employee_id = head.id
+    db.add(a["project"])
+    db.commit()
+
+    _, sub = _lumpsum_sub(client, pm_header, name="Lumpsum25", period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id,
+                          sub_id=sub["id"], on_date=START)
+    saved = _post_report(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                         on_date=TODAY, work_item_id=wi).json()
+    req_id = saved["tasks"][0]["continuation_request_id"]
+    client.post(f"{CR}/{req_id}/reject", headers=login("head25@x.com"), json={})
+
+    assert _notif_url(db, a["user"].id, "continuation_rejected") == f"/work-reports/{saved['id']}"
+    detail = client.get(f"{BASE}/{saved['id']}", headers=a["header"]).json()
+    assert detail["tasks"] == []
+    assert detail["status"] == "draft"
+    assert detail["review_note"] is None
+
+
+def test_decision_notification_falls_back_to_the_request_page_with_no_entry(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    """A request raised through the explicit endpoint and decided before the
+    employee ever reported that day has no report to link to."""
+    a = author(email="emp22@x.com", code="E22", proj_code="P-22")
+    head_u = make_user("head22@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="H22", user_id=head_u.id)
+    a["project"].head_employee_id = head.id
+    db.add(a["project"])
+    db.commit()
+
+    _, sub = _lumpsum_sub(client, pm_header, name="Lumpsum22", period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id,
+                          sub_id=sub["id"], on_date=START)
+    req = client.post(CR, headers=a["header"], json={
+        "work_item_id": wi, "continuation_date": TODAY.isoformat(),
+    }).json()
+    client.post(f"{CR}/{req['id']}/approve", headers=login("head22@x.com"), json={})
+
+    assert _notif_url(db, a["user"].id, "continuation_approved") == f"/lump-sum-activity/{req['id']}"
+
+
+def test_reviewer_notification_destination_is_unchanged(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    """The OTHER notification this feature sends is untouched: the reviewer still
+    lands on their own queue, filtered to the pending request."""
+    _a, _head_header, _report_id, req_id = _continued_report(
+        client, db, author, pm_header, make_user, make_employee, login, suffix="23",
+    )
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    n = db.execute(
+        select(Notification).where(Notification.type == "continuation_requested")
+    ).scalars().all()
+    assert any(x.target_url == f"/lump-sum-activity?queue=pending&id={req_id}" for x in n)
+
+
+def test_reviewer_can_still_open_the_request_detail(
+    flag_on, client, db, author, pm_header, make_user, make_employee, login,
+):
+    """The page the Back button lives on: GET /continuation-requests/{id} still
+    serves the full record to the Head and to the PM."""
+    _a, head_header, _report_id, req_id = _continued_report(
+        client, db, author, pm_header, make_user, make_employee, login, suffix="24",
+    )
+    res = client.get(f"{CR}/{req_id}", headers=head_header)
+    assert res.status_code == 200, res.text
+    assert res.json()["id"] == req_id
+    assert client.get(f"{CR}/{req_id}", headers=pm_header).status_code == 200

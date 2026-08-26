@@ -52,6 +52,12 @@ export interface TaskStatusRow {
   hours_minutes: number;
   status: TaskStatus;
   days_overdue: number;
+  // Lump-sum rows are measured in WORK DAYS, not against due_date: days_used is
+  // the work days spent BEFORE today (today is day days_used + 1). Absent on
+  // every other TASK_BASED row, and on an older backend.
+  is_lumpsum?: boolean;
+  target_days?: number | null;
+  days_used?: number | null;
 }
 
 export interface MyAlertsSummary {

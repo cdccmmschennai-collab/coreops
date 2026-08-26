@@ -16,6 +16,7 @@ import { useMyActivityRequests } from "@/features/activity-requests/hooks";
 import type { ActivityRequest } from "@/features/activity-requests/types";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
+import { ContinuationRowStatus } from "@/features/continuation-requests/components/continuation-row-status";
 import { AppError } from "@/lib/api-client";
 import { formatDateTime, formatInt } from "@/lib/format";
 import { can } from "@/lib/rbac";
@@ -29,6 +30,7 @@ import {
   useToggleTaskCompletion,
   useWorkReport,
 } from "../hooks";
+import { overallTaskBadge } from "../open-task-state";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_STATUS_LABEL,
@@ -79,21 +81,10 @@ const countFor = (t: WorkReportTask, unit: string): number => {
   }
 };
 
-// Task-continuation lifecycle (derived on the server from the work item's dates).
-const LIFECYCLE_LABEL: Record<string, string> = {
-  IN_PROGRESS: "In progress",
-  DUE_TODAY: "Due today",
-  OVERDUE: "Overdue",
-  COMPLETED_ON_TIME: "Completed",
-  COMPLETED_LATE: "Completed late",
-};
-const LIFECYCLE_VARIANT: Record<string, "neutral" | "warning" | "danger" | "success"> = {
-  IN_PROGRESS: "neutral",
-  DUE_TODAY: "warning",
-  OVERDUE: "danger",
-  COMPLETED_ON_TIME: "success",
-  COMPLETED_LATE: "warning",
-};
+// The task-continuation lifecycle labels this file used to keep are gone: the
+// "Overall task" badge now comes from open-task-state's overallTaskBadge, which owns
+// both presentations (work days for a lump-sum item, the calendar lifecycle for
+// everything else) so this page and the Open Task card cannot disagree.
 
 /** The NUMERIC benchmark's "actual" value — whichever of
  * tags_count/docs_count/bom_count/spares_count the sub-activity's
@@ -353,10 +344,17 @@ export function WorkReportDetail({ id }: { id: string }) {
         </div>
       )}
 
-      {/* Edit access granted — shown only to the author who requested it */}
+      {/* Edit access granted — shown only to the author who requested it.
+          `review_note` is written by exactly one path (a rejected lump-sum
+          continuation withdrawing its rows and reopening the report — every
+          other transition clears it), so showing it here is what tells the
+          author, on the report itself, why an entry is gone. */}
       {report.status === "granted" && isAuthor && (
         <div className="mb-4 max-w-2xl rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-foreground">
           <span className="font-medium">Edit access granted.</span> You can edit and resubmit this report.
+          {report.review_note && (
+            <span className="mt-1 block text-muted-foreground">{report.review_note}</span>
+          )}
         </div>
       )}
 
@@ -467,6 +465,10 @@ export function WorkReportDetail({ id }: { id: string }) {
                 const projectName = t.project_name ?? fallback?.name ?? "—";
                 const projectCode = t.project_code ?? fallback?.code ?? "—";
                 const jobCodeCode = t.project_job_code_code ?? fallback?.job_code_code ?? "—";
+                // "Overall task" state, in whatever unit governs this item:
+                // work days for a lump-sum activity, the frozen calendar due
+                // date for everything else. Null for a legacy standalone row.
+                const overall = overallTaskBadge(t);
                 return (
                   <div key={t.id} className="rounded-lg border border-border p-4">
                     {/* Header: project (+ the half it belongs to on a split report) */}
@@ -588,6 +590,11 @@ export function WorkReportDetail({ id }: { id: string }) {
                              task visibly separate — an earlier report of a task
                              completed later must not present an active checkbox. */
                           <>
+                            {/* A lump-sum day entered past the allowed duration
+                                states its own approval state, so a submitted
+                                report never reads as an approved continuation. */}
+                            <ContinuationRowStatus task={t} />
+
                             <div className="space-y-0.5">
                               <p className="text-xs text-muted-foreground">Work on this report</p>
                               <p className="text-sm font-medium">
@@ -601,12 +608,8 @@ export function WorkReportDetail({ id }: { id: string }) {
                               <div className="min-w-0 space-y-1">
                                 <p className="text-xs text-muted-foreground">Overall task</p>
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                  {t.overall_lifecycle && (
-                                    <Badge variant={LIFECYCLE_VARIANT[t.overall_lifecycle] ?? "neutral"}>
-                                      {t.overall_lifecycle === "OVERDUE" && t.days_overdue > 0
-                                        ? `Overdue by ${t.days_overdue}d`
-                                        : LIFECYCLE_LABEL[t.overall_lifecycle] ?? t.overall_lifecycle}
-                                    </Badge>
+                                  {overall && (
+                                    <Badge variant={overall.variant}>{overall.text}</Badge>
                                   )}
                                   {t.overall_completed_on && !t.completed_on_this_report && (
                                     <span className="text-xs text-muted-foreground">

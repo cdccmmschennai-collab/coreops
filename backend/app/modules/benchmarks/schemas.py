@@ -63,6 +63,13 @@ class TaskStatusOut(BaseModel):
     hours_minutes: int
     status: str
     days_overdue: int
+    # Lump-sum rows are measured in WORK DAYS, not against due_date: `days_used`
+    # is the work days spent BEFORE today (so today is day days_used + 1) and
+    # days_overdue counts only work days taken beyond the allowance. Both stay
+    # None/unused for every other TASK_BASED row.
+    is_lumpsum: bool = False
+    target_days: int | None = None
+    days_used: int | None = None
 
 
 class MyAlertsSummaryOut(BaseModel):

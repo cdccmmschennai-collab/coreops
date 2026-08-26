@@ -22,12 +22,16 @@ from datetime import date, timedelta
 import pytest
 
 from app.core.config import settings
-from app.modules.activity_master.service import compute_week_bounds
+from app.modules.activity_master.service import (
+    compute_week_bounds,
+    get_task_status_activities,
+)
 from app.modules.projects.models import ProjectStatus
 from app.modules.users.models import UserRole
 from app.modules.work_reports.models import WorkItem
 from app.modules.work_reports.work_items import (
     compute_due_date,
+    days_used_before,
     lumpsum_allowance_exhausted,
     lumpsum_days_over,
     lumpsum_lifecycle,
@@ -125,10 +129,22 @@ def _start(client, header, *, project_id, sub_id, on_date):
                  on_date=on_date).json()["tasks"][0]["work_item_id"]
 
 
+def _row(res):
+    """The single task row of a report-write response."""
+    return res.json()["tasks"][0]
+
+
 def _open_task(client, header, *, report_date, work_item_id):
     ot = client.get(OPEN_TASKS, headers=header,
                     params={"report_date": report_date.isoformat()}).json()
     return next((t for t in ot["items"] if t["work_item_id"] == work_item_id), None)
+
+
+def _detail_row(client, header, report_id):
+    """The single task row as GET /work-reports/{id} - Report Detail - serves it."""
+    res = client.get(f"{BASE}/{report_id}", headers=header)
+    assert res.status_code == 200, res.text
+    return res.json()["tasks"][0]
 
 
 # --------------------------------------------------------------------------
@@ -158,6 +174,21 @@ def test_lumpsum_days_over_only_counts_days_beyond_the_allowance():
     assert lumpsum_days_over(4, 2) == 2   # two approved continuation days used
 
 
+def test_days_used_before_positions_a_saved_row_in_its_allowance():
+    """Where an ALREADY-SAVED row sits in the allowance: the work days worked
+    strictly before it. Skipped calendar days are simply not in the set, and a
+    later continuation never counts backwards against an earlier row."""
+    worked = {_d(0), _d(2), _d(4)}
+    assert days_used_before(worked, _d(0)) == 0   # day 1
+    assert days_used_before(worked, _d(2)) == 1   # day 2 - the gap consumed nothing
+    assert days_used_before(worked, _d(4)) == 2   # day 3
+    # Feeds the Phase 1 predicates unchanged: a 2-day allowance is spent by the
+    # third work day and not one day earlier.
+    assert lumpsum_lifecycle(days_used_before(worked, _d(2)), 2).value == "DUE_TODAY"
+    assert lumpsum_lifecycle(days_used_before(worked, _d(4)), 2).value == "OVERDUE"
+    assert days_used_before((), _d(0)) == 0
+
+
 # --------------------------------------------------------------------------
 # 2-day lump-sum
 # --------------------------------------------------------------------------
@@ -167,13 +198,15 @@ def test_two_day_lumpsum_consecutive_days(flag_on, client, author, pm_header, db
     _, sub = _lumpsum_sub(client, pm_header, period=2)
     wid = _start(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=_d(0))
-    # Day 2 - the last day of the allowed duration.
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(1), work_item_id=wid, expect=201)
-    # Day 3 - allowance spent.
+    # Day 2 - the last day of the allowed duration. Ordinary work, no approval.
     res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-                on_date=_d(2), work_item_id=wid, expect=403)
-    assert "allowed duration" in res.json()["error"]["message"].lower()
+                on_date=_d(1), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] is None
+    # Day 3 - allowance spent. The entry is accepted into the report but is NOT
+    # accepted WORK: it is stamped pending until the Project Head decides.
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(2), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] == "pending"
 
 
 def test_two_day_lumpsum_with_skipped_calendar_days(flag_on, client, author, pm_header, db):
@@ -192,11 +225,13 @@ def test_two_day_lumpsum_with_skipped_calendar_days(flag_on, client, author, pm_
     assert item.due_date < _d(4)          # the calendar deadline has passed ...
 
     # ... and it makes no difference: this is the second WORK day.
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(4), work_item_id=wid, expect=201)
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(4), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] is None
     # The next work entry after that is the one that needs approval.
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(6), work_item_id=wid, expect=403)
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(6), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] == "pending"
     # The originating history is untouched by any of this.
     db.expire_all()
     item = db.get(WorkItem, _uuid.UUID(wid))
@@ -205,15 +240,16 @@ def test_two_day_lumpsum_with_skipped_calendar_days(flag_on, client, author, pm_
     assert item.due_date == compute_due_date(db, _d(0), 2)
 
 
-def test_one_day_lumpsum_blocks_the_next_work_entry(flag_on, client, author, pm_header):
+def test_one_day_lumpsum_gates_the_next_work_entry(flag_on, client, author, pm_header):
     """A 1-day lump-sum is used up by the day it starts; the next entry - however
-    many calendar days later - is blocked."""
+    many calendar days later - needs approval."""
     a = author()
     _, sub = _lumpsum_sub(client, pm_header, period=1)
     wid = _start(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=_d(0))
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(2), work_item_id=wid, expect=403)
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(2), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] == "pending"
 
 
 # --------------------------------------------------------------------------
@@ -226,10 +262,12 @@ def test_three_day_lumpsum_with_skipped_calendar_days(flag_on, client, author, p
     wid = _start(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=_d(0))
     for day in (_d(2), _d(4)):            # work days 2 and 3
-        _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-              on_date=day, work_item_id=wid, expect=201)
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(6), work_item_id=wid, expect=403)
+        res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                    on_date=day, work_item_id=wid, expect=201)
+        assert _row(res)["continuation_approval_status"] is None
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(6), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] == "pending"
 
 
 def test_continuation_required_only_after_the_allowance_is_spent(
@@ -259,8 +297,9 @@ def test_continuation_required_only_after_the_allowance_is_spent(
     assert (t["days_used"], t["lifecycle"], t["days_overdue"]) == (3, "OVERDUE", 0)
     assert t["requires_continuation_approval"] is True
     assert t["continuation_status"] is None
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(5), work_item_id=wid, expect=403)
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(5), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] == "pending"
 
 
 # --------------------------------------------------------------------------
@@ -313,30 +352,38 @@ def test_completed_lumpsum_is_neither_suggested_nor_continuable(
 def test_approved_continuation_unlocks_further_work_days(
     flag_on, client, author, pm_header
 ):
-    """Once the allowance is spent the employee raises a request from the same
-    state the form shows, and approval unblocks the work days after it."""
+    """Once the allowance is spent the continuation is entered as PENDING, and
+    the Project Head's approval turns it - and the work days after it - into
+    ordinary recorded work on the same item."""
     a = author()
     _, sub = _lumpsum_sub(client, pm_header, period=2)
     wid = _start(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=_d(0))
     _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
           on_date=_d(2), work_item_id=wid, expect=201)      # day 2 of 2
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(4), work_item_id=wid, expect=403)      # spent
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(4), work_item_id=wid, expect=201)   # spent -> pending
+    assert _row(res)["continuation_approval_status"] == "pending"
 
+    # The explicit request endpoint is idempotent against the request the save
+    # already raised - the same pending row, not a second one.
     req = client.post(CR, headers=a["header"], json={
         "work_item_id": wid, "continuation_date": _d(4).isoformat(),
     }).json()
     assert req["status"] == "pending"
+    assert req["id"] == _row(res)["continuation_request_id"]
     assert client.post(f"{CR}/{req['id']}/approve", headers=pm_header,
                        json={}).status_code == 200
 
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(4), work_item_id=wid, expect=201)
-    # Approval is permanent for the life of the item - the day after it is not
-    # blocked again.
-    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-          on_date=_d(5), work_item_id=wid, expect=201)
+    # The already-entered day now reads as approved work, unchanged otherwise.
+    got = client.get(f"{BASE}/{res.json()['id']}", headers=a["header"]).json()
+    assert got["tasks"][0]["continuation_approval_status"] == "approved"
+    # Approval is permanent for the life of the item - the day after it rides on
+    # the same approval rather than raising a second request.
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(5), work_item_id=wid, expect=201)
+    assert _row(res)["continuation_approval_status"] == "approved"
+    assert _row(res)["continuation_request_id"] == req["id"]
 
     t = _open_task(client, a["header"], report_date=_d(6), work_item_id=wid)
     assert (t["days_used"], t["lifecycle"], t["days_overdue"]) == (4, "OVERDUE", 2)
@@ -389,3 +436,275 @@ def test_quantity_task_keeps_calendar_lifecycle_and_is_never_gated(
                    "pages_count": 10}],
     })
     assert res.status_code == 201, res.text
+
+
+# --------------------------------------------------------------------------
+# Report Detail - the overall-task state a saved row publishes
+#
+# The bug these pin: Report Detail derived the overall state of a LUMP-SUM row
+# from the item's frozen calendar due_date, so a 2-work-day activity started on
+# the 22nd and worked once read
+#
+#     Started 2026-08-22  Due 2026-08-24  Completed -
+#     Overall task: Overdue by 2d
+#
+# when it was in fact on day 1 of 2 and needed nothing approved. Every date here
+# sits in the PREVIOUS Fri-Thu cycle, so every calendar due date below is
+# genuinely in the past - which is exactly the condition that used to produce
+# the wrong badge and must now produce none.
+# --------------------------------------------------------------------------
+def test_report_detail_lumpsum_first_work_day_is_in_progress(
+    flag_on, client, author, pm_header
+):
+    """1 of 2 work days used -> in progress. No approval, and no overdue count,
+    even though the item's calendar deadline has passed."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    res = _post(client, a["header"], project_id=a["project"].id,
+                sub_id=sub["id"], on_date=_d(0))
+
+    t = _detail_row(client, a["header"], res.json()["id"])
+    assert t["overall_is_lumpsum"] is True
+    assert t["overall_target_days"] == 2
+    assert t["overall_days_used"] == 0          # this report is day 1 of 2
+    assert t["overall_lifecycle"] == "IN_PROGRESS"
+    assert t["continuation_approval_status"] is None
+    # The frozen calendar deadline is in the past and still says so on its own
+    # fields; it simply no longer decides a lump-sum row's overall state.
+    assert t["due_date"] < TODAY.isoformat()
+    assert t["started_date"] == _d(0).isoformat()
+
+
+def test_report_detail_lumpsum_last_allowed_day_is_still_within_the_duration(
+    flag_on, client, author, pm_header
+):
+    """2 of 2 work days used -> the last allowed day, still no approval. The
+    three skipped calendar days in between consume nothing."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(4), work_item_id=wid)
+
+    t = _detail_row(client, a["header"], res.json()["id"])
+    assert t["overall_days_used"] == 1          # one work day, not four calendar
+    assert t["overall_target_days"] == 2        # this report is day 2 of 2
+    assert t["overall_lifecycle"] == "DUE_TODAY"
+    assert t["continuation_approval_status"] is None
+
+
+def test_report_detail_lumpsum_beyond_the_allowance_needs_continuation(
+    flag_on, client, author, pm_header
+):
+    """3 of 2 work days used -> duration exceeded, and the row carries the
+    Phase 3 continuation request rather than a calendar overdue count."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+          on_date=_d(2), work_item_id=wid)
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(4), work_item_id=wid)
+
+    t = _detail_row(client, a["header"], res.json()["id"])
+    assert t["overall_days_used"] == 2          # the allowance is spent
+    assert t["overall_lifecycle"] == "OVERDUE"
+    assert t["continuation_approval_status"] == "pending"
+    assert t["continuation_request_id"] is not None
+
+
+def test_report_detail_lumpsum_earlier_days_are_not_pushed_over_by_later_ones(
+    flag_on, client, author, pm_header
+):
+    """A saved row's place in the allowance is decided by the days worked BEFORE
+    it. Continuing the activity again must not retroactively turn day 1 into a
+    duration-exceeded day."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    first = _post(client, a["header"], project_id=a["project"].id,
+                  sub_id=sub["id"], on_date=_d(0))
+    wid = _row(first)["work_item_id"]
+    for day in (_d(2), _d(4)):                  # day 2, then a gated day 3
+        _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+              on_date=day, work_item_id=wid)
+
+    t = _detail_row(client, a["header"], first.json()["id"])
+    assert t["overall_days_used"] == 0
+    assert t["overall_lifecycle"] == "IN_PROGRESS"
+    assert t["continuation_approval_status"] is None
+
+
+def test_report_detail_completed_lumpsum_keeps_the_calendar_verdict(
+    flag_on, client, author, pm_header
+):
+    """Completion is a CALENDAR question for every kind of item (the approved
+    Phase 1 rule): a completed lump-sum row reports the completion lifecycle and
+    no work-day position at all."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    res = _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+                on_date=_d(4), work_item_id=wid, is_completed=True)
+
+    t = _detail_row(client, a["header"], res.json()["id"])
+    assert t["overall_is_lumpsum"] is True
+    assert t["overall_days_used"] is None
+    assert t["overall_completed_on"] == _d(4).isoformat()
+    assert t["overall_lifecycle"] in ("COMPLETED_ON_TIME", "COMPLETED_LATE")
+
+
+def test_report_detail_quantity_task_keeps_the_calendar_lifecycle(
+    flag_on, client, author, pm_header
+):
+    """TASK_WITH_QUANTITY - and every other non-lump-sum row - is untouched: it
+    is not measured in work days and keeps the calendar overdue badge."""
+    a = author()
+    _, sub = _quantity_sub(client, pm_header, period=2)
+    res = client.post(BASE, headers=a["header"], json={
+        "report_date": _d(0).isoformat(), "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [{"project_id": str(a["project"].id), "description": "work",
+                   "sub_activity_id": sub["id"], "pages_count": 10}],
+    })
+    assert res.status_code == 201, res.text
+
+    t = _detail_row(client, a["header"], res.json()["id"])
+    assert t["overall_is_lumpsum"] is False
+    assert t["overall_days_used"] is None
+    assert t["overall_lifecycle"] == "OVERDUE"      # the calendar deadline passed
+    assert t["days_overdue"] > 0
+    assert t["continuation_approval_status"] is None
+
+
+# --------------------------------------------------------------------------
+# employee dashboard - "Benchmark Activities"
+# --------------------------------------------------------------------------
+# The card reads GET /benchmarks/my-alerts -> tasks, whose rows come from
+# activity_master.get_task_status_activities. It used to decide In Progress vs
+# Overdue purely from the frozen calendar due_date, so a 2-work-day lump-sum
+# worked once read "2 Days Overdue" while a work day still remained. Lump-sum
+# rows now carry the same work-day state the Open Task card and the Report
+# Detail badge show; every other TASK_BASED row is untouched.
+def _dashboard_row(db, employee_id, *, today, work_item_id=None):
+    rows = get_task_status_activities(db, employee_ids={employee_id}, today=today)
+    if work_item_id is None:
+        assert len(rows) == 1, rows
+        return rows[0]
+    return next(
+        (r for r in rows if str(r["work_item_id"]) == str(work_item_id)), None
+    )
+
+
+def test_dashboard_lumpsum_with_one_work_day_used_is_not_overdue(
+    flag_on, client, author, pm_header, db
+):
+    """The reported bug: 2 allowed work days, one used, calendar deadline long
+    past - the card must read day 2 of 2, not overdue."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+
+    r = _dashboard_row(db, a["emp"].id, today=_d(6), work_item_id=wid)
+    assert r["due_date"] < _d(6)              # the calendar deadline HAS passed
+    assert r["is_lumpsum"] is True
+    assert (r["days_used"], r["target_days"]) == (1, 2)   # today would be day 2
+    assert r["days_overdue"] == 0             # nothing beyond the allowance
+    assert r["status"] == "pending"
+
+
+def test_dashboard_lumpsum_on_its_last_allowed_work_day(
+    flag_on, client, author, pm_header, db
+):
+    """Day 2 of 2: the allowance still holds, so still not overdue."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+
+    # Evaluated ON the second work day - the day itself is not consumed yet.
+    r = _dashboard_row(db, a["emp"].id, today=_d(1), work_item_id=wid)
+    assert (r["days_used"], r["days_overdue"]) == (1, 0)
+    assert lumpsum_allowance_exhausted(r["days_used"], r["target_days"]) is False
+
+
+def test_dashboard_lumpsum_is_overdue_once_the_allowance_is_spent(
+    flag_on, client, author, pm_header, db
+):
+    """Both allowed work days used and the activity still open -> the allowance
+    is spent (the card's Overdue), and a further work day counts beyond it."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+          on_date=_d(1), work_item_id=wid)
+
+    r = _dashboard_row(db, a["emp"].id, today=_d(6), work_item_id=wid)
+    assert (r["days_used"], r["days_overdue"]) == (2, 0)
+    assert lumpsum_allowance_exhausted(r["days_used"], r["target_days"]) is True
+
+    # A third work day (accepted, pending approval) is one day BEYOND it.
+    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+          on_date=_d(2), work_item_id=wid)
+    r = _dashboard_row(db, a["emp"].id, today=_d(6), work_item_id=wid)
+    assert (r["days_used"], r["days_overdue"]) == (3, 1)
+
+
+def test_dashboard_lumpsum_skipped_calendar_days_consume_nothing(
+    flag_on, client, author, pm_header, db
+):
+    """Four calendar days pass with no entry: days_used - and therefore the
+    card's status - does not move."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+
+    early = _dashboard_row(db, a["emp"].id, today=_d(2), work_item_id=wid)
+    late = _dashboard_row(db, a["emp"].id, today=_d(6), work_item_id=wid)
+    assert early["days_used"] == late["days_used"] == 1
+    assert early["days_overdue"] == late["days_overdue"] == 0
+
+
+def test_dashboard_completed_lumpsum_keeps_its_completed_behaviour(
+    flag_on, client, author, pm_header, db
+):
+    """A completed lump-sum row still reports status "completed" (the card drops
+    it) and is never re-measured in work days."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=2)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    _post(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+          on_date=_d(1), work_item_id=wid, is_completed=True)
+
+    r = _dashboard_row(db, a["emp"].id, today=_d(6), work_item_id=wid)
+    assert r["status"] == "completed"
+    assert r["days_used"] is None
+    assert r["days_overdue"] == 0
+
+
+def test_dashboard_quantity_task_keeps_the_calendar_status(
+    flag_on, client, author, pm_header, db
+):
+    """TASK_WITH_QUANTITY is not a lump-sum row: it is still measured against
+    its due_date exactly as before."""
+    a = author()
+    _, sub = _quantity_sub(client, pm_header, period=2)
+    res = client.post(BASE, headers=a["header"], json={
+        "report_date": _d(0).isoformat(), "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [{"project_id": str(a["project"].id), "description": "work",
+                   "sub_activity_id": sub["id"], "pages_count": 10}],
+    })
+    assert res.status_code == 201, res.text
+
+    r = _dashboard_row(db, a["emp"].id, today=_d(6))
+    assert r["is_lumpsum"] is False
+    assert r["days_used"] is None
+    assert r["days_overdue"] == (_d(6) - r["due_date"]).days   # the calendar rule
+    assert r["days_overdue"] > 0

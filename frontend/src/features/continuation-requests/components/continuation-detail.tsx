@@ -3,12 +3,25 @@
 import type { ReactNode } from "react";
 
 import { ErrorState } from "@/components/feedback/error-state";
+import { BackButton } from "@/components/shell/back-button";
 import { PageHeader } from "@/components/shell/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { useContinuationRequest } from "../hooks";
 import { ContinuationStatusBadge } from "./continuation-status-badge";
+
+/**
+ * `fallback` (not `href`) so a reviewer who opened this from the queue returns to
+ * the queue exactly as they left it - the list keeps its pending/all tab and
+ * filters in the URL, and router.back() restores that URL. /lump-sum-activity is
+ * used only when there is no in-app history to return to.
+ */
+function QueueBackButton() {
+  return (
+    <BackButton fallback="/lump-sum-activity" label="Back to Lump-sum Activity Requests" />
+  );
+}
 
 function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -25,6 +38,7 @@ export function ContinuationDetail({ id }: { id: string }) {
   if (query.isLoading) {
     return (
       <>
+        <QueueBackButton />
         <PageHeader title="Lump-sum Activity Request" />
         <Skeleton className="h-64 w-full" />
       </>
@@ -33,6 +47,7 @@ export function ContinuationDetail({ id }: { id: string }) {
   if (query.isError || !query.data) {
     return (
       <>
+        <QueueBackButton />
         <PageHeader title="Lump-sum Activity Request" />
         <ErrorState title="Could not load this request" />
       </>
@@ -42,6 +57,7 @@ export function ContinuationDetail({ id }: { id: string }) {
   const req = query.data;
   return (
     <>
+      <QueueBackButton />
       <PageHeader
         title="Lump-sum Activity Request"
         subtitle={`${req.employee_name} - ${req.project_code || req.project_name}`}
