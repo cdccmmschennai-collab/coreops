@@ -224,6 +224,22 @@ def get_or_create_pending_for_continuation(
     calling notify_new_pending_request for any (request, True) this
     returns — mirroring how leave/service.py always commits the main entity
     first and calls its notify_* helpers afterward.
+
+    The speculative insert below is wrapped in a SAVEPOINT (db.begin_nested())
+    rather than relying on a plain db.rollback(). This function is called
+    mid-transaction — potentially after the report row itself, prior periods,
+    and prior work items from earlier tasks in the same multi-task/multi-period
+    report save have already been db.add()-ed and db.flush()-ed but not yet
+    committed (create_work_report/update_work_report each have exactly ONE
+    terminal db.commit(), at the very end). A plain db.rollback() operates on
+    the WHOLE transaction, not just this statement, so losing the race here
+    would silently discard everything already flushed earlier in the SAME
+    report save while the caller's loop keeps referencing those now-reverted
+    ORM objects. This does NOT mirror create_continuation_request's own
+    IntegrityError handling — that function is only ever called standalone,
+    with nothing else pending in its session, so a plain rollback there is
+    safe. A SAVEPOINT confines the rollback-on-conflict to just this insert
+    attempt.
     """
     existing = _pending_for_work_item(db, item.id)
     if existing is not None:
@@ -239,16 +255,18 @@ def get_or_create_pending_for_continuation(
         continuation_date=continuation_date,
         status=ContinuationRequestStatus.pending.value,
     )
-    db.add(req)
     try:
-        db.flush()
+        with db.begin_nested():
+            db.add(req)
+            db.flush()
     except IntegrityError:
         # Lost the race to a concurrent duplicate create/save — the partial
-        # unique index rejected the second pending row within this same
-        # transaction. Fall back to the winner (mirrors
-        # create_continuation_request's own IntegrityError handling, but at
-        # flush time since this path never commits on its own).
-        db.rollback()
+        # unique index rejected the second pending row. Exiting the `with`
+        # block on this exception automatically rolls back only the nested
+        # SAVEPOINT (this insert attempt), never anything already flushed
+        # earlier in the enclosing report-save transaction (the report row,
+        # prior periods, prior work items from earlier tasks in the same
+        # multi-task/multi-period save). Fall back to the winner.
         existing = _pending_for_work_item(db, item.id)
         if existing is None:
             raise

@@ -204,6 +204,116 @@ def test_pending_continuation_lets_further_days_through(flag_on, client, db, aut
     assert db.query(ContinuationRequest).filter_by(work_item_id=wi).count() == 1
 
 
+def test_lost_race_uses_savepoint_and_does_not_corrupt_report_save(
+    flag_on, client, db, author, pm_header, monkeypatch,
+):
+    """Forces get_or_create_pending_for_continuation's IntegrityError branch
+    for real: a genuine second Postgres session commits a competing pending
+    ContinuationRequest for the SAME work item between this function's own
+    existence-check and its own insert (a real lost race, not a pre-existing
+    row the existence-check would have found and short-circuited on, per
+    test_pending_continuation_lets_further_days_through above never exercising
+    this branch at all).
+
+    This report save has TWO tasks: task A (a lump-sum item still well within
+    its allowed duration - never gated, its WorkItem row flushes normally
+    first) and task B (the overdue lump-sum item that loses the race). Before
+    the fix, get_or_create_pending_for_continuation's plain db.rollback() on
+    the IntegrityError would discard the WHOLE transaction so far - including
+    task A's already-flushed WorkItem and the report/period rows - even
+    though the save ultimately "succeeds". This test proves task A's data and
+    the report itself survive intact, and exactly one ContinuationRequest
+    (the concurrent winner) exists for task B's work item afterward."""
+    import uuid as uuid_mod
+
+    from app.core.database import SessionLocal
+    from app.modules.continuation_requests import service as cr_service
+    from app.modules.continuation_requests.models import ContinuationRequestStatus
+    from app.modules.work_reports.models import WorkItem
+
+    a = author()
+    _, sub_a = _lumpsum_sub(client, pm_header, name="LumpA", period=6)  # within duration
+    _, sub_b = _lumpsum_sub(client, pm_header, name="LumpB", period=1)  # overdue
+
+    # Both work items start on the same day - a single employee can only have
+    # one report per date, so start them together in one report with two tasks.
+    started = client.post(BASE, headers=a["header"], json={
+        "report_date": START.isoformat(), "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "work A", "sub_activity_id": sub_a["id"]},
+            {"project_id": str(a["project"].id), "description": "work B", "sub_activity_id": sub_b["id"]},
+        ],
+    })
+    assert started.status_code == 201, started.text
+    started_tasks = {t["sub_activity_id"]: t["work_item_id"] for t in started.json()["tasks"]}
+    wi_a = started_tasks[sub_a["id"]]
+    wi_b = started_tasks[sub_b["id"]]
+    cont_day = TODAY
+
+    real_pending = cr_service._pending_for_work_item
+    raced = {"done": False}
+
+    def fake_pending(db_arg, work_item_id):
+        if not raced["done"] and str(work_item_id) == wi_b:
+            raced["done"] = True
+            # Simulate a concurrent request that wins the race: on a totally
+            # separate session/connection, insert and COMMIT a competing
+            # pending row for the same work item - invisible to this check
+            # (exactly as a genuine race would be), but which WILL conflict
+            # when this session's own flush attempts its insert below.
+            other = SessionLocal()
+            try:
+                item = other.get(WorkItem, uuid_mod.UUID(wi_b))
+                competing = ContinuationRequest(
+                    employee_id=item.employee_id, work_item_id=item.id,
+                    project_id=item.project_id, sub_activity_id=item.sub_activity_id,
+                    original_report_date=item.started_on,
+                    allowed_duration_days=item.target_days, due_date=item.due_date,
+                    continuation_date=cont_day, status=ContinuationRequestStatus.pending.value,
+                )
+                other.add(competing)
+                other.commit()
+            finally:
+                other.close()
+            return None
+        return real_pending(db_arg, work_item_id)
+
+    monkeypatch.setattr(cr_service, "_pending_for_work_item", fake_pending)
+
+    res = client.post(BASE, headers=a["header"], json={
+        "report_date": cont_day.isoformat(), "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "work A",
+             "sub_activity_id": sub_a["id"], "work_item_id": wi_a},
+            {"project_id": str(a["project"].id), "description": "work B",
+             "sub_activity_id": sub_b["id"], "work_item_id": wi_b},
+        ],
+    })
+    assert res.status_code == 201, res.text
+    body = res.json()
+    task_work_items = {t["work_item_id"] for t in body["tasks"]}
+    assert task_work_items == {wi_a, wi_b}
+
+    # The report is genuinely persisted and retrievable - not corrupted by a
+    # whole-transaction rollback triggered deep inside task B's processing.
+    fetched = client.get(f"{BASE}/{body['id']}", headers=a["header"])
+    assert fetched.status_code == 200, fetched.text
+    fetched_work_items = {t["work_item_id"] for t in fetched.json()["tasks"]}
+    assert fetched_work_items == {wi_a, wi_b}
+
+    # Exactly one ContinuationRequest exists for the raced work item - the
+    # concurrent winner, reused (no duplicate, no crash).
+    reqs = db.query(ContinuationRequest).filter_by(work_item_id=wi_b).all()
+    assert len(reqs) == 1
+    assert reqs[0].status == "pending"
+
+    # Task A's own work item is untouched by task B's race - no leftover
+    # ContinuationRequest was ever created for it.
+    assert db.query(ContinuationRequest).filter_by(work_item_id=wi_a).count() == 0
+
+
 def test_update_report_path_auto_requests_continuation(flag_on, client, db, author, pm_header):
     """The auto-request gate must fire through the report-UPDATE path too
     (PATCH /work-reports/{id}), not just through create_work_report — this
