@@ -10,7 +10,34 @@ export type WorkReportPeriod = Omit<
 export type WorkReport = Omit<
   components["schemas"]["WorkReportOut"],
   "tasks" | "periods"
-> & { tasks: WorkReportTask[]; periods: WorkReportPeriod[] };
+> & {
+  tasks: WorkReportTask[];
+  periods: WorkReportPeriod[];
+  /** Continuations rejected on this report - detail read only, see below. */
+  rejected_continuations?: RejectedContinuation[];
+};
+/**
+ * A lump-sum continuation the Project Head rejected on this report (backend
+ * RejectedContinuationOut, migration 0077). The rows entered under it were
+ * withdrawn from the activity list - they were never accepted work - so this
+ * surviving request record is the only thing that keeps the employee's history
+ * of "I asked to continue this, and it was refused" from disappearing.
+ *
+ * Declared here rather than off openapi.json for the same reason as the row
+ * fields below, and optional so an older backend simply serves none.
+ */
+export interface RejectedContinuation {
+  request_id: string;
+  project_id: string;
+  project_code?: string | null;
+  activity_name?: string | null;
+  sub_activity_name?: string | null;
+  continuation_date: string;
+  allowed_duration_days: number;
+  reviewer_name?: string | null;
+  decision_comment?: string | null;
+  decided_at?: string | null;
+}
 export type WorkReportStatus = components["schemas"]["WorkReportStatus"];
 // Adds the virtual "requested" value used ONLY by the list Status filter: a
 // submitted report with a pending edit request. It is not a persisted status —
@@ -31,10 +58,14 @@ export type WorkReportPage = Omit<
 // The status is the linked request's CURRENT status, resolved server-side on
 // every read:
 //   null       - this row needed no approval;
-//   "pending"  - entered and submitted, but not accepted work yet;
+//   "pending"  - entered and submitted, but not accepted work yet. The REPORT is
+//                submitted normally; only marking the activity complete waits;
 //   "approved" - ordinary recorded work.
-// "rejected" never reaches the client: rejecting withdraws these rows from the
-// report.
+// "rejected" does not reach the client on a row: rejecting withdraws these rows
+// from the report, and what survives is the report's `rejected_continuations`
+// record above. The value is still in the union because the editor derives a
+// not-yet-saved row's state from the open task it continues, which can be a
+// rejected one.
 //
 // `overall_is_lumpsum` / `overall_target_days` / `overall_days_used` are served
 // alongside them (same backend schema, same reason for being declared here) and
@@ -47,7 +78,7 @@ export type WorkReportPage = Omit<
 // so an older backend simply falls back to the calendar presentation.
 export type WorkReportTask = components["schemas"]["WorkReportTaskOut"] & {
   continuation_request_id?: string | null;
-  continuation_approval_status?: "pending" | "approved" | null;
+  continuation_approval_status?: "pending" | "approved" | "rejected" | null;
   overall_is_lumpsum?: boolean;
   overall_target_days?: number | null;
   overall_days_used?: number | null;

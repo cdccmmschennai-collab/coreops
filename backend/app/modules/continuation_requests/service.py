@@ -92,7 +92,12 @@ def affected_report_id(db: Session, req: ContinuationRequest) -> uuid.UUID | Non
     explicit endpoint and decided before the employee reported that day has no
     row, and so no report to send them to.
 
-    Must be read BEFORE a rejection withdraws those rows."""
+    Once a decision has stamped req.affected_report_id (migration 0077) that
+    stored value wins - after a rejection the rows it is derived from are gone,
+    and recomputing would answer None. Before a decision it is computed live, so
+    the stamp written at decision time is always this same answer."""
+    if req.affected_report_id is not None:
+        return req.affected_report_id
     rows = db.execute(
         select(DailyWorkReport.id, DailyWorkReport.report_date)
         .join(WorkReportTask, WorkReportTask.report_id == DailyWorkReport.id)
@@ -111,8 +116,9 @@ def _employee_target_url(db: Session, req: ContinuationRequest) -> str:
 
     The employee's question is "what happened to my work?", so the destination is
     the REPORT the decision landed on - approved work is labelled as approved
-    there, and rejected work is gone from it with the withdrawal note explaining
-    why. The reviewer's request page (REVIEW_URL/{id}) answers a different
+    there, and rejected work is withdrawn from the activity list but still listed
+    on the report as a "Continuation rejected" record carrying the reviewer and
+    their note. The reviewer's request page (REVIEW_URL/{id}) answers a different
     question (the full request record) and stays the reviewer's destination; it
     is only used here as a fallback when no report can be resolved."""
     report_id = affected_report_id(db, req)
@@ -214,6 +220,41 @@ def latest_requests_by_work_item(
         latest[r.work_item_id] = r  # later rows overwrite earlier ones
     _attach_names(db, list(latest.values()))
     return latest
+
+
+def rejected_requests_by_report(
+    db: Session, report_ids,
+) -> dict[uuid.UUID, list[ContinuationRequest]]:
+    """The REJECTED continuation requests each report carries, display names
+    attached, grouped by report.
+
+    Rejection withdraws the rows entered under the request, so the request record
+    is all that is left of it - and it is what the report detail shows the
+    employee so a refused continuation does not just vanish from their history.
+    Keyed on affected_report_id, stamped at decision time (migration 0077)
+    precisely because the rows it was derived from no longer exist.
+
+    One query for the whole page (plus _attach_names' batch), and it lives here
+    rather than in work_reports so every read of continuation state goes through
+    this module."""
+    ids = list(report_ids)
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(ContinuationRequest)
+        .where(
+            ContinuationRequest.affected_report_id.in_(ids),
+            ContinuationRequest.status == ContinuationRequestStatus.rejected.value,
+        )
+        .order_by(ContinuationRequest.decided_at)
+    ).scalars().all()
+    if not rows:
+        return {}
+    _attach_names(db, list(rows))
+    out: dict[uuid.UUID, list[ContinuationRequest]] = {}
+    for req in rows:
+        out.setdefault(req.affected_report_id, []).append(req)
+    return out
 
 
 def _pending_for_work_item(db: Session, work_item_id: uuid.UUID) -> ContinuationRequest | None:
@@ -549,6 +590,7 @@ def approve_continuation_request(
     req.reviewer_id = reviewer.id if reviewer else None
     req.decision_comment = comment
     req.decided_at = datetime.now(timezone.utc)
+    req.affected_report_id = affected_report_id(db, req)
     db.add(req)
     db.commit()
     db.refresh(req)
@@ -577,6 +619,9 @@ def reject_continuation_request(
     req.reviewer_id = reviewer.id if reviewer else None
     req.decision_comment = comment
     req.decided_at = datetime.now(timezone.utc)
+    # Stamped BEFORE the withdrawal below deletes the rows it is derived from -
+    # this is what keeps the rejection visible on that report afterwards.
+    req.affected_report_id = affected_report_id(db, req)
     db.add(req)
 
     # A rejected continuation is not accepted work, so it must not stay on the

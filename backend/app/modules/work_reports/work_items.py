@@ -280,24 +280,31 @@ def has_pending_continuation(db: Session, *, work_item_id: uuid.UUID) -> bool:
     return pending_request_for_work_item(db, work_item_id) is not None
 
 
+PENDING_CONTINUATION_MESSAGE = (
+    "This activity's continuation is awaiting Project Head approval. "
+    "You can mark it complete once the continuation is approved."
+)
+
+
 def _guard_complete_here(db: Session, *, item: WorkItem, report_date: date) -> None:
     """Shared rule for both completion paths: this report may only be the one that
     completes the task if it isn't already completed on a different report and no
     later continuation exists (which would make completing here a backdate).
 
-    An undecided continuation also blocks completion. Continuing past the allowed
-    duration is work the Project Head has not accepted yet, and completing the
-    activity on the strength of it would turn a pending request into a finished
-    activity - exactly the "pending is treated as approved" confusion this phase
-    removes. It also keeps rejection simple: withdrawing the rejected rows can
-    never have to un-complete an activity that was closed using them."""
-    if has_pending_continuation(db, work_item_id=item.id):
-        raise AppError(
-            "validation_error",
-            "This activity's continuation is awaiting Project Head approval. "
-            "You can mark it complete once the continuation is approved.",
-            422,
-        )
+    An undecided continuation deliberately does NOT live here. It is a rule about
+    ONE ACTIVITY ("this activity can't be marked complete yet"), not about the
+    report ("this report can't be submitted"), and the two call sites need
+    opposite handling of it:
+
+      * _apply_completion (report save) SKIPS the completion and lets the report
+        submit - raising there aborted the whole multi-activity save, which is
+        the bug this correction fixes;
+      * complete_via_endpoint (an explicit, single-purpose "mark complete"
+        request) raises, because refusing the one action the caller asked for is
+        the honest answer.
+
+    Both consult has_pending_continuation directly, so "is this item's
+    continuation undecided?" still has exactly one answer."""
     if item.completed_on is not None and item.completed_on != report_date:
         raise AppError(
             "validation_error",
@@ -532,8 +539,19 @@ def _apply_completion(
     with no later continuation (see _guard_complete_here) -- an old report must
     never backdate a task finished on a later one. Completing is one-way after
     submission; correcting is allowed only while the report is still an editable
-    draft AND it was this very report that completed the item (§9/§10)."""
+    draft AND it was this very report that completed the item (§9/§10).
+
+    A tick on an activity whose continuation is still undecided is IGNORED, not
+    rejected: the day's work is saved, the report submits, and the activity stays
+    open until the Project Head decides. Refusing the whole save here is what
+    used to make one pending lump-sum continuation block an entire multi-activity
+    report. The row still says what happened - it is stamped with the request, so
+    the editor and the detail page both label it "Continuation requested -
+    awaiting Project Head approval" - and the UI disables the checkbox for the
+    same reason, so this is a backstop, not the primary signal."""
     if is_completed:
+        if has_pending_continuation(db, work_item_id=item.id):
+            return
         _guard_complete_here(db, item=item, report_date=report.report_date)
         if item.completed_on is None:
             # completed_on = this report's date (§9). Guaranteed >= started_on by
@@ -624,6 +642,11 @@ def complete_via_endpoint(
       * reopening is allowed only on the report that actually completed the task
         and only while that report is still editable (one-way after submit).
 
+    Unlike the report-save path, an undecided continuation RAISES here: this
+    endpoint's whole payload is "mark this activity complete", so there is
+    nothing else to save and silently doing nothing would be a lie. Nothing about
+    the report's own submitted state is touched either way.
+
     The caller mirrors just THIS row from the item afterwards -- it must NOT
     propagate is_completed to sibling rows (row-level completion is per report)."""
     if is_completed:
@@ -643,6 +666,8 @@ def complete_via_endpoint(
                 "report instead.",
                 422,
             )
+        if has_pending_continuation(db, work_item_id=item.id):
+            raise AppError("validation_error", PENDING_CONTINUATION_MESSAGE, 422)
         _guard_complete_here(db, item=item, report_date=report_date)
         item.completed_on = report_date
         return

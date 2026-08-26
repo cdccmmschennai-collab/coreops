@@ -200,6 +200,47 @@ export function overallTaskBadge(row: OverallTaskRow): OverallTaskBadge | null {
   };
 }
 
+/**
+ * Continuation-approval state of ONE editor row, and the single thing it
+ * blocks.
+ *
+ * A row can learn its state from two places and they must agree: a SAVED row
+ * carries `continuation_approval_status` from the API, while a row the employee
+ * has just attached to an open work item has nothing saved yet - its state is
+ * whatever the open item says will happen when the report is saved. Deriving it
+ * once, here, is what keeps the editor from inventing a second rule.
+ *
+ * `null` means no approval is involved: not a lump-sum activity, or one still
+ * inside its allowed work days.
+ */
+export type ContinuationStatus = "pending" | "approved" | "rejected" | null;
+
+export function continuationRowStatus(
+  savedStatus: ContinuationStatus | undefined,
+  openTask?: OpenTask | null,
+): ContinuationStatus {
+  if (savedStatus) return savedStatus;
+  if (!openTask || !isLumpsumTask(openTask)) return null;
+  if (!allowanceExhausted(usedWorkDays(openTask), openTask.target_days)) return null;
+  // Past the allowance with no request yet: saving this row raises one, so the
+  // row is about to be pending and should say so before the employee submits.
+  return (openTask.continuation_status as ContinuationStatus) ?? "pending";
+}
+
+/**
+ * Whether this row's activity may be marked fully completed.
+ *
+ * A pending continuation blocks exactly ONE thing - closing the activity on work
+ * the Project Head has not accepted yet. It deliberately does NOT block saving
+ * or submitting the report: the day's work is recorded, the report is submitted,
+ * and only the completion waits for the decision. Mirrors the backend
+ * (work_items._apply_completion, which ignores the tick rather than refusing the
+ * save).
+ */
+export function completionBlockedByContinuation(status: ContinuationStatus): boolean {
+  return status === "pending";
+}
+
 /** The parenthetical in the inline "You have an open task for this activity"
  * prompt, which offers Continue-existing vs Start-new on a manual pick. Same
  * split: a calendar deadline only where a calendar deadline still decides

@@ -393,6 +393,31 @@ class TaskCompletionUpdate(BaseModel):
     is_completed: bool
 
 
+class RejectedContinuationOut(BaseModel):
+    """A lump-sum continuation the Project Head REJECTED on this report.
+
+    Its task rows were withdrawn (they were never accepted work, so they must not
+    sit in the activity list looking accepted), but the request record survives
+    and is what the employee reads to see WHAT they asked to continue, that it
+    was refused, by WHOM and WHY. Sourced entirely from continuation_requests -
+    there is no second status anywhere.
+
+    Detail view only; the report list does not carry it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: uuid.UUID
+    project_id: uuid.UUID
+    project_code: str | None = None
+    activity_name: str | None = None
+    sub_activity_name: str | None = None
+    continuation_date: date
+    allowed_duration_days: int
+    reviewer_name: str | None = None
+    decision_comment: str | None = None
+    decided_at: datetime | None = None
+
+
 class WorkReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -439,6 +464,9 @@ class WorkReportOut(BaseModel):
     # just the led activities' rows — a partial view of a mixed report. Set in
     # service (_restrict_to_led_rows); always False for PM/Head/own reports.
     scoped_to_led_activities: bool = False
+    # Lump-sum continuations rejected on this report. Populated on the detail
+    # read only (empty on the list) - see RejectedContinuationOut.
+    rejected_continuations: list[RejectedContinuationOut] = []
     created_at: datetime
 
 

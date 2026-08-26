@@ -182,14 +182,58 @@ def _report_in_projects(
     ).scalar_one_or_none() is not None
 
 
+def _attach_rejected_continuations(
+    db: Session, reports: list[DailyWorkReport]
+) -> None:
+    """Attach the lump-sum continuations a Project Head REJECTED on each report.
+
+    Rejection withdraws the rows entered under the request, so without this the
+    employee's own history would simply lose the entry with no explanation of
+    what happened to it. The record is read straight off continuation_requests
+    (status + reviewer + note), the one source of truth for continuation
+    approval — nothing about it is stored on the report or its rows.
+
+    One query for the whole page, keyed on the report the decision was stamped
+    with (migration 0077)."""
+    by_report = continuation_requests_service.rejected_requests_by_report(
+        db, [r.id for r in reports]
+    )
+    if not by_report:
+        return
+    for r in reports:
+        r.rejected_continuations = [
+            {
+                "request_id": req.id,
+                "project_id": req.project_id,
+                "project_code": req.project_code,
+                "activity_name": req.activity_name,
+                "sub_activity_name": req.sub_activity_name,
+                "continuation_date": req.continuation_date,
+                "allowed_duration_days": req.allowed_duration_days,
+                "reviewer_name": req.reviewer_name,
+                "decision_comment": req.decision_comment,
+                "decided_at": req.decided_at,
+            }
+            for req in by_report.get(r.id, [])
+        ]
+
+
 def _decorate(
-    db: Session, actor: User, reports: list[DailyWorkReport]
+    db: Session,
+    actor: User,
+    reports: list[DailyWorkReport],
+    *,
+    with_rejected_continuations: bool = False,
 ) -> list[DailyWorkReport]:
     """Attach tasks and the per-actor `can_review` flag to each report.
 
     can_review = the Project Head of one of the report's projects may grant edit
     access on it (but never on one's own report — authors request edits, they
     don't grant them). The PM does not grant edit access, so this is Head-only.
+
+    `with_rejected_continuations` is the detail read only: the withdrawn-entry
+    record belongs on the report page, and the list would pay for a query whose
+    result it never renders.
     """
     _attach_tasks(db, reports)
     # Resolve author display names server-side so scoped viewers (project Heads)
@@ -207,6 +251,9 @@ def _decorate(
     reviewable = authz.reviewable_project_ids(db, actor)
     for r in reports:
         r.scoped_to_led_activities = False
+        r.rejected_continuations = []
+    if with_rejected_continuations:
+        _attach_rejected_continuations(db, reports)
     # Activity-Lead row scoping: a foreign report visible only through a Lead
     # assignment is trimmed to its led rows BEFORE the flags below, so
     # can_review (Head-only, and False for such reports anyway) never reads
@@ -765,6 +812,12 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
             # Active completion control only when the task is open, this report is
             # editable, and this is the latest linked entry (no later report to
             # backdate over). Earlier/older linked rows get a read-only view.
+            #
+            # A row whose own continuation is still PENDING also gets a read-only
+            # view: closing an activity on work the Project Head has not accepted
+            # is the one thing a pending continuation blocks, and the completion
+            # endpoint refuses it, so the control must not be offered. This does
+            # NOT affect the report - it is submitted either way.
             is_latest = (
                 report is not None
                 and latest_entry_date.get(item.id) == report.report_date
@@ -774,6 +827,7 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
                 and report is not None
                 and report.status in _EDITABLE
                 and is_latest
+                and row.continuation_approval_status != "pending"
             )
         by_report[row.report_id].append(row)
     for report in reports:
@@ -1206,7 +1260,7 @@ def _fetch(db: Session, report_id: uuid.UUID) -> DailyWorkReport:
 def get_work_report(db: Session, actor: User, report_id: uuid.UUID) -> DailyWorkReport:
     report = _fetch(db, report_id)
     _assert_can_read(db, actor, report)
-    return _decorate(db, actor, [report])[0]
+    return _decorate(db, actor, [report], with_rejected_continuations=True)[0]
 
 
 def get_open_tasks(db: Session, actor: User, report_date: date) -> list[dict]:

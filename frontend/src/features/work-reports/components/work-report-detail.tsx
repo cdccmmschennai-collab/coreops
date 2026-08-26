@@ -729,6 +729,51 @@ export function WorkReportDetail({ id }: { id: string }) {
               {activityRequests.map((r) => (
                 <RequestedActivityCard key={r.id} request={r} />
               ))}
+
+              {/* Lump-sum continuations the Project Head REJECTED on this
+                  report. Their task rows were withdrawn (unaccepted work must
+                  not sit in the list above looking accepted), so this is what
+                  keeps the request itself - what was asked for, by when, who
+                  refused it and why - in the employee's own history instead of
+                  silently vanishing. It is a record, never a report activity:
+                  no minutes, no counts, no benchmark. */}
+              {(report.rejected_continuations ?? []).map((c) => (
+                <div
+                  key={c.request_id}
+                  className="rounded-lg border border-dashed border-border p-4"
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium leading-snug">
+                      {c.activity_name ?? "—"} / {c.sub_activity_name ?? "—"}
+                    </p>
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-xs text-muted-foreground">
+                      <span>{c.project_code ?? "—"}</span>
+                      <span aria-hidden>·</span>
+                      <span>
+                        continued on {c.continuation_date} · allowed{" "}
+                        {c.allowed_duration_days}{" "}
+                        {c.allowed_duration_days === 1 ? "work day" : "work days"}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="mt-3">
+                    <ContinuationRowStatus
+                      task={{ continuation_approval_status: "rejected" }}
+                      note={
+                        c.decision_comment
+                          ? `Reason: ${c.decision_comment}`
+                          : null
+                      }
+                    />
+                  </div>
+                  {c.reviewer_name && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Reviewed by {c.reviewer_name}
+                      {c.decided_at ? ` on ${c.decided_at.slice(0, 10)}` : ""}.
+                    </p>
+                  )}
+                </div>
+              ))}
             </CardContent>
           </Card>
 

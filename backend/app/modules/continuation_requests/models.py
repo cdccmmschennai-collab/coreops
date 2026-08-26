@@ -85,6 +85,17 @@ class ContinuationRequest(UUIDMixin, Base):
     )
     decision_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The report the decision landed on, stamped at decision time from the rows
+    # entered under this request while they still exist (migration 0077). NOT a
+    # second approval state - `status` above stays the only one - just the
+    # WHERE, so a REJECTION can still be shown on that report after it has
+    # withdrawn the rows, and the employee's notification has a destination that
+    # no longer depends on a query the rejection itself empties. NULL when
+    # nothing was ever entered under the request.
+    affected_report_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("daily_work_reports.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -102,6 +113,7 @@ class ContinuationRequest(UUIDMixin, Base):
         Index("continuation_requests_work_item_idx", "work_item_id"),
         Index("continuation_requests_project_idx", "project_id"),
         Index("continuation_requests_status_idx", "status"),
+        Index("continuation_requests_affected_report_idx", "affected_report_id"),
         # One PENDING request per WorkItem - the DB-level guard for "no
         # duplicate pending continuation requests" (service.py pre-checks the
         # same predicate for a clean error message; this is the authoritative

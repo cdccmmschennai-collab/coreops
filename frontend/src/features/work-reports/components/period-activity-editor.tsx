@@ -54,7 +54,11 @@ import {
   resolveExceptionCode,
 } from "../benchmark-exception";
 import { scaledTarget } from "../benchmark-target";
-import { openTaskInlineSummary } from "../open-task-state";
+import {
+  completionBlockedByContinuation,
+  continuationRowStatus,
+  openTaskInlineSummary,
+} from "../open-task-state";
 import {
   COUNT_FIELD_OPTIONS,
   LUMPSUM_STAGED_COUNT,
@@ -441,10 +445,25 @@ export function PeriodActivityEditor({
         // A manual sub-activity pick that matches an open work item ->
         // offer an explicit Continue existing / Start a new task choice
         // (unless already linked or the user chose Start-new for this row).
-        const rowOpenMatch =
-          continuationEnabled && !rowWorkItemId && selectedProjectId && rowSubId
+        const rowOpenItem =
+          continuationEnabled && selectedProjectId && rowSubId
             ? openBySubProject.get(`${selectedProjectId}|${rowSubId}`)
             : undefined;
+        const rowOpenMatch = !rowWorkItemId ? rowOpenItem : undefined;
+        // One derivation of this row's continuation state, from the saved status
+        // when there is one and from the open item it continues when there is
+        // not (a row just attached in this editor has nothing saved yet). It
+        // gates the completion checkbox below and nothing else - a pending
+        // continuation never blocks saving or submitting the report.
+        const rowContinuationStatus = continuationRowStatus(
+          (watchedTasks?.[index]?.continuation_approval_status ?? null) as
+            | "pending"
+            | "approved"
+            | "rejected"
+            | null,
+          isContinuation ? rowOpenItem : undefined,
+        );
+        const completionOnHold = completionBlockedByContinuation(rowContinuationStatus);
 
         return (
           <div
@@ -484,11 +503,7 @@ export function PeriodActivityEditor({
                       it is still awaiting the Project Head, so re-opening the
                       report never presents pending work as accepted. */}
                   <ContinuationRowStatus
-                    task={{
-                      continuation_approval_status:
-                        (watchedTasks?.[index]?.continuation_approval_status ??
-                          null) as "pending" | "approved" | null,
-                    }}
+                    task={{ continuation_approval_status: rowContinuationStatus }}
                     compact
                   />
                 </span>
@@ -1179,7 +1194,7 @@ export function PeriodActivityEditor({
                     name={`tasks.${index}.is_completed`}
                     render={({ field: f }) => (
                       <FormItem className="mt-3">
-                        {!f.value && (
+                        {!f.value && !completionOnHold && (
                           <p className="mb-2 text-xs text-muted-foreground">
                             Leave unchecked if unfinished; the task will
                             continue in your next report.
@@ -1188,18 +1203,37 @@ export function PeriodActivityEditor({
                         <label className="flex items-center gap-2 text-sm">
                           <FormControl>
                             <Checkbox
-                              checked={f.value}
+                              checked={completionOnHold ? false : f.value}
+                              disabled={completionOnHold}
                               onChange={(e) => f.onChange(e.target.checked)}
                             />
                           </FormControl>
-                          <span className="font-medium text-foreground">
+                          <span
+                            className={
+                              completionOnHold
+                                ? "font-medium text-muted-foreground"
+                                : "font-medium text-foreground"
+                            }
+                          >
                             Mark task fully completed
                           </span>
                         </label>
-                        {f.value && (
-                          <p className="mt-2 text-xs font-medium text-foreground">
-                            Task completed - it will no longer carry forward.
+                        {/* The ONE thing a pending continuation holds up. The
+                            report itself submits normally - saying so here is
+                            what stops "awaiting approval" from reading as
+                            "you cannot submit". */}
+                        {completionOnHold ? (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            You can mark this activity complete once the Project
+                            Head approves the continuation. Your report can be
+                            submitted as usual meanwhile.
                           </p>
+                        ) : (
+                          f.value && (
+                            <p className="mt-2 text-xs font-medium text-foreground">
+                              Task completed - it will no longer carry forward.
+                            </p>
+                          )
                         )}
                         <FormMessage />
                       </FormItem>

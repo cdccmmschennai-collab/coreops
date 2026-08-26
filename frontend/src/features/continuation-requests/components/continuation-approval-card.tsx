@@ -16,7 +16,7 @@ export function ContinuationApprovalCard({ task }: Props) {
     return (
       <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm">
         <p className="font-medium text-success">
-          Continuation approved — you can continue this activity.
+          Continuation approved - you can continue this activity.
         </p>
       </div>
     );
@@ -48,6 +48,10 @@ export function ContinuationApprovalCard({ task }: Props) {
           marked complete meanwhile. If it is rejected, those entries are removed
           from their reports.
         </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          You can still submit your report as usual - only this activity is
+          waiting.
+        </p>
         <div className="mt-1">
           <ContinuationStatusBadge status="pending" />
         </div>
@@ -60,7 +64,8 @@ export function ContinuationApprovalCard({ task }: Props) {
       <p className="text-xs text-muted-foreground">
         This activity&apos;s allowed duration ({task.target_days}{" "}
         {task.target_days === 1 ? "day" : "days"}) has passed. Continuing it in
-        today&apos;s report will be sent to your Project Head for approval.
+        today&apos;s report will be sent to your Project Head for approval - you
+        can still submit the report as usual.
       </p>
     </div>
   );

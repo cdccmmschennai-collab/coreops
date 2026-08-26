@@ -299,19 +299,34 @@ def test_pending_continuation_cannot_complete_the_activity(client, team, db):
     assert db.get(WorkItem, _uuid.UUID(wid)).completed_on is None
 
 
-def test_pending_continuation_cannot_be_completed_in_the_same_save(client, team, db):
-    """The same rule through the report form's completion checkbox, so there is
-    no second door into "completed on unapproved work"."""
+def test_pending_continuation_ignores_the_completion_tick_but_saves_the_report(
+    client, team, db
+):
+    """The same rule through the report form's completion checkbox - but the
+    checkbox is a rule about ONE ACTIVITY, never about the report.
+
+    Refusing the whole save (the old behaviour) meant one pending lump-sum
+    continuation could block an entire multi-activity report, and rolled back the
+    request that would have told the Project Head about it. The tick is ignored
+    instead: the day's work is saved, the report is created, the activity stays
+    open, and the request is raised."""
+    import uuid as _uuid
+
     a, pm = team["author"], team["pm"]
     _, sub = _lumpsum_sub(client, pm, period=1)
     wid = _start(client, a["header"], project_id=a["project"].id,
                  sub_id=sub["id"], on_date=_d(0))
 
     res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
-               on_date=_d(2), work_item_id=wid, is_completed=True, expect=422)
-    assert "approval" in res.json()["error"]["message"].lower()
-    # The refused save left nothing behind - no report, and no stray request.
-    assert _requests(db, a["emp"].id) == []
+               on_date=_d(2), work_item_id=wid, is_completed=True)
+    row = _row(res)
+    assert row["continuation_approval_status"] == "pending"
+    # The tick did not close the activity, and the row does not claim it did.
+    assert row["row_is_completed"] is False
+    assert row["overall_completed_on"] is None
+    assert db.get(WorkItem, _uuid.UUID(wid)).completed_on is None
+    # ...and the Project Head's request survived the save that used to roll it back.
+    assert len(_requests(db, a["emp"].id)) == 1
 
 
 # ==========================================================================
@@ -570,3 +585,250 @@ def test_quantity_task_is_never_gated_or_stamped(client, team, db):
     done = client.patch(f"{BASE}/tasks/{row['id']}/completion", headers=a["header"],
                         json={"is_completed": True})
     assert done.status_code == 200, done.text
+
+
+# ==========================================================================
+# 12. THE CORRECTION: a pending continuation blocks ONE ACTIVITY's completion,
+#     never the report's submission.
+#
+# The old behaviour raised 422 out of the report save the moment the completion
+# checkbox was ticked on an activity whose continuation was undecided. That
+# aborted the WHOLE save - every other activity on the report with it - and
+# rolled back the very request that would have told the Project Head. These
+# tests pin the two rules apart: "this activity cannot be marked complete yet"
+# is enforced; "this report cannot be submitted" is not.
+# ==========================================================================
+def _uuid_of(value):
+    import uuid as _uuid
+
+    return _uuid.UUID(str(value))
+
+
+def _mixed(client, team, *, period=1, tick_ls=True, extra=0):
+    """A report on _d(2) carrying `extra` + 1 ordinary daily activities and one
+    lump-sum continuation past its allowance."""
+    a, pm = team["author"], team["pm"]
+    _, ls = _lumpsum_sub(client, pm, period=period)
+    dailies = [_daily_sub(client, pm, name=f"Daily{i}")[1] for i in range(extra + 1)]
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=ls["id"], on_date=_d(0))
+    tasks = [
+        _task(a["project"].id, d["id"], pages_count=40, minutes_spent=60)
+        for d in dailies
+    ]
+    tasks.append(_task(a["project"].id, ls["id"], work_item_id=wid,
+                       is_completed=tick_ls, minutes_spent=90))
+    res = _post(client, a["header"], on_date=_d(2), tasks=tasks)
+    return res, {"ls": ls, "dailies": dailies, "wid": wid}
+
+
+def test_case_a_normal_activity_only_submits(client, team, db):
+    """Case A - nothing about this correction may touch an ordinary report."""
+    a, pm = team["author"], team["pm"]
+    _, daily = _daily_sub(client, pm)
+    res = _post(client, a["header"], on_date=_d(2), tasks=[
+        _task(a["project"].id, daily["id"], pages_count=40, minutes_spent=60),
+    ])
+    assert _submit(client, a["header"], res.json()["id"])["status"] == "submitted"
+    assert _requests(db, a["emp"].id) == []
+
+
+def test_case_b_lumpsum_within_allowance_submits_and_completes(client, team, db):
+    """Case B - inside its allowed duration a lump-sum activity is ordinary work,
+    completion checkbox included."""
+    a, pm = team["author"], team["pm"]
+    _, sub = _lumpsum_sub(client, pm, period=3)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+               on_date=_d(1), work_item_id=wid, is_completed=True)
+    assert _row(res)["continuation_approval_status"] is None
+    assert _submit(client, a["header"], res.json()["id"])["status"] == "submitted"
+    assert _requests(db, a["emp"].id) == []
+    assert db.get(WorkItem, _uuid_of(wid)).completed_on == _d(1)
+
+
+def test_case_c_pending_continuation_alone_still_submits(client, team, db):
+    """Case C - the report is submitted; only the continuation waits."""
+    a, pm = team["author"], team["pm"]
+    _, sub = _lumpsum_sub(client, pm, period=1)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+    res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+               on_date=_d(2), work_item_id=wid, is_completed=True)
+
+    got = _submit(client, a["header"], res.json()["id"])
+    assert got["status"] == "submitted"
+    assert got["tasks"][0]["continuation_approval_status"] == "pending"
+    # The activity itself is NOT closed, and the completion control is withdrawn
+    # rather than offered-and-refused.
+    assert got["tasks"][0]["can_complete_here"] is False
+    assert db.get(WorkItem, _uuid_of(wid)).completed_on is None
+    assert len(_requests(db, a["emp"].id)) == 1
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_cases_d_e_mixed_report_submits_with_only_the_ls_row_pending(
+    client, team, db, extra
+):
+    """Cases D and E - one, then two ordinary activities alongside a ticked
+    pending continuation. Every ordinary row is submitted normally and keeps its
+    own numbers; only the lump-sum row is pending."""
+    a = team["author"]
+    res, ids = _mixed(client, team, extra=extra)
+
+    got = _submit(client, a["header"], res.json()["id"])
+    assert got["status"] == "submitted"
+    assert len(got["tasks"]) == extra + 2
+    assert got["total_minutes"] == 60 * (extra + 1) + 90
+
+    by_sub = {t["sub_activity_id"]: t for t in got["tasks"]}
+    for d in ids["dailies"]:
+        row = by_sub[d["id"]]
+        assert row["continuation_approval_status"] is None
+        assert row["pages_count"] == 40
+        # Numeric benchmark output is untouched by the neighbouring continuation.
+        assert row["benchmark_status"] is not None
+    assert by_sub[ids["ls"]["id"]]["continuation_approval_status"] == "pending"
+    assert len(_requests(db, a["emp"].id)) == 1
+
+
+def test_case_f_pending_continuation_beside_a_completed_activity_submits(
+    client, team, db
+):
+    """Case F - another task activity completed on the same report. The
+    completion that CAN be honoured is honoured; the one that cannot is not, and
+    neither decides whether the report submits."""
+    a, pm = team["author"], team["pm"]
+    _, ls = _lumpsum_sub(client, pm, period=1)
+    _, qty = _quantity_sub(client, pm, period=1)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=ls["id"], on_date=_d(0))
+
+    res = _post(client, a["header"], on_date=_d(2), tasks=[
+        _task(a["project"].id, qty["id"], pages_count=100, is_completed=True,
+              minutes_spent=60),
+        _task(a["project"].id, ls["id"], work_item_id=wid, is_completed=True,
+              minutes_spent=90),
+    ])
+    got = _submit(client, a["header"], res.json()["id"])
+    assert got["status"] == "submitted"
+    by_sub = {t["sub_activity_id"]: t for t in got["tasks"]}
+    assert by_sub[qty["id"]]["row_is_completed"] is True
+    assert by_sub[ls["id"]]["row_is_completed"] is False
+    assert by_sub[ls["id"]]["continuation_approval_status"] == "pending"
+    assert db.get(WorkItem, _uuid_of(wid)).completed_on is None
+
+
+def test_head_is_notified_when_the_mixed_report_is_saved(client, team, db):
+    """The notification the old 422 destroyed: the save now commits, so the
+    reviewer request exists and is routed to the project's Head, at the reviewer
+    destination - not the employee's report."""
+    from app.modules.notifications.models import Notification
+
+    a, h = team["author"], team["head"]
+    _mixed(client, team, extra=1)
+    req = _requests(db, a["emp"].id)[0]
+
+    notes = db.execute(
+        select(Notification).where(
+            Notification.user_id == h["user"].id,
+            Notification.type == "continuation_requested",
+        )
+    ).scalars().all()
+    assert len(notes) == 1
+    assert notes[0].target_url == f"/lump-sum-activity?queue=pending&id={req.id}"
+
+
+def test_approval_of_a_mixed_report_leaves_everything_else_alone(client, team, db):
+    """The report stays submitted, the ordinary rows stay exactly as they were,
+    and the approved row rides the SAME work item with no fresh allowance."""
+    a, h = team["author"], team["head"]
+    res, ids = _mixed(client, team, extra=1)
+    report_id = res.json()["id"]
+    _submit(client, a["header"], report_id)
+    req = _requests(db, a["emp"].id)[0]
+    item_before = db.get(WorkItem, _uuid_of(ids["wid"]))
+    before = (item_before.started_on, item_before.due_date, item_before.target_days)
+
+    ok = client.post(f"{CR}/{req.id}/approve", headers=h["header"], json={})
+    assert ok.status_code == 200, ok.text
+
+    got = _get(client, a["header"], report_id)
+    assert got["status"] == "submitted"
+    assert len(got["tasks"]) == 3
+    assert got["total_minutes"] == 60 * 2 + 90
+    by_sub = {t["sub_activity_id"]: t for t in got["tasks"]}
+    assert by_sub[ids["ls"]["id"]]["continuation_approval_status"] == "approved"
+    for d in ids["dailies"]:
+        assert by_sub[d["id"]]["continuation_approval_status"] is None
+
+    db.expire_all()
+    item = db.get(WorkItem, _uuid_of(ids["wid"]))
+    assert (item.started_on, item.due_date, item.target_days) == before
+    assert db.execute(
+        select(WorkItem).where(WorkItem.employee_id == a["emp"].id)
+    ).scalars().all() == [item]
+
+
+def test_rejection_of_a_mixed_report_keeps_a_visible_rejected_record(client, team, db):
+    """Rejection withdraws the unaccepted rows but must not erase the employee's
+    history of having asked. The report survives, the ordinary rows survive, and
+    the report carries a rejected-continuation record naming the activity, the
+    reviewer and the reason."""
+    a, h = team["author"], team["head"]
+    res, ids = _mixed(client, team, extra=1)
+    report_id = res.json()["id"]
+    _submit(client, a["header"], report_id)
+    req = _requests(db, a["emp"].id)[0]
+
+    out = client.post(f"{CR}/{req.id}/reject", headers=h["header"],
+                      json={"comment": "not justified"})
+    assert out.status_code == 200, out.text
+
+    got = _get(client, a["header"], report_id)
+    assert got["status"] == "submitted"          # it still stands on its own work
+    assert {t["sub_activity_id"] for t in got["tasks"]} == {
+        d["id"] for d in ids["dailies"]
+    }
+    assert got["total_minutes"] == 60 * 2        # the rejected minutes are gone
+
+    rejected = got["rejected_continuations"]
+    assert len(rejected) == 1
+    assert rejected[0]["request_id"] == str(req.id)
+    assert rejected[0]["sub_activity_name"] == ids["ls"]["name"]
+    assert rejected[0]["continuation_date"] == _d(2).isoformat()
+    assert rejected[0]["reviewer_name"] == h["emp"].full_name
+    assert rejected[0]["decision_comment"] == "not justified"
+
+
+def test_rejected_record_is_not_an_approved_activity(client, team, db):
+    """The record is history, not work: it is not in `tasks`, contributes no
+    minutes, and the activity still cannot be continued."""
+    a, h = team["author"], team["head"]
+    res, ids = _mixed(client, team, tick_ls=False)
+    _submit(client, a["header"], res.json()["id"])
+    req = _requests(db, a["emp"].id)[0]
+    client.post(f"{CR}/{req.id}/reject", headers=h["header"], json={})
+
+    got = _get(client, a["header"], res.json()["id"])
+    assert all(t["sub_activity_id"] != ids["ls"]["id"] for t in got["tasks"])
+    assert len(got["rejected_continuations"]) == 1
+    blocked = _one(client, a["header"], project_id=a["project"].id,
+                   sub_id=ids["ls"]["id"], on_date=_d(3),
+                   work_item_id=ids["wid"], expect=403)
+    assert "rejected" in blocked.json()["error"]["message"].lower()
+
+
+def test_report_list_does_not_carry_the_rejected_record(client, team, db):
+    """Detail-only: the list must not pay for a query it never renders."""
+    a, h = team["author"], team["head"]
+    res, _ids = _mixed(client, team, tick_ls=False)
+    _submit(client, a["header"], res.json()["id"])
+    req = _requests(db, a["emp"].id)[0]
+    client.post(f"{CR}/{req.id}/reject", headers=h["header"], json={})
+
+    listed = client.get(BASE, headers=a["header"],
+                        params={"employee_id": str(a["emp"].id)}).json()
+    row = next(r for r in listed["items"] if r["id"] == res.json()["id"])
+    assert row["rejected_continuations"] == []
