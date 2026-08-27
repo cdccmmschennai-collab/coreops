@@ -22,7 +22,7 @@ from itertools import groupby
 
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core import authz
 from app.core.config import settings
@@ -982,6 +982,49 @@ DAY_STATUS_LABELS: dict[str, str] = {
 }
 
 
+def _export_benchmark(task: WorkReportTask, sub, fraction: Decimal):
+    """The (mode, target, unit) triple the export's BENCHMARK cell renders.
+
+    The snapshot frozen on the task at submit time wins whenever there IS one —
+    that is the value the day was measured against, and it is never second-
+    guessed here. But the snapshot is written by `_apply_benchmarks`, which only
+    runs at SUBMIT: a row added after the report was submitted (an approved LS
+    continuation, an edit-granted report still being worked on) and any legacy
+    row that predates the snapshot columns carries none. Those rows used to
+    export an EMPTY benchmark cell, so one report could show the very same
+    lumpsum sub-activity as "LS" on one line and blank on the next.
+
+    The fallback reads the sub-activity's OWN Activity Master classification —
+    the same authority `_apply_benchmarks` freezes from — so an LS activity
+    reads LS and a counted activity keeps its number, whatever lifecycle state
+    the row is in. Classification comes from the activity, never from approval,
+    continuation or due-date state, none of which is consulted here.
+
+    A sub-activity with no benchmark configured still yields (None, None, None):
+    a blank cell, exactly as before.
+    """
+    if task.benchmark_type_snapshot is not None or sub is None:
+        return (
+            task.benchmark_type_snapshot,
+            task.benchmark_value_snapshot,
+            task.relevant_count_field_snapshot,
+        )
+    # Scaled the same way the submit-time freeze scales it, so the fallback and
+    # the snapshot can never disagree about a half-day row's effective target.
+    value = (
+        scaled_target(sub.benchmark_value, fraction)
+        if sub.benchmark_value is not None
+        else None
+    )
+    # A LUMPSUM row's unit is the employee's own choice, already stored at save
+    # time; every other mode's unit belongs to the master.
+    return (
+        sub.benchmark_type,
+        value,
+        task.relevant_count_field_snapshot or sub.relevant_count_field,
+    )
+
+
 def build_activity_rows(
     db: Session,
     actor: User,
@@ -1003,10 +1046,17 @@ def build_activity_rows(
     if not allowed:
         return []
 
+    # Aliased so the optional activity_id filter below can still join
+    # ActivityMaster on its own terms without colliding with this one.
+    bench_sub = aliased(ActivityMaster)
     q = (
-        select(WorkReportTask, DailyWorkReport, Employee, WorkReportPeriod)
+        select(WorkReportTask, DailyWorkReport, Employee, WorkReportPeriod, bench_sub)
         .join(DailyWorkReport, DailyWorkReport.id == WorkReportTask.report_id)
         .join(Employee, Employee.id == DailyWorkReport.employee_id)
+        # The row's sub-activity, for the BENCHMARK fallback in
+        # `_export_benchmark` — read ONLY when the task carries no frozen
+        # snapshot. Outer, since a row need not name a sub-activity at all.
+        .outerjoin(bench_sub, bench_sub.id == WorkReportTask.sub_activity_id)
         # Left join to the task's period so the split-day activity blocks can be
         # ordered First Half then Second Half deterministically, independent of
         # task creation order (see the order_by below). The period is also
@@ -1066,11 +1116,26 @@ def build_activity_rows(
     task_result = db.execute(q).all()
     # One combined Day Remarks per report (split-day halves labelled + ordered);
     # dedupe reports so the period lookup runs once per report, not once per task.
-    task_reports = {report.id: report for _t, report, _e, _p in task_result}
+    task_reports = {report.id: report for _t, report, _e, _p, _s in task_result}
     remarks_by_report = _combined_remarks_by_report(db, list(task_reports.values()))
 
     rows: list[dict] = []
-    for task, report, emp, period in task_result:
+    for task, report, emp, period, bench in task_result:
+        # Period scaling, mirroring _apply_benchmarks: the period's own fraction,
+        # else the legacy report-wide half_day rule. Only ever consulted by the
+        # no-snapshot fallback inside _export_benchmark.
+        fraction = (
+            Decimal(period.work_fraction)
+            if period is not None
+            else (
+                Decimal("0.5")
+                if report.day_status == DayStatus.half_day
+                else Decimal("1.0")
+            )
+        )
+        benchmark_type, benchmark_value, benchmark_unit = _export_benchmark(
+            task, bench, fraction
+        )
         rows.append({
             "employee_label": f"{emp.employee_code} - {emp.full_name}",
             "report_date": report.report_date,
@@ -1103,10 +1168,12 @@ def build_activity_rows(
             "records": task.records_count,
             # Benchmark as FROZEN on the task at submit time (_apply_benchmarks) —
             # the mode, the effective per-period target and the unit it is counted
-            # in. Nothing is computed here: the export only renders these three.
-            "benchmark_type": task.benchmark_type_snapshot,
-            "benchmark_value": task.benchmark_value_snapshot,
-            "benchmark_unit": task.relevant_count_field_snapshot,
+            # in — falling back to the sub-activity's own classification on a row
+            # that never went through a submit (see _export_benchmark). Nothing is
+            # computed here: the export only renders these three.
+            "benchmark_type": benchmark_type,
+            "benchmark_value": benchmark_value,
+            "benchmark_unit": benchmark_unit,
             "remarks": remarks_by_report[report.id],
         })
 

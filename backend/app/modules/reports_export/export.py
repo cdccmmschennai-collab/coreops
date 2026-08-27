@@ -1,13 +1,15 @@
 """Weekly Activity Report XLSX builder.
 
-One flat, filterable table: ONE ROW PER LOGICAL ACTIVITY (i.e. per half-day),
-never per Employee+Date. A day on which two activities were recorded produces
-two rows — FIRST HALF then SECOND HALF — instead of the old wide layout's
-"Project Code 2 / Activity Type 2 / …" repeated column groups, which could not
-be filtered or pivoted. The identifying columns an activity shares with its
-sibling (Employee, Date, Day, Day Status, Day Remarks) are merged VERTICALLY
-across the day's rows for readability; the activity columns themselves are never
-merged, so every row stays independently filterable.
+One flat, filterable table: ONE ROW PER LOGICAL ACTIVITY, never per
+Employee+Date. A day on which two activities were recorded produces two rows —
+FIRST HALF then SECOND HALF on a Split Day, ACTIVITY 1 then ACTIVITY 2 on a Full
+Day — instead of the old wide layout's "Project Code 2 / Activity Type 2 / …"
+repeated column groups, which could not be filtered or pivoted. Which of the two
+the HALF column reads comes from the RECORDED PERIOD, never from how many
+activities the day happens to hold (see half_label). The identifying columns an
+activity shares with its sibling (Employee, Date, Day, Day Status, Day Remarks)
+are merged VERTICALLY across the day's rows for readability; the activity columns
+themselves are never merged, so every row stays independently filterable.
 
 Structure (16 columns, matching the company's SAMPLE workbook plus an explicit
 DAY / HALF split):
@@ -790,26 +792,23 @@ def benchmark_display(activity: dict):
 def half_label(day_part, index: int, total: int):
     """The HALF cell: which part of the day this activity row covers.
 
-    The recorded period wins whenever there is one — a split-day report knows
-    which half each task belongs to, so first_half/second_half are read straight
-    off it and two tasks logged in the SAME half both read FIRST HALF rather
-    than being renumbered.
+    The recorded period is the ONLY thing that can produce a half label. A
+    split-day report knows which half each task belongs to, so first_half /
+    second_half are read straight off it, and two tasks logged in the SAME half
+    both read FIRST HALF rather than being renumbered.
 
-    A full-day period (and a legacy row with no period at all) records no halves,
-    so the day's activities are labelled positionally, which is how the business
-    already reads the two-activity day the old wide layout produced: one activity
-    is the whole day, two split it into halves. A third or later activity — which
-    no half vocabulary covers — is numbered rather than mislabelled."""
+    A full-day period (and a legacy row with no period at all) has no halves to
+    report. One activity is simply the whole day; a Full Day report carrying two
+    activities — which the two-activity rule expressly allows — is TWO
+    ACTIVITIES, not two halves, so the rows are numbered ACTIVITY 1 / ACTIVITY 2.
+    The activity COUNT never decides the day format: labelling them FIRST/SECOND
+    HALF would claim the employee filed a Split Day report they never filed."""
     if day_part == DayPart.first_half.value:
         return "FIRST HALF"
     if day_part == DayPart.second_half.value:
         return "SECOND HALF"
     if total <= 1:
         return "FULL DAY"
-    if index == 0:
-        return "FIRST HALF"
-    if index == 1:
-        return "SECOND HALF"
     return f"ACTIVITY {index + 1}"
 
 
