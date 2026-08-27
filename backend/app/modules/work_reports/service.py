@@ -1184,12 +1184,18 @@ def build_activity_rows(
     # the dashboard preview and the Excel export. Skipped when filtering by a
     # task attribute (project / activity / sub-activity), since a no-activity day
     # can never match those.
+    #
+    # Split-Day reports are excluded here and handled by the per-period query
+    # below instead: a Split Day is TWO recorded reporting periods, so it is
+    # represented by its two periods even when neither of them holds an
+    # activity — never collapsed into one full-day row.
     if project_id is None and activity_id is None and sub_activity_id is None:
         nq = (
             select(DailyWorkReport, Employee)
             .join(Employee, Employee.id == DailyWorkReport.employee_id)
             .where(
                 DailyWorkReport.id.in_(scoped),
+                DailyWorkReport.report_mode != ReportMode.split_day.value,
                 ~select(WorkReportTask.id)
                 .where(WorkReportTask.report_id == DailyWorkReport.id)
                 .exists(),
@@ -1229,6 +1235,72 @@ def build_activity_rows(
                 "benchmark_value": None,
                 "benchmark_unit": None,
                 "remarks": leave_remarks[report.id],
+            })
+
+        # A Split Day records TWO reporting periods, and either of them can be a
+        # no-activity half — worked in the morning, on Leave in the afternoon.
+        # The task join above can only ever produce a row for the half that
+        # HOLDS a task, so the other half vanished from the export while the
+        # Report Detail page still showed it. Surface every zero-task Split-Day
+        # period the way a whole leave day is surfaced: a status-only row
+        # carrying its own day_part and period_status, every activity column
+        # blank. Nothing is created or stored — work_report_periods already
+        # holds the period; this only renders it.
+        pq = (
+            select(WorkReportPeriod, DailyWorkReport, Employee)
+            .join(DailyWorkReport, DailyWorkReport.id == WorkReportPeriod.report_id)
+            .join(Employee, Employee.id == DailyWorkReport.employee_id)
+            .where(
+                DailyWorkReport.id.in_(scoped),
+                DailyWorkReport.report_mode == ReportMode.split_day.value,
+                ~select(WorkReportTask.id)
+                .where(WorkReportTask.period_id == WorkReportPeriod.id)
+                .exists(),
+            )
+        )
+        if employee_id is not None:
+            pq = pq.where(DailyWorkReport.employee_id == employee_id)
+        if date_from is not None:
+            pq = pq.where(DailyWorkReport.report_date >= date_from)
+        if date_to is not None:
+            pq = pq.where(DailyWorkReport.report_date <= date_to)
+        period_result = db.execute(pq).all()
+        # Same combined Day Remarks the day's activity rows carry, so the merged
+        # DAY REMARKS block still reads as one value across the whole day.
+        period_reports = {report.id: report for _p, report, _e in period_result}
+        period_remarks = _combined_remarks_by_report(
+            db, list(period_reports.values())
+        )
+        for period, report, emp in period_result:
+            rows.append({
+                "employee_label": f"{emp.employee_code} - {emp.full_name}",
+                "report_date": report.report_date,
+                "day_status": (
+                    DAY_STATUS_LABELS.get(report.day_status.value, report.day_status.value)
+                    if report.day_status
+                    else None
+                ),
+                "day_part": period.day_part,
+                "period_status": (
+                    DAY_STATUS_LABELS.get(
+                        period.period_status.value, period.period_status.value
+                    )
+                    if period.period_status
+                    else None
+                ),
+                "project_code": None,
+                "activity_type": None,
+                "sub_activity_type": None,
+                "tags": None,
+                "docs": None,
+                "bom": None,
+                "spares": None,
+                "pages": None,
+                "records": None,
+                "benchmark_type": None,
+                "benchmark_value": None,
+                "benchmark_unit": None,
+                "remarks": period_remarks[report.id],
             })
 
     # Keep employee+date rows contiguous so the groupby in build_activity_groups
@@ -1296,6 +1368,19 @@ def build_activity_groups(
             or r["activity_type"] is not None
             or r["sub_activity_type"] is not None
         ]
+        # Split-Day periods that hold no activity (see build_activity_rows).
+        # Deliberately kept OUT of `activities`: a Leave half is a reporting
+        # PERIOD, not an activity, so it must never inflate the activity count
+        # the preview shows, `max_activities`, or the two-activity-per-report
+        # rule. Only the Excel export consumes these, as status-only rows.
+        status_periods = [
+            {"day_part": r["day_part"], "period_status": r["period_status"]}
+            for r in day_rows
+            if r["day_part"] is not None
+            and r["project_code"] is None
+            and r["activity_type"] is None
+            and r["sub_activity_type"] is None
+        ]
         max_activities = max(max_activities, len(activities))
         out_rows.append({
             "employee_label": emp_label,
@@ -1303,6 +1388,7 @@ def build_activity_groups(
             "day_status": day_rows[0]["day_status"],
             "remarks": day_rows[0]["remarks"],
             "activities": activities,
+            "status_periods": status_periods,
         })
 
     return {"max_activities": max_activities or 1, "rows": out_rows}

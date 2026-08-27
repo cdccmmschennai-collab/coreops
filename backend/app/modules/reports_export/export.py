@@ -812,6 +812,43 @@ def half_label(day_part, index: int, total: int):
     return f"ACTIVITY {index + 1}"
 
 
+# Period order within one day: FIRST HALF before SECOND HALF. A full-day period
+# (and a legacy row with no period at all) has no half and ranks ahead of both,
+# which leaves its existing order untouched.
+_PART_RANK = {DayPart.first_half.value: 1, DayPart.second_half.value: 2}
+
+
+def day_entries(activities: list[dict], status_periods: list[dict]):
+    """The day's export rows in recorded-period order.
+
+    Returns (entry, index, status_only) triples: every recorded activity, plus a
+    status-only entry for each Split-Day period that holds no activity at all.
+
+    A Split Day records TWO reporting periods, and either of them can be a
+    no-activity half — worked in the morning, on Leave / Week Off / Company
+    Holiday in the afternoon. That half owns no task line, so flattening
+    `activities` alone dropped it from the sheet even though the Report Detail
+    page shows it. A status entry is NOT an activity: it carries only the
+    period's own day_part and status, and it deliberately stays out of `total`,
+    the ACTIVITY COUNT that numbers a Full Day's ACTIVITY 1 / ACTIVITY 2 rows.
+
+    A day with no status period at all keeps its existing order exactly — the
+    ranking below never runs for it."""
+    if not status_periods:
+        return [(a, i, False) for i, a in enumerate(activities)]
+    ranked = [
+        (_PART_RANK.get(a.get("day_part"), 0), a, i, False)
+        for i, a in enumerate(activities)
+    ]
+    ranked += [
+        (_PART_RANK.get(p.get("day_part"), 0), p, 0, True) for p in status_periods
+    ]
+    # Stable: within one half the activities keep the order they arrived in, and
+    # an activity still precedes a status period of the same rank.
+    ranked.sort(key=lambda e: e[0])
+    return [(entry, index, status_only) for _rank, entry, index, status_only in ranked]
+
+
 def _merge_day_block(ws, first_row: int, last_row: int) -> None:
     """Merge the day-level identity columns vertically across one day's activity
     rows, leaving each underlying cell's value in place.
@@ -836,15 +873,23 @@ def build_workbook(rows: list[dict], max_activities: int = 1) -> BytesIO:
     """The Weekly Activity Report workbook: one row per activity (half-day).
 
     `rows` is the Employee+Date grouping build_activity_groups produces; this
-    flattens each day's `activities` into consecutive rows and merges the day's
-    shared identity cells across them. `max_activities` no longer shapes the
+    flattens each day's `activities` — plus any `status_periods`, the Split-Day
+    halves that hold no activity (see day_entries) — into consecutive rows and
+    merges the day's shared identity cells across them. `max_activities` no longer shapes the
     sheet (there are no repeated column groups left) and is accepted only so the
     existing call site keeps working unchanged."""
     wb, ws = _new_sheet()
     _write_header(ws, 1, _COLUMNS)
     ws.freeze_panes = "A2"
 
-    def write_activity_row(r: int, row: dict, activity: dict | None, index: int, total: int) -> None:
+    def write_activity_row(
+        r: int,
+        row: dict,
+        activity: dict | None,
+        index: int,
+        total: int,
+        status_only: bool = False,
+    ) -> None:
         day_status = row.get("day_status")
         ws.cell(r, _COL["EMPLOYEE ID & NAME"], _upper(row.get("employee_label")))
         ws.cell(r, _DATE_COL, row.get("report_date"))
@@ -858,6 +903,20 @@ def build_workbook(rows: list[dict], max_activities: int = 1) -> BytesIO:
             ws.cell(r, _COL["DAY STATUS"], _upper(day_status))
             ws.cell(r, _COL["HALF"], "FULL DAY")
             ws.cell(r, _COL["ACTIVITY TYPE"], _upper(day_status))
+        elif status_only:
+            # A recorded Split-Day period holding no activity (Leave, Week Off,
+            # Company Holiday, Comp Off …). Only the two columns that genuinely
+            # describe it are written: the period's OWN status and which half it
+            # is. Project, activity, sub-activity, counts and benchmark stay
+            # empty — inventing any of them would put work into the sheet that
+            # was never reported, and this row is a reporting period, not an
+            # activity.
+            ws.cell(
+                r, _COL["DAY STATUS"], _upper(activity.get("period_status") or day_status)
+            )
+            ws.cell(
+                r, _COL["HALF"], half_label(activity.get("day_part"), index, total)
+            )
         else:
             # The half's own status when a split day mixes two, else the day's.
             ws.cell(
@@ -883,13 +942,16 @@ def build_workbook(rows: list[dict], max_activities: int = 1) -> BytesIO:
     r = 2
     for row in rows:
         activities = row.get("activities") or []
+        entries = day_entries(activities, row.get("status_periods") or [])
         first_row = r
-        if not activities:
+        if not entries:
             write_activity_row(r, row, None, 0, 0)
             r += 1
         else:
-            for index, activity in enumerate(activities):
-                write_activity_row(r, row, activity, index, len(activities))
+            for entry, index, status_only in entries:
+                write_activity_row(
+                    r, row, entry, index, len(activities), status_only
+                )
                 r += 1
         if r - first_row > 1:
             _merge_day_block(ws, first_row, r - 1)
