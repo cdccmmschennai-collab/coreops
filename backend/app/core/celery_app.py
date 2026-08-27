@@ -29,6 +29,10 @@ from app.core.config import settings
 BUSINESS_TIMEZONE = "Asia/Kolkata"
 DAILY_REPORT_REMINDER_TASK = "coreops.reminders.send_daily_report_reminders"
 LEAVE_BALANCE_NOTICE_TASK = "coreops.reminders.send_monthly_leave_balance_notices"
+# Generic "deliver one email" task (app/tasks/email_tasks.py). NOT scheduled -
+# it is fired on demand by app.notifications.email_dispatch.enqueue_email, so it
+# appears in `include` below but never in the beat schedule.
+EMAIL_SEND_TASK = "coreops.notifications.send_email"
 
 
 class ScheduleSettings(BaseSettings):
@@ -95,7 +99,10 @@ celery_app = Celery(
     "wms",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_BROKER_URL,
-    include=["app.tasks.periodic_tasks"],
+    # Every module holding a @celery_app.task MUST be listed here - the worker
+    # imports exactly these, and a task in an unlisted module is never
+    # registered, so calls to it die as "Received unregistered task".
+    include=["app.tasks.periodic_tasks", "app.tasks.email_tasks"],
 )
 celery_app.conf.update(
     task_track_started=True,

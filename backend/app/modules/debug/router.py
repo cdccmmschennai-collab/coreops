@@ -1,6 +1,8 @@
 """Debug endpoints for the Daily Report Reminder pipeline.
 
   POST /debug/send-test-email   send a one-off test email (verify SMTP)
+  POST /debug/queue-test-email  queue the same email via Celery (verify the
+                                broker + worker + retry path end to end)
   GET  /debug/missing-reports   preview reminder data as JSON (verify grouping)
   POST /debug/send-reminders    run the reminder dispatcher immediately
   POST /debug/send-leave-balance-notices
@@ -18,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import require_role
 from app.modules.users.models import UserRole
+from app.notifications.email_dispatch import enqueue_email
 from app.notifications.email_service import EmailSendError, EmailService
 from app.reminders.daily_report.dispatcher import run_daily_report_reminders
 from app.reminders.daily_report.service import DailyReportReminderService
@@ -53,6 +56,34 @@ def send_test_email(body: TestEmailIn) -> dict:
     except EmailSendError as exc:
         raise AppError("email_failed", f"Test email failed: {exc}", 502)
     return {"sent": sent, "to": str(body.to)}
+
+
+@router.post("/queue-test-email")
+def queue_test_email(body: TestEmailIn) -> dict:
+    """The same message as /send-test-email, but through the Celery path.
+
+    This is how the async capability is verified against a real deployment: the
+    response says only whether the broker ACCEPTED the message, so a `queued`
+    task_id here plus an `email.task_done` line in the worker journal proves the
+    whole chain (enqueue -> Redis -> worker -> Brevo). A `queued: false` answer
+    names which link is missing in `reason`.
+    """
+    html = (
+        f'<div style="font-family:sans-serif;font-size:14px;color:#0f172a;">'
+        f"{body.message}</div>"
+    )
+    result = enqueue_email(
+        to=str(body.to),
+        subject=body.subject,
+        html_body=html,
+        text_body=body.message,
+    )
+    return {
+        "queued": result.queued,
+        "task_id": result.task_id,
+        "reason": result.reason,
+        "to": list(result.recipients),
+    }
 
 
 @router.get("/missing-reports")
