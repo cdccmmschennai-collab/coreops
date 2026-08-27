@@ -52,11 +52,18 @@ class EmailService:
         *,
         to: str | list[str],
         subject: str,
-        html_body: str,
+        html_body: str = "",
         text_body: str | None = None,
         attachments: list[Attachment] | None = None,
+        text_only: bool = False,
     ) -> bool:
         """Send one message. Returns True if handed to SMTP, False if skipped.
+
+        ``text_only=True`` sends a single-part ``text/plain`` message with no
+        HTML alternative at all — for notifications that should look like an
+        ordinary email somebody typed, not a designed template. It defaults to
+        False, so every existing caller keeps the multipart/alternative shape it
+        has always produced, byte for byte.
 
         Raises ``EmailSendError`` on any SMTP/transport failure.
         """
@@ -81,7 +88,7 @@ class EmailService:
             )
 
         message = self._build_message(
-            recipients, subject, html_body, text_body, attachments
+            recipients, subject, html_body, text_body, attachments, text_only
         )
 
         try:
@@ -107,6 +114,7 @@ class EmailService:
         html_body: str,
         text_body: str | None,
         attachments: list[Attachment] | None = None,
+        text_only: bool = False,
     ) -> EmailMessage:
         settings = self._settings
         message = EmailMessage()
@@ -115,7 +123,12 @@ class EmailService:
         message["To"] = ", ".join(recipients)
         # A plain-text part is always set so non-HTML clients render something.
         message.set_content(text_body or _html_to_text_fallback(html_body))
-        message.add_alternative(html_body, subtype="html")
+        # The HTML alternative is what a mail client actually renders when it is
+        # present, so a caller asking for text/plain must not get one attached.
+        # Skipping it leaves a genuine single-part text/plain message rather than
+        # a multipart whose text half is only a fallback nobody sees.
+        if not text_only:
+            message.add_alternative(html_body, subtype="html")
         for attachment in attachments or []:
             # add_attachment on a multipart/alternative message promotes it to
             # multipart/mixed, keeping the text+html alternative intact.

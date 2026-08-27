@@ -50,7 +50,8 @@ class _StubEmailService:
         self._error = error
         self.sends = []
 
-    def send(self, *, to, subject, html_body, text_body=None, attachments=None):
+    def send(self, *, to, subject, html_body="", text_body=None, attachments=None,
+             text_only=False):
         self.sends.append(
             {
                 "to": to,
@@ -58,6 +59,7 @@ class _StubEmailService:
                 "html_body": html_body,
                 "text_body": text_body,
                 "attachments": attachments,
+                "text_only": text_only,
             }
         )
         if self._error is not None:
@@ -75,6 +77,14 @@ class _StubSettings:
     @property
     def is_configured(self):
         return self._configured
+
+
+class _SmtpSettings(_StubSettings):
+    """Enough of EmailSettings for `EmailService._build_message` to address a
+    message, without reading the environment or opening a socket."""
+
+    SMTP_FROM_NAME = "CoreOps"
+    from_address = "noreply@coreops.cdccmms.com"
 
 
 class _StubTask:
@@ -151,6 +161,7 @@ def test_build_payload_shape():
         "subject": "Subject",          # trimmed
         "html_body": _HTML,
         "text_body": "Hello",
+        "text_only": False,
         "attachments": [],
     }
 
@@ -183,6 +194,96 @@ def test_build_payload_rejects_oversized_subject():
 def test_build_payload_rejects_empty_html_body():
     with pytest.raises(EmailPayloadError, match="html_body must not be empty"):
         build_payload(to="a@x.com", subject="S", html_body="   ")
+
+
+# --- text_only ---------------------------------------------------------------
+#
+# The opt-in that lets a caller send a real single-part text/plain message. It is
+# additive: everything above still describes the default, and these prove the
+# default did not move.
+
+def test_a_text_only_payload_needs_no_html_body():
+    payload = build_payload(
+        to="a@x.com", subject="S", text_body="Hello", text_only=True
+    )
+    assert payload["text_only"] is True
+    assert payload["html_body"] == ""
+    assert payload["text_body"] == "Hello"
+
+
+def test_a_text_only_payload_rejects_an_empty_text_body():
+    """The html_body rule is not relaxed, it is MOVED: a text_only message with
+    no text at all is just as malformed."""
+    with pytest.raises(EmailPayloadError, match="text_body must not be empty"):
+        build_payload(to="a@x.com", subject="S", text_body="   ", text_only=True)
+
+
+def test_deliver_payload_forwards_the_text_only_flag():
+    service = _StubEmailService()
+    payload = build_payload(
+        to="a@x.com", subject="S", text_body="Hello", text_only=True
+    )
+    deliver_payload(payload, email_service=service)
+    assert service.sends[0]["text_only"] is True
+    assert service.sends[0]["text_body"] == "Hello"
+
+
+def test_a_payload_predating_the_flag_still_delivers_as_multipart():
+    """An older payload sitting in the queue during a deploy carries no
+    `text_only` key. It must read as the multipart message it was queued as, not
+    trip a KeyError."""
+    service = _StubEmailService()
+    legacy = {
+        "version": PAYLOAD_VERSION,
+        "to": ["a@x.com"],
+        "subject": "S",
+        "html_body": _HTML,
+        "text_body": "Hello",
+        "attachments": [],
+    }
+    assert deliver_payload(legacy, email_service=service) is True
+    assert service.sends[0]["text_only"] is False
+    assert service.sends[0]["html_body"] == _HTML
+
+
+def test_enqueue_carries_text_only_into_the_queued_payload(stub_task, monkeypatch):
+    import app.notifications.email_dispatch as dispatch
+
+    monkeypatch.setattr(dispatch, "get_email_settings", _enabled)
+    result = enqueue_email(
+        to="a@x.com", subject="S", text_body="Hello", text_only=True
+    )
+    assert result.queued is True
+    assert stub_task.payloads[0]["text_only"] is True
+    assert stub_task.payloads[0]["html_body"] == ""
+
+
+def test_a_text_only_message_is_a_single_part_text_plain_email():
+    """The whole reason the flag exists: a mail client renders the HTML
+    alternative when there is one, so a "plain text" body would never be seen
+    while the transport kept attaching one."""
+    from app.notifications.email_service import EmailService
+
+    service = EmailService(settings=_SmtpSettings())
+    message = service._build_message(
+        ["a@x.com"], "S", "", "Hello there", None, True
+    )
+    assert message.get_content_type() == "text/plain"
+    assert not message.is_multipart()
+    assert message.get_content().strip() == "Hello there"
+
+
+def test_the_default_message_is_still_multipart_alternative():
+    """The regression guard for every other email module: unchanged shape."""
+    from app.notifications.email_service import EmailService
+
+    service = EmailService(settings=_SmtpSettings())
+    message = service._build_message(["a@x.com"], "S", _HTML, "Hello", None, False)
+    assert message.get_content_type() == "multipart/alternative"
+    assert [p.get_content_type() for p in message.iter_parts()] == [
+        "text/plain",
+        "text/html",
+    ]
 
 
 def test_build_payload_rejects_too_many_recipients():

@@ -56,6 +56,20 @@ class Settings(BaseSettings):
     BACKEND_PORT: int = 8100
     CORS_ORIGINS: str = "http://localhost:3100"
 
+    # Public base URL of the CoreOps web app, used to turn the relative paths
+    # notifications already carry (e.g. /attendance?tab=leave&id=...) into
+    # absolute links for OUTBOUND EMAIL. Browser-facing pages never need it.
+    #
+    # Deliberately its own setting rather than something derived from
+    # CORS_ORIGINS: that is a security allow-list which may hold several origins
+    # in any order, and quietly borrowing its first entry would make an email
+    # link depend on the order of a list nobody edits with links in mind.
+    #
+    # Empty (the default) means "no public URL configured", and every email
+    # template omits its link rather than rendering a broken relative one. So
+    # local dev and the test suite need no value at all.
+    APP_BASE_URL: str = ""
+
     # Temporary notification debug endpoints (/debug/*). Off by default; enable
     # only for verifying the email/reminder pipeline. Guarded by PM role too.
     ENABLE_DEBUG_ENDPOINTS: bool = False

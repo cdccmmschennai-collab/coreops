@@ -59,7 +59,9 @@ from app.modules.leave.effects import (
 )
 from app.modules.leave_balances import ledger
 from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave import email as leave_email
 from app.modules.leave import routing
+from app.modules.leave.recipients import leave_request_path, resolve_leave_recipients
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
     DeliverableConflictOut,
@@ -251,17 +253,6 @@ def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
         db.rollback()
 
 
-def _notify_manager(db: Session, employee: Employee, type_: str, title: str,
-                    message: str, entity_id: uuid.UUID | None = None,
-                    target_url: str | None = None) -> None:
-    if employee.manager_id is None:
-        return
-    mgr = db.get(Employee, employee.manager_id)
-    if mgr is None or mgr.user_id is None:
-        return
-    _push(db, mgr.user_id, type_, title, message, entity_id, target_url)
-
-
 def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
                             type_: str, title: str, message: str,
                             queue: str | None = None) -> None:
@@ -270,37 +261,16 @@ def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
     themself), else the employee's manager - the existing PM-fallback path,
     unchanged.
 
-    The Head is resolved fresh here, never read off a value stored at
-    submission time, so a Head reassignment after filing still notifies the
-    right person (spec §15).
-
-    `queue` picks which queue the notification's `target_url` deep-links to.
-    It defaults to `None`, which preserves each existing caller's URL shape
-    exactly: the Head branch still lands on `queue=pending` (the request IS in
-    the pending queue for `leave_submitted`/`leave_cancelled`) and the fallback
-    branch omits `&queue=` entirely, same as before. A caller whose
-    notification is about something NOT in the pending queue - namely
-    `request_leave_cancellation`, which moves the request straight to
-    `cancellation_requested` - passes `queue="cancellation"` so both branches
-    deep-link to the queue that can actually contain it.
+    Walks `resolve_leave_recipients` and takes the first candidate with a login
+    to deliver to, which is exactly the rule this function has always applied: a
+    Head with no linked user account falls through to the manager.
     """
-    head_id = (
-        authz.project_head_employee_id(db, req.routed_project_id)
-        if req.routed_project_id is not None
-        else None
-    )
-    if head_id is not None and head_id != employee.id:
-        head = db.get(Employee, head_id)
-        if head is not None and head.user_id is not None:
-            _push(db, head.user_id, type_, title, message, req.id,
-                  f"/attendance?tab=leave&queue={queue or 'pending'}&id={req.id}")
-            return
-    fallback_url = (
-        f"/attendance?tab=leave&queue={queue}&id={req.id}"
-        if queue is not None
-        else f"/attendance?tab=leave&id={req.id}"
-    )
-    _notify_manager(db, employee, type_, title, message, req.id, fallback_url)
+    for candidate in resolve_leave_recipients(db, employee, req):
+        if candidate.employee.user_id is None:
+            continue
+        _push(db, candidate.employee.user_id, type_, title, message, req.id,
+              leave_request_path(req, is_head=candidate.is_head, queue=queue))
+        return
 
 
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
@@ -660,6 +630,16 @@ def create_leave_request(
         f"{me.full_name} submitted a leave request",
         f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
     )
+    # Email the same approver the notification above just reached - both walk
+    # `resolve_leave_recipients`, so they cannot route differently. Placed AFTER
+    # the commit and after the in-app push on purpose: the request is already
+    # saved and the bell has already rung, so nothing this call does - including
+    # an unreachable broker - can cost either of them. It never raises.
+    #
+    # Submission is the ONLY leave event that emails. Approve, reject, cancel and
+    # the cancellation decisions stay in-app, which is why this sits here rather
+    # than in `_push` or `_notify_routed_approver`, both shared by those events.
+    leave_email.send_submission_email(db, me, req)
     return req
 
 
@@ -1021,6 +1001,14 @@ def approve_leave_request(
         req.id,
         f"/attendance?tab=leave&id={req.id}",
     )
+    # Tell the employee by email too. Placed AFTER the commit and after the bell
+    # on purpose: the decision is already durable and the notification already
+    # delivered, so nothing this call does - including an unreachable broker or
+    # an employee with no work email - can cost either of them. It never raises.
+    #
+    # Attached to this function rather than to `_push`/`_notify_employee`, which
+    # the cancellation events share: only an approval and a rejection email.
+    leave_email.send_approval_email(db, req, reviewer)
     return req
 
 
@@ -1056,6 +1044,9 @@ def reject_leave_request(
         req.id,
         f"/attendance?tab=leave&id={req.id}",
     )
+    # See the note in `approve_leave_request`: after the commit, after the bell,
+    # never raises, and reached from this function alone.
+    leave_email.send_rejection_email(db, req, reviewer)
     return req
 
 

@@ -150,9 +150,10 @@ def build_payload(
     *,
     to: str | list[str] | tuple[str, ...] | None,
     subject: str,
-    html_body: str,
+    html_body: str = "",
     text_body: str | None = None,
     attachments: list[Attachment] | None = None,
+    text_only: bool = False,
 ) -> dict:
     """A JSON-safe dict describing one message.
 
@@ -160,6 +161,17 @@ def build_payload(
     decoded again by :func:`payload_to_attachments` in the worker. Raises
     :class:`EmailPayloadError` for anything that would fail identically on every
     retry.
+
+    ``text_only=True`` declares a single-part ``text/plain`` message: ``html_body``
+    is then irrelevant and ``text_body`` becomes the required one. The default is
+    False, which keeps the original rule — an HTML body is mandatory — for every
+    caller that has not asked for anything different.
+
+    The flag rides in the payload WITHOUT a ``PAYLOAD_VERSION`` bump, because it
+    is purely additive: a worker running older code reads the payload it already
+    understands and sends the multipart message it always did. Bumping the
+    version would instead make that worker refuse the message outright, turning a
+    cosmetic difference into a dropped email during a rolling deploy.
     """
     recipients = normalise_recipients(to)
     if len(recipients) > MAX_RECIPIENTS:
@@ -175,7 +187,12 @@ def build_payload(
         raise EmailPayloadError(
             f"subject is {len(subject)} characters (max {MAX_SUBJECT_LENGTH})."
         )
-    if not (html_body or "").strip():
+    if text_only:
+        if not (text_body or "").strip():
+            raise EmailPayloadError(
+                "text_body must not be empty for a text_only message."
+            )
+    elif not (html_body or "").strip():
         raise EmailPayloadError("html_body must not be empty.")
 
     encoded: list[dict] = []
@@ -203,6 +220,7 @@ def build_payload(
         "subject": subject,
         "html_body": html_body,
         "text_body": text_body,
+        "text_only": bool(text_only),
         "attachments": encoded,
     }
 
@@ -252,9 +270,13 @@ def deliver_payload(payload: dict, *, email_service: EmailService | None = None)
     return service.send(
         to=list(payload.get("to") or []),
         subject=payload["subject"],
-        html_body=payload["html_body"],
+        # `.get` rather than `[...]`: a text_only payload legitimately carries no
+        # HTML at all, and an older payload predating the flag carries no
+        # `text_only` key. Both must read as "the shape this worker already knows".
+        html_body=payload.get("html_body") or "",
         text_body=payload.get("text_body"),
         attachments=payload_to_attachments(payload) or None,
+        text_only=bool(payload.get("text_only", False)),
     )
 
 
@@ -264,12 +286,16 @@ def enqueue_email(
     *,
     to: str | list[str] | tuple[str, ...] | None,
     subject: str,
-    html_body: str,
+    html_body: str = "",
     text_body: str | None = None,
     attachments: list[Attachment] | None = None,
     settings: EmailSettings | None = None,
+    text_only: bool = False,
 ) -> EnqueueResult:
     """Queue one email for the Celery worker to deliver. Returns immediately.
+
+    ``text_only=True`` queues a single-part ``text/plain`` message and needs no
+    ``html_body`` at all — see :func:`build_payload`.
 
     Never raises for a delivery condition — no recipients, email switched off, an
     unconfigured or unreachable broker all come back as ``queued=False`` with a
@@ -320,6 +346,7 @@ def enqueue_email(
         html_body=html_body,
         text_body=text_body,
         attachments=attachments,
+        text_only=text_only,
     )
 
     try:
@@ -348,10 +375,11 @@ def send_email_now(
     *,
     to: str | list[str] | tuple[str, ...] | None,
     subject: str,
-    html_body: str,
+    html_body: str = "",
     text_body: str | None = None,
     attachments: list[Attachment] | None = None,
     email_service: EmailService | None = None,
+    text_only: bool = False,
 ) -> bool:
     """Deliver one email SYNCHRONOUSLY, through the same validation and
     normalisation the queued path uses.
@@ -367,6 +395,7 @@ def send_email_now(
         html_body=html_body,
         text_body=text_body,
         attachments=attachments,
+        text_only=text_only,
     )
     if not payload["to"]:
         logger.warning("email.skip reason=%s subject=%r", REASON_NO_RECIPIENTS, subject)
