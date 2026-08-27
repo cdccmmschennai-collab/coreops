@@ -492,13 +492,17 @@ def test_a_non_benchmark_activity_is_included(client, wr):
 
 
 def test_all_four_kinds_appear_together(client, wr):
-    """One day, four activities of four different shapes — four rows, none
-    dropped for lacking a tag count or a benchmark."""
+    """Four activities of four different shapes across the same cycle — four
+    rows, none dropped for lacking a tag count or a benchmark. Split across two
+    days (the report cap allows at most two activities per day) since the
+    report row-building is what is under test, not same-day grouping."""
     _file(client, wr["alice"], TODAY, [
-        _task(wr["project"], wr["tags_sub"], tags_count=250),
-        _task(wr["project"], wr["docs_sub"], docs_count=15),
         _task(wr["project"], wr["task_sub"]),
         _task(wr["project"], wr["meeting_sub"]),
+    ])
+    _file(client, wr["alice"], TODAY - timedelta(days=1), [
+        _task(wr["project"], wr["tags_sub"], tags_count=250),
+        _task(wr["project"], wr["docs_sub"], docs_count=15),
     ])
 
     rows = _by_sub(_report(client, wr["head"], wr["project"]))
@@ -648,6 +652,8 @@ def test_the_same_request_twice_returns_the_same_order(client, wr):
     _file(client, wr["alice"], TODAY, [
         _task(wr["project"], wr["tags_sub"], tags_count=100),
         _task(wr["project"], wr["docs_sub"], docs_count=25),
+    ])
+    _file(client, wr["alice"], TODAY - timedelta(days=1), [
         _task(wr["project"], wr["meeting_sub"]),
     ])
 

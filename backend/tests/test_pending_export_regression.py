@@ -63,9 +63,17 @@ def mixed_dataset(client, setup_author, pm_header, day_parts_on):
         "tasks": [
             _task(e1["project"].id, full["id"], tags_count=85),
             _task(e1["project"].id, am["id"], docs_count=90),
-            _task(e1["project"].id, lump["id"]),
         ],
     })
+    # The task-based (lump-sum) activity is its own report: the daily
+    # activity cap allows at most two rows per report, and the two numeric
+    # rows above already fill d[0]'s allowance.
+    if d[2] != d[0]:
+        _create_submit(client, e1["header"], {
+            "report_date": d[2].isoformat(), "day_status": "work_at_office",
+            "location": "chennai", "remarks": "e1 task",
+            "tasks": [_task(e1["project"].id, lump["id"])],
+        })
     if d[1] != d[0]:
         _submit_split(
             client, e1["header"],

@@ -200,19 +200,31 @@ def test_nonworking_half_creates_no_period_task(client, setup_author, day_parts_
 # ── Full Day is unaffected ─────────────────────────────────────────────────
 
 
-def test_full_day_still_accepts_multiple_activities(client, setup_author):
-    """The one-per-period cap is Split-Day only: Full Day keeps its existing
-    multi-activity behaviour (Add Activity + the PM approval workflow)."""
+def test_full_day_still_accepts_two_activities_but_not_three(client, setup_author):
+    """The one-per-period cap is Split-Day only: Full Day is not limited to one
+    activity per period (Add Activity + the PM approval workflow both still
+    work there). But the universal maximum-two-activities-per-report rule
+    (work_reports.service.MAX_ACTIVITIES_PER_REPORT) applies to every report
+    mode, so a Full-Day report still stops at two."""
     a = setup_author()
     pid = a["project"].id
     res = client.post(BASE, headers=a["header"], json={
         "report_date": TODAY,
         "day_status": "work_at_office",
         "location": "chennai",
-        "tasks": [_task(pid), _task(pid), _task(pid)],
+        "tasks": [_task(pid), _task(pid)],
     })
     assert res.status_code == 201, res.text
-    assert len(res.json()["tasks"]) == 3
+    assert len(res.json()["tasks"]) == 2
+
+    res3 = client.post(BASE, headers=a["header"], json={
+        "report_date": "2026-07-21",
+        "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [_task(pid), _task(pid), _task(pid)],
+    })
+    assert res3.status_code == 422, res3.text
+    assert "maximum of 2 activities" in res3.json()["error"]["message"]
 
 
 def test_full_day_leave_still_drops_tasks_silently(client, setup_author):

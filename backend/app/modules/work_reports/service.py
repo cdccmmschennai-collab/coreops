@@ -80,6 +80,13 @@ from app.modules.work_reports.schemas import (
 from app.shared.errors import AppError
 
 MAX_DAY_MINUTES = 1440
+# One universal cap on activity/work-item rows per report, regardless of
+# activity type (benchmark, numeric, lump-sum, PM-approved, continuation, or
+# any other row _validate_tasks ever sees) — the employee still picks which
+# ones. Enforced once here, the single place every write path (create, the
+# periods-payload update, and the legacy tasks-payload update) funnels its
+# full row list through before any row is persisted.
+MAX_ACTIVITIES_PER_REPORT = 2
 
 
 def _push(db: Session, user_id: uuid.UUID, type_: str, title: str, message: str,
@@ -506,6 +513,12 @@ def _validate_tasks(
     of the tag-scope consumption total so an edit does not count its own
     previous numbers against itself.
     """
+    if len(tasks) > MAX_ACTIVITIES_PER_REPORT:
+        raise AppError(
+            "validation_error",
+            f"A work report can contain a maximum of {MAX_ACTIVITIES_PER_REPORT} activities.",
+            422,
+        )
     # Restricted-activity enforcement (migration 0061): reject any row selecting
     # a RESTRICTED activity this employee is not authorized for, in a bulk check
     # (never one query per row). Dropdown filtering is not security — this is the

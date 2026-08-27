@@ -151,21 +151,36 @@ def test_my_alerts_tasks_panel_is_current_week_only_and_includes_completed(
         (week_done_sub, week_start + timedelta(days=1)),
         (last_week_sub, week_start - timedelta(days=3)),
     )
-    payload = {
+    # Two activities max per report (§ the daily activity cap) — the two
+    # current-week rows share one report; the previous-week row lives on a
+    # separate report date. due_date is overwritten below regardless of which
+    # report created the row, so which report hosts it is immaterial here.
+    created = client.post(BASE, headers=a["header"], json={
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
             "sub_activity_id": sub["id"],
-        } for sub, _ in subs_and_due],
-    }
-    created = client.post(BASE, headers=a["header"], json=payload).json()
+        } for sub, _ in subs_and_due[:2]],
+    }).json()
+    created_last_week = client.post(BASE, headers=a["header"], json={
+        "report_date": (TODAY_D - timedelta(days=1)).isoformat(),
+        "tasks": [{
+            "project_id": str(a["project"].id), "description": "work",
+            "sub_activity_id": subs_and_due[2][0]["id"],
+        }],
+    }).json()
 
     task_ids = {}
-    for task, (sub, due) in zip(created["tasks"], subs_and_due):
+    for task, (sub, due) in zip(created["tasks"], subs_and_due[:2]):
         task_ids[sub["id"]] = task["id"]
         row = db.get(WorkReportTask, task["id"])
         row.due_date = due
         db.add(row)
+    last_week_sub_id, last_week_due = subs_and_due[2]
+    task_ids[last_week_sub_id["id"]] = created_last_week["tasks"][0]["id"]
+    last_row = db.get(WorkReportTask, created_last_week["tasks"][0]["id"])
+    last_row.due_date = last_week_due
+    db.add(last_row)
     db.commit()
 
     client.patch(

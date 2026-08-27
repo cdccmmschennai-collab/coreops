@@ -204,6 +204,83 @@ def test_pending_continuation_lets_further_days_through(flag_on, client, db, aut
     assert db.query(ContinuationRequest).filter_by(work_item_id=wi).count() == 1
 
 
+# --------------------------------------------------------------------------
+# maximum two activities per report interacts with continuation approval
+# --------------------------------------------------------------------------
+def test_pending_continuation_counts_as_one_activity(flag_on, client, author, pm_header, db):
+    """An overdue LS continuation that auto-creates a pending approval request
+    still counts as ONE activity row: pairing it with one new activity is
+    still just two (allowed), and a third is rejected regardless."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)  # due the same day it starts
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    res = client.post(BASE, headers=a["header"], json={
+        "report_date": cont_day.isoformat(), "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "continue A",
+             "sub_activity_id": sub["id"], "work_item_id": wi},
+            {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
+        ],
+    })
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert len(body["tasks"]) == 2
+    assert body["tasks"][0]["continuation_approval_status"] == "pending"
+
+    res3 = client.patch(f"{BASE}/{body['id']}", headers=a["header"], json={
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "continue A",
+             "sub_activity_id": sub["id"], "work_item_id": wi},
+            {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
+            {"project_id": str(a["project"].id), "description": "new C", "minutes_spent": 30},
+        ],
+    })
+    assert res3.status_code == 422, res3.text
+    assert "maximum of 2 activities" in res3.json()["error"]["message"]
+
+
+def test_rejected_continuation_frees_activity_slot(flag_on, client, author, pm_header, db):
+    """Once a Project Head rejects a lump-sum continuation, its row is
+    withdrawn from the report, freeing the daily two-activity slot it held so
+    the employee can record a different second activity in its place."""
+    a = author()
+    _, sub = _lumpsum_sub(client, pm_header, period=1)
+    wi = _start_work_item(client, a["header"], project_id=a["project"].id, sub_id=sub["id"], on_date=START)
+    cont_day = TODAY
+
+    res = client.post(BASE, headers=a["header"], json={
+        "report_date": cont_day.isoformat(), "day_status": "work_at_office",
+        "location": "chennai",
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "continue A",
+             "sub_activity_id": sub["id"], "work_item_id": wi},
+            {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
+        ],
+    })
+    assert res.status_code == 201, res.text
+    report_id = res.json()["id"]
+
+    req = db.query(ContinuationRequest).filter_by(work_item_id=wi).one()
+    reject_res = client.post(f"{CR}/{req.id}/reject", headers=pm_header, json={"comment": "not justified"})
+    assert reject_res.status_code == 200, reject_res.text
+
+    fetched = client.get(f"{BASE}/{report_id}", headers=a["header"]).json()
+    assert len(fetched["tasks"]) == 1
+    assert fetched["tasks"][0]["description"] == "new B"
+
+    res2 = client.patch(f"{BASE}/{report_id}", headers=a["header"], json={
+        "tasks": [
+            {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
+            {"project_id": str(a["project"].id), "description": "new D", "minutes_spent": 30},
+        ],
+    })
+    assert res2.status_code == 200, res2.text
+    assert len(res2.json()["tasks"]) == 2
+
+
 def test_lost_race_uses_savepoint_and_does_not_corrupt_report_save(
     flag_on, client, db, author, pm_header, monkeypatch,
 ):

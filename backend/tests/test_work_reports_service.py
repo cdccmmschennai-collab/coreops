@@ -626,3 +626,79 @@ def test_negative_count_is_rejected_at_the_schema(db, author):
 
     with pytest.raises(Exception):
         _counted_task(p.id, tags_count=-1)
+
+
+# ---------- maximum two activities per report -------------------------------
+def test_one_activity_allowed(db, author):
+    u, e, p = author(email="a@x.com", code="E-MAX1", proj_code="P-MAX1")
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id)]))
+    assert len(r.tasks) == 1
+
+
+def test_two_activities_allowed(db, author):
+    u, e, p = author(email="a@x.com", code="E-MAX2", proj_code="P-MAX2")
+    r = svc.create_work_report(
+        db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id, desc="a"), _task(p.id, desc="b")]),
+    )
+    assert len(r.tasks) == 2
+
+
+def test_third_activity_rejected_on_create(db, author):
+    u, e, p = author(email="a@x.com", code="E-MAX3", proj_code="P-MAX3")
+    with pytest.raises(AppError) as ei:
+        svc.create_work_report(
+            db, u,
+            WorkReportCreate(
+                report_date=TODAY,
+                tasks=[_task(p.id, desc="a"), _task(p.id, desc="b"), _task(p.id, desc="c")],
+            ),
+        )
+    assert ei.value.status_code == 422
+    assert "maximum of 2 activities" in ei.value.message
+
+
+def test_third_activity_rejected_on_update(db, author):
+    u, e, p = author(email="a@x.com", code="E-MAX4", proj_code="P-MAX4")
+    r = svc.create_work_report(
+        db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id, desc="a"), _task(p.id, desc="b")]),
+    )
+    with pytest.raises(AppError) as ei:
+        svc.update_work_report(
+            db, u, r.id,
+            WorkReportUpdate(
+                tasks=[_task(p.id, desc="a"), _task(p.id, desc="b"), _task(p.id, desc="c")],
+            ),
+        )
+    assert ei.value.status_code == 422
+
+
+def test_draft_one_activity_then_add_second_allowed(db, author):
+    """Start with one activity, save, later add a second — allowed."""
+    u, e, p = author(email="a@x.com", code="E-MAX5", proj_code="P-MAX5")
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id, desc="a")]))
+    r = svc.update_work_report(
+        db, u, r.id, WorkReportUpdate(tasks=[_task(p.id, desc="a"), _task(p.id, desc="b")]),
+    )
+    assert len(r.tasks) == 2
+
+
+def test_editing_existing_two_activity_report_without_adding_third_allowed(db, author):
+    u, e, p = author(email="a@x.com", code="E-MAX6", proj_code="P-MAX6")
+    r = svc.create_work_report(
+        db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id, 60, "a"), _task(p.id, 60, "b")]),
+    )
+    r = svc.update_work_report(
+        db, u, r.id, WorkReportUpdate(tasks=[_task(p.id, 90, "a"), _task(p.id, 90, "b")]),
+    )
+    assert len(r.tasks) == 2
+    assert r.total_minutes == 180
+
+
+def test_employee_can_choose_which_two_of_three_available(db, author):
+    """Given A/B/C available, selecting A + C (skipping B) is allowed."""
+    u, e, p = author(email="a@x.com", code="E-MAX7", proj_code="P-MAX7")
+    r = svc.create_work_report(
+        db, u, WorkReportCreate(report_date=TODAY, tasks=[_task(p.id, desc="A"), _task(p.id, desc="C")]),
+    )
+    descs = {t.description for t in r.tasks}
+    assert descs == {"A", "C"}

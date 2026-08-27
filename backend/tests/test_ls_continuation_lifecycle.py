@@ -673,7 +673,7 @@ def _uuid_of(value):
     return _uuid.UUID(str(value))
 
 
-def _mixed(client, team, *, period=1, tick_ls=True, extra=0):
+def _mixed(client, team, *, period=1, tick_ls=True, extra=0, expect=201):
     """A report on _d(2) carrying `extra` + 1 ordinary daily activities and one
     lump-sum continuation past its allowance."""
     a, pm = team["author"], team["pm"]
@@ -687,7 +687,7 @@ def _mixed(client, team, *, period=1, tick_ls=True, extra=0):
     ]
     tasks.append(_task(a["project"].id, ls["id"], work_item_id=wid,
                        is_completed=tick_ls, minutes_spent=90))
-    res = _post(client, a["header"], on_date=_d(2), tasks=tasks)
+    res = _post(client, a["header"], on_date=_d(2), tasks=tasks, expect=expect)
     return res, {"ls": ls, "dailies": dailies, "wid": wid}
 
 
@@ -736,20 +736,17 @@ def test_case_c_pending_continuation_alone_still_submits(client, team, db):
     assert len(_requests(db, a["emp"].id)) == 1
 
 
-@pytest.mark.parametrize("extra", [0, 1])
-def test_cases_d_e_mixed_report_submits_with_only_the_ls_row_pending(
-    client, team, db, extra
-):
-    """Cases D and E - one, then two ordinary activities alongside a ticked
-    pending continuation. Every ordinary row is submitted normally and keeps its
-    own numbers; only the lump-sum row is pending."""
+def test_case_d_mixed_report_submits_with_only_the_ls_row_pending(client, team, db):
+    """Case D - one ordinary activity alongside a ticked pending continuation.
+    The ordinary row is submitted normally and keeps its own numbers; only the
+    lump-sum row is pending."""
     a = team["author"]
-    res, ids = _mixed(client, team, extra=extra)
+    res, ids = _mixed(client, team, extra=0)
 
     got = _submit(client, a["header"], res.json()["id"])
     assert got["status"] == "submitted"
-    assert len(got["tasks"]) == extra + 2
-    assert got["total_minutes"] == 60 * (extra + 1) + 90
+    assert len(got["tasks"]) == 2
+    assert got["total_minutes"] == 60 + 90
 
     by_sub = {t["sub_activity_id"]: t for t in got["tasks"]}
     for d in ids["dailies"]:
@@ -760,6 +757,17 @@ def test_cases_d_e_mixed_report_submits_with_only_the_ls_row_pending(
         assert row["benchmark_status"] is not None
     assert by_sub[ids["ls"]["id"]]["continuation_approval_status"] == "pending"
     assert len(_requests(db, a["emp"].id)) == 1
+
+
+def test_case_e_second_ordinary_activity_alongside_pending_continuation_rejected(
+    client, team, db
+):
+    """Case E - a SECOND ordinary activity alongside the pending continuation
+    would make three activity rows on one report, which the universal
+    maximum-two-activities rule now rejects outright (a separate, report-
+    capacity rule from continuation approval — see _mixed's extra=1 shape)."""
+    res, _ids = _mixed(client, team, extra=1, expect=422)
+    assert "maximum of 2 activities" in res.json()["error"]["message"]
 
 
 def test_case_f_pending_continuation_beside_a_completed_activity_submits(
@@ -796,7 +804,7 @@ def test_head_is_notified_when_the_mixed_report_is_saved(client, team, db):
     from app.modules.notifications.models import Notification
 
     a, h = team["author"], team["head"]
-    _mixed(client, team, extra=1)
+    _mixed(client, team, extra=0)
     req = _requests(db, a["emp"].id)[0]
 
     notes = db.execute(
@@ -813,7 +821,7 @@ def test_approval_of_a_mixed_report_leaves_everything_else_alone(client, team, d
     """The report stays submitted, the ordinary rows stay exactly as they were,
     and the approved row rides the SAME work item with no fresh allowance."""
     a, h = team["author"], team["head"]
-    res, ids = _mixed(client, team, extra=1)
+    res, ids = _mixed(client, team, extra=0)
     report_id = res.json()["id"]
     _submit(client, a["header"], report_id)
     req = _requests(db, a["emp"].id)[0]
@@ -825,8 +833,8 @@ def test_approval_of_a_mixed_report_leaves_everything_else_alone(client, team, d
 
     got = _get(client, a["header"], report_id)
     assert got["status"] == "submitted"
-    assert len(got["tasks"]) == 3
-    assert got["total_minutes"] == 60 * 2 + 90
+    assert len(got["tasks"]) == 2
+    assert got["total_minutes"] == 60 + 90
     by_sub = {t["sub_activity_id"]: t for t in got["tasks"]}
     assert by_sub[ids["ls"]["id"]]["continuation_approval_status"] == "approved"
     for d in ids["dailies"]:
@@ -846,7 +854,7 @@ def test_rejection_of_a_mixed_report_keeps_a_visible_rejected_record(client, tea
     the report carries a rejected-continuation record naming the activity, the
     reviewer and the reason."""
     a, h = team["author"], team["head"]
-    res, ids = _mixed(client, team, extra=1)
+    res, ids = _mixed(client, team, extra=0)
     report_id = res.json()["id"]
     _submit(client, a["header"], report_id)
     req = _requests(db, a["emp"].id)[0]
@@ -860,7 +868,7 @@ def test_rejection_of_a_mixed_report_keeps_a_visible_rejected_record(client, tea
     assert {t["sub_activity_id"] for t in got["tasks"]} == {
         d["id"] for d in ids["dailies"]
     }
-    assert got["total_minutes"] == 60 * 2        # the rejected minutes are gone
+    assert got["total_minutes"] == 60            # the rejected minutes are gone
 
     rejected = got["rejected_continuations"]
     assert len(rejected) == 1

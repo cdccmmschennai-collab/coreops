@@ -365,10 +365,19 @@ def test_duplicate_work_item_in_one_report_rejected(flag_on, client, author, pm_
     assert db.query(WorkItem).count() == 1
 
 
-def test_failed_create_rolls_back_work_item(flag_on, client, author, pm_header, db):
-    """A START row followed by a duplicate-link failure must leave NO work item."""
+def test_failed_create_rolls_back_work_item(
+    flag_on, client, author, pm_header, db, make_project, make_project_member
+):
+    """A START row followed by a same-request failure must leave NO stray work
+    item — even the one this same (failed) request created. Two rows only (the
+    report cap allows no more): the second continues a pre-existing item under
+    the WRONG project, which fails inside the insert/flush path rather than
+    upfront validation, so it still proves the first row's freshly-flushed item
+    is rolled back with the rest of the transaction."""
     a = author()
     _, sub = _task_sub(client, pm_header, period=2)
+    other_project = make_project(code="P-OTHER", status=ProjectStatus.active)
+    make_project_member(project_id=other_project.id, employee_id=a["emp"].id)
     r1 = _post_report(client, a["header"], project_id=a["project"].id,
                       sub_id=sub["id"], on_date=TODAY - timedelta(days=1)).json()
     wid = r1["tasks"][0]["work_item_id"]
@@ -380,10 +389,10 @@ def test_failed_create_rolls_back_work_item(flag_on, client, author, pm_header, 
             # a fresh START (would create an item) ...
             {"project_id": str(a["project"].id), "description": "new",
              "sub_activity_id": sub["id"]},
-            # ... then a duplicate continuation that aborts the whole request.
-            {"project_id": str(a["project"].id), "description": "dup",
-             "sub_activity_id": sub["id"], "work_item_id": str(wid)},
-            {"project_id": str(a["project"].id), "description": "dup2",
+            # ... then a continuation of the pre-existing item under a
+            # DIFFERENT project, which fails after the row above already
+            # flushed its new work item.
+            {"project_id": str(other_project.id), "description": "mismatch",
              "sub_activity_id": sub["id"], "work_item_id": str(wid)},
         ],
     })
@@ -965,6 +974,176 @@ def test_numeric_benchmark_never_creates_work_item(flag_on, client, author, pm_h
                      sub_id=sub["id"], on_date=TODAY, tags=40).json()
     assert r["tasks"][0]["work_item_id"] is None
     assert db.query(WorkItem).count() == 0
+
+
+# --------------------------------------------------------------------------
+# maximum two activities per report — universal cap, applies to every kind of
+# task row (fresh LS starts, LS continuations, numeric/count-based rows).
+# --------------------------------------------------------------------------
+def _t(project_id, sub_id, *, work_item_id=None, desc="work"):
+    d = {"project_id": str(project_id), "description": desc, "sub_activity_id": sub_id}
+    if work_item_id is not None:
+        d["work_item_id"] = str(work_item_id)
+    return d
+
+
+def _post_multi(client, header, *, on_date, tasks, expect=201):
+    res = client.post(BASE, headers=header, json={
+        "report_date": on_date.isoformat(), "day_status": "work_at_office",
+        "location": "chennai", "tasks": tasks,
+    })
+    assert res.status_code == expect, res.text
+    return res
+
+
+def test_two_ls_activities_allowed(flag_on, client, author, pm_header, db):
+    a = author()
+    _, sub_a = _task_sub(client, pm_header, name="A", period=6)
+    _, sub_b = _task_sub(client, pm_header, name="B", period=6)
+    res = _post_multi(client, a["header"], on_date=TODAY, tasks=[
+        _t(a["project"].id, sub_a["id"], desc="A"),
+        _t(a["project"].id, sub_b["id"], desc="B"),
+    ])
+    assert len(res.json()["tasks"]) == 2
+    assert db.query(WorkItem).count() == 2
+
+
+def test_two_ls_continuations_allowed(flag_on, client, author, pm_header, db):
+    a = author()
+    _, sub_a = _task_sub(client, pm_header, name="A", period=6)
+    _, sub_b = _task_sub(client, pm_header, name="B", period=6)
+    start = TODAY - timedelta(days=1)
+    r1 = _post_multi(client, a["header"], on_date=start, tasks=[
+        _t(a["project"].id, sub_a["id"], desc="A"),
+        _t(a["project"].id, sub_b["id"], desc="B"),
+    ]).json()
+    wid_a = r1["tasks"][0]["work_item_id"]
+    wid_b = r1["tasks"][1]["work_item_id"]
+    res = _post_multi(client, a["header"], on_date=TODAY, tasks=[
+        _t(a["project"].id, sub_a["id"], work_item_id=wid_a, desc="cont A"),
+        _t(a["project"].id, sub_b["id"], work_item_id=wid_b, desc="cont B"),
+    ])
+    assert len(res.json()["tasks"]) == 2
+
+
+def test_one_continuation_plus_one_new_activity_allowed(flag_on, client, author, pm_header, db):
+    a = author()
+    _, sub_a = _task_sub(client, pm_header, name="A", period=6)
+    _, sub_c = _task_sub(client, pm_header, name="C", period=6)
+    start = TODAY - timedelta(days=1)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub_a["id"], on_date=start).json()
+    wid_a = r1["tasks"][0]["work_item_id"]
+    res = _post_multi(client, a["header"], on_date=TODAY, tasks=[
+        _t(a["project"].id, sub_a["id"], work_item_id=wid_a, desc="cont A"),
+        _t(a["project"].id, sub_c["id"], desc="new C"),
+    ])
+    assert len(res.json()["tasks"]) == 2
+
+
+def test_accumulated_ls_day3_third_activity_rejected(flag_on, client, author, pm_header, db):
+    """The exact accumulated-LS scenario: Day1 starts A; Day2 continues A while
+    starting B (2 activities, allowed); Day3 attempting continue A + continue B
+    + start C must reject the third — the report stays capped at two."""
+    a = author()
+    _, sub_a = _task_sub(client, pm_header, name="A", period=10)
+    _, sub_b = _task_sub(client, pm_header, name="B", period=10)
+    _, sub_c = _task_sub(client, pm_header, name="C", period=10)
+    day1 = TODAY - timedelta(days=2)
+    day2 = TODAY - timedelta(days=1)
+    day3 = TODAY
+
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub_a["id"], on_date=day1).json()
+    wid_a = r1["tasks"][0]["work_item_id"]
+
+    r2 = _post_multi(client, a["header"], on_date=day2, tasks=[
+        _t(a["project"].id, sub_a["id"], work_item_id=wid_a, desc="cont A"),
+        _t(a["project"].id, sub_b["id"], desc="new B"),
+    ]).json()
+    wid_b = r2["tasks"][1]["work_item_id"]
+    assert db.query(WorkItem).count() == 2
+
+    res = _post_multi(client, a["header"], on_date=day3, tasks=[
+        _t(a["project"].id, sub_a["id"], work_item_id=wid_a, desc="cont A"),
+        _t(a["project"].id, sub_b["id"], work_item_id=wid_b, desc="cont B"),
+        _t(a["project"].id, sub_c["id"], desc="new C"),
+    ], expect=422)
+    assert "maximum of 2 activities" in res.json()["error"]["message"]
+    # No third work item was created for the rejected row.
+    assert db.query(WorkItem).count() == 2
+
+
+def test_two_existing_plus_third_continuation_rejected_on_update(
+    flag_on, client, author, pm_header, db
+):
+    """A report already saved with two activities cannot be updated to add a
+    third, even when the third is an LS continuation of an open work item."""
+    a = author()
+    _, sub_a = _task_sub(client, pm_header, name="A", period=6)
+    _, sub_b = _task_sub(client, pm_header, name="B", period=6)
+    _, sub_c = _task_sub(client, pm_header, name="C", period=6)
+    earlier = TODAY - timedelta(days=1)
+    wid_c = _post_report(client, a["header"], project_id=a["project"].id,
+                         sub_id=sub_c["id"], on_date=earlier).json()["tasks"][0]["work_item_id"]
+
+    r = _post_multi(client, a["header"], on_date=TODAY, tasks=[
+        _t(a["project"].id, sub_a["id"], desc="A"),
+        _t(a["project"].id, sub_b["id"], desc="B"),
+    ]).json()
+
+    res = client.patch(f"{BASE}/{r['id']}", headers=a["header"], json={
+        "tasks": [
+            _t(a["project"].id, sub_a["id"], desc="A"),
+            _t(a["project"].id, sub_b["id"], desc="B"),
+            _t(a["project"].id, sub_c["id"], work_item_id=wid_c, desc="cont C"),
+        ],
+    })
+    assert res.status_code == 422, res.text
+    assert "maximum of 2 activities" in res.json()["error"]["message"]
+
+
+def test_two_numeric_activities_allowed(flag_on, client, author, pm_header, db):
+    a = author()
+    aa = client.post("/api/v1/activity-master/activities",
+                     json={"name": "Numeric Group"}, headers=pm_header).json()
+    sub1 = client.post(
+        f"/api/v1/activity-master/activities/{aa['id']}/sub-activities",
+        json={"name": "Nums1", "benchmark_type": "NUMERIC",
+              "benchmark_value": 100, "relevant_count_field": "tags"},
+        headers=pm_header,
+    ).json()
+    sub2 = client.post(
+        f"/api/v1/activity-master/activities/{aa['id']}/sub-activities",
+        json={"name": "Nums2", "benchmark_type": "NUMERIC",
+              "benchmark_value": 50, "relevant_count_field": "docs"},
+        headers=pm_header,
+    ).json()
+    res = _post_multi(client, a["header"], on_date=TODAY, tasks=[
+        _t(a["project"].id, sub1["id"], desc="one"),
+        _t(a["project"].id, sub2["id"], desc="two"),
+    ])
+    assert len(res.json()["tasks"]) == 2
+
+
+def test_third_numeric_activity_rejected(flag_on, client, author, pm_header, db):
+    a = author()
+    aa = client.post("/api/v1/activity-master/activities",
+                     json={"name": "Numeric Group 2"}, headers=pm_header).json()
+    subs = []
+    for i in range(3):
+        subs.append(client.post(
+            f"/api/v1/activity-master/activities/{aa['id']}/sub-activities",
+            json={"name": f"Num{i}", "benchmark_type": "NUMERIC",
+                  "benchmark_value": 10, "relevant_count_field": "tags"},
+            headers=pm_header,
+        ).json())
+    res = _post_multi(client, a["header"], on_date=TODAY, tasks=[
+        _t(a["project"].id, subs[0]["id"], desc="one"),
+        _t(a["project"].id, subs[1]["id"], desc="two"),
+        _t(a["project"].id, subs[2]["id"], desc="three"),
+    ], expect=422)
+    assert "maximum of 2 activities" in res.json()["error"]["message"]
 
 
 # --------------------------------------------------------------------------
