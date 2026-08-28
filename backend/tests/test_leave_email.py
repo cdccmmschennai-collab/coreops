@@ -13,10 +13,13 @@ Two layers, deliberately:
     end to end through the API, because that is the property that would silently
     regress.
 
-All three are single-part `text/plain` messages - there is no HTML renderer left
-in `leave/email.py` - so the assertions read the one body a recipient actually
-sees, and `_assert_no_markup` guards against the designed-HTML format creeping
-back in.
+All three still render a `text/plain` body with no markup at all -
+`_assert_no_markup` guards against the old designed-HTML format creeping back
+into it - but now carry a minimal HTML alternative alongside it too, whose only
+job is to make "View Leave Request" a real hyperlink with the CoreOps URL
+hidden behind it rather than printed in the body. `_visible_text` strips that
+HTML down to what a reader actually sees, so the raw-URL-must-not-be-visible
+requirement can be asserted directly.
 
 `enqueue_email` is replaced by a recorder in most tests, so nothing reaches
 Celery, Redis or SMTP. The two tests that deliberately keep the real
@@ -49,6 +52,14 @@ def _assert_no_markup(body: str) -> None:
     lowered = body.lower()
     for tell in _MARKUP_TELLS:
         assert tell not in lowered, f"{tell!r} found in a plain-text email body"
+
+
+def _visible_text(html_body: str) -> str:
+    """Strip tags to approximate what a mail client actually renders to the eye
+    - used to assert the raw URL is not part of the visible text."""
+    import re
+
+    return re.sub(r"<[^>]+>", "", html_body)
 
 
 class _Recorder:
@@ -124,19 +135,29 @@ def test_routed_head_with_a_work_email_is_the_recipient(
     )
 
 
-def test_every_leave_email_is_queued_as_a_text_only_message(
-    db, make_employee, recorder,
+def test_every_leave_email_carries_a_minimal_html_alternative(
+    db, make_employee, recorder, monkeypatch,
 ):
-    """The transport attaches an HTML alternative unless asked not to, and that
-    alternative is the part a mail client renders. Every leave send must
-    therefore pass `text_only=True` and hand over no HTML at all - otherwise the
-    plain-text body would be written, queued, and never seen."""
+    """Every leave send hands `enqueue_email` both a markup-free `text_body` and
+    a minimal `html_body` whose only clickable element is "View Leave Request",
+    with the CoreOps URL hidden behind it rather than printed in the visible
+    text. None of the three pass `text_only=True` any more - that flag would
+    suppress the HTML alternative outright, and a hidden URL is impossible
+    without it."""
+    import html as html_module
+
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "APP_BASE_URL", "https://coreops.cdccmms.com")
+
     reviewer = make_employee(employee_code="RV15", work_email="rv15@cdccmms.com")
     mgr = make_employee(employee_code="MG15", work_email="mgr.15@cdccmms.com")
     emp = make_employee(
         employee_code="EE15", manager_id=mgr.id, work_email="emp.15@cdccmms.com"
     )
     req = _leave(db, emp.id)
+    link = leave_email.build_link(leave_email.leave_request_path(req, is_head=False))
+    escaped_href = html_module.escape(link, quote=True)
 
     leave_email.send_submission_email(db, emp, req)
     leave_email.send_approval_email(db, req, reviewer)
@@ -144,9 +165,17 @@ def test_every_leave_email_is_queued_as_a_text_only_message(
 
     assert len(recorder.calls) == 3
     for call in recorder.calls:
-        assert call["text_only"] is True
-        assert "html_body" not in call
+        assert not call.get("text_only")
         _assert_no_markup(call["text_body"])
+        assert "View Leave Request" in call["text_body"]
+
+        html_body = call["html_body"]
+        assert "<b>View Leave Request</b></a>" in html_body
+        assert f'href="{escaped_href}"' in html_body
+        assert link not in _visible_text(html_body)
+        # No card, no button, no table-based layout - a letter, not a design.
+        for tell in ("<table", "<button", "background", "<img", "class="):
+            assert tell not in html_body.lower()
 
 
 def test_head_without_a_work_email_falls_back_to_the_manager(
@@ -453,6 +482,43 @@ def test_the_link_is_rendered_as_a_plain_url_on_its_own_line():
 
 def test_no_link_means_no_call_to_action():
     assert "View Leave Request" not in _render(link=None).text_body
+    assert "View Leave Request" not in _render(link=None).html_body
+
+
+def test_the_html_link_hides_the_url_behind_view_leave_request():
+    """The one presentation difference from the text body: the HTML alternative
+    must render "View Leave Request" as the clickable text, with the CoreOps URL
+    only in the href, never in what the reader sees."""
+    import html as html_module
+
+    rendered = _render()
+    link = "https://coreops.cdccmms.com/attendance?tab=leave&id=abc"
+    escaped_href = html_module.escape(link, quote=True)
+
+    assert f'href="{escaped_href}"' in rendered.html_body
+    assert "<b>View Leave Request</b></a>" in rendered.html_body
+    assert link not in _visible_text(rendered.html_body)
+    assert "coreops.cdccmms.com" not in _visible_text(rendered.html_body)
+
+
+def test_the_html_body_has_no_marketing_layout():
+    """No card, no button, no table, no image, no background - a letter, not a
+    designed notification."""
+    html_body = _render().html_body.lower()
+    for tell in (
+        "<table", "<button", "background", "<img", "class=", "<center",
+        "border-radius", "cellpadding", "max-width",
+    ):
+        assert tell not in html_body
+
+
+def test_the_html_body_carries_the_same_facts_as_the_text_body():
+    rendered = _render()
+    text = _visible_text(rendered.html_body)
+    assert "Karthikeyan K" in text
+    assert "Casual Leave" in text
+    assert "Personal reasons" in text
+    assert "Dear Giridharan," in text
 
 
 def test_the_request_id_stays_in_the_footer_not_the_message():
@@ -610,6 +676,47 @@ def test_an_unknown_reviewer_drops_the_clause_rather_than_naming_nobody():
 
 def test_a_decision_without_a_link_has_no_call_to_action():
     assert "View Leave Request" not in _decision(link=None).text_body
+    assert "View Leave Request" not in _decision(link=None).html_body
+
+
+def test_a_decision_html_link_hides_the_url_behind_view_leave_request():
+    import html as html_module
+
+    rendered = _decision(approved=True)
+    link = "https://coreops.cdccmms.com/attendance?tab=leave&id=abc"
+    escaped_href = html_module.escape(link, quote=True)
+
+    assert f'href="{escaped_href}"' in rendered.html_body
+    assert "<b>View Leave Request</b></a>" in rendered.html_body
+    assert link not in _visible_text(rendered.html_body)
+
+
+def test_a_decision_html_body_has_no_marketing_layout():
+    for approved in (True, False):
+        html_body = _decision(
+            approved=approved, reviewer_comment="Peak week"
+        ).html_body.lower()
+        for tell in (
+            "<table", "<button", "background", "<img", "class=", "<center",
+            "border-radius", "cellpadding", "max-width",
+        ):
+            assert tell not in html_body
+
+
+def test_a_decision_html_body_carries_the_same_facts_as_the_text_body():
+    approved = _decision(approved=True)
+    approved_text = _visible_text(approved.html_body)
+    assert "Dear Santhosh Kumar," in approved_text
+    assert "Giridharan" in approved_text
+    assert "Casual Leave" in approved_text
+
+    rejected = _decision(
+        approved=False, reviewer_comment="Leave cannot be approved for these dates."
+    )
+    rejected_text = _visible_text(rejected.html_body)
+    assert "Personal reasons" in rejected_text
+    assert "Leave cannot be approved for these dates." in rejected_text
+    assert "Reviewer Comment" in rejected_text
 
 
 def test_the_decision_request_id_stays_in_the_footer():

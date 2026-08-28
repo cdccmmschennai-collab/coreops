@@ -18,19 +18,31 @@ than as a branch inside `leave/service.py::_push`, the helper all six leave
 notification events share. Attaching mail to `_push` would silently start
 emailing every one of them.
 
-PLAIN TEXT, DELIBERATELY
-========================
-All three are single-part `text/plain` messages. There is no HTML template here,
-and there must not be one: a leave request is correspondence between two
-colleagues, and it should arrive looking like an email a person typed in Outlook
-rather than a designed notification. No tables, no containers, no buttons, no
-inline CSS, no brand colours - a greeting, the facts, a link and a signature.
+PLAIN TEXT, PLUS THE THINNEST POSSIBLE HTML ALTERNATIVE
+========================================================
+All three are still, at heart, plain letters: a greeting, the facts, a link and a
+signature. No tables, no containers, no buttons, no card, no banner, no brand
+colours - a leave request is correspondence between two colleagues and must
+arrive looking like an email a person typed in Outlook, not a designed
+notification.
 
-That is why every send passes `text_only=True` to `enqueue_email`. Without it the
-transport attaches an HTML alternative, which is the part a mail client actually
-renders, so a "plain text" body would never be the one anybody saw. The flag is
-an opt-in on the shared transport and changes nothing for its other callers - the
-daily report reminder is still multipart, exactly as it was.
+The one concession is the link. A bare URL sitting in the body is ugly and, worse,
+a `text/plain` message cannot hide it behind words - "View Leave Request" can only
+be the clickable text, and the CoreOps URL kept out of what the reader sees, if
+there is an HTML part for the mail client to render. So each of these three now
+carries a minimal HTML alternative alongside its text body: normal left-aligned
+paragraphs in a normal font. Bold is spent on exactly three things - the actor
+or outcome named in the opening sentence ("submitted by NAME", "approved by
+NAME."), the Leave Period value, and the link text - never a field label, and
+the link's only styling is `color:#1155cc; text-decoration:underline;`, a
+plain blue underline, not a button. `_html_document` builds it; `_text_document`
+is unchanged and still supplies the text/plain part non-HTML clients fall back
+to, URL and all.
+
+That HTML alternative is why these sends no longer pass `text_only=True` -
+`enqueue_email` now gets both `text_body` and `html_body`, the same
+multipart/alternative shape every other caller of the shared transport already
+uses. The daily report reminder was never text_only and is untouched by this.
 
 WHO EACH ONE GOES TO
 ====================
@@ -71,6 +83,7 @@ SMTP.
 """
 from __future__ import annotations
 
+import html as _html
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -110,10 +123,16 @@ _LEAVE_TYPE_LABELS: dict[LeaveType, str] = {
 
 @dataclass(frozen=True)
 class RenderedLeaveEmail:
-    """One ready-to-send leave email. Plain text only - there is no HTML half."""
+    """One ready-to-send leave email: a text/plain body and its minimal HTML twin.
+
+    `text_body` is the letter, exactly as before. `html_body` says the same
+    things in the same order - it exists only so "View Leave Request" can be a
+    real hyperlink instead of a bare URL; see the module docstring.
+    """
 
     subject: str
     text_body: str
+    html_body: str
 
 
 # ---------- pure rendering --------------------------------------------------
@@ -204,21 +223,37 @@ def render_submission_email(
     if clean_reason:
         details.append(("Reason", clean_reason))
 
+    intro = (
+        f"A new leave request has been submitted by {employee_name} "
+        "and requires your review."
+    )
+    intro_html = (
+        "A new leave request has been submitted by "
+        f"<b>{_html.escape(employee_name)}</b> and requires your review."
+    )
+    closing = (
+        f"Please review the request and approve or reject it through "
+        f"the {product} system."
+    )
     return RenderedLeaveEmail(
         subject=f"Leave Request - {employee_name} - Action Required",
         text_body=_text_document(
             product=product,
             greeting=recipient_name,
-            intro=(
-                f"A new leave request has been submitted by {employee_name} "
-                "and requires your review."
-            ),
+            intro=intro,
             details=details,
             note=None,
-            closing=(
-                f"Please review the request and approve or reject it through "
-                f"the {product} system."
-            ),
+            closing=closing,
+            request_id=request_id,
+            link=link,
+        ),
+        html_body=_html_document(
+            product=product,
+            greeting=recipient_name,
+            intro_html=intro_html,
+            details=details,
+            note=None,
+            closing=closing,
             request_id=request_id,
             link=link,
         ),
@@ -281,8 +316,13 @@ def render_decision_email(
 
     if reviewer_name:
         intro = f"Your leave request has been {outcome} by {reviewer_name}."
+        intro_html = (
+            f"Your leave request has been <b>{outcome} by "
+            f"{_html.escape(reviewer_name)}.</b>"
+        )
     else:
         intro = f"Your leave request has been {outcome}."
+        intro_html = f"Your leave request has been <b>{outcome}.</b>"
 
     if approved:
         closing = (
@@ -300,6 +340,16 @@ def render_decision_email(
             product=product,
             greeting=employee_name,
             intro=intro,
+            details=details,
+            note=note,
+            closing=closing,
+            request_id=request_id,
+            link=link,
+        ),
+        html_body=_html_document(
+            product=product,
+            greeting=employee_name,
+            intro_html=intro_html,
             details=details,
             note=note,
             closing=closing,
@@ -351,6 +401,71 @@ def _text_document(
     return "\n".join(lines)
 
 
+def _html_document(
+    *,
+    product: str,
+    greeting: str,
+    intro_html: str,
+    details: list[tuple[str, str]],
+    note: tuple[str, str] | None,
+    closing: str,
+    request_id: str,
+    link: str | None,
+) -> str:
+    """The same letter as `_text_document`, as the thinnest HTML that can carry
+    a real hyperlink.
+
+    Existing exclusively so "View Leave Request" can be clickable text with the
+    CoreOps URL hidden behind it - a `text/plain` part cannot do that at all. No
+    table, no div, no card, no background, no button: plain left-aligned
+    paragraphs in the browser/client default font. Bold is spent on exactly
+    three things - the actor/outcome clause in the opening sentence (built into
+    `intro_html` by the caller, since only it knows which words that is), the
+    Leave Period value, and the link text - never a field label. The anchor is
+    the only element with any inline style, `color:#1155cc;
+    text-decoration:underline;`, a plain blue underline rather than a button.
+    Every value that did not come from this module is escaped, since a leave
+    reason or a name is free text typed by an employee; `intro_html` is the one
+    exception because the caller has already escaped its dynamic pieces.
+    """
+    e = _html.escape
+
+    paragraphs = [f"<p>Dear {e(greeting)},</p>", f"<p>{intro_html}</p>"]
+
+    detail_lines = []
+    for label, value in details:
+        rendered_value = f"<b>{e(value)}</b>" if label == "Leave Period" else e(value)
+        detail_lines.append(f"{e(label)}: {rendered_value}")
+    if detail_lines:
+        paragraphs.append(f"<p>{'<br>'.join(detail_lines)}</p>")
+    if note is not None:
+        paragraphs.append(f"<p>{e(note[0])}: {e(note[1])}</p>")
+
+    paragraphs.append(f"<p>{e(closing)}</p>")
+
+    if link:
+        paragraphs.append(
+            '<p><a href="{href}" '
+            'style="color:#1155cc;text-decoration:underline;">'
+            "<b>View Leave Request</b></a></p>".format(href=e(link, quote=True))
+        )
+
+    paragraphs.append(f"<p>Regards,<br>{e(product)}</p>")
+    paragraphs.append(
+        f"<p>Request ID: {e(request_id)}<br>"
+        "Automated notification - please do not reply.</p>"
+    )
+
+    body = "\n".join(paragraphs)
+    return (
+        "<html><body "
+        'style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+        'line-height:1.5;color:#000000;text-align:left;">\n'
+        f"{body}\n"
+        "</body></html>"
+    )
+
+
 # ---------- resolution + send ----------------------------------------------
 
 def first_emailable(recipients: list[LeaveRecipient]) -> LeaveRecipient | None:
@@ -400,7 +515,7 @@ def send_submission_email(db: Session, employee: Employee, req: LeaveRequest) ->
             to=recipient.employee.work_email,
             subject=rendered.subject,
             text_body=rendered.text_body,
-            text_only=True,
+            html_body=rendered.html_body,
         )
 
         # Logged at the FEATURE level as well as inside enqueue_email, because
@@ -504,7 +619,7 @@ def _send_decision_email(
             to=address,
             subject=rendered.subject,
             text_body=rendered.text_body,
-            text_only=True,
+            html_body=rendered.html_body,
         )
 
         if result.queued:
