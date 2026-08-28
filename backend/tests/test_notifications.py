@@ -155,7 +155,10 @@ def _setup_leave_actors(make_user, make_employee):
     mgr_u  = make_user("mgr@lv.com", role=UserRole.project_manager)
     emp_u  = make_user("emp@lv.com", role=UserRole.employee)
     mgr_e  = make_employee(employee_code="MGR-LV", user_id=mgr_u.id)
-    emp_e  = make_employee(employee_code="EMP-LV", user_id=emp_u.id, manager_id=mgr_e.id)
+    # `reporting_pm_id` (a users.id), not `manager_id`: the leave recipient chain
+    # falls back to the reporting PM, who can actually approve the request.
+    emp_e  = make_employee(employee_code="EMP-LV", user_id=emp_u.id,
+                           reporting_pm_id=mgr_u.id)
     return mgr_u, emp_u, mgr_e, emp_e
 
 
@@ -336,12 +339,13 @@ def test_target_url_in_api_response(client, make_user, login):
 def test_leave_submitted_notification_has_target_url(
     client, make_user, make_employee, login
 ):
-    """Leave-submitted notification sent to manager carries target_url."""
+    """Leave-submitted notification sent to the PM carries target_url."""
     from datetime import date, timedelta
     mgr_u  = make_user("mgr@tu.com", role=UserRole.project_manager)
     emp_u  = make_user("emp@tu.com", role=UserRole.employee)
     mgr_e  = make_employee(employee_code="MGR-TU", user_id=mgr_u.id)
-    emp_e  = make_employee(employee_code="EMP-TU", user_id=emp_u.id, manager_id=mgr_e.id)
+    emp_e  = make_employee(employee_code="EMP-TU", user_id=emp_u.id,
+                           reporting_pm_id=mgr_u.id)
 
     start = str(date.today() + timedelta(days=7))
     end   = str(date.today() + timedelta(days=9))

@@ -38,7 +38,9 @@ def team(make_user, make_employee):
     mu = make_user("mgr@x.com", role=UserRole.project_manager)
     mgr = make_employee(employee_code="MGR", user_id=mu.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
-    emp = make_employee(employee_code="EMP069", user_id=eu.id, manager_id=mgr.id,
+    # `reporting_pm_id` (a users.id), not `manager_id`: the leave recipient chain
+    # falls back to the reporting PM, who can actually decide the request.
+    emp = make_employee(employee_code="EMP069", user_id=eu.id, reporting_pm_id=mu.id,
                         first_name="Arun", last_name="Kumar")
     return {"manager_user": mu, "manager": mgr, "employee_user": eu, "employee": emp}
 

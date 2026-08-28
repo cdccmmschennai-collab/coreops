@@ -340,7 +340,7 @@ def test_create_routes_to_project_head_and_notifies(
     assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
 
 
-def test_create_no_head_falls_back_to_manager_notification(
+def test_create_no_head_falls_back_to_pm_notification(
     client, db, make_user, make_employee, make_project, make_project_member, login,
 ):
     """The previous day's project DOES resolve, but has no Head assigned -
@@ -354,9 +354,9 @@ def test_create_no_head_falls_back_to_manager_notification(
     project = make_project(code="RP-2")  # no head_employee_id
 
     mu = make_user("mgr10@x.com", role=UserRole.project_manager)
-    mgr = make_employee(employee_code="MGR10", user_id=mu.id)
+    make_employee(employee_code="MGR10", user_id=mu.id)
     eu = make_user("emp11@x.com", role=UserRole.employee)
-    emp = make_employee(employee_code="E11", user_id=eu.id, manager_id=mgr.id)
+    emp = make_employee(employee_code="E11", user_id=eu.id, reporting_pm_id=mu.id)
     make_project_member(project_id=project.id, employee_id=emp.id)
 
     # `prev_day` must not be in the future - work_reports.service rejects a
@@ -392,12 +392,12 @@ def test_create_no_head_falls_back_to_manager_notification(
     assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
 
 
-def test_create_self_as_head_falls_back_to_manager_notification(
+def test_a_project_heads_own_leave_is_unrouted_and_goes_to_the_pm(
     client, db, make_user, make_employee, make_project, make_project_member, login,
 ):
-    """The employee IS the routed project's Head - notifying them about their
-    own submission makes no sense, so this must fall back to their manager,
-    same as the no-head case."""
+    """The requester is a Project Head. Their leave must not be routed to ANY
+    Project Head - not themselves and not a colleague - so routed_project_id
+    stays NULL and the PM, the authoritative approver for a Head, is notified."""
     from datetime import timedelta
 
     from app.modules.notifications.models import Notification
@@ -405,9 +405,9 @@ def test_create_self_as_head_falls_back_to_manager_notification(
     from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
 
     mu = make_user("mgr11@x.com", role=UserRole.project_manager)
-    mgr = make_employee(employee_code="MGR11", user_id=mu.id)
+    make_employee(employee_code="MGR11", user_id=mu.id)
     eu = make_user("emp12@x.com", role=UserRole.employee)
-    emp = make_employee(employee_code="E12", user_id=eu.id, manager_id=mgr.id)
+    emp = make_employee(employee_code="E12", user_id=eu.id, reporting_pm_id=mu.id)
     project = make_project(code="RP-3", head_employee_id=emp.id)
     make_project_member(project_id=project.id, employee_id=emp.id)
 
@@ -436,9 +436,141 @@ def test_create_self_as_head_falls_back_to_manager_notification(
         json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
     )
     assert res.status_code == 201, res.text
+    assert res.json()["routed_project_id"] is None
 
     assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 1
     assert db.query(Notification).filter(Notification.user_id == eu.id).count() == 0
+
+
+def test_another_head_cannot_approve_a_project_heads_own_leave(
+    client, db, make_user, make_employee, make_project, login,
+):
+    """A Head's own leave is unrouted, and an unrouted request has no Head
+    reviewer at all - so a DIFFERENT Project Head is refused just like any other
+    employee, leaving the PM as the only approver."""
+    a_u = make_user("head-own-a@x.com", role=UserRole.employee)
+    head_a = make_employee(employee_code="HOA", user_id=a_u.id)
+    make_project(code="OWN-A", head_employee_id=head_a.id)
+
+    b_u = make_user("head-own-b@x.com", role=UserRole.employee)
+    head_b = make_employee(employee_code="HOB", user_id=b_u.id)
+    make_project(code="OWN-B", head_employee_id=head_b.id)
+
+    _fund(db, head_a.id)
+    req = _make_leave(db, head_a.id, routed_project_id=None)
+
+    # Head B - a Project Head, but not of anything this request is routed to.
+    res_b = client.post(
+        f"/api/v1/leave-requests/{req.id}/approve", headers=login("head-own-b@x.com"), json={}
+    )
+    assert res_b.status_code == 403, res_b.text
+
+    # Head A - the requester - cannot approve their own either.
+    res_a = client.post(
+        f"/api/v1/leave-requests/{req.id}/approve", headers=login("head-own-a@x.com"), json={}
+    )
+    assert res_a.status_code == 403, res_a.text
+
+
+def test_the_pm_can_approve_a_project_heads_own_leave(
+    client, db, make_user, make_employee, make_project, login,
+):
+    """The other half of the rule: the PM really is the authoritative approver
+    for an unrouted request, so the Head's leave is not left undecidable."""
+    make_user("pm-own@x.com", role=UserRole.project_manager)
+    a_u = make_user("head-own-c@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HOC", user_id=a_u.id)
+    make_project(code="OWN-C", head_employee_id=head.id)
+
+    _fund(db, head.id)
+    req = _make_leave(db, head.id, routed_project_id=None)
+
+    res = client.post(
+        f"/api/v1/leave-requests/{req.id}/approve", headers=login("pm-own@x.com"), json={}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+
+
+def test_the_pm_is_notified_of_a_cancellation_request_on_an_unrouted_leave(
+    client, db, make_user, make_employee, login,
+):
+    """The PM fallback carries every event the recipient chain handles, not just
+    submission - a cancellation request on an unrouted leave has to reach the
+    person who will decide it, deep-linked to the queue that contains it."""
+    from app.modules.notifications.models import Notification
+
+    mu = make_user("pm-cancel@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="PMC", user_id=mu.id)
+    eu = make_user("emp-cancel@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="ECX", user_id=eu.id, reporting_pm_id=mu.id)
+
+    req = _make_leave(db, emp.id, routed_project_id=None)
+    req.status = LeaveStatus.approved
+    db.add(req)
+    db.commit()
+
+    res = client.post(
+        f"/api/v1/leave-requests/{req.id}/request-cancellation",
+        headers=login("emp-cancel@x.com"),
+    )
+    assert res.status_code == 200, res.text
+
+    note = (
+        db.query(Notification)
+        .filter(Notification.user_id == mu.id,
+                Notification.type == "leave_cancellation_requested")
+        .one()
+    )
+    assert note.target_url == f"/attendance?tab=leave&queue=cancellation&id={req.id}"
+
+
+def test_an_employee_with_no_reporting_pm_notifies_nobody_without_failing(
+    client, db, make_user, make_employee, login,
+):
+    """No routed project and no reporting PM on record. That is a legitimate
+    data state, not an error: the request is still created and nothing raises."""
+    from app.modules.notifications.models import Notification
+
+    eu = make_user("emp-orphan@x.com", role=UserRole.employee)
+    make_employee(
+        employee_code="EORPH", user_id=eu.id, manager_id=None, reporting_pm_id=None
+    )
+
+    before = db.query(Notification).count()
+    res = client.post(
+        "/api/v1/leave-requests", headers=login("emp-orphan@x.com"), json=_payload()
+    )
+
+    assert res.status_code == 201, res.text
+    assert res.json()["routed_project_id"] is None
+    assert db.query(Notification).count() == before
+
+
+def test_the_line_manager_is_never_notified_of_a_leave_request(
+    client, db, make_user, make_employee, login,
+):
+    """`manager_id` is no longer a rung of the chain. A line manager cannot
+    approve leave, so notifying them told somebody who could not act while the
+    PM who could was never told."""
+    from app.modules.notifications.models import Notification
+
+    lm_u = make_user("linemgr@x.com", role=UserRole.employee)
+    line_mgr = make_employee(employee_code="LM1", user_id=lm_u.id)
+    mu = make_user("pm-lm@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="PMLM", user_id=mu.id)
+    eu = make_user("emp-lm@x.com", role=UserRole.employee)
+    make_employee(
+        employee_code="ELM", user_id=eu.id, manager_id=line_mgr.id, reporting_pm_id=mu.id
+    )
+
+    res = client.post(
+        "/api/v1/leave-requests", headers=login("emp-lm@x.com"), json=_payload()
+    )
+    assert res.status_code == 201, res.text
+
+    assert db.query(Notification).filter(Notification.user_id == lm_u.id).count() == 0
+    assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 1
 
 
 def _fund_and_login(login, email):

@@ -48,7 +48,7 @@ WHO EACH ONE GOES TO
 ====================
 The submission email goes to the first candidate in
 `leave/recipients.py::resolve_leave_recipients` that has a `work_email`: the
-routed project's current Project Head, else the requester's line manager. That is
+routed project's current Project Head, else the requester's reporting PM. That is
 the SAME chain, in the same order, that the in-app notification walks - the two
 channels differ only in the reachability test they apply to it (a login vs an
 address), so they can never disagree about routing.
@@ -65,8 +65,9 @@ can be found, no email is sent and the in-app notification stands alone.
 
 A fallback recipient is a DELIVERY decision only. Approval authority is
 unchanged and lives in `leave/service.py::_assert_can_review`: the Project Head
-remains the intended per-project approver even when the email went to their
-manager instead.
+remains the intended per-project approver even when the email went to the PM
+instead - and the PM is authorized to review any request, so a fallback email
+never lands with somebody who cannot act on it.
 
 FAILURE IS NEVER THE CALLER'S PROBLEM
 =====================================

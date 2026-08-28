@@ -6,7 +6,7 @@ import { usePermissionList } from "@/features/permissions/hooks";
 import { useUrlState } from "@/lib/use-url-state";
 
 import { useLeaveList } from "../hooks";
-import { resolveLeaveQueue } from "../types";
+import { leaveQueueCountParams, resolveLeaveQueue } from "../types";
 import { AdminLeaveList } from "./admin-leave-list";
 import { LeaveCancellationReviewPanel } from "./leave-cancellation-review-panel";
 import { LeaveReviewPanel } from "./leave-review-panel";
@@ -35,11 +35,13 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
   // prop: a Head's own requests must not appear in their own approval queues.
   const excludeSelf = !showPermissionQueue;
 
-  // limit:1 — these two only exist to read `total` for the badges.
+  // These two only exist to read `total` for the badges. They MUST pass the same
+  // `excludeSelf` the queues below pass, or a Head's own request is counted on a
+  // tab whose list will not show it - see `leaveQueueCountParams`.
   const pendingCount =
-    useLeaveList({ status: "pending", limit: 1, offset: 0 }).data?.total ?? 0;
+    useLeaveList(leaveQueueCountParams("pending", excludeSelf)).data?.total ?? 0;
   const cancellationCount =
-    useLeaveList({ status: "cancellation_requested", limit: 1, offset: 0 }).data?.total ?? 0;
+    useLeaveList(leaveQueueCountParams("cancellation_requested", excludeSelf)).data?.total ?? 0;
   const permissionCount =
     usePermissionList(
       { status: "pending", limit: 1, offset: 0 },

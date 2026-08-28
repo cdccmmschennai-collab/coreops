@@ -185,6 +185,29 @@ def reviewable_project_ids(db: Session, actor: User) -> set[uuid.UUID]:
     return set(head_ids)
 
 
+def heads_any_project(db: Session, employee_id: uuid.UUID) -> bool:
+    """Whether this EMPLOYEE is the assigned Head of any live project.
+
+    The boolean, employee-keyed twin of :func:`reviewable_project_ids`, which
+    answers the same question about the *caller* and enumerates the projects.
+    This one is keyed on an employee id because leave routing has to ask it
+    about a SUBJECT who is not the caller: a Project Head's own leave request is
+    never routed to a Project Head — not even a different project's Head — so it
+    falls to the PM, the authoritative approver for a Head's own leave.
+
+    Deleted projects are excluded: a Head of nothing but an archived project is
+    not a Head any more.
+    """
+    return db.execute(
+        select(Project.id)
+        .where(
+            Project.head_employee_id == employee_id,
+            Project.deleted_at.is_(None),
+        )
+        .limit(1)
+    ).scalar_one_or_none() is not None
+
+
 def led_activity_pairs(
     db: Session,
     actor: User,

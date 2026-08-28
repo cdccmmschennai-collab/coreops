@@ -179,6 +179,9 @@ def make_employee(db):
         last_name: str = "User",
         user_id=None,
         manager_id=None,
+        # A users.id, not an employees.id - the PM's login. This is the rung the
+        # leave recipient chain falls back to when no Project Head is resolved.
+        reporting_pm_id=None,
         status: EmployeeStatus = EmployeeStatus.active,
         department: str | None = None,
         designation: str | None = None,
@@ -190,6 +193,7 @@ def make_employee(db):
             last_name=last_name,
             user_id=user_id,
             manager_id=manager_id,
+            reporting_pm_id=reporting_pm_id,
             status=status,
             department=department,
             designation=designation,

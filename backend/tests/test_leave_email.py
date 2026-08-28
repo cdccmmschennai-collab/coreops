@@ -113,6 +113,20 @@ def _leave(db, employee_id, *, routed_project_id=None, reason="Personal reasons"
     return req
 
 
+def _pm(make_user, make_employee, tag: str, *, work_email: str | None):
+    """Build the requester's reporting PM and return their USER id.
+
+    The fallback rung of the leave recipient chain is `Employee.reporting_pm_id`,
+    which holds a **users.id** - so a usable PM needs both a `project_manager`
+    user (the authority that lets them approve, and the bell's target) and the
+    employee row that carries their `work_email` (the email's target). Pass the
+    returned id as `reporting_pm_id=` on the requester.
+    """
+    pm_user = make_user(f"pm-{tag}@x.com", role=UserRole.project_manager)
+    make_employee(employee_code=f"PM{tag}", user_id=pm_user.id, work_email=work_email)
+    return pm_user.id
+
+
 # ---------- recipient resolution -------------------------------------------
 
 def test_routed_head_with_a_work_email_is_the_recipient(
@@ -136,7 +150,7 @@ def test_routed_head_with_a_work_email_is_the_recipient(
 
 
 def test_every_leave_email_carries_a_minimal_html_alternative(
-    db, make_employee, recorder, monkeypatch,
+    db, make_user, make_employee, recorder, monkeypatch,
 ):
     """Every leave send hands `enqueue_email` both a markup-free `text_body` and
     a minimal `html_body` whose only clickable element is "View Leave Request",
@@ -151,9 +165,10 @@ def test_every_leave_email_carries_a_minimal_html_alternative(
     monkeypatch.setattr(settings, "APP_BASE_URL", "https://coreops.cdccmms.com")
 
     reviewer = make_employee(employee_code="RV15", work_email="rv15@cdccmms.com")
-    mgr = make_employee(employee_code="MG15", work_email="mgr.15@cdccmms.com")
     emp = make_employee(
-        employee_code="EE15", manager_id=mgr.id, work_email="emp.15@cdccmms.com"
+        employee_code="EE15",
+        reporting_pm_id=_pm(make_user, make_employee, "15", work_email="pm.15@cdccmms.com"),
+        work_email="emp.15@cdccmms.com",
     )
     req = _leave(db, emp.id)
     link = leave_email.build_link(leave_email.leave_request_path(req, is_head=False))
@@ -178,7 +193,7 @@ def test_every_leave_email_carries_a_minimal_html_alternative(
             assert tell not in html_body.lower()
 
 
-def test_head_without_a_work_email_falls_back_to_the_manager(
+def test_head_without_a_work_email_falls_back_to_the_pm(
     db, make_user, make_employee, make_project, recorder,
 ):
     """The Head has a LOGIN but no work email. The bell still reaches them (the
@@ -186,13 +201,15 @@ def test_head_without_a_work_email_falls_back_to_the_manager(
     hu = make_user("head-e2@x.com")
     head = make_employee(employee_code="HE2", user_id=hu.id, work_email=None)
     project = make_project(code="EM-2", head_employee_id=head.id)
-    mgr = make_employee(employee_code="MG2", work_email="mgr.two@cdccmms.com")
-    emp = make_employee(employee_code="EE2", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE2",
+        reporting_pm_id=_pm(make_user, make_employee, "2", work_email="pm.two@cdccmms.com"),
+    )
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
 
-    assert recorder.recipients == ["mgr.two@cdccmms.com"]
+    assert recorder.recipients == ["pm.two@cdccmms.com"]
     # The chain itself still puts the Head first - only the email's own
     # reachability test skipped them.
     chain = resolve_leave_recipients(db, emp, req)
@@ -207,61 +224,110 @@ def test_head_login_email_is_never_used_as_the_work_email(
     hu = make_user("head-login@x.com")
     head = make_employee(employee_code="HE3", user_id=hu.id, work_email=None)
     project = make_project(code="EM-3", head_employee_id=head.id)
-    mgr = make_employee(employee_code="MG3", work_email="mgr.three@cdccmms.com")
-    emp = make_employee(employee_code="EE3", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE3",
+        reporting_pm_id=_pm(make_user, make_employee, "3", work_email="pm.three@cdccmms.com"),
+    )
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
 
-    assert recorder.recipients == ["mgr.three@cdccmms.com"]
+    assert recorder.recipients == ["pm.three@cdccmms.com"]
     assert "head-login@x.com" not in recorder.recipients
 
 
-def test_no_routed_project_falls_back_to_the_manager(
-    db, make_employee, recorder,
+def test_no_routed_project_falls_back_to_the_pm(
+    db, make_user, make_employee, recorder,
 ):
-    mgr = make_employee(employee_code="MG4", work_email="mgr.four@cdccmms.com")
-    emp = make_employee(employee_code="EE4", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE4",
+        reporting_pm_id=_pm(make_user, make_employee, "4", work_email="pm.four@cdccmms.com"),
+    )
     req = _leave(db, emp.id, routed_project_id=None)
 
     leave_email.send_submission_email(db, emp, req)
 
-    assert recorder.recipients == ["mgr.four@cdccmms.com"]
+    assert recorder.recipients == ["pm.four@cdccmms.com"]
 
 
-def test_project_without_a_head_falls_back_to_the_manager(
-    db, make_employee, make_project, recorder,
+def test_project_without_a_head_falls_back_to_the_pm(
+    db, make_user, make_employee, make_project, recorder,
 ):
     project = make_project(code="EM-5")  # no head_employee_id
-    mgr = make_employee(employee_code="MG5", work_email="mgr.five@cdccmms.com")
-    emp = make_employee(employee_code="EE5", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE5",
+        reporting_pm_id=_pm(make_user, make_employee, "5", work_email="pm.five@cdccmms.com"),
+    )
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
 
-    assert recorder.recipients == ["mgr.five@cdccmms.com"]
+    assert recorder.recipients == ["pm.five@cdccmms.com"]
+
+
+def test_the_line_manager_is_never_the_leave_email_recipient(
+    db, make_user, make_employee, recorder,
+):
+    """`manager_id` is the LINE MANAGER and is no longer a rung of the chain.
+
+    A line manager cannot approve leave - `_assert_can_review` grants review to a
+    PM or the routed Head and nobody else - so emailing them told somebody who
+    could not act while the PM who could was never told. The requester here has
+    both pointers set and only the PM may be mailed.
+    """
+    mgr = make_employee(employee_code="MG4B", work_email="mgr.four.b@cdccmms.com")
+    emp = make_employee(
+        employee_code="EE4B",
+        manager_id=mgr.id,
+        reporting_pm_id=_pm(make_user, make_employee, "4B", work_email="pm.four.b@cdccmms.com"),
+    )
+    req = _leave(db, emp.id, routed_project_id=None)
+
+    leave_email.send_submission_email(db, emp, req)
+
+    assert recorder.recipients == ["pm.four.b@cdccmms.com"]
+    assert "mgr.four.b@cdccmms.com" not in recorder.recipients
 
 
 def test_the_requester_is_never_emailed_about_their_own_request(
-    db, make_employee, make_project, recorder,
+    db, make_user, make_employee, make_project, recorder,
 ):
     """The employee IS the routed project's Head. Emailing them their own
     submission is noise, and they may not review it either."""
-    mgr = make_employee(employee_code="MG6", work_email="mgr.six@cdccmms.com")
     emp = make_employee(
-        employee_code="EE6", manager_id=mgr.id, work_email="self.six@cdccmms.com"
+        employee_code="EE6",
+        reporting_pm_id=_pm(make_user, make_employee, "6", work_email="pm.six@cdccmms.com"),
+        work_email="self.six@cdccmms.com",
     )
     project = make_project(code="EM-6", head_employee_id=emp.id)
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
 
-    assert recorder.recipients == ["mgr.six@cdccmms.com"]
+    assert recorder.recipients == ["pm.six@cdccmms.com"]
     assert "self.six@cdccmms.com" not in recorder.recipients
 
 
+def test_a_pm_is_never_emailed_about_their_own_request(
+    db, make_user, make_employee, recorder,
+):
+    """A PM filing their own leave is their own reporting PM. They cannot review
+    their own request (`_assert_can_review`), so the chain must drop them rather
+    than mail them about it - and with no other rung, nothing is sent."""
+    pm_user = make_user("pm-self@x.com", role=UserRole.project_manager)
+    pm = make_employee(
+        employee_code="PMSELF", user_id=pm_user.id,
+        work_email="pm.self@cdccmms.com", reporting_pm_id=pm_user.id,
+    )
+    req = _leave(db, pm.id, routed_project_id=None)
+
+    leave_email.send_submission_email(db, pm, req)
+
+    assert recorder.calls == []
+
+
 def test_head_with_no_user_account_is_still_emailed(
-    db, make_employee, make_project, recorder,
+    db, make_user, make_employee, make_project, recorder,
 ):
     """Email needs an address, not a login. A Head with no linked User row is
     unreachable by the bell but perfectly reachable by email."""
@@ -269,8 +335,10 @@ def test_head_with_no_user_account_is_still_emailed(
         employee_code="HE7", user_id=None, work_email="head.seven@cdccmms.com"
     )
     project = make_project(code="EM-7", head_employee_id=head.id)
-    mgr = make_employee(employee_code="MG7", work_email="mgr.seven@cdccmms.com")
-    emp = make_employee(employee_code="EE7", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE7",
+        reporting_pm_id=_pm(make_user, make_employee, "7", work_email="pm.seven@cdccmms.com"),
+    )
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
@@ -279,26 +347,30 @@ def test_head_with_no_user_account_is_still_emailed(
 
 
 def test_a_blank_work_email_counts_as_no_work_email(
-    db, make_employee, make_project, recorder,
+    db, make_user, make_employee, make_project, recorder,
 ):
     head = make_employee(employee_code="HE8", work_email="   ")
     project = make_project(code="EM-8", head_employee_id=head.id)
-    mgr = make_employee(employee_code="MG8", work_email="mgr.eight@cdccmms.com")
-    emp = make_employee(employee_code="EE8", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE8",
+        reporting_pm_id=_pm(make_user, make_employee, "8", work_email="pm.eight@cdccmms.com"),
+    )
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
 
-    assert recorder.recipients == ["mgr.eight@cdccmms.com"]
+    assert recorder.recipients == ["pm.eight@cdccmms.com"]
 
 
 def test_nobody_with_a_work_email_sends_nothing(
-    db, make_employee, make_project, recorder,
+    db, make_user, make_employee, make_project, recorder,
 ):
     head = make_employee(employee_code="HE9", work_email=None)
     project = make_project(code="EM-9", head_employee_id=head.id)
-    mgr = make_employee(employee_code="MG9", work_email=None)
-    emp = make_employee(employee_code="EE9", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE9",
+        reporting_pm_id=_pm(make_user, make_employee, "9", work_email=None),
+    )
     req = _leave(db, emp.id, routed_project_id=project.id)
 
     leave_email.send_submission_email(db, emp, req)
@@ -307,8 +379,9 @@ def test_nobody_with_a_work_email_sends_nothing(
 
 
 def test_no_recipients_at_all_sends_nothing(db, make_employee, recorder):
-    """No routed project and no manager - a legitimate state, not an error."""
-    emp = make_employee(employee_code="EE10", manager_id=None)
+    """No routed project and no reporting PM - a legitimate state, not an
+    error, and it must not raise."""
+    emp = make_employee(employee_code="EE10", manager_id=None, reporting_pm_id=None)
     req = _leave(db, emp.id, routed_project_id=None)
 
     leave_email.send_submission_email(db, emp, req)
@@ -316,9 +389,24 @@ def test_no_recipients_at_all_sends_nothing(db, make_employee, recorder):
     assert recorder.calls == []
 
 
+def test_a_reporting_pm_without_an_employee_record_resolves_to_nobody(
+    db, make_user, make_employee, recorder,
+):
+    """`reporting_pm_id` points at a users.id. If that user has no employee row
+    there is no `work_email` to send to and no employee to hand the chain, so the
+    chain is empty and nothing is sent - it must not raise."""
+    pm_user = make_user("pm-orphan@x.com", role=UserRole.project_manager)
+    emp = make_employee(employee_code="EE10B", reporting_pm_id=pm_user.id)
+    req = _leave(db, emp.id, routed_project_id=None)
+
+    assert resolve_leave_recipients(db, emp, req) == []
+    leave_email.send_submission_email(db, emp, req)
+    assert recorder.calls == []
+
+
 # ---------- failure behaviour ----------------------------------------------
 
-def test_a_dead_broker_does_not_raise(db, make_employee, monkeypatch):
+def test_a_dead_broker_does_not_raise(db, make_user, make_employee, monkeypatch):
     """Real `enqueue_email`, dead Celery. The leave request is already committed
     by this point, so an outage must degrade to a log line."""
     import app.notifications.email_dispatch as dispatch
@@ -331,15 +419,17 @@ def test_a_dead_broker_does_not_raise(db, make_employee, monkeypatch):
     monkeypatch.setattr(email_tasks, "send_email", _DeadTask())
     monkeypatch.setattr(dispatch, "get_email_settings", lambda: _StubSettings())
 
-    mgr = make_employee(employee_code="MG11", work_email="mgr.eleven@cdccmms.com")
-    emp = make_employee(employee_code="EE11", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE11",
+        reporting_pm_id=_pm(make_user, make_employee, "11", work_email="pm.eleven@cdccmms.com"),
+    )
     req = _leave(db, emp.id)
 
     leave_email.send_submission_email(db, emp, req)  # must not raise
 
 
 def test_disabled_email_does_not_raise_and_never_reaches_the_broker(
-    db, make_employee, monkeypatch,
+    db, make_user, make_employee, monkeypatch,
 ):
     import app.notifications.email_dispatch as dispatch
     import app.tasks.email_tasks as email_tasks
@@ -358,18 +448,22 @@ def test_disabled_email_does_not_raise_and_never_reaches_the_broker(
     monkeypatch.setattr(email_tasks, "send_email", _Boom())
     monkeypatch.setattr(dispatch, "get_email_settings", lambda: _Disabled())
 
-    mgr = make_employee(employee_code="MG12", work_email="mgr.twelve@cdccmms.com")
-    emp = make_employee(employee_code="EE12", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE12",
+        reporting_pm_id=_pm(make_user, make_employee, "12", work_email="pm.twelve@cdccmms.com"),
+    )
     req = _leave(db, emp.id)
 
     leave_email.send_submission_email(db, emp, req)  # must not raise
 
 
-def test_a_renderer_failure_does_not_escape(db, make_employee, monkeypatch):
+def test_a_renderer_failure_does_not_escape(db, make_user, make_employee, monkeypatch):
     """Last-resort isolation: even a bug in this module must not reach a caller
     whose leave request has already been committed."""
-    mgr = make_employee(employee_code="MG13", work_email="mgr.13@cdccmms.com")
-    emp = make_employee(employee_code="EE13", manager_id=mgr.id)
+    emp = make_employee(
+        employee_code="EE13",
+        reporting_pm_id=_pm(make_user, make_employee, "13", work_email="pm.13@cdccmms.com"),
+    )
     req = _leave(db, emp.id)
 
     def _boom(**kwargs):
@@ -802,20 +896,23 @@ def test_rejection_emails_the_requesting_employee_with_the_comment(
 
 
 def test_a_decision_never_emails_the_reviewer_or_the_manager(
-    db, make_employee, recorder,
+    db, make_user, make_employee, recorder,
 ):
     """No chain is walked: the outcome of a request is nobody's business but the
-    requester's, so there is no Head/manager rung to fall through to."""
+    requester's, so there is no Head/PM rung to fall through to."""
     reviewer = make_employee(employee_code="RV32", work_email="reviewer.32@cdccmms.com")
     mgr = make_employee(employee_code="MG32", work_email="mgr.32@cdccmms.com")
     emp = make_employee(
-        employee_code="EE32", manager_id=mgr.id, work_email="emp.32@cdccmms.com"
+        employee_code="EE32", manager_id=mgr.id, work_email="emp.32@cdccmms.com",
+        reporting_pm_id=_pm(make_user, make_employee, "32", work_email="pm.32@cdccmms.com"),
     )
     req = _decided(db, emp.id, reviewer_id=reviewer.id)
 
     leave_email.send_approval_email(db, req, reviewer)
 
     assert recorder.recipients == ["emp.32@cdccmms.com"]
+    assert "mgr.32@cdccmms.com" not in recorder.recipients
+    assert "pm.32@cdccmms.com" not in recorder.recipients
 
 
 def test_a_decision_for_an_employee_without_a_work_email_sends_nothing(
@@ -1030,7 +1127,7 @@ def _decision_fixture(db, make_user, make_employee):
                         first_name="Giri", last_name="Dharan",
                         work_email="mgr.e2e@cdccmms.com")
     eu = make_user("emp-dec@x.com")
-    emp = make_employee(employee_code="EE21", user_id=eu.id, manager_id=mgr.id,
+    emp = make_employee(employee_code="EE21", user_id=eu.id, reporting_pm_id=mu.id,
                         first_name="Santhosh", last_name="Kumar",
                         work_email="santhosh.e2e@cdccmms.com")
 
@@ -1207,7 +1304,7 @@ def test_a_decision_for_an_employee_without_a_work_email_still_succeeds(
     mgr = make_employee(employee_code="MG23", user_id=mu.id,
                         work_email="mgr.23@cdccmms.com")
     eu = make_user("emp-nomail@x.com")
-    emp = make_employee(employee_code="EE23", user_id=eu.id, manager_id=mgr.id,
+    emp = make_employee(employee_code="EE23", user_id=eu.id, reporting_pm_id=mu.id,
                         work_email=None)
     db.add(EmployeeLeaveAdjustment(
         employee_id=emp.id,
@@ -1310,9 +1407,11 @@ def test_a_broker_outage_does_not_fail_the_submission(
     monkeypatch.setattr(email_tasks, "send_email", _DeadTask())
     monkeypatch.setattr(dispatch, "get_email_settings", lambda: _StubSettings())
 
-    mgr = make_employee(employee_code="MG22", work_email="mgr.22@cdccmms.com")
     eu = make_user("emp-broker@x.com")
-    make_employee(employee_code="EE22", user_id=eu.id, manager_id=mgr.id)
+    make_employee(
+        employee_code="EE22", user_id=eu.id,
+        reporting_pm_id=_pm(make_user, make_employee, "22", work_email="pm.22@cdccmms.com"),
+    )
 
     start = date.today() + timedelta(days=7)
     res = client.post(

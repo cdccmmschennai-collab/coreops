@@ -207,6 +207,23 @@ export function resolveLeaveQueue(raw: string | null | undefined): LeaveQueue {
     : "pending";
 }
 
+/** The list params a queue's TAB BADGE counts with.
+ *
+ *  `limit: 1` because only `total` is read - the badge never renders rows. The
+ *  point of this helper is `exclude_self`: the badge and the list it labels must
+ *  describe ONE dataset, and they drifted apart because the count call sites
+ *  simply forgot to pass it. A Project Head reviewing their own queue sees their
+ *  own requests filtered out of the list, so they must be filtered out of the
+ *  number on the tab too - otherwise the tab says "1" and opens on an empty
+ *  table. Both the badge and the queue's own list now build their
+ *  `exclude_self` from the same flag, so the two cannot disagree again. */
+export function leaveQueueCountParams(
+  status: LeaveStatus,
+  excludeSelf: boolean,
+): LeaveListParams {
+  return { status, limit: 1, offset: 0, exclude_self: excludeSelf };
+}
+
 /** `3 August 2026`, or `29 July 2026 - 30 July 2026` for a range. */
 export function formatLeavePeriod(startDate: string, endDate: string): string {
   const start = formatLongDate(startDate);

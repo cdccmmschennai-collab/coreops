@@ -258,12 +258,14 @@ def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
                             queue: str | None = None) -> None:
     """Notify whoever this request is routed to: the CURRENT Head of
     `req.routed_project_id` if one is assigned (and isn't the requester
-    themself), else the employee's manager - the existing PM-fallback path,
-    unchanged.
+    themself), else the employee's reporting PM.
 
     Walks `resolve_leave_recipients` and takes the first candidate with a login
-    to deliver to, which is exactly the rule this function has always applied: a
-    Head with no linked user account falls through to the manager.
+    to deliver to, then STOPS - exactly one person is notified, never all
+    candidates. A Head with no linked user account falls through to the PM,
+    which is the rule this function has always applied; only the identity of
+    that fallback rung changed (line manager -> reporting PM), so that the
+    person notified is a person who can actually approve the request.
     """
     for candidate in resolve_leave_recipients(db, employee, req):
         if candidate.employee.user_id is None:
