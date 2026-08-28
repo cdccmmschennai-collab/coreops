@@ -365,21 +365,190 @@ def test_overlapping_requests_are_refused_but_dead_ones_do_not_block(
     }).status_code == 201
 
 
-def test_approval_blocked_when_balance_is_insufficient(
+# ======================================================================
+# An insufficient balance does not block an approval
+# ======================================================================
+#
+# The rule these replace refused any approval costing more days than the ledger
+# reported spendable, and told the reviewer to reject it or have it refiled as
+# unpaid. That was wrong: the approver decides whether the absence is warranted,
+# not whether it is currently funded. A short balance now approves and goes
+# NEGATIVE, and the deficit is carried and reconciled by the ledger.
+
+def test_approval_is_allowed_from_a_zero_balance_and_goes_negative(
     client, login, team, fund, make_leave_request, db
 ):
-    """Section 12J - and the request survives intact so it can be refiled."""
-    fund("1.50")
+    """0 available, 2 days requested -> approved, balance -2.
+
+    The headline case. Nothing about the approval is special-cased: the days are
+    marked exactly as a funded approval marks them, and the balance is negative
+    purely because the ledger counts those rows against an empty pool.
+    """
+    fund("0.00")
+    req = make_leave_request(
+        employee_id=team["employee"].id, start_date=MON, end_date=TUE
+    )
+
+    res = _approve(client, login, req.id)
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
+
+    db.expire_all()
+    assert db.get(LeaveRequest, req.id).status == LeaveStatus.approved
+    assert _balance(db, team["employee"].id) == Decimal("-2.00")
+    # The calendar is marked exactly as it would be for a funded approval.
+    assert _days(db, team["employee"].id) == [
+        (MON, AttendanceStatus.leave),
+        (TUE, AttendanceStatus.leave),
+    ]
+
+
+def test_a_partially_funded_approval_spends_what_there_is_and_overdraws_the_rest(
+    client, login, team, fund, make_leave_request, db
+):
+    """1 available, 3 days requested -> approved, balance -2.
+
+    The deficit is the arithmetic result (1 - 3), not a flat penalty: the day the
+    pool COULD fund is still funded.
+    """
+    fund("1.00")
     req = make_leave_request(
         employee_id=team["employee"].id, start_date=MON, end_date=WED
     )
+
     res = _approve(client, login, req.id)
-    assert res.status_code == 422, res.text
-    assert "Insufficient leave balance" in res.json()["error"]["message"]
+    assert res.status_code == 200, res.text
 
     db.expire_all()
-    assert db.get(LeaveRequest, req.id).status == LeaveStatus.pending
-    assert _balance(db, team["employee"].id) == Decimal("1.50")
+    assert _balance(db, team["employee"].id) == Decimal("-2.00")
+    assert len(_days(db, team["employee"].id)) == 3
+
+
+def test_a_funded_approval_is_completely_unchanged(
+    client, login, team, fund, make_leave_request, db
+):
+    """A positive balance still behaves exactly as it always did - the deletion
+    of the guard must not have moved the normal case."""
+    fund("10.00")
+    req = make_leave_request(
+        employee_id=team["employee"].id, start_date=MON, end_date=TUE
+    )
+
+    assert _approve(client, login, req.id).status_code == 200
+
+    db.expire_all()
+    assert _balance(db, team["employee"].id) == Decimal("8.00")
+    assert len(_days(db, team["employee"].id)) == 2
+
+
+def test_next_months_accrual_offsets_the_deficit(
+    client, login, team, fund, make_leave_request, make_leave_allocation, db
+):
+    """The reconciliation the business rule depends on, through the real
+    approval path rather than at the ledger's own level.
+
+    March is overdrawn to -2 by an approval. April and May each accrue 1 day, so
+    the deficit is offset month by month - -1, then 0 - with no correction, no
+    reset and no separate reconciliation step. `carry_in(M) = closing(M-1)` is
+    unclamped, and `available(M)` adds the month's allocation to it.
+    """
+    fund("0.00")
+    # Effective from APRIL, so March itself accrues nothing and the -2 below is
+    # unambiguously the approval's doing.
+    make_leave_allocation(
+        employee_id=team["employee"].id,
+        effective_from=date(2027, 4, 1),
+        monthly_days=1,
+    )
+    req = make_leave_request(
+        employee_id=team["employee"].id, start_date=MON, end_date=TUE
+    )
+    assert _approve(client, login, req.id).status_code == 200
+
+    db.expire_all()
+    emp_id = team["employee"].id
+    assert ledger.closing_balance(db, emp_id, date(2027, 3, 1)) == Decimal("-2.00")
+    assert ledger.closing_balance(db, emp_id, date(2027, 4, 1)) == Decimal("-1.00")
+    assert ledger.closing_balance(db, emp_id, date(2027, 5, 1)) == Decimal("0.00")
+
+
+def test_rejecting_an_unaffordable_request_still_costs_nothing(
+    client, login, team, fund, make_leave_request, db
+):
+    """Rejection is still the way to refuse leave, and it consumes nothing -
+    the balance is untouched and no day is marked."""
+    fund("0.00")
+    req = make_leave_request(
+        employee_id=team["employee"].id, start_date=MON, end_date=TUE
+    )
+
+    res = client.post(
+        f"{API}/{req.id}/reject", headers=login("mgr@x.com"),
+        json={"comment": "Not this week"},
+    )
+    assert res.status_code == 200, res.text
+
+    db.expire_all()
+    assert db.get(LeaveRequest, req.id).status == LeaveStatus.rejected
+    assert _balance(db, team["employee"].id) == Decimal("0.00")
+    assert _days(db, team["employee"].id) == []
+
+
+def test_unpaid_leave_still_costs_the_pool_nothing_even_when_overdrawn(
+    client, login, team, fund, make_leave_request, db
+):
+    """Unpaid leave is not funded from the pool, so it marks the calendar and
+    moves the balance by zero - it does not deepen an existing deficit.
+
+    Approving it was never blocked (it does not deduct), and removing the guard
+    must not have turned it into something that deducts.
+    """
+    fund("0.00")
+    paid = make_leave_request(
+        employee_id=team["employee"].id, start_date=MON, end_date=TUE
+    )
+    assert _approve(client, login, paid.id).status_code == 200
+    db.expire_all()
+    assert _balance(db, team["employee"].id) == Decimal("-2.00")
+
+    unpaid = make_leave_request(
+        employee_id=team["employee"].id, start_date=WED, end_date=WED,
+        leave_type=LeaveType.unpaid,
+    )
+    assert _approve(client, login, unpaid.id).status_code == 200
+
+    db.expire_all()
+    # The unpaid day IS marked...
+    assert len(_days(db, team["employee"].id)) == 3
+    # ...but the deficit is unchanged by it.
+    assert _balance(db, team["employee"].id) == Decimal("-2.00")
+
+
+def test_cancelling_an_overdrawn_approval_restores_the_deficit_exactly(
+    client, login, team, fund, make_leave_request, db
+):
+    """Reversal is symmetric from a negative balance too: deleting the rows
+    stops the ledger counting them, so -2 returns to 0 rather than over- or
+    under-restoring."""
+    fund("0.00")
+    req = make_leave_request(
+        employee_id=team["employee"].id, start_date=MON, end_date=TUE
+    )
+    assert _approve(client, login, req.id).status_code == 200
+    db.expire_all()
+    assert _balance(db, team["employee"].id) == Decimal("-2.00")
+
+    # An APPROVED leave is withdrawn through the two-step flow, not `/cancel`
+    # (which only accepts a pending request).
+    assert client.post(
+        f"{API}/{req.id}/request-cancellation", headers=login("emp@x.com"),
+    ).status_code == 200
+    assert client.post(
+        f"{API}/{req.id}/approve-cancellation", headers=login("mgr@x.com"),
+    ).status_code == 200
+
+    db.expire_all()
+    assert _balance(db, team["employee"].id) == Decimal("0.00")
     assert _days(db, team["employee"].id) == []
 
 

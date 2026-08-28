@@ -36,7 +36,6 @@ being marked.
 """
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select
@@ -52,12 +51,10 @@ from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.effects import (
     apply_leave_approved,
-    deducts_balance,
     leave_working_days,
     plan_leave_days,
     reverse_leave_approved,
 )
-from app.modules.leave_balances import ledger
 from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.leave import email as leave_email
 from app.modules.leave import routing
@@ -953,28 +950,33 @@ def approve_leave_request(
     # worked.
     _assert_approvable_against_biometric(db, req.employee_id, to_mark)
 
-    # UNCHANGED ELIGIBILITY RULE, new source for its input. The guard is still
-    # "you cannot approve more days than the employee has", still applies only to
-    # balance-deducting types, still fires at approval rather than at submission,
-    # and still refuses nothing on a zero or negative balance that it did not
-    # refuse before. What moved is where the figure comes from: the authoritative
-    # ledger instead of the stored counter Phase 3 retired.
+    # THE BALANCE DOES NOT GATE THE APPROVAL.
     #
-    # Weighed against the month the last charged day falls in, because that
-    # month's balance already has every earlier month's consumption folded in.
-    # Reading "the balance today" instead would let two future leaves in
-    # different months each be approved against the same untouched figure.
-    if deducts_balance(req.leave_type) and to_mark:
-        available = ledger.spendable_on(db, req.employee_id, to_mark[-1])
-        if Decimal(len(to_mark)) > available:
-            raise AppError(
-                "validation_error",
-                f"Insufficient leave balance: {len(to_mark)} day(s) requested, "
-                f"{available:g} available. Reject the request, or have it refiled "
-                "as unpaid leave.",
-                422,
-            )
-
+    # There used to be an eligibility guard here that refused any request costing
+    # more days than `ledger.spendable_on` reported, telling the reviewer to
+    # reject it or have it refiled as unpaid. That is not the business rule: an
+    # approver decides whether the absence is warranted, not whether it is
+    # currently funded, and a genuine leave does not stop being genuine because
+    # the pool is empty. A short balance now approves and goes NEGATIVE.
+    #
+    # Nothing needs to be added to make that work, which is why this is a
+    # deletion and not a replacement. The ledger already carries a deficit
+    # faithfully and already reconciles it:
+    #
+    #   consumption   is the `leave` attendance rows `apply_leave_approved`
+    #                 writes below - marking the day IS the deduction, so an
+    #                 approval that overdraws simply produces a closing balance
+    #                 below zero (`ledger.py`: "NEGATIVES ARE REAL. Nothing is
+    #                 clamped.")
+    #   carry-forward is `carry_in(M) = closing(M-1)`, unclamped, so the deficit
+    #                 survives into the next month
+    #   reconciliation is `available(M) = carry_in + allocation + adjustment`, so
+    #                 the next month's accrual offsets the deficit on its own:
+    #                 -2 then +1/month reads -1, then 0.
+    #
+    # The guards that DO still gate an approval are untouched and sit above this
+    # comment: a day the employee is recorded present for, and a day the
+    # biometric device has settled as worked.
     reviewer = _current_employee(db, actor)
     req.status = LeaveStatus.approved
     req.manager_id = reviewer.id if reviewer else None

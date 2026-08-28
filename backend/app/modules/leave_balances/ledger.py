@@ -46,9 +46,18 @@ ledger and every month reads as not-in-ledger.
 NEGATIVES ARE REAL
 ==================
 Nothing is clamped. The existing system represents loss-of-pay as a negative
-balance, PM corrections may push a month below zero, and this module reports
-that faithfully. Deciding what a negative balance FORBIDS is not the ledger's
-job - it belongs to the leave approval guard, whose rule is unchanged.
+balance, PM corrections may push a month below zero, an approved leave the pool
+could not fund pushes it below zero too, and this module reports all of that
+faithfully.
+
+A negative balance FORBIDS nothing. Leave approval deliberately does not weigh
+the balance at all (`leave/service.py::approve_leave_request`): the approver
+decides whether the absence is warranted, and a deficit is then carried and
+reconciled here rather than refused there. `carry_in(M) = closing(M-1)` is
+unclamped, so a deficit survives into the next month, and `available(M)` adds
+that month's allocation to it - which is precisely how a negative balance is
+offset by future accrual, with no reconciliation step of its own: -2 followed by
++1/month reads -1, then 0.
 
 WHAT COUNTS AS CONSUMED
 =======================

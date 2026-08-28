@@ -121,8 +121,10 @@ export interface LeaveBalanceListParams {
  *  precedes the employee's ledger, which is not the same as zero.
  *
  *  Zero and negative balances print exactly as they are. Nothing in this module
- *  hides or blocks them; the leave approval guard on the server is the only
- *  thing that decides what a balance forbids. */
+ *  hides or blocks them, and nothing on the server does either: a leave approval
+ *  no longer weighs the balance, so a genuine approval may overdraw the pool and
+ *  a negative figure here is an ordinary state, not an error to be styled as
+ *  one. It is offset by the next month's accrual. */
 export function formatBalance(
   value: number,
   inLedger = true,

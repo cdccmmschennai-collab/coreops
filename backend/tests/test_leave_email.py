@@ -1114,6 +1114,58 @@ def test_submitting_emails_the_head_and_still_rings_the_bell(
     assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
 
 
+def test_submitting_with_no_routed_project_emails_the_pm_and_rings_their_bell(
+    client, db, make_user, make_employee, login, recorder,
+):
+    """PARITY WITH THE HEAD PATH - the regression this test exists for.
+
+    The employee has filed no work report, so `resolve_routed_project` cannot
+    establish a project and `routed_project_id` is NULL. The PM is then the
+    authorized approver, the request appears in their queue, and BOTH channels
+    must reach them - exactly as both reach the Head when a project does route.
+
+    This is the case that went silent in production. The fallback rung used to be
+    `Employee.manager_id`, the line manager, which is set on almost nobody and is
+    not an authorized reviewer either; `resolve_leave_recipients` therefore
+    returned an empty chain and neither the bell nor the email fired, while the
+    request stayed fully visible in the PM's queue because queue visibility is
+    role-based and never consults the chain. That divergence - visible to the PM,
+    undeliverable to the PM - is what this asserts can never come back.
+    """
+    from app.modules.notifications.models import Notification
+
+    mu = make_user("pm-fallback-e2e@x.com", role=UserRole.project_manager)
+    make_employee(
+        employee_code="PMF1", user_id=mu.id, work_email="pm.fallback@cdccmms.com"
+    )
+    eu = make_user("emp-fallback-e2e@x.com")
+    make_employee(
+        employee_code="EEF1", first_name="Nainar", last_name="B",
+        user_id=eu.id, reporting_pm_id=mu.id,
+    )
+
+    leave_date = _next_working_day(_recent_working_day())
+    res = client.post(
+        "/api/v1/leave-requests",
+        headers=login("emp-fallback-e2e@x.com"),
+        json=_payload(leave_date, leave_date),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    # No work report exists, so nothing routes - this IS the fallback case.
+    assert body["routed_project_id"] is None
+
+    # ...the email reached the PM's work address...
+    assert recorder.recipients == ["pm.fallback@cdccmms.com"]
+    assert "Nainar B" in recorder.calls[0]["subject"]
+
+    # ...and the bell rang for the PM's login, at the fallback rung's deep link
+    # (no `queue=` - that shape belongs to the Head rung).
+    note = db.query(Notification).filter(Notification.user_id == mu.id).one()
+    assert note.type == "leave_submitted"
+    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+
+
 def _decision_fixture(db, make_user, make_employee):
     """A manager who may review, an employee who may be emailed, and a balance
     large enough for the approvals these tests perform."""
@@ -1288,6 +1340,17 @@ def test_the_decision_bell_still_rings_alongside_the_email(
     assert notes["leave_rejected"].target_url == (
         f"/attendance?tab=leave&id={second['id']}"
     )
+
+    # BOTH channels, for BOTH outcomes. The bell above and the email here are the
+    # employee-facing half of the parity this module guarantees: whatever happens
+    # to the approver's chain, the requester is always told the outcome twice.
+    decision_subjects = [
+        call["subject"] for call in recorder.calls
+        if call["subject"].startswith("Leave Request - ")
+        and call["to"] == "santhosh.e2e@cdccmms.com"
+    ]
+    assert "Leave Request - Approved" in decision_subjects
+    assert "Leave Request - Rejected" in decision_subjects
 
 
 def test_a_decision_for_an_employee_without_a_work_email_still_succeeds(

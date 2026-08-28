@@ -88,10 +88,15 @@ from app.modules.users.models import User
 # Leave types that draw down `employee_leave_balances.available_leave`.
 #
 # `unpaid` is deliberately absent: unpaid leave is BY DEFINITION not taken from
-# the leave pool, so deducting it would both misstate the balance and make the
-# insufficient-balance guard reject the one request that exists precisely for the
-# case where there is no balance left. An unpaid day is still marked Leave on the
-# calendar - it is real absence, just not funded absence.
+# the leave pool, so deducting it would misstate the balance - an unpaid absence
+# must cost the pool nothing at all, not even when the pool is empty. An unpaid
+# day is still marked Leave on the calendar - it is real absence, just not funded
+# absence.
+#
+# This set no longer decides whether an approval is ALLOWED - nothing does; a
+# short balance approves and goes negative (`leave/service.py::approve_leave_request`).
+# It decides only which types the pool pays for, which is what
+# `ledger._consumed_by_month` excludes unpaid days from.
 BALANCE_DEDUCTING_TYPES = frozenset(
     {
         LeaveType.casual,
