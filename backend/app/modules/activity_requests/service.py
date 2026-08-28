@@ -495,7 +495,12 @@ def _create_task_from_request(
     )
     # Validates the project is active and the employee is still a member; raises
     # AppError otherwise so approval fails cleanly instead of writing a bad row.
-    _total, snapshots = _validate_tasks(db, req.employee_id, [row])
+    # require_lumpsum_count=False: ActivityRequest carries no count_field (see
+    # _validate_tasks' own docstring) — the mandatory LS-count gate only
+    # applies where a client could actually name one.
+    _total, snapshots = _validate_tasks(
+        db, req.employee_id, [row], require_lumpsum_count=False,
+    )
     snap = snapshots[0]
     started_date, due_date = _task_based_dates(report.report_date, snap)
     db.add(

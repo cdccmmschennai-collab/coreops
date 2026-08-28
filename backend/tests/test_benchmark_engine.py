@@ -197,7 +197,7 @@ def test_task_based_due_date_computed_on_draft_save(client, setup_author, activi
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -221,7 +221,7 @@ def test_task_based_daily_due_date_is_assigned_date(client, setup_author, activi
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -239,6 +239,7 @@ def test_submit_task_based_sub_activity_has_no_deficit(client, setup_author, act
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
             "sub_activity_id": sub["id"], "is_completed": True,
+            "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -260,7 +261,7 @@ def test_completion_toggle_works_on_submitted_locked_report(client, setup_author
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -291,7 +292,7 @@ def test_completion_toggle_rejects_non_author(client, setup_author, activity_adm
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -313,7 +314,7 @@ def test_overdue_flips_true_after_due_date_passes(client, db, setup_author, acti
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -552,7 +553,7 @@ def test_overdue_activities_lists_past_due_incomplete_rows(client, db, setup_aut
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()
@@ -599,7 +600,7 @@ def test_overdue_excludes_previous_cycle(client, db, setup_author, activity_admi
         BASE, headers=a["header"],
         json={"report_date": TODAY, "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }]},
     ).json()
 

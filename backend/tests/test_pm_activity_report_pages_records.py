@@ -106,7 +106,7 @@ def test_activity_rows_api_zeroes_legacy_pages_records(client, setup_author, pm_
     _submit(
         client, a["header"], a["project"].id,
         [{"project_id": str(a["project"].id), "description": "w",
-          "sub_activity_id": sub["id"], "tags_count": 7}],
+          "sub_activity_id": sub["id"], "tags_count": 7, "count_field": "tags"}],
     )
     cell = _first_activity(client, pm_header)
     assert cell["tags"] == 7      # unrelated existing count unchanged

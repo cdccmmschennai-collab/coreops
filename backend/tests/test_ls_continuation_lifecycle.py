@@ -136,8 +136,15 @@ def _daily_sub(client, admin, *, name="Daily"):
 
 
 def _task(project_id, sub_id, *, work_item_id=None, is_completed=False, **extra):
+    # count_field/count_value: an LS row now requires a count (see
+    # test_lumpsum_count_field.py). Defaulted here so every builder in this
+    # file — which is about the continuation/approval lifecycle, not the
+    # count feature — keeps passing it without each call site restating it;
+    # a non-lumpsum sub (TASK_WITH_QUANTITY, NUMERIC_DAILY) simply has it
+    # cleared server-side, same as before.
     t = {"project_id": str(project_id), "description": "work",
-         "sub_activity_id": sub_id, "is_completed": is_completed, **extra}
+         "sub_activity_id": sub_id, "is_completed": is_completed,
+         "count_field": "tags", "count_value": 25, **extra}
     if work_item_id is not None:
         t["work_item_id"] = str(work_item_id)
     return t
@@ -153,9 +160,10 @@ def _post(client, header, *, on_date, tasks, expect=201):
 
 
 def _one(client, header, *, project_id, sub_id, on_date, work_item_id=None,
-         is_completed=False, expect=201):
+         is_completed=False, expect=201, **extra):
     return _post(client, header, on_date=on_date, expect=expect, tasks=[
-        _task(project_id, sub_id, work_item_id=work_item_id, is_completed=is_completed)
+        _task(project_id, sub_id, work_item_id=work_item_id,
+              is_completed=is_completed, **extra)
     ])
 
 
@@ -909,3 +917,47 @@ def test_report_list_does_not_carry_the_rejected_record(client, team, db):
                         params={"employee_id": str(a["emp"].id)}).json()
     row = next(r for r in listed["items"] if r["id"] == res.json()["id"])
     assert row["rejected_continuations"] == []
+
+
+# ==========================================================================
+# 13. the mandatory count requirement (test_lumpsum_count_field.py) reaches
+#     continuation rows too, and disturbs nothing about the lifecycle itself.
+# ==========================================================================
+def test_5_continuation_lifecycle_is_unchanged_by_the_mandatory_count(
+    client, team, db
+):
+    """5. Existing LS continuation flow → unchanged. Every row in this file's
+    scenarios now carries a count (see `_task`'s default), and the pending ->
+    approve handshake still runs exactly as before: same request, same work
+    item, same frozen deadline."""
+    a, h, pm = team["author"], team["head"], team["pm"]
+    _, sub = _lumpsum_sub(client, pm, period=1)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+
+    res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+               on_date=_d(2), work_item_id=wid)
+    row = _row(res)
+    assert row["continuation_approval_status"] == "pending"
+
+    req = _requests(db, a["emp"].id)[0]
+    ok = client.post(f"{CR}/{req.id}/approve", headers=h["header"], json={})
+    assert ok.status_code == 200, ok.text
+
+    got = _get(client, a["header"], res.json()["id"])
+    assert got["tasks"][0]["continuation_approval_status"] == "approved"
+    assert got["tasks"][0]["work_item_id"] == wid
+
+
+def test_a_continuation_row_still_needs_its_own_count(client, team, db):
+    """The mandatory rule is per-row, not per-activity: a continuation day
+    that omits the count is rejected exactly like a fresh LS row would be."""
+    a, pm = team["author"], team["pm"]
+    _, sub = _lumpsum_sub(client, pm, period=1)
+    wid = _start(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=_d(0))
+
+    res = _one(client, a["header"], project_id=a["project"].id, sub_id=sub["id"],
+               on_date=_d(2), work_item_id=wid, count_field=None, count_value=None,
+               expect=422)
+    assert "count" in res.json()["error"]["message"].lower()

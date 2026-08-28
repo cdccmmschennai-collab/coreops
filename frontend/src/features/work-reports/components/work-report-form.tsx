@@ -65,6 +65,7 @@ import {
   useWorkReportList,
 } from "../hooks";
 import { scaledTarget } from "../benchmark-target";
+import { asCountField, hasCountValue, isLumpsumUnitRow } from "../ls-count";
 import { openTaskCardState } from "../open-task-state";
 import { useProjectOptions } from "../project-options";
 import {
@@ -401,6 +402,33 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return ok;
   }
 
+  // A LUMPSUM (LS) sub-activity configures no benchmark unit of its own — it is
+  // measured by completion within a duration — so nothing else on the row
+  // forces a count to be entered. Both halves of the Count row (field + value)
+  // are now mandatory for one, mirrored by the backend's `is_lumpsum_task`
+  // gate in work_reports/service.py `_validate_tasks`.
+  function validateLumpsumCounts(rows: WorkReportFormValues["tasks"]): boolean {
+    let ok = true;
+    rows.forEach((t, i) => {
+      const sub = t.sub_activity_id ? subActivityById.get(t.sub_activity_id) : undefined;
+      if (!isLumpsumUnitRow(sub?.benchmark_type, sub?.relevant_count_field)) return;
+      const primary = asCountField(t.count_field);
+      const value = primary ? t[countFieldName(primary)] : t.count_value;
+      if (!primary || !hasCountValue(value)) {
+        form.setError(`tasks.${i}.count_field`, {
+          message: `Required - ${sub!.name} needs a count field and its value`,
+        });
+        ok = false;
+      }
+    });
+    if (!ok) {
+      showFormError(
+        "Select a count field and enter its value for the lump-sum activities highlighted below.",
+      );
+    }
+    return ok;
+  }
+
   // "Request PM to Add This Activity" — the additional-activity draft (the
   // last row) is NOT saved to the report. The report is first persisted
   // without it, then the draft is sent to the PM as an activity request tagged
@@ -421,6 +449,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     // Validate benchmark counts on every row INCLUDING the draft being
     // requested, so a request can't be sent half-filled.
     if (!validateBenchmarks(values.tasks)) return;
+    if (!validateLumpsumCounts(values.tasks)) return;
 
     try {
       // Persist the report (without the draft) so the request can link to it.
@@ -725,6 +754,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     // applies, so the deficit/productivity calc at submit time reflects real
     // production, not an unfilled field.
     if (!validateBenchmarks(persist.tasks)) return;
+    if (!validateLumpsumCounts(persist.tasks)) return;
 
     try {
       const result =

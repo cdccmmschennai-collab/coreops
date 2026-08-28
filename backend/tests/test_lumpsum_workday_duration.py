@@ -112,8 +112,13 @@ def _quantity_sub(client, admin, *, name="Quantity", period=2):
 
 def _post(client, header, *, project_id, sub_id, on_date, work_item_id=None,
           is_completed=False, expect=201):
+    # count_field/count_value: a bare _lumpsum_sub row is real lump-sum (no
+    # relevant_count_field), which now requires a count (see
+    # test_lumpsum_count_field.py). Harmless for _quantity_sub — the server
+    # clears it for anything that isn't lump-sum.
     task = {"project_id": str(project_id), "description": "work",
-            "sub_activity_id": sub_id, "is_completed": is_completed}
+            "sub_activity_id": sub_id, "is_completed": is_completed,
+            "count_field": "tags", "count_value": 1}
     if work_item_id is not None:
         task["work_item_id"] = str(work_item_id)
     res = client.post(BASE, headers=header, json={

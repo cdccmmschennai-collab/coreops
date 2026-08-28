@@ -159,7 +159,7 @@ def test_my_alerts_tasks_panel_is_current_week_only_and_includes_completed(
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         } for sub, _ in subs_and_due[:2]],
     }).json()
     created_last_week = client.post(BASE, headers=a["header"], json={
@@ -167,6 +167,7 @@ def test_my_alerts_tasks_panel_is_current_week_only_and_includes_completed(
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
             "sub_activity_id": subs_and_due[2][0]["id"],
+            "count_field": "tags", "count_value": 1,
         }],
     }).json()
 
@@ -203,7 +204,7 @@ def test_my_alerts_shows_overdue(client, db, setup_author, activity_admin):
         "report_date": TODAY,
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
-            "sub_activity_id": sub["id"],
+            "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1,
         }],
     }
     created = client.post(BASE, headers=a["header"], json=payload).json()

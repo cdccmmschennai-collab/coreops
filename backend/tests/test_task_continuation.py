@@ -91,10 +91,15 @@ def _task_sub(client, admin, *, name="Lumpsum", period=2, count_field=None, valu
 
 
 def _post_report(client, header, *, project_id, sub_id, on_date, work_item_id=None,
-                 is_completed=False, tags=0, expect=201):
+                 is_completed=False, tags=1, expect=201):
+    # count_field="tags": a bare _task_sub row is real lump-sum (no
+    # relevant_count_field), which now requires a count field + value (see
+    # test_lumpsum_count_field.py). Harmless for CASE A / quantity /
+    # numeric subs — the server clears it for anything that isn't lump-sum.
     task = {
         "project_id": str(project_id), "description": "work",
         "sub_activity_id": sub_id, "is_completed": is_completed, "tags_count": tags,
+        "count_field": "tags",
     }
     if work_item_id is not None:
         task["work_item_id"] = str(work_item_id)
@@ -597,7 +602,7 @@ def test_draft_completion_can_be_corrected(flag_on, client, author, pm_header, d
     res = client.patch(f"{BASE}/{r1['id']}", headers=a["header"], json={
         "tasks": [{"project_id": str(a["project"].id), "description": "work",
                    "sub_activity_id": sub["id"], "work_item_id": str(wid),
-                   "is_completed": False}],
+                   "is_completed": False, "count_field": "tags", "count_value": 1}],
     })
     assert res.status_code == 200, res.text
     db.expire_all()
@@ -617,7 +622,8 @@ def test_resave_preserves_link_and_no_duplicate_item(flag_on, client, author, pm
     res = client.patch(f"{BASE}/{r1['id']}", headers=a["header"], json={
         "remarks": "edited",
         "tasks": [{"project_id": str(a["project"].id), "description": "work",
-                   "sub_activity_id": sub["id"], "work_item_id": str(wid)}],
+                   "sub_activity_id": sub["id"], "work_item_id": str(wid),
+                   "count_field": "tags", "count_value": 1}],
     })
     assert res.status_code == 200, res.text
     assert res.json()["tasks"][0]["work_item_id"] == wid
@@ -981,7 +987,10 @@ def test_numeric_benchmark_never_creates_work_item(flag_on, client, author, pm_h
 # task row (fresh LS starts, LS continuations, numeric/count-based rows).
 # --------------------------------------------------------------------------
 def _t(project_id, sub_id, *, work_item_id=None, desc="work"):
-    d = {"project_id": str(project_id), "description": desc, "sub_activity_id": sub_id}
+    # count_field/count_value: see _post_report's comment above — a bare
+    # _task_sub row is real lump-sum and now requires a count.
+    d = {"project_id": str(project_id), "description": desc, "sub_activity_id": sub_id,
+         "count_field": "tags", "count_value": 1}
     if work_item_id is not None:
         d["work_item_id"] = str(work_item_id)
     return d

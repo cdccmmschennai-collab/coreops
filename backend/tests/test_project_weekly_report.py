@@ -127,11 +127,17 @@ def wr(db, make_project, make_user, make_employee, make_project_member, login, c
 
 # ---------- helpers ---------------------------------------------------------
 def _task(project, sub, **over):
+    # count_field/count_value: task_sub is real lump-sum (no
+    # relevant_count_field), which now requires a count (see
+    # test_lumpsum_count_field.py). Harmless for tags_sub/docs_sub/
+    # meeting_sub — the server clears it for anything that isn't lump-sum.
     task = {
         "project_id": str(project.id),
         "sub_activity_id": str(sub.id),
         "minutes_spent": 240,
         "description": "worked on it",
+        "count_field": "tags",
+        "count_value": 1,
     }
     task.update(over)
     return task

@@ -986,9 +986,13 @@ export function PeriodActivityEditor({
                   {isLumpsum && (
                     <div className="rounded-md border border-primary/40 p-3">
                       {/* One heading over the pair — the field picker is part of
-                          the Count, not a second labelled field beneath it. */}
+                          the Count, not a second labelled field beneath it. A
+                          lumpsum row now REQUIRES both halves (see
+                          validateLumpsumCounts, mirrored on the server), so the
+                          heading carries the same required marker as any other
+                          mandatory count. */}
                       <p className="mb-2 text-sm font-medium text-foreground">
-                        Count
+                        Count<span className="text-destructive"> *</span>
                       </p>
                       {/* Two equal columns so the value and its field read as
                           paired controls, with the clear control taking only

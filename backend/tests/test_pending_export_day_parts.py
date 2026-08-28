@@ -92,7 +92,12 @@ def _make_task_sub(client, pm_header, *, name, period=1):
 
 
 def _task(project_id, sub_id=None, **counts):
-    body = {"project_id": str(project_id), "description": "work"}
+    # count_field/count_value: a bare _make_task_sub row is real lump-sum (no
+    # relevant_count_field), which now requires a count (see
+    # test_lumpsum_count_field.py). Harmless for a numeric sub — the server
+    # clears it for anything that isn't lump-sum.
+    body = {"project_id": str(project_id), "description": "work",
+            "count_field": "tags", "count_value": 1}
     if sub_id:
         body["sub_activity_id"] = sub_id
     body.update(counts)

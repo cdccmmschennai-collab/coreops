@@ -101,10 +101,13 @@ def _submit(client, header, project_id, sub_id, report_date, qty, count_field="t
 
 
 def _submit_task(client, header, project_id, sub_id, report_date):
-    """Submit a plain task row (no counts) and return the created task id."""
+    """Submit a plain task row and return the created task id. count_field/
+    count_value default in: a bare _make_task_sub row is real lump-sum, which
+    now requires a count (see test_lumpsum_count_field.py)."""
     payload = {
         "report_date": report_date.isoformat(),
-        "tasks": [{"project_id": str(project_id), "description": "x", "sub_activity_id": sub_id}],
+        "tasks": [{"project_id": str(project_id), "description": "x", "sub_activity_id": sub_id,
+                    "count_field": "tags", "count_value": 1}],
     }
     body = client.post(BASE, headers=header, json=payload).json()
     assert client.post(f"{BASE}/{body['id']}/submit", headers=header).status_code == 200
@@ -1394,7 +1397,7 @@ def test_task_row_beside_pages_leaves_the_pages_total_untouched(
             {"project_id": str(a["project"].id), "description": "p",
              "sub_activity_id": pages_sub["id"], "pages_count": 400},
             {"project_id": str(a["project"].id), "description": "t",
-             "sub_activity_id": text_sub["id"]},
+             "sub_activity_id": text_sub["id"], "count_field": "tags", "count_value": 1},
         ],
     }
     body = client.post(BASE, headers=a["header"], json=payload).json()

@@ -78,7 +78,11 @@ def _make_sub_activity(
 
 
 def _task(project_id, sub_id=None, **counts):
-    body = {"project_id": str(project_id), "description": "work"}
+    # count_field/count_value: a real lump-sum sub-activity now requires a
+    # count (see test_lumpsum_count_field.py). Harmless for a non-lumpsum sub
+    # or no sub at all — the server clears/ignores it either way.
+    body = {"project_id": str(project_id), "description": "work",
+            "count_field": "tags", "count_value": 1}
     if sub_id:
         body["sub_activity_id"] = sub_id
     body.update(counts)

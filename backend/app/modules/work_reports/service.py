@@ -502,6 +502,7 @@ def _validate_tasks(
     tasks,
     *,
     exclude_report_id: uuid.UUID | None = None,
+    require_lumpsum_count: bool = True,
 ) -> tuple[int, list[dict]]:
     """Validate project (active) + membership; return (total_minutes, snapshots).
 
@@ -512,6 +513,12 @@ def _validate_tasks(
     `exclude_report_id` is the report being rewritten, if any — it is left out
     of the tag-scope consumption total so an edit does not count its own
     previous numbers against itself.
+
+    `require_lumpsum_count` is False only for the activity-request approval
+    row (activity_requests/service.py `_create_task_from_request`): that
+    request's own schema has never carried count_field, so there's no field
+    an employee could have named — the mandatory-count gate below would
+    reject every lumpsum second-activity approval outright.
     """
     if len(tasks) > MAX_ACTIVITIES_PER_REPORT:
         raise AppError(
@@ -655,6 +662,18 @@ def _validate_tasks(
             if not resolved:
                 count_field = None
                 count_value = None
+        # A lumpsum row is otherwise measured by completion alone, so the
+        # employee's count is the only thing standing between it and a report
+        # that claims nothing produced. Mandatory: after the resolution above,
+        # count_field survives only when it names a field AND that field
+        # resolved to a genuine positive count — exactly the state this row
+        # must be in to save.
+        if require_lumpsum_count and is_lumpsum_task and count_field is None:
+            raise AppError(
+                "validation_error",
+                "Select a count field and enter its value for this lump-sum activity.",
+                422,
+            )
         # Optional Maintenance Plant selection — independent of the project's
         # own assigned plant; which plant the employee worked at that day.
         maintenance_plant_code: str | None = None

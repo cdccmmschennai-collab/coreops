@@ -467,7 +467,7 @@ def test_task_status_only_has_due_date_but_no_percentage(
     created, submitted = _submit(
         client, a["header"], a["project"].id,
         [{"project_id": str(a["project"].id), "description": "w",
-          "sub_activity_id": sub["id"]}],
+          "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1}],
     )
     assert created["tasks"][0]["due_date"] == TODAY   # duration tracked
     task = submitted["tasks"][0]
@@ -487,7 +487,7 @@ def test_legacy_task_based_still_tracks_completion(
     created, submitted = _submit(
         client, a["header"], a["project"].id,
         [{"project_id": str(a["project"].id), "description": "w",
-          "sub_activity_id": sub["id"]}],
+          "sub_activity_id": sub["id"], "count_field": "tags", "count_value": 1}],
     )
     assert created["tasks"][0]["due_date"] == TODAY
     assert submitted["tasks"][0]["productivity_pct"] is None

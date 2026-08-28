@@ -82,7 +82,12 @@ def _quantity_task_sub(client, admin, *, name="Quantity", period=1):
 
 
 def _post_report(client, header, *, project_id, sub_id, on_date, work_item_id=None, expect=201):
-    task = {"project_id": str(project_id), "description": "work", "sub_activity_id": sub_id}
+    # count_field/count_value: a bare _lumpsum_sub row is real lump-sum (no
+    # relevant_count_field), which now requires a count (see
+    # test_lumpsum_count_field.py). Harmless for _quantity_task_sub — the
+    # server clears it for anything that isn't lump-sum.
+    task = {"project_id": str(project_id), "description": "work", "sub_activity_id": sub_id,
+            "count_field": "tags", "count_value": 1}
     if work_item_id is not None:
         task["work_item_id"] = str(work_item_id)
     res = client.post(BASE, headers=header, json={
@@ -221,7 +226,8 @@ def test_pending_continuation_counts_as_one_activity(flag_on, client, author, pm
         "location": "chennai",
         "tasks": [
             {"project_id": str(a["project"].id), "description": "continue A",
-             "sub_activity_id": sub["id"], "work_item_id": wi},
+             "sub_activity_id": sub["id"], "work_item_id": wi,
+             "count_field": "tags", "count_value": 1},
             {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
         ],
     })
@@ -233,7 +239,8 @@ def test_pending_continuation_counts_as_one_activity(flag_on, client, author, pm
     res3 = client.patch(f"{BASE}/{body['id']}", headers=a["header"], json={
         "tasks": [
             {"project_id": str(a["project"].id), "description": "continue A",
-             "sub_activity_id": sub["id"], "work_item_id": wi},
+             "sub_activity_id": sub["id"], "work_item_id": wi,
+             "count_field": "tags", "count_value": 1},
             {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
             {"project_id": str(a["project"].id), "description": "new C", "minutes_spent": 30},
         ],
@@ -256,7 +263,8 @@ def test_rejected_continuation_frees_activity_slot(flag_on, client, author, pm_h
         "location": "chennai",
         "tasks": [
             {"project_id": str(a["project"].id), "description": "continue A",
-             "sub_activity_id": sub["id"], "work_item_id": wi},
+             "sub_activity_id": sub["id"], "work_item_id": wi,
+             "count_field": "tags", "count_value": 1},
             {"project_id": str(a["project"].id), "description": "new B", "minutes_spent": 30},
         ],
     })
@@ -318,8 +326,10 @@ def test_lost_race_uses_savepoint_and_does_not_corrupt_report_save(
         "report_date": START.isoformat(), "day_status": "work_at_office",
         "location": "chennai",
         "tasks": [
-            {"project_id": str(a["project"].id), "description": "work A", "sub_activity_id": sub_a["id"]},
-            {"project_id": str(a["project"].id), "description": "work B", "sub_activity_id": sub_b["id"]},
+            {"project_id": str(a["project"].id), "description": "work A", "sub_activity_id": sub_a["id"],
+             "count_field": "tags", "count_value": 1},
+            {"project_id": str(a["project"].id), "description": "work B", "sub_activity_id": sub_b["id"],
+             "count_field": "tags", "count_value": 1},
         ],
     })
     assert started.status_code == 201, started.text
@@ -363,9 +373,11 @@ def test_lost_race_uses_savepoint_and_does_not_corrupt_report_save(
         "location": "chennai",
         "tasks": [
             {"project_id": str(a["project"].id), "description": "work A",
-             "sub_activity_id": sub_a["id"], "work_item_id": wi_a},
+             "sub_activity_id": sub_a["id"], "work_item_id": wi_a,
+             "count_field": "tags", "count_value": 1},
             {"project_id": str(a["project"].id), "description": "work B",
-             "sub_activity_id": sub_b["id"], "work_item_id": wi_b},
+             "sub_activity_id": sub_b["id"], "work_item_id": wi_b,
+             "count_field": "tags", "count_value": 1},
         ],
     })
     assert res.status_code == 201, res.text
@@ -415,6 +427,7 @@ def test_update_report_path_auto_requests_continuation(flag_on, client, db, auth
         "tasks": [{
             "project_id": str(a["project"].id), "description": "work",
             "sub_activity_id": sub["id"], "work_item_id": wi,
+            "count_field": "tags", "count_value": 1,
         }],
     })
     assert res.status_code == 200, res.text
