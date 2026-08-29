@@ -93,6 +93,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.modules.employees.models import Employee
+from app.modules.leave.effects import leave_working_days
 from app.modules.leave.models import LeaveRequest, LeaveType
 from app.modules.leave.recipients import (
     LeaveRecipient,
@@ -143,36 +144,23 @@ def leave_type_label(leave_type: LeaveType) -> str:
     return _LEAVE_TYPE_LABELS.get(leave_type, "Leave")
 
 
-def leave_day_count(start: date, end: date) -> int:
-    """Calendar days the request spans, inclusive of both ends.
-
-    THE one day count every leave email quotes, so the submission mail and the
-    decision mails can never state different lengths for the same request. It is
-    deliberately the CALENDAR span of what the employee asked for - the same
-    figure `LeaveRequest.start_date`/`end_date` show in the UI - and not
-    `effects.leave_working_days`, which subtracts weekends and holidays to decide
-    what the approval actually charges. Those two answer different questions:
-    "how long is this absence" versus "what does it cost the balance", and the
-    latter needs a database. Keeping this one pure is what lets the templates be
-    tested without a session.
-    """
-    span = (end - start).days
-    return span + 1 if span >= 0 else 0
-
-
-def format_leave_period(start: date, end: date) -> str:
+def format_leave_period(start: date, end: date, working_days: int) -> str:
     """"28 Aug 2026 - 29 Aug 2026 (2 days)", or a single date for a one-day leave.
+
+    `working_days` is the authoritative count - the same figure
+    `effects.leave_working_days` produces and the Leave Detail page shows - never
+    recomputed here from the calendar span. A leave spanning a weekend must state
+    the number of days it actually costs, not `(end - start) + 1`.
 
     A one-day leave rendered as a range reads like a mistake, so it is not, and
     the count is singular there: "28 Aug 2026 (1 day)".
     """
-    days = leave_day_count(start, end)
-    unit = "day" if days == 1 else "days"
+    unit = "day" if working_days == 1 else "days"
     if start == end:
-        return f"{start.strftime(_DATE_FMT)} ({days} {unit})"
+        return f"{start.strftime(_DATE_FMT)} ({working_days} {unit})"
     return (
         f"{start.strftime(_DATE_FMT)} - {end.strftime(_DATE_FMT)} "
-        f"({days} {unit})"
+        f"({working_days} {unit})"
     )
 
 
@@ -197,6 +185,7 @@ def render_submission_email(
     leave_type: LeaveType,
     start_date: date,
     end_date: date,
+    working_days: int,
     reason: str | None,
     request_id: str,
     link: str | None,
@@ -205,7 +194,9 @@ def render_submission_email(
 
     Pure: no database, no SMTP, no settings beyond the product name. Everything
     it needs is an argument, so the wording can be asserted in tests without a
-    session or a mail server.
+    session or a mail server. `working_days` is the caller's job to supply -
+    see :func:`send_submission_email`, which sources it from
+    `effects.leave_working_days`, the single authoritative calculation.
 
     The body greets the reader by name, names the employee, the leave type, the
     period and (when given) the reason, states plainly that the request needs
@@ -219,7 +210,7 @@ def render_submission_email(
 
     details = [
         ("Leave Type", leave_type_label(leave_type)),
-        ("Leave Period", format_leave_period(start_date, end_date)),
+        ("Leave Period", format_leave_period(start_date, end_date, working_days)),
     ]
     if clean_reason:
         details.append(("Reason", clean_reason))
@@ -269,6 +260,7 @@ def render_decision_email(
     leave_type: LeaveType,
     start_date: date,
     end_date: date,
+    working_days: int,
     reason: str | None,
     reviewer_comment: str | None,
     request_id: str,
@@ -278,7 +270,8 @@ def render_decision_email(
 
     Pure, exactly like :func:`render_submission_email`, and sharing its document
     shape so an approval, a rejection and a submission all read like mail from
-    the same person.
+    the same person. `working_days` is sourced the same way - see
+    :func:`_send_decision_email`.
 
     `approved` picks the whole voice of the message; the two outcomes are one
     function rather than two because everything except three sentences is
@@ -304,7 +297,7 @@ def render_decision_email(
 
     details = [
         ("Leave Type", leave_type_label(leave_type)),
-        ("Leave Period", format_leave_period(start_date, end_date)),
+        ("Leave Period", format_leave_period(start_date, end_date, working_days)),
     ]
     clean_reason = (reason or "").strip()
     if not approved and clean_reason:
@@ -506,6 +499,7 @@ def send_submission_email(db: Session, employee: Employee, req: LeaveRequest) ->
             leave_type=req.leave_type,
             start_date=req.start_date,
             end_date=req.end_date,
+            working_days=len(leave_working_days(db, req.start_date, req.end_date)),
             reason=req.reason,
             request_id=str(req.id),
             link=build_link(
@@ -608,6 +602,7 @@ def _send_decision_email(
             leave_type=req.leave_type,
             start_date=req.start_date,
             end_date=req.end_date,
+            working_days=len(leave_working_days(db, req.start_date, req.end_date)),
             reason=req.reason,
             reviewer_comment=req.manager_comment,
             request_id=str(req.id),

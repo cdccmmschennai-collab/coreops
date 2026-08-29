@@ -484,6 +484,7 @@ def _render(**overrides):
         "leave_type": LeaveType.casual,
         "start_date": _START,
         "end_date": _END,
+        "working_days": 2,
         "reason": "Personal reasons",
         "request_id": "11111111-2222-3333-4444-555555555555",
         "link": "https://coreops.cdccmms.com/attendance?tab=leave&id=abc",
@@ -537,7 +538,7 @@ def test_the_submission_body_matches_the_agreed_letter_shape():
 
 
 def test_a_single_day_leave_is_not_rendered_as_a_range():
-    rendered = _render(end_date=_START)
+    rendered = _render(end_date=_START, working_days=1)
     assert "28 Aug 2026 - " not in rendered.text_body
     assert "28 Aug 2026" in rendered.text_body
 
@@ -552,13 +553,19 @@ def test_the_greeting_names_the_actual_recipient():
 
 def test_the_period_states_the_day_count():
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in _render().text_body
-    assert "28 Aug 2026 (1 day)" in _render(end_date=_START).text_body
+    assert "28 Aug 2026 (1 day)" in _render(end_date=_START, working_days=1).text_body
 
 
-def test_leave_day_count_is_the_inclusive_calendar_span():
-    assert leave_email.leave_day_count(_START, _START) == 1
-    assert leave_email.leave_day_count(_START, _END) == 2
-    assert leave_email.leave_day_count(_START, date(2026, 9, 3)) == 7
+def test_the_period_states_the_caller_supplied_working_day_count_not_the_calendar_span():
+    """A leave spanning a weekend must show what it actually costs, not
+    `(end - start) + 1` - that arithmetic must not reappear in this module."""
+    rendered = _render(
+        start_date=date(2026, 8, 29),
+        end_date=date(2026, 9, 1),
+        working_days=3,
+    )
+    assert "29 Aug 2026 - 01 Sep 2026 (3 days)" in rendered.text_body
+    assert "(4 days)" not in rendered.text_body
 
 
 def test_a_missing_reason_omits_the_row_entirely():
@@ -667,6 +674,7 @@ def _decision(**overrides):
         "leave_type": LeaveType.casual,
         "start_date": _START,
         "end_date": _END,
+        "working_days": 2,
         "reason": "Personal reasons",
         "reviewer_comment": None,
         "request_id": "11111111-2222-3333-4444-555555555555",
@@ -693,7 +701,9 @@ def test_the_approval_body_carries_the_business_facts():
 
 
 def test_the_approval_body_matches_the_agreed_letter_shape():
-    assert _decision(approved=True, end_date=_START).text_body == "\n".join([
+    assert _decision(
+        approved=True, end_date=_START, working_days=1
+    ).text_body == "\n".join([
         "Dear Santhosh Kumar,",
         "",
         "Your leave request has been approved by Giridharan.",
@@ -758,7 +768,7 @@ def test_an_approval_does_not_echo_the_reason_or_a_comment_back():
 
 
 def test_a_single_day_decision_states_one_day():
-    rendered = _decision(end_date=_START)
+    rendered = _decision(end_date=_START, working_days=1)
     assert "28 Aug 2026 (1 day)" in rendered.text_body
     assert "28 Aug 2026 - " not in rendered.text_body
 
@@ -874,6 +884,37 @@ def test_approval_emails_the_requesting_employees_work_email(
     assert "Giri D" in body
     assert "Casual Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
+
+
+def test_a_weekend_spanning_approval_states_the_actual_working_day_count(
+    db, make_employee, recorder,
+):
+    """29 Aug 2026 (Sat, a working Saturday) -> 1 Sep 2026 (Tue) is 4 calendar
+    days but only 3 working days: Sun 30 Aug does not count. The email must
+    state 3, sourced from `effects.leave_working_days`, not `(end-start)+1`."""
+    reviewer = make_employee(employee_code="RV40", first_name="Giri", last_name="D")
+    emp = make_employee(
+        employee_code="EE40", first_name="Santhosh", last_name="Kumar",
+        work_email="santhosh.kumar.40@cdccmms.com",
+    )
+    req = LeaveRequest(
+        employee_id=emp.id,
+        leave_type=LeaveType.casual,
+        start_date=date(2026, 8, 29),
+        end_date=date(2026, 9, 1),
+        reason="Personal reasons",
+        status=LeaveStatus.approved,
+        manager_id=reviewer.id,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+
+    leave_email.send_approval_email(db, req, reviewer)
+
+    body = recorder.calls[0]["text_body"]
+    assert "29 Aug 2026 - 01 Sep 2026 (3 days)" in body
+    assert "(4 days)" not in body
 
 
 def test_rejection_emails_the_requesting_employee_with_the_comment(
