@@ -147,9 +147,13 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     const base = projects.map((p) => ({
       value: p.id,
       label: p.name,
-      sublabel: p.code,
+      // A project can have no code (migration 0078); keep those fields out of
+      // the option instead of passing null through to cmdk.
+      sublabel: p.code ?? undefined,
       description: p.client ?? undefined,
-      keywords: [p.code, p.name, p.client ?? "", p.job_code_code ?? ""],
+      keywords: [p.code, p.name, p.client, p.job_code_code].filter(
+        (k): k is string => !!k,
+      ),
     }));
     if (mode !== "edit") return base;
     const inList = new Set(projects.map((p) => p.id));

@@ -12,7 +12,12 @@ export type Project = Omit<components["schemas"]["ProjectOut"], "code"> & {
   code: string | null;
 };
 export type ProjectStatus = components["schemas"]["ProjectStatus"];
-export type ProjectPage = components["schemas"]["ProjectPage"];
+// items overridden for the same reason: the generated ProjectPage still points
+// at the stale ProjectOut, so list consumers saw `code: string` and shipped
+// `null` straight into code that assumed a string.
+export type ProjectPage = Omit<components["schemas"]["ProjectPage"], "items"> & {
+  items: Project[];
+};
 // code overridden here too: backend ProjectCreate.code is now `str | None`
 // (migration 0078) — omitting/nulling it creates a project with no code.
 // ProjectUpdate's generated type already had `code?: string | null`.

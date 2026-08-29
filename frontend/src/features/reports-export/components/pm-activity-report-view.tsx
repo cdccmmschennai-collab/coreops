@@ -108,7 +108,7 @@ export function PmActivityReportView() {
           <SelectContent>
             <SelectItem value={ALL}>All projects</SelectItem>
             {projects.map((p) => (
-              <SelectItem key={p.id} value={p.id}>{p.code} · {p.name}</SelectItem>
+              <SelectItem key={p.id} value={p.id}>{p.code ? `${p.code} · ${p.name}` : p.name}</SelectItem>
             ))}
           </SelectContent>
         </Select>

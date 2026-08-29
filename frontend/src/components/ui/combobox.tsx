@@ -80,6 +80,18 @@ function commandItemValue(opt: ComboboxOption): string {
     .join(" ");
 }
 
+/**
+ * cmdk calls `.trim()` on every keyword it is handed, so a null/undefined entry
+ * (e.g. a project with no code) throws inside its render. Drop blanks here so a
+ * caller's optional field can never crash the list.
+ */
+function commandItemKeywords(opt: ComboboxOption): string[] | undefined {
+  const kept = (opt.keywords ?? []).filter(
+    (k): k is string => typeof k === "string" && k.trim() !== "",
+  );
+  return kept.length > 0 ? kept : undefined;
+}
+
 
 export function Combobox({
   value,
@@ -227,7 +239,7 @@ export function Combobox({
                   <CommandItem
                     key={opt.value}
                     value={commandItemValue(opt)}
-                    keywords={opt.keywords}
+                    keywords={commandItemKeywords(opt)}
                     onSelect={() => handleSelect(opt.value)}
                   >
                     <Check

@@ -51,7 +51,10 @@ export function WorkReportsFilters({
   const { items: defaultProjects } = useProjectOptions();
   const projects: ProjectFilterOption[] =
     projectOptions ??
-    defaultProjects.map((p) => ({ id: p.id, label: `${p.name} · ${p.code}` }));
+    defaultProjects.map((p) => ({
+      id: p.id,
+      label: p.code ? `${p.name} · ${p.code}` : p.name,
+    }));
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
