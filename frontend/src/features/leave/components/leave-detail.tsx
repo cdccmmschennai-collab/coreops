@@ -18,7 +18,11 @@ import { AppError } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
 import { useDeliverableImpact, useLeaveRequest } from "../hooks";
-import { LEAVE_TYPE_LABEL, type DeliverableConflict } from "../types";
+import {
+  formatLeaveDuration,
+  LEAVE_TYPE_LABEL,
+  type DeliverableConflict,
+} from "../types";
 import { LeaveStatusBadge } from "./leave-status-badge";
 
 const IMPACT_REASON =
@@ -51,12 +55,6 @@ function fmtDateTime(value: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function leaveDays(start: string, end: string): number {
-  const diff = Date.parse(end) - Date.parse(start);
-  if (Number.isNaN(diff)) return 1;
-  return Math.round(diff / 86_400_000) + 1;
 }
 
 function InfoRow({ label, value }: { label: string; value: ReactNode }) {
@@ -144,7 +142,6 @@ export function LeaveDetail({ id }: { id: string }) {
     byId.get(leave.employee_id) ??
     (leave.employee_id === employeeId ? employee?.full_name : undefined) ??
     leave.employee_id.slice(0, 8);
-  const days = leaveDays(leave.start_date, leave.end_date);
   const showImpact = isManager && conflicts.length > 0;
 
   return (
@@ -180,7 +177,7 @@ export function LeaveDetail({ id }: { id: string }) {
               <InfoRow label="Requested On" value={fmtDateTime(leave.created_at)} />
               <InfoRow label="From" value={fmtDate(leave.start_date)} />
               <InfoRow label="To" value={fmtDate(leave.end_date)} />
-              <InfoRow label="Duration" value={`${days} day${days > 1 ? "s" : ""}`} />
+              <InfoRow label="Duration" value={formatLeaveDuration(leave.working_days)} />
               <InfoRow label="Status" value={<LeaveStatusBadge status={leave.status} />} />
               {leave.manager_comment ? (
                 <InfoRow label="Manager note" value={leave.manager_comment} />

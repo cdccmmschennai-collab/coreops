@@ -37,6 +37,12 @@ class LeaveRequestOut(BaseModel):
     leave_type: LeaveType
     start_date: date
     end_date: date
+    # How many days of [start_date, end_date] the office is actually open for -
+    # the number the employee is charged, not the calendar span. Computed by
+    # `service.attach_working_days` from `effects.leave_working_days`, so the UI
+    # can never disagree with what an approval deducts. `start_date`/`end_date`
+    # are untouched: they remain the range the employee asked for.
+    working_days: int
     reason: str | None = None
     status: LeaveStatus
     manager_id: uuid.UUID | None = None

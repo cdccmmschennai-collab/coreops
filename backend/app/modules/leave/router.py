@@ -42,6 +42,17 @@ router = APIRouter(prefix="/leave-requests", tags=["leave"])
 require_reviewer = require_role("project_manager")
 
 
+def _out(db: Session, req) -> LeaveRequestOut:
+    """Serialize one leave request, with its working-day count attached.
+
+    Every endpoint below goes through this rather than calling `model_validate`
+    directly, so `working_days` is present on every response shape - including
+    the ones a mutation returns straight into the client's cache.
+    """
+    service.attach_working_days(db, [req])
+    return LeaveRequestOut.model_validate(req)
+
+
 @router.get("", response_model=LeaveRequestPage)
 def list_leave_requests(
     employee_id: uuid.UUID | None = Query(default=None),
@@ -66,7 +77,7 @@ def list_leave_requests(
         exclude_self=exclude_self,
     )
     return LeaveRequestPage(
-        items=[LeaveRequestOut.model_validate(r) for r in rows],
+        items=[_out(db, r) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -79,7 +90,7 @@ def create_leave_request(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(service.create_leave_request(db, current, body))
+    return _out(db, service.create_leave_request(db, current, body))
 
 
 @router.post("/deliverable-impact", response_model=DeliverableImpactResponse)
@@ -113,7 +124,7 @@ def get_leave_request(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(service.get_leave_request(db, current, req_id))
+    return _out(db, service.get_leave_request(db, current, req_id))
 
 
 @router.patch("/{req_id}", response_model=LeaveRequestOut)
@@ -123,9 +134,7 @@ def update_leave_request(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(
-        service.update_leave_request(db, current, req_id, body)
-    )
+    return _out(db, service.update_leave_request(db, current, req_id, body))
 
 
 @router.post("/{req_id}/cancel", response_model=LeaveRequestOut)
@@ -134,7 +143,7 @@ def cancel_leave_request(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(service.cancel_leave_request(db, current, req_id))
+    return _out(db, service.cancel_leave_request(db, current, req_id))
 
 
 @router.post("/{req_id}/request-cancellation", response_model=LeaveRequestOut)
@@ -143,9 +152,7 @@ def request_leave_cancellation(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(
-        service.request_leave_cancellation(db, current, req_id)
-    )
+    return _out(db, service.request_leave_cancellation(db, current, req_id))
 
 
 @router.post("/{req_id}/approve-cancellation", response_model=LeaveRequestOut)
@@ -154,9 +161,7 @@ def approve_leave_cancellation(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(
-        service.approve_leave_cancellation(db, current, req_id)
-    )
+    return _out(db, service.approve_leave_cancellation(db, current, req_id))
 
 
 @router.post("/{req_id}/reject-cancellation", response_model=LeaveRequestOut)
@@ -165,9 +170,7 @@ def reject_leave_cancellation(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(
-        service.reject_leave_cancellation(db, current, req_id)
-    )
+    return _out(db, service.reject_leave_cancellation(db, current, req_id))
 
 
 @router.post("/{req_id}/approve", response_model=LeaveRequestOut)
@@ -177,9 +180,7 @@ def approve_leave_request(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(
-        service.approve_leave_request(db, current, req_id, body)
-    )
+    return _out(db, service.approve_leave_request(db, current, req_id, body))
 
 
 @router.post("/{req_id}/reject", response_model=LeaveRequestOut)
@@ -189,6 +190,4 @@ def reject_leave_request(
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
-    return LeaveRequestOut.model_validate(
-        service.reject_leave_request(db, current, req_id, body)
-    )
+    return _out(db, service.reject_leave_request(db, current, req_id, body))

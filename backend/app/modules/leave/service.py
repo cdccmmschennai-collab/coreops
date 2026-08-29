@@ -590,6 +590,25 @@ def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
         r.employee_name = names.get(r.employee_id)
 
 
+def attach_working_days(db: Session, rows: list[LeaveRequest]) -> None:
+    """Set `.working_days` on each row: the days the range actually costs.
+
+    Same non-mapped-attribute trick as `_attach_employee_names` above, and the
+    same reason - the count is not a column, it is a question for the company
+    calendar. The answer comes from `effects.leave_working_days`, which is what
+    an approval charges against, so the number the Leave Detail page shows and
+    the number deducted from the employee's balance are the same calculation:
+    28-31 August 2026 is 3, because the 5th Saturday works and the Sunday does
+    not. Nothing here re-implements the weekend/holiday rule.
+
+    Called by the router for every `LeaveRequestOut` it builds. One overrides
+    query per row; the pages that use it are small and the alternative was a
+    second copy of the day-walking loop.
+    """
+    for r in rows:
+        r.working_days = len(leave_working_days(db, r.start_date, r.end_date))
+
+
 # ---------- employee writes -----------------------------------------------
 
 def create_leave_request(

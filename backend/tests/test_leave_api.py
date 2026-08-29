@@ -9,6 +9,7 @@ itself is covered in `test_leave_phase10.py`.
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.modules.calendar.models import CalendarEvent, CalendarEventType
 from app.modules.calendar.working_days import next_working_day, previous_working_day
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave_balances import ledger
@@ -701,3 +702,101 @@ def test_reassigned_head_takes_over_review_authority(
     h_b = login("headi@x.com")
     res_b = client.post(f"/api/v1/leave-requests/{req.id}/approve", headers=h_b, json={})
     assert res_b.status_code == 200, res_b.text  # Head B has it now
+
+
+# ---------- working_days on the response ------------------------------------
+#
+# The Leave Detail page no longer derives its Duration from `(end - start) + 1`;
+# it renders `working_days`, which the backend computes with
+# `effects.leave_working_days` - the same calculation an approval charges
+# against. The office-week rule itself (1st/3rd/5th Saturday working, 2nd/4th
+# not, Sunday not, holiday and working_day overrides) is pinned in
+# `test_office_week.py`; these only assert that the API carries the answer.
+
+AUG_FRI = date(2026, 8, 28)   # Friday          - working
+AUG_SAT = date(2026, 8, 29)   # 5th Saturday    - working
+AUG_SUN = date(2026, 8, 30)   # Sunday          - non-working
+AUG_MON = date(2026, 8, 31)   # Monday          - working
+
+
+def test_detail_reports_three_working_days_for_28_to_31_august(
+    client, make_user, make_employee, make_leave_request, login,
+):
+    """The case this change exists for: a four-day range that costs three days,
+    because the 5th Saturday works and the Sunday does not."""
+    u = make_user("wd1@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="WD1", user_id=u.id)
+    req = make_leave_request(
+        employee_id=emp.id, start_date=AUG_FRI, end_date=AUG_MON
+    )
+
+    h = login("wd1@x.com")
+    res = client.get(f"/api/v1/leave-requests/{req.id}", headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["working_days"] == 3
+    # The requested range is untouched - the count is not the span.
+    assert body["start_date"] == "2026-08-28"
+    assert body["end_date"] == "2026-08-31"
+
+
+def test_a_company_holiday_inside_the_range_lowers_the_count(
+    client, db, make_user, make_employee, make_leave_request, login,
+):
+    """Proves the count really comes from the calendar table rather than from a
+    hardcoded week: declaring the working Saturday a holiday drops it to 2."""
+    u = make_user("wd2@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="WD2", user_id=u.id)
+    req = make_leave_request(
+        employee_id=emp.id, start_date=AUG_FRI, end_date=AUG_MON
+    )
+    db.add(
+        CalendarEvent(
+            event_date=AUG_SAT,
+            title="Company holiday",
+            event_type=CalendarEventType.holiday,
+        )
+    )
+    db.commit()
+
+    h = login("wd2@x.com")
+    res = client.get(f"/api/v1/leave-requests/{req.id}", headers=h)
+    assert res.status_code == 200, res.text
+    assert res.json()["working_days"] == 2
+
+
+def test_a_working_day_override_raises_the_count(
+    client, db, make_user, make_employee, make_leave_request, login,
+):
+    """The inverse: declaring the Sunday a working day brings it back to 4."""
+    u = make_user("wd3@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="WD3", user_id=u.id)
+    req = make_leave_request(
+        employee_id=emp.id, start_date=AUG_FRI, end_date=AUG_MON
+    )
+    db.add(
+        CalendarEvent(
+            event_date=AUG_SUN,
+            title="Declared working",
+            event_type=CalendarEventType.working_day,
+        )
+    )
+    db.commit()
+
+    h = login("wd3@x.com")
+    res = client.get(f"/api/v1/leave-requests/{req.id}", headers=h)
+    assert res.status_code == 200, res.text
+    assert res.json()["working_days"] == 4
+
+
+def test_the_list_carries_working_days_too(
+    client, make_user, make_employee, make_leave_request, login,
+):
+    u = make_user("wd4@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="WD4", user_id=u.id)
+    make_leave_request(employee_id=emp.id, start_date=AUG_FRI, end_date=AUG_MON)
+
+    h = login("wd4@x.com")
+    res = client.get("/api/v1/leave-requests", headers=h)
+    assert res.status_code == 200, res.text
+    assert [row["working_days"] for row in res.json()["items"]] == [3]

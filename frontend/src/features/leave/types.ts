@@ -13,6 +13,11 @@ export interface LeaveRequest {
   leave_type: LeaveType;
   start_date: string;
   end_date: string;
+  /** Days the office is actually open across [start_date, end_date] - the
+   *  number the employee is charged. Computed by the backend against the
+   *  company calendar (weekends, working Saturdays, holidays and working-day
+   *  overrides); never recalculated here. */
+  working_days: number;
   reason: string | null;
   status: LeaveStatus;
   manager_id: string | null;
@@ -222,6 +227,18 @@ export function leaveQueueCountParams(
   excludeSelf: boolean,
 ): LeaveListParams {
   return { status, limit: 1, offset: 0, exclude_self: excludeSelf };
+}
+
+/** The Duration line on Leave Detail: `3 days`, `1 day`, `0 days`.
+ *
+ *  Takes the backend's `working_days` and does nothing but pluralise it. The
+ *  page used to derive the number itself as `(end - start) + 1`, which counted
+ *  the Sundays, the 2nd/4th Saturdays and the company holidays inside a range
+ *  and so disagreed with what the approval actually charged - 28-31 August 2026
+ *  showed 4 where the backend deducts 3. There is no calendar arithmetic on this
+ *  side of the wire any more; the backend is the only place that rule lives. */
+export function formatLeaveDuration(workingDays: number): string {
+  return `${workingDays} ${workingDays === 1 ? "day" : "days"}`;
 }
 
 /** `3 August 2026`, or `29 July 2026 - 30 July 2026` for a range. */
