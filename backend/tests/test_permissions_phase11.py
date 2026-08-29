@@ -31,7 +31,11 @@ TUE = date(2027, 3, 2)
 WED = date(2027, 3, 3)
 THU = date(2027, 3, 4)
 FRI = date(2027, 3, 5)
-SAT = date(2027, 3, 6)
+# The SECOND Saturday of March 2027 - genuinely non-working under the company
+# calendar. (2027-03-06 is the FIRST Saturday, which the office works.)
+SAT = date(2027, 3, 13)
+# The FIRST Saturday - an ordinary working day, so a permission may fall on it.
+WORKING_SAT = date(2027, 3, 6)
 NEXT_MON = date(2027, 3, 8)
 
 # A month boundary that is a working day on both sides: Wed 31 March / Thu 1 April.
@@ -303,11 +307,18 @@ def test_one_live_request_per_day(client, login, team):
 
 
 def test_a_non_working_day_cannot_have_a_permission(client, login, team):
-    """A permission releases hours from inside a working day; a Saturday has none
-    to release. Resolved by the existing company-calendar rules."""
+    """A permission releases hours from inside a working day; a 2nd Saturday has
+    none to release. Resolved by the existing company-calendar rules."""
     res = _submit(client, login, SAT, 1)
     assert res.status_code == 422, res.text
     assert "not a working day" in res.json()["error"]["message"]
+
+
+def test_a_working_saturday_can_have_a_permission(client, login, team):
+    """The other half of the same rule: the office works its 1st, 3rd and 5th
+    Saturdays, so those DO have hours to release."""
+    res = _submit(client, login, WORKING_SAT, 1)
+    assert res.status_code == 201, res.text
 
 
 # ======================================================================

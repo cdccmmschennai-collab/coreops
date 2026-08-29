@@ -33,8 +33,12 @@ API = "/api/v1/leave-requests"
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
-# 2027-03-01 is a Monday; 2027-03-06/07 are the Saturday and Sunday after it.
-MON = date(2027, 3, 1)
+# 2027-03-08 is a Monday; 2027-03-13/14 are the Saturday and Sunday after it.
+# That Saturday is the SECOND of March 2027, so it is genuinely non-working under
+# the company calendar - which is what
+# `test_a_punch_on_a_non_working_day_does_not_block_the_range` is about. (The
+# week starting 2027-03-01 ends on a FIRST Saturday, an ordinary working day.)
+MON = date(2027, 3, 8)
 TUE = MON + timedelta(days=1)
 SAT = MON + timedelta(days=5)
 SUN = MON + timedelta(days=6)
@@ -126,7 +130,7 @@ def test_a_fully_punched_day_cannot_be_requested_as_leave(
     assert res.status_code == 422, res.text
     message = res.json()["error"]["message"]
     assert "biometric record" in message
-    assert "1 March 2027" in message
+    assert "8 March 2027" in message
     # The punch window is named, so the employee can recognise (or dispute) it.
     assert "09:10 AM" in message and "05:54 PM" in message
 
@@ -149,8 +153,8 @@ def test_only_the_punched_day_of_a_range_is_named(client, login, team, mapped, p
     res = _file(client, login, MON, TUE)
     assert res.status_code == 422, res.text
     message = res.json()["error"]["message"]
-    assert "2 March 2027" in message
-    assert "1 March 2027" not in message
+    assert "9 March 2027" in message
+    assert "8 March 2027" not in message
 
 
 def test_a_punch_on_a_non_working_day_does_not_block_the_range(

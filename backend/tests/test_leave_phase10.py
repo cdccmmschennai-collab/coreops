@@ -34,6 +34,12 @@ TUE = MON + timedelta(days=1)
 WED = MON + timedelta(days=2)
 FRI = MON + timedelta(days=4)
 NEXT_MON = MON + timedelta(days=7)
+# A Friday-to-Monday pair whose weekend is genuinely non-working: 2027-03-13 is
+# the SECOND Saturday of March 2027, so Sat and Sun are both off. FRI/NEXT_MON
+# above straddle the FIRST Saturday, which the office WORKS - that pair is used
+# by `test_a_working_saturday_inside_a_range_is_charged` instead.
+OFF_FRI = date(2027, 3, 12)
+OFF_NEXT_MON = date(2027, 3, 15)
 
 
 @pytest.fixture()
@@ -150,16 +156,39 @@ def test_approval_deducts_balance_and_marks_the_calendar(
 def test_weekends_are_neither_marked_nor_charged(
     client, login, team, fund, make_leave_request, db
 ):
-    """A Friday-to-Monday leave costs two days, not four."""
+    """A Friday-to-Monday leave over an OFF weekend costs two days, not four."""
     fund("10.00")
+    req = make_leave_request(
+        employee_id=team["employee"].id, start_date=OFF_FRI, end_date=OFF_NEXT_MON
+    )
+    _approve(client, login, req.id)
+
+    db.expire_all()
+    assert [d for d, _ in _days(db, team["employee"].id)] == [OFF_FRI, OFF_NEXT_MON]
+    assert _balance(db, team["employee"].id) == Decimal("8.00")
+
+
+def test_a_working_saturday_inside_a_range_is_charged(
+    client, login, team, fund, make_leave_request, db
+):
+    """The office works its 1st, 3rd and 5th Saturdays, so a leave range that
+    covers one costs that day too.
+
+    FRI 2027-03-05 -> MON 2027-03-08 spans the FIRST Saturday of March: three
+    working days (Fri, Sat, Mon), not two. This is the 28-31 August 2026 case the
+    rule was corrected for, on pinned dates.
+    """
+    fund("10.00")
+    saturday = FRI + timedelta(days=1)
+    assert saturday.weekday() == 5 and (saturday.day - 1) // 7 + 1 == 1
     req = make_leave_request(
         employee_id=team["employee"].id, start_date=FRI, end_date=NEXT_MON
     )
     _approve(client, login, req.id)
 
     db.expire_all()
-    assert [d for d, _ in _days(db, team["employee"].id)] == [FRI, NEXT_MON]
-    assert _balance(db, team["employee"].id) == Decimal("8.00")
+    assert [d for d, _ in _days(db, team["employee"].id)] == [FRI, saturday, NEXT_MON]
+    assert _balance(db, team["employee"].id) == Decimal("7.00")
 
 
 def test_unpaid_leave_marks_the_calendar_without_touching_balance(

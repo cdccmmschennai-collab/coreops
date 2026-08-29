@@ -9,10 +9,29 @@ itself is covered in `test_leave_phase10.py`.
 from datetime import date, timedelta
 from decimal import Decimal
 
+from app.modules.calendar.working_days import next_working_day, previous_working_day
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave_balances import ledger
 from app.modules.leave_balances.models import EmployeeLeaveAdjustment
 from app.modules.users.models import UserRole
+
+
+def _report_and_leave_dates(db) -> tuple[date, date]:
+    """`(prev_day, leave_date)` - two CONSECUTIVE working days for the routing
+    tests, where `prev_day` is never in the future.
+
+    Both come from the shared company calendar rather than a local Mon-Fri rule,
+    so the pair stays genuinely consecutive as the office week does (a working
+    1st/3rd/5th Saturday is a working day here too). That matters because
+    `leave/routing.py` resolves the evidence date as
+    `previous_working_day(leave_date)` - which is `prev_day` BY CONSTRUCTION
+    here, so the work report filed below is always the one routing looks for.
+
+    `prev_day` is at-or-before today because `work_reports.service` rejects a
+    report dated after today.
+    """
+    prev_day = previous_working_day(db, date.today() + timedelta(days=1))
+    return prev_day, next_working_day(db, prev_day)
 
 
 def _fund(db, employee_id, days: str = "30.00"):
@@ -307,18 +326,7 @@ def test_create_routes_to_project_head_and_notifies(
     emp = make_employee(employee_code="E10", user_id=eu.id)
     make_project_member(project_id=project.id, employee_id=emp.id)
 
-    # `prev_day` must not be in the future - work_reports.service rejects a
-    # report dated after today - so it's pinned to the most recent working day
-    # at-or-before today, and `leave_date` is the next working day after that
-    # (rather than today+7 as originally sketched, which put `prev_day` days
-    # in the future on every day of the week and made the report creation
-    # below always fail with "Report date cannot be in the future").
-    prev_day = date.today()
-    while prev_day.weekday() >= 5:
-        prev_day -= timedelta(days=1)
-    leave_date = prev_day + timedelta(days=1)
-    while leave_date.weekday() >= 5:
-        leave_date += timedelta(days=1)
+    prev_day, leave_date = _report_and_leave_dates(db)
     wr_svc.create_work_report(
         db, eu, WorkReportCreate(
             report_date=prev_day,
@@ -359,18 +367,7 @@ def test_create_no_head_falls_back_to_pm_notification(
     emp = make_employee(employee_code="E11", user_id=eu.id, reporting_pm_id=mu.id)
     make_project_member(project_id=project.id, employee_id=emp.id)
 
-    # `prev_day` must not be in the future - work_reports.service rejects a
-    # report dated after today - so it's pinned to the most recent working day
-    # at-or-before today, and `leave_date` is the next working day after that
-    # (rather than today+7 as originally sketched, which put `prev_day` days
-    # in the future on every day of the week and made the report creation
-    # below always fail with "Report date cannot be in the future").
-    prev_day = date.today()
-    while prev_day.weekday() >= 5:
-        prev_day -= timedelta(days=1)
-    leave_date = prev_day + timedelta(days=1)
-    while leave_date.weekday() >= 5:
-        leave_date += timedelta(days=1)
+    prev_day, leave_date = _report_and_leave_dates(db)
     wr_svc.create_work_report(
         db, eu, WorkReportCreate(
             report_date=prev_day,
@@ -411,18 +408,7 @@ def test_a_project_heads_own_leave_is_unrouted_and_goes_to_the_pm(
     project = make_project(code="RP-3", head_employee_id=emp.id)
     make_project_member(project_id=project.id, employee_id=emp.id)
 
-    # `prev_day` must not be in the future - work_reports.service rejects a
-    # report dated after today - so it's pinned to the most recent working day
-    # at-or-before today, and `leave_date` is the next working day after that
-    # (rather than today+7 as originally sketched, which put `prev_day` days
-    # in the future on every day of the week and made the report creation
-    # below always fail with "Report date cannot be in the future").
-    prev_day = date.today()
-    while prev_day.weekday() >= 5:
-        prev_day -= timedelta(days=1)
-    leave_date = prev_day + timedelta(days=1)
-    while leave_date.weekday() >= 5:
-        leave_date += timedelta(days=1)
+    prev_day, leave_date = _report_and_leave_dates(db)
     wr_svc.create_work_report(
         db, eu, WorkReportCreate(
             report_date=prev_day,

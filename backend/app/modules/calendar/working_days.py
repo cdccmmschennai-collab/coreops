@@ -1,13 +1,32 @@
 """Working-day resolution against the company calendar.
 
-The baseline working week is Mon-Fri. Entries in ``company_calendar_events``
-override that baseline:
+THE OFFICE WEEK
+===============
+The baseline working week is Mon-Fri, plus the 1st, 3rd and 5th Saturday of each
+month:
 
+    Mon-Fri            working
+    1st/3rd/5th Sat    working
+    2nd/4th Sat        non-working
+    Sun                non-working
+
+This is the company's actual calendar, and the same rule the attendance calendar
+has always drawn (``frontend/src/features/attendance/month.ts::isWeekend``). The
+backend previously treated EVERY Saturday as non-working, which under-counted a
+leave range spanning a working Saturday and refused a permission on one; the two
+now agree, and this function stays the single source of truth for "is the office
+open".
+
+OVERRIDES
+=========
+Entries in ``company_calendar_events`` override that baseline, in this
+precedence - unchanged:
+
+  * ``working_day`` marks a normally-off day (a 2nd/4th Saturday, a Sunday, or a
+    day that is also flagged as a holiday) as working. It is the declared
+    inverse of a holiday, so it wins over every other signal.
   * ``holiday`` / ``cdc_holiday`` / ``natural_hazard`` make an otherwise normal
-    weekday NON-working.
-  * ``working_day`` marks a normally-off day (Saturday, Sunday, or a day that is
-    also flagged as a holiday) as working. It is the declared inverse of a
-    holiday, so it wins over every other signal.
+    working day - a weekday OR a working Saturday - NON-working.
   * ``event`` is informational only and never changes whether the office works.
 
 The date arithmetic is a pure function (:func:`is_working_day`) so it can be
@@ -34,6 +53,23 @@ NON_WORKING_EVENT_TYPES = (
 # means the calendar is misconfigured, not that the office was really shut.
 DEFAULT_MAX_LOOKBACK_DAYS = 30
 
+# Which Saturdays of the month the office is closed on. The 1st, 3rd and 5th
+# Saturday are ordinary working days; only the 2nd and 4th are off.
+NON_WORKING_SATURDAY_OCCURRENCES = frozenset({2, 4})
+
+_SATURDAY = 5
+_SUNDAY = 6
+
+
+def saturday_occurrence(day: date) -> int:
+    """Which Saturday of its month ``day`` is: 1-7 -> 1st, 8-14 -> 2nd, and so on.
+
+    The day-of-month alone settles it, because Saturdays fall exactly seven days
+    apart. Only meaningful for a date that IS a Saturday; callers check that
+    first.
+    """
+    return (day.day - 1) // 7 + 1
+
 
 def is_working_day(
     day: date, *, non_working: set[date], working_overrides: set[date]
@@ -42,12 +78,22 @@ def is_working_day(
 
     Pure: pass the two sets from :func:`load_calendar_overrides` (or build them
     directly in a test).
+
+    The two override checks come first and are unchanged - a declared
+    ``working_day`` opens the office whatever the week says, and a declared
+    holiday closes it. Only a date nobody has ruled on falls through to the
+    office week described in the module docstring.
     """
     if day in working_overrides:
         return True
     if day in non_working:
         return False
-    return day.weekday() < 5  # Mon..Fri
+    weekday = day.weekday()
+    if weekday == _SUNDAY:
+        return False
+    if weekday == _SATURDAY:
+        return saturday_occurrence(day) not in NON_WORKING_SATURDAY_OCCURRENCES
+    return True  # Mon..Fri
 
 
 def load_calendar_overrides(

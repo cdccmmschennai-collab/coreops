@@ -30,6 +30,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.modules.calendar.working_days import next_working_day, previous_working_day
 from app.modules.leave import email as leave_email
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave.recipients import resolve_leave_recipients
@@ -1039,18 +1040,16 @@ def test_a_configured_app_base_url_produces_an_absolute_decision_link(
 
 # ---------- end-to-end wiring ----------------------------------------------
 
-def _recent_working_day() -> date:
-    day = date.today()
-    while day.weekday() >= 5:
-        day -= timedelta(days=1)
-    return day
+def _recent_working_day(db) -> date:
+    """The most recent working day at or before today.
 
-
-def _next_working_day(after: date) -> date:
-    day = after + timedelta(days=1)
-    while day.weekday() >= 5:
-        day += timedelta(days=1)
-    return day
+    Resolved through the shared company calendar rather than a local Mon-Fri
+    rule, so it follows the real office week - working 1st/3rd/5th Saturdays
+    included - and stays the very day `leave/routing.py` will look for a work
+    report on. Never in the future, which `work_reports` requires of a report
+    date.
+    """
+    return previous_working_day(db, date.today() + timedelta(days=1))
 
 
 def _payload(start: date, end: date, leave_type: str = "casual") -> dict:
@@ -1084,8 +1083,8 @@ def test_submitting_emails_the_head_and_still_rings_the_bell(
     )
     make_project_member(project_id=project.id, employee_id=emp.id)
 
-    prev_day = _recent_working_day()
-    leave_date = _next_working_day(prev_day)
+    prev_day = _recent_working_day(db)
+    leave_date = next_working_day(db, prev_day)
     wr_svc.create_work_report(
         db, eu, WorkReportCreate(
             report_date=prev_day,
@@ -1144,7 +1143,7 @@ def test_submitting_with_no_routed_project_emails_the_pm_and_rings_their_bell(
         user_id=eu.id, reporting_pm_id=mu.id,
     )
 
-    leave_date = _next_working_day(_recent_working_day())
+    leave_date = next_working_day(db, _recent_working_day(db))
     res = client.post(
         "/api/v1/leave-requests",
         headers=login("emp-fallback-e2e@x.com"),
