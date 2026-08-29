@@ -39,7 +39,7 @@ OPEN_TASKS = f"{BASE}/open-tasks"
 CR = "/api/v1/continuation-requests"
 TODAY = date.today()
 # The PREVIOUS Friday-Thursday cycle: seven consecutive past days, all inside
-# the editable report window (current + previous month).
+# the editable report window.
 PREV_FRI = compute_week_bounds(TODAY)[0] - timedelta(days=7)
 
 

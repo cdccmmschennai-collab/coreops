@@ -160,7 +160,7 @@ Guards (→ 422 unless noted):
 ## 6. Validation rules
 
 **Header**
-- `report_date` required; **not in the future** (`> today` → 422); within the **edit window** = current + previous month (older dates → 422; matches attendance policy).
+- `report_date` required; **not in the future** (`> today` → 422); within the **edit window** = the last `REPORTING_WINDOW_MONTHS` (6) calendar months, current month included, so the boundary is the 1st of the earliest open month (older dates → 422).
 - One report per `(employee, report_date)` → duplicate **409** (uniform envelope, `code=conflict`).
 - `summary` ≤ 2000 chars.
 - `review_note` required & non-empty on reject (≤ 1000 chars).
@@ -249,7 +249,7 @@ no new npm packages; ports unchanged (FE 3100 / BE 8100 / PG 5433 / Redis 6381).
 - **D-DWR-1 — Structure:** header + task lines *(recommended)* vs single free-text summary report.
 - **D-DWR-2 — Manager scope:** direct reports via `employees.manager_id` *(recommended)* vs project-membership based.
 - **D-DWR-3 — Project membership required** on each task line *(recommended)* vs any active project allowed.
-- **D-DWR-4 — Edit window:** current + previous month *(recommended, matches attendance)* vs unrestricted vs current month only.
+- **D-DWR-4 — Edit window:** a whole number of calendar months back, `REPORTING_WINDOW_MONTHS` in `work_reports/service.py` *(now 6, widened from 2 so historical reports can be migrated in)* vs unrestricted vs current month only.
 - **D-DWR-5 — Resubmission:** rejected → editable & resubmittable *(recommended)* vs rejected is terminal (new report required).
 
 Defaults (the *recommended* option) apply where not answered.

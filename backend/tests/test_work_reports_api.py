@@ -11,6 +11,7 @@ import pytest
 
 from app.modules.projects.models import ProjectStatus
 from app.modules.users.models import UserRole
+from app.modules.work_reports import service as wr_service
 
 BASE = "/api/v1/work-reports"
 TODAY = date.today().isoformat()
@@ -83,6 +84,24 @@ def test_create_future_date_422(client, setup_author):
     a = setup_author()
     future = (date.today() + timedelta(days=1)).isoformat()
     res = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, report_date=future))
+    assert res.status_code == 422
+
+
+def test_create_historical_date_inside_the_window_201(client, setup_author):
+    """A report five calendar months back - March, filing in August - files."""
+    a = setup_author()
+    start = wr_service._window_start(date.today()).isoformat()
+    res = client.post(BASE, headers=a["header"], json=_payload(a["project"].id, report_date=start))
+    assert res.status_code == 201, res.text
+    assert res.json()["report_date"] == start
+
+
+def test_create_date_before_the_window_422(client, setup_author):
+    a = setup_author()
+    too_old = (wr_service._window_start(date.today()) - timedelta(days=1)).isoformat()
+    res = client.post(
+        BASE, headers=a["header"], json=_payload(a["project"].id, report_date=too_old)
+    )
     assert res.status_code == 422
 
 

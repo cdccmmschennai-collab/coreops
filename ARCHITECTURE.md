@@ -239,7 +239,7 @@ Bounded contexts in dependency order. **User** = authentication identity;
 5. **Relationships** — references `employees` (author), `projects` (tasks), `job_codes`
    (snapshot); emits notifications.
 6. **RBAC** — employees CRUD their **own** reports; PMs read all and review.
-7. **Business logic** — date window (current + previous month, no future); duplicate-per-day
+7. **Business logic** — date window (the last 6 calendar months, current month included, no future); duplicate-per-day
    guard; each task validates project is active **and** the author is a member; daily sum ≤
    1440; `total_minutes` always server-derived; editing a `rejected` report returns it to
    `draft`; only `draft` is deletable; submit/approve/reject notify the counterpart.

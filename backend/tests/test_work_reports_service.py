@@ -260,6 +260,56 @@ def test_edit_window_violation_422(db, author):
     assert ei.value.status_code == 422
 
 
+# ---------- the historical filing window (calendar months) -------------------
+def _first_of_month_back(today: date, n: int) -> date:
+    """First day of the month `n` calendar months before `today`."""
+    m = today.year * 12 + (today.month - 1) - n
+    return date(m // 12, m % 12 + 1, 1)
+
+
+def test_window_start_is_the_first_of_the_earliest_open_month():
+    """Whole calendar months, current one included, and it wraps the year."""
+    assert svc.REPORTING_WINDOW_MONTHS == 6
+    # Aug 2026 -> Mar..Aug 2026 are open, so the boundary is 2026-03-01 whether
+    # you ask on the 1st or the 28th: the window never moves within a month.
+    assert svc._window_start(date(2026, 8, 28)) == date(2026, 3, 1)
+    assert svc._window_start(date(2026, 8, 1)) == date(2026, 3, 1)
+    assert svc._window_start(date(2026, 1, 15)) == date(2025, 8, 1)
+    assert svc._window_start(date(2026, 3, 31)) == date(2025, 10, 1)
+
+
+@pytest.mark.parametrize("months_back", [0, 1, 2, 3, 4, 5])
+def test_every_month_in_the_window_can_be_filed(db, author, months_back):
+    """With today in August 2026 these are March through August."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
+    day = _first_of_month_back(TODAY, months_back)
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=day, tasks=[_task(p.id)]))
+    assert r.report_date == day
+
+
+def test_the_earliest_permitted_date_is_accepted(db, author):
+    """The boundary is inclusive: the 1st of the earliest open month files."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
+    start = svc._window_start(TODAY)
+    r = svc.create_work_report(db, u, WorkReportCreate(report_date=start, tasks=[_task(p.id)]))
+    assert r.report_date == start
+
+
+def test_the_day_before_the_window_start_is_rejected(db, author):
+    """One day earlier - the last day of the sixth month back - is out."""
+    u, e, p = author(email="a@x.com", code="E-1", proj_code="P-1")
+    with pytest.raises(AppError) as ei:
+        svc.create_work_report(
+            db,
+            u,
+            WorkReportCreate(
+                report_date=svc._window_start(TODAY) - timedelta(days=1),
+                tasks=[_task(p.id)],
+            ),
+        )
+    assert ei.value.status_code == 422
+
+
 def test_create_without_employee_profile_422(db, make_user, make_project):
     """A user with no employee profile cannot author a report."""
     u = make_user("ghost@x.com", role=UserRole.employee)

@@ -22,8 +22,11 @@ Definitions used throughout:
     backwards, since they are the ones who definitely came to work.
   - a report "exists" for (employee, date) only once it is **submitted** — a
     draft does not satisfy compliance.
-  - "previous working day" lookback is bounded by the report submission window
-    (current + previous month) so every pending day is actually fileable.
+  - "previous working day" lookback is current + previous month. It stays a
+    SUBSET of the report submission window (`work_reports.REPORTING_WINDOW_MONTHS`,
+    6 months) on purpose: everything the banner nags about is fileable, but
+    widening the filing window to let old reports be migrated in must not turn
+    months of historical gaps into a standing pile of pending days.
 """
 import uuid
 from datetime import date

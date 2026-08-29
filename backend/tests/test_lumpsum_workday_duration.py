@@ -43,7 +43,7 @@ CR = "/api/v1/continuation-requests"
 TODAY = date.today()
 # The PREVIOUS Friday-Thursday cycle: seven consecutive days that are all in the
 # past whatever weekday the suite runs on, and all inside the editable report
-# window (current + previous month).
+# window.
 PREV_FRI = compute_week_bounds(TODAY)[0] - timedelta(days=7)
 
 

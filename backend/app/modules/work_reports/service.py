@@ -2,7 +2,8 @@
 
 All business rules live here (DAILY_WORK_REPORTS_SPEC.md §3, §5, §6):
   - author = the acting user's employee profile (reports are always "own")
-  - validation: future date, edit window (current + previous month), duplicate
+  - validation: future date, edit window (the last REPORTING_WINDOW_MONTHS
+    calendar months, current month included), duplicate
     (employee, date), project active + author membership, daily sum <= 1440
   - workflow: draft -> submitted (final). No approval step; a submitted report
     is locked from further edits.
@@ -416,21 +417,30 @@ def _lifecycle_row_kwargs(
     }
 
 
-def _first_of_previous_month(today: date) -> date:
-    first_of_this = today.replace(day=1)
-    if first_of_this.month == 1:
-        return first_of_this.replace(year=first_of_this.year - 1, month=12)
-    return first_of_this.replace(month=first_of_this.month - 1)
+# How many CALENDAR MONTHS of history stay open for filing, counting the current
+# month as the first. The window has always been whole months - it opens on the
+# 1st of the earliest month, never on a rolling day count - and widening it from
+# 2 to 6 keeps exactly that semantics: on 2026-08-29 the earliest fileable date
+# is 2026-03-01. This is the single source of the boundary; nothing else
+# recomputes it.
+REPORTING_WINDOW_MONTHS = 6
+
+
+def _window_start(today: date) -> date:
+    """First day of the earliest month still open for filing."""
+    months = today.year * 12 + (today.month - 1) - (REPORTING_WINDOW_MONTHS - 1)
+    return date(months // 12, months % 12 + 1, 1)
 
 
 def _validate_report_date(report_date: date) -> None:
     today = _today()
     if report_date > today:
         raise AppError("validation_error", "Report date cannot be in the future.", 422)
-    if report_date < _first_of_previous_month(today):
+    if report_date < _window_start(today):
         raise AppError(
             "validation_error",
-            "Report date is outside the editable window (current and previous month).",
+            "Report date is outside the editable window "
+            f"(the current and previous {REPORTING_WINDOW_MONTHS - 1} months).",
             422,
         )
 
