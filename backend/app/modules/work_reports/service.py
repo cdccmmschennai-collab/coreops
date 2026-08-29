@@ -503,6 +503,7 @@ def _validate_tasks(
     *,
     exclude_report_id: uuid.UUID | None = None,
     require_lumpsum_count: bool = True,
+    require_project_code: bool = True,
 ) -> tuple[int, list[dict]]:
     """Validate project (active) + membership; return (total_minutes, snapshots).
 
@@ -519,6 +520,16 @@ def _validate_tasks(
     request's own schema has never carried count_field, so there's no field
     an employee could have named — the mandatory-count gate below would
     reject every lumpsum second-activity approval outright.
+
+    `require_project_code` (Support Missing Project Codes): a project may have
+    no permanent code yet (projects.code IS NULL, migration 0078). The
+    snapshot's project_code is then `task.manual_project_code`, the employee's
+    free-text entry — never written back to the Project Master. False only for
+    the same activity-request approval row as above: that request's own schema
+    has never carried a project-code field either, so rejecting it here would
+    newly break approval for a no-code project's second activity; the snapshot
+    is simply left None, exactly as it was before this feature (a no-code
+    project could not exist at all before migration 0078).
     """
     if len(tasks) > MAX_ACTIVITIES_PER_REPORT:
         raise AppError(
@@ -557,6 +568,23 @@ def _validate_tasks(
         if project.job_code_id:
             jc = db.get(JobCode, project.job_code_id)
             job_code_code = jc.code if jc else None
+        # Support Missing Project Codes: the project's own code wins whenever
+        # it has one — the employee is never asked for a second one. Only a
+        # code-less project (projects.code IS NULL) falls back to the
+        # employee-entered value, and only when the caller actually requires
+        # one (see require_project_code's own docstring above).
+        if project.code:
+            effective_project_code = project.code
+        else:
+            manual_code = (getattr(task, "manual_project_code", None) or "").strip() or None
+            if manual_code is None and require_project_code:
+                raise AppError(
+                    "validation_error",
+                    "Enter a project code for this activity — the selected "
+                    "project has no project code set.",
+                    422,
+                )
+            effective_project_code = manual_code
         # Optional Activity Master selection: replaces free-text activity_type.
         sub_activity_name: str | None = None
         activity_name: str | None = None
@@ -693,7 +721,7 @@ def _validate_tasks(
             planning_plant_description = pp.description if pp else None
         snapshots.append({
             "project_name": project.name,
-            "project_code": project.code,
+            "project_code": effective_project_code,
             "project_job_code_code": job_code_code,
             "sub_activity_name": sub_activity_name,
             "activity_name": activity_name,

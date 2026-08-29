@@ -79,7 +79,13 @@ class ProjectMemberRole(str, enum.Enum):
 class Project(UUIDMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "projects"
 
-    code: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable (migration 0078): a project may begin work before a permanent
+    # code is assigned (e.g. a Tag Estimation engagement). Creating/editing a
+    # project through the normal API still requires a code (ProjectCreate/
+    # ProjectUpdate) — this only allows such a row to exist and be read back.
+    # The employee-entered fallback used on work reports for a code-less
+    # project lives on work_report_tasks.project_code, never here.
+    code: Mapped[str | None] = mapped_column(Text, nullable=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     client: Mapped[str | None] = mapped_column(Text, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

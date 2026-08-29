@@ -1,10 +1,24 @@
 import type { components } from "@/types/openapi";
 
-// Types come straight from the live API contract (openapi-typescript output).
-export type Project = components["schemas"]["ProjectOut"];
+// Types come straight from the live API contract (openapi-typescript output),
+// except `code`: the checked-in openapi.json still has it as a plain `string`
+// (backend ProjectOut.code is now `str | None`, migration 0078 — Support
+// Missing Project Codes — but regenerating openapi.json/.ts for one field
+// produces an unreviewable whole-file diff, same reasoning as WorkReportTask's
+// own manually-declared fields in work-reports/types.ts). Overridden here so
+// every place that reads `.code` is compile-checked against the real
+// nullability rather than trusting the stale generated type.
+export type Project = Omit<components["schemas"]["ProjectOut"], "code"> & {
+  code: string | null;
+};
 export type ProjectStatus = components["schemas"]["ProjectStatus"];
 export type ProjectPage = components["schemas"]["ProjectPage"];
-export type ProjectCreateBody = components["schemas"]["ProjectCreate"];
+// code overridden here too: backend ProjectCreate.code is now `str | None`
+// (migration 0078) — omitting/nulling it creates a project with no code.
+// ProjectUpdate's generated type already had `code?: string | null`.
+export type ProjectCreateBody = Omit<components["schemas"]["ProjectCreate"], "code"> & {
+  code?: string | null;
+};
 export type ProjectUpdateBody = components["schemas"]["ProjectUpdate"];
 export type ProjectMember = components["schemas"]["ProjectMemberOut"];
 export type ProjectMemberRole = components["schemas"]["ProjectMemberRole"];

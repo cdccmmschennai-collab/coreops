@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Combobox } from "@/components/ui/combobox";
 import { CountInput } from "@/components/ui/count-input";
+import { Input } from "@/components/ui/input";
 import {
   FormControl,
   FormField,
@@ -434,6 +435,11 @@ export function PeriodActivityEditor({
         const projectCodeLabel =
           selectedProject?.code ?? watchedTasks?.[index]?.project_code ?? "—";
         const jobCodeLabel = selectedProject?.job_code_code ?? "—";
+        // Support Missing Project Codes: only once a project is actually
+        // selected AND that live project genuinely has no code of its own —
+        // never for a row with nothing picked yet (a separate "Project is
+        // required" error already covers that).
+        const needsManualProjectCode = !!selectedProjectId && !!selectedProject && !selectedProject.code;
 
         // Task continuation, per row.
         const rowSubId = watchedTasks?.[index]?.sub_activity_id;
@@ -587,6 +593,12 @@ export function PeriodActivityEditor({
                           // Planning Plant — clear any prior selection so a
                           // plant from the old Planning Plant can't linger.
                           if (changed) clearRowPlant(index);
+                          // Support Missing Project Codes: a manual entry
+                          // typed for the OLD project must never leak onto a
+                          // newly selected one.
+                          if (changed) {
+                            form.setValue(`tasks.${index}.manual_project_code`, "");
+                          }
                         }}
                         options={projectOptions}
                         placeholder="Select project…"
@@ -601,15 +613,39 @@ export function PeriodActivityEditor({
                 )}
               />
 
-              {/* Project Code — read-only metadata, auto-filled from selection */}
-              <div className="space-y-2">
-                <span className="block text-xs font-medium leading-none text-muted-foreground">
-                  Project Code
-                </span>
-                <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
-                  {projectCodeLabel}
+              {/* Project Code — read-only metadata, auto-filled from selection;
+                  becomes a required free-text entry when the selected project
+                  has no code of its own (Support Missing Project Codes). */}
+              {needsManualProjectCode ? (
+                <FormField
+                  control={form.control}
+                  name={`tasks.${index}.manual_project_code`}
+                  render={({ field: f }) => (
+                    <FormItem className="space-y-2">
+                      <FormLabel className="block text-xs font-medium leading-none text-muted-foreground">
+                        Project Code <span className="text-destructive">*</span>
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          {...f}
+                          placeholder="Enter project code"
+                          className="h-9 font-mono text-sm"
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              ) : (
+                <div className="space-y-2">
+                  <span className="block text-xs font-medium leading-none text-muted-foreground">
+                    Project Code
+                  </span>
+                  <div className="flex h-9 items-center rounded-md border border-input bg-muted/40 px-3 font-mono text-sm text-muted-foreground">
+                    {projectCodeLabel}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Job Code — read-only metadata, auto-filled from selection */}
               <div className="space-y-2">

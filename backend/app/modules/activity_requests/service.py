@@ -497,9 +497,13 @@ def _create_task_from_request(
     # AppError otherwise so approval fails cleanly instead of writing a bad row.
     # require_lumpsum_count=False: ActivityRequest carries no count_field (see
     # _validate_tasks' own docstring) — the mandatory LS-count gate only
-    # applies where a client could actually name one.
+    # applies where a client could actually name one. require_project_code=False:
+    # ActivityRequest likewise carries no project-code field, so a no-code
+    # project's second activity keeps approving exactly as it did before that
+    # gate existed (see _validate_tasks' own docstring).
     _total, snapshots = _validate_tasks(
-        db, req.employee_id, [row], require_lumpsum_count=False,
+        db, req.employee_id, [row],
+        require_lumpsum_count=False, require_project_code=False,
     )
     snap = snapshots[0]
     started_date, due_date = _task_based_dates(report.report_date, snap)

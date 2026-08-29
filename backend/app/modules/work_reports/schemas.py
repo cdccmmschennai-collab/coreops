@@ -131,6 +131,15 @@ class WorkReportTaskIn(BaseModel):
     # employee actually worked at that day. Planning Plant code/description
     # auto-derive server-side; never client-supplied.
     maintenance_plant_id: uuid.UUID | None = None
+    # Employee-entered project code (Support Missing Project Codes). Only
+    # read when the SELECTED PROJECT itself has no permanent code
+    # (projects.code IS NULL, migration 0078) — a project that already has one
+    # never needs this, and this value never overrides it. When required and
+    # missing, the service rejects the save with 422. Never written back to
+    # the Project Master; it is frozen into this row's own
+    # work_report_tasks.project_code snapshot (the same pre-existing column a
+    # coded project's own code has always been frozen into).
+    manual_project_code: str | None = Field(default=None, max_length=100)
 
 
 class WorkReportTaskOut(BaseModel):
@@ -496,7 +505,8 @@ class ReportScopeProject(BaseModel):
     only the listed led activities."""
 
     project_id: uuid.UUID
-    code: str
+    # Nullable (migration 0078) — a project may have no permanent code yet.
+    code: str | None = None
     name: str
     access: Literal["head", "lead"]
     activities: list[ReportScopeActivity] = []

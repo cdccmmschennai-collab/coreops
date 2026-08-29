@@ -37,6 +37,69 @@ def test_create_missing_name_422(client, auth_header):
     assert client.post("/api/v1/projects", headers=h, json={"code": "P"}).status_code == 422
 
 
+# ---------- optional code (Support Missing Project Codes, migration 0078) --
+
+def test_create_without_code_succeeds(client, auth_header):
+    """A project can begin work before a permanent code is assigned (e.g. a
+    Tag Estimation engagement) — omitting `code` entirely creates one with
+    none, not a validation error."""
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    res = client.post(
+        "/api/v1/projects", headers=h, json={"name": "Tag Estimation"},
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["code"] is None
+
+
+def test_create_with_null_code_succeeds(client, auth_header):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    res = client.post(
+        "/api/v1/projects", headers=h, json={"name": "Tag Estimation", "code": None},
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["code"] is None
+
+
+def test_create_with_empty_string_code_rejected(client, auth_header):
+    """Blank is not the same as absent — an explicit "" is still not a real
+    code, exactly as ProjectUpdate has always treated it."""
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    res = client.post(
+        "/api/v1/projects", headers=h, json={"name": "Tag Estimation", "code": ""},
+    )
+    assert res.status_code == 422, res.text
+
+
+def test_multiple_no_code_projects_do_not_conflict(client, auth_header):
+    """The partial-unique index on `code` already tolerates any number of
+    NULLs — the application-level duplicate check must not second-guess
+    that by treating two no-code projects as a conflict."""
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    first = client.post(
+        "/api/v1/projects", headers=h, json={"name": "Tag Estimation A"},
+    )
+    second = client.post(
+        "/api/v1/projects", headers=h, json={"name": "Tag Estimation B"},
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+
+
+def test_update_can_clear_code_to_null(client, auth_header, make_project):
+    """A code entered in error can be cleared back to none by sending
+    `code: null` on PATCH — never written implicitly, only on explicit
+    request, and never a conflict with another no-code project."""
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    make_project(code=None, name="Existing No-Code Project")
+    p = make_project(code="TEMP-CODE", name="Apollo 2")
+
+    res = client.patch(
+        f"/api/v1/projects/{p.id}", headers=h, json={"code": None},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["code"] is None
+
+
 def test_create_bad_dates_422(client, auth_header):
     h = auth_header("admin@example.com", role=UserRole.project_manager)
     res = client.post(

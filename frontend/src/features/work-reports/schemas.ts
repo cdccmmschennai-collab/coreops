@@ -211,6 +211,12 @@ const taskSchema = z
     // longer in the RBAC-scoped list.  Never sent back to the backend.
     project_name: z.string().optional(),
     project_code: z.string().optional(),
+    // Support Missing Project Codes: the employee's free-text entry, used
+    // only while the selected project has no code of its own. Whether it is
+    // actually REQUIRED depends on the live-selected project (something this
+    // static schema cannot see — see work-report-form.tsx's pre-submit
+    // check); ignored by the server whenever the project has its own code.
+    manual_project_code: z.string().max(100).optional().default(""),
     // Day remarks — optional free text describing the activity.
     description: z
       .string()
@@ -461,6 +467,7 @@ export const EMPTY_TASK_ROW: WorkReportFormValues["tasks"][number] = {
   task_hours:     "",
   project_name:   undefined,
   project_code:   undefined,
+  manual_project_code: "",
   description:    "",
   duration_hours: "",
   activity_type:  "",
@@ -561,6 +568,10 @@ function toTaskBody(t: WorkReportFormValues["tasks"][number]) {
     benchmark_exception_code: orNull(t.benchmark_exception_code),
     work_item_id:  orNull(t.work_item_id),
     maintenance_plant_id: orNull(t.maintenance_plant_id),
+    // Support Missing Project Codes: only meaningful when the selected
+    // project has no code of its own — the server ignores it otherwise, so
+    // sending it unconditionally is harmless.
+    manual_project_code: orNull(t.manual_project_code),
   };
 }
 
@@ -680,6 +691,12 @@ export function toFormValues(report: WorkReport): WorkReportFormValues {
             task_hours:     t.task_minutes_spent != null ? minutesToHours(t.task_minutes_spent) : "",
             project_name:   t.project_name ?? undefined,
             project_code:   t.project_code ?? undefined,
+            // Pre-fill for a no-code project: t.project_code IS the employee's
+            // previous entry in that case (there is no separate field on the
+            // API — see manual_project_code's own comment above). Harmless
+            // when the project has its own code: the input is never shown or
+            // sent in that case.
+            manual_project_code: t.project_code ?? "",
             description:    t.description,
             duration_hours: t.minutes_spent != null ? minutesToHours(t.minutes_spent) : "",
             activity_type:  t.activity_type ?? "",

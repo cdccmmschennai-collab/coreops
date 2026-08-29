@@ -545,7 +545,11 @@ def _resolve_job_code(
 
 
 def create_project(db: Session, actor: User, data: ProjectCreate) -> Project:
-    if db.execute(
+    # No code at all (migration 0078) is never a conflict — any number of
+    # no-code projects can coexist, same as the partial-unique index itself
+    # allows (Postgres NULL <> NULL). `Project.code == None` would otherwise
+    # compile to "code IS NULL" and match every other no-code project.
+    if data.code and db.execute(
         select(Project).where(Project.code == data.code, Project.deleted_at.is_(None))
     ).scalar_one_or_none():
         raise AppError("conflict", "A project with this code already exists.", 409)
@@ -957,9 +961,11 @@ def update_project(
     # above the tag-scope section.
 
     # code is editable (PMs need to fix codes entered before this field
-    # existed) — but must stay unique among non-deleted projects, same rule
-    # create_project enforces.
-    if "code" in fields and fields["code"] != project.code:
+    # existed, or clear it entirely — e.g. reverting a code entered in error —
+    # by sending code: null, migration 0078) — but must stay unique among
+    # non-deleted projects, same rule create_project enforces. Clearing to
+    # None is never a conflict, same reasoning as create_project's own check.
+    if "code" in fields and fields["code"] != project.code and fields["code"]:
         if db.execute(
             select(Project).where(
                 Project.code == fields["code"],

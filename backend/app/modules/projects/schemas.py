@@ -27,7 +27,9 @@ class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    code: str
+    # Nullable (migration 0078) — a project may have no permanent code yet.
+    # See work_reports for the per-activity employee-entered fallback.
+    code: str | None = None
     name: str
     job_code_id: uuid.UUID | None = None
     job_code_code: str | None = None   # populated by service join
@@ -62,7 +64,12 @@ class ProjectOut(BaseModel):
 
 
 class ProjectCreate(BaseModel):
-    code: str = Field(min_length=1)
+    # Nullable (migration 0078): a project may begin work before a permanent
+    # code is assigned (e.g. a Tag Estimation engagement) — omit it, or send
+    # null, to create one with none. A code that IS provided is still
+    # validated/enforced unique exactly as before; this only removes the
+    # requirement that one be provided at all.
+    code: str | None = Field(default=None, min_length=1)
     name: str = Field(min_length=1)
     job_code: str | None = None   # free text; resolved to a JobCode by the service
     planning_plant_id: uuid.UUID | None = None   # project master link to a Planning Plant
@@ -279,7 +286,8 @@ class LedProjectMember(BaseModel):
 class LedProject(BaseModel):
     project_id: uuid.UUID
     name: str
-    code: str
+    # Nullable (migration 0078) — a project may have no permanent code yet.
+    code: str | None = None
     members: list[LedProjectMember]
 
 
@@ -336,8 +344,9 @@ class WeeklyReportRow(BaseModel):
     work_period_label: str
     employee_name: str
     # PROJECT CODE ONLY (e.g. "4716-LC25102900") — never the project name, in
-    # the preview or the export.
-    project_code: str
+    # the preview or the export. Nullable (migration 0078): a project with no
+    # permanent code yet.
+    project_code: str | None = None
     activity_name: str | None = None
     sub_activity_name: str | None = None
     # Numeric target frozen at submit time, or the textual label for a
@@ -365,7 +374,7 @@ class WeeklyReportRow(BaseModel):
 
 class WeeklyReportOut(BaseModel):
     project_id: uuid.UUID
-    project_code: str
+    project_code: str | None = None
     period: WeeklyReportPeriodOut
     rows: list[WeeklyReportRow] = Field(default_factory=list)
     row_count: int = 0

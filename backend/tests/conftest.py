@@ -211,7 +211,7 @@ def make_employee(db):
 def make_project(db):
     def _make(
         *,
-        code: str,
+        code: str | None = None,
         name: str = "Test Project",
         client: str | None = None,
         status: ProjectStatus = ProjectStatus.planning,

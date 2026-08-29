@@ -429,6 +429,30 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     return ok;
   }
 
+  // Support Missing Project Codes: a project with no code of its own
+  // (projects.code IS NULL) needs the employee to type one on the row —
+  // mirrors the backend's own gate exactly (work_reports/service.py
+  // _validate_tasks, require_project_code=True on this save path). Reads the
+  // LIVE project list (not anything cached on the row), so it is correct
+  // regardless of when the project was picked.
+  function validateProjectCodes(rows: WorkReportFormValues["tasks"]): boolean {
+    let ok = true;
+    rows.forEach((t, i) => {
+      if (!t.project_id) return;
+      const project = projById.get(t.project_id);
+      if (project && !project.code && !t.manual_project_code.trim()) {
+        form.setError(`tasks.${i}.manual_project_code`, {
+          message: "Project Code is required",
+        });
+        ok = false;
+      }
+    });
+    if (!ok) {
+      showFormError("Enter the project code for the activities highlighted below.");
+    }
+    return ok;
+  }
+
   // "Request PM to Add This Activity" — the additional-activity draft (the
   // last row) is NOT saved to the report. The report is first persisted
   // without it, then the draft is sent to the PM as an activity request tagged
@@ -755,6 +779,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
     // production, not an unfilled field.
     if (!validateBenchmarks(persist.tasks)) return;
     if (!validateLumpsumCounts(persist.tasks)) return;
+    if (!validateProjectCodes(persist.tasks)) return;
 
     try {
       const result =

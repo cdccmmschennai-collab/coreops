@@ -56,7 +56,9 @@ class ActivityRequestOut(BaseModel):
     # Display-only names resolved by the service (never persisted).
     employee_name: str = ""
     project_name: str = ""
-    project_code: str = ""
+    # Nullable (migration 0078) — the requested project may have no permanent
+    # code yet.
+    project_code: str | None = ""
     activity_name: str | None = None
     sub_activity_name: str = ""
     task_title: str | None = None

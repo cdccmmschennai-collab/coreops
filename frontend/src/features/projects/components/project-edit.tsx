@@ -52,7 +52,7 @@ export function ProjectEdit({ id }: { id: string }) {
   }
 
   const defaults: ProjectFormValues = {
-    code: project.code,
+    code: project.code ?? "",
     name: project.name,
     job_code: project.job_code_code ?? "",
     planning_plant_id: project.planning_plant_id ?? "",
@@ -71,7 +71,7 @@ export function ProjectEdit({ id }: { id: string }) {
       <Link href={`/projects/${project.id}`} className="text-sm text-primary hover:underline">
         ← {project.name}
       </Link>
-      <PageHeader className="mt-2" title={`Edit ${project.name}`} subtitle={project.code} />
+      <PageHeader className="mt-2" title={`Edit ${project.name}`} subtitle={project.code ?? undefined} />
       <ProjectForm mode="edit" projectId={project.id} defaultValues={defaults} />
     </>
   );

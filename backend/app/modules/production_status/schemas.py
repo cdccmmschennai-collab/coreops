@@ -72,7 +72,7 @@ class ProductionStatusOut(BaseModel):
 
     # --- project (derived from the project, never entered) -----------------
     project_id: uuid.UUID
-    project_code: str
+    project_code: str | None = None
     project_name: str
     # The project's own Planning Plant. Context only: it is what scopes the
     # Maintenance Plant dropdown, and it is NEVER shown as this record's plant.
@@ -148,7 +148,7 @@ class ProductionStatusReportRow(BaseModel):
     id: uuid.UUID
 
     project_id: uuid.UUID
-    project_code: str
+    project_code: str | None = None
     # The rendered "PROJECT / PLANT" cell - project, this record's Maintenance
     # Plant and the revision combined into one clean string (see
     # service._project_plant_display). One field, not a second project/plant

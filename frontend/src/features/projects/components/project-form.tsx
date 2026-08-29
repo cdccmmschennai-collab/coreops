@@ -138,7 +138,11 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
           <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
             <div className="grid gap-4 sm:grid-cols-2">
 
-              {/* Project Code — editable; uniqueness re-checked server-side on change */}
+              {/* Project Code — optional (migration 0078): left blank for a
+                  project that has none yet (e.g. a Tag Estimation engagement),
+                  in which case the employee enters one per activity on the
+                  work report instead. Editable; uniqueness re-checked
+                  server-side on change. */}
               <FormField
                 control={form.control}
                 name="code"
@@ -146,7 +150,10 @@ export function ProjectForm({ mode, defaultValues, projectId }: ProjectFormProps
                   <FormItem>
                     <FormLabel>Project Code</FormLabel>
                     <FormControl>
-                      <Input {...field} placeholder="e.g. GC19101900" />
+                      <Input
+                        {...field}
+                        placeholder="e.g. GC19101900 (leave blank if not yet assigned)"
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

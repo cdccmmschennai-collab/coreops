@@ -28,7 +28,12 @@ export const PROJECT_STATUS_LABEL: Record<(typeof PROJECT_STATUSES)[number], str
 
 export const projectFormSchema = z
   .object({
-    code: z.string().trim().min(1, "Project code is required"),
+    // Optional (migration 0078) — a project may begin work before a
+    // permanent code is assigned (e.g. a Tag Estimation engagement). Left
+    // blank, it is sent as null; the work-report side then requires the
+    // employee to enter one per activity instead (see work-reports/schemas.ts
+    // manual_project_code).
+    code: z.string().trim().optional().default(""),
     name: z.string().trim().min(1, "Project name is required"),
     job_code: z.string().trim().optional().default(""),
     // A project belongs to a Planning Plant (project master). Description (PP)
@@ -76,7 +81,7 @@ const orNull = (v: string): string | null => (v.trim() === "" ? null : v.trim())
 
 export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
   return {
-    code: v.code,
+    code: orNull(v.code),
     name: v.name,
     job_code: orNull(v.job_code),
     planning_plant_id: orNull(v.planning_plant_id),
@@ -92,13 +97,15 @@ export function toCreateBody(v: ProjectFormValues): ProjectCreateBody {
 }
 
 /** code is editable — the PM can fix a code entered before this field
- *  existed (still subject to the same uniqueness rule create enforces).
+ *  existed (still subject to the same uniqueness rule create enforces), or
+ *  clear it back to none (migration 0078) by leaving the field blank — sent
+ *  as null, exactly like create.
  *  planned_completion_date is included but the backend only applies it when
  *  the project has no existing planned date (initial set). Use
  *  PATCH /planned-completion-date for subsequent changes (requires a reason). */
 export function toUpdateBody(v: ProjectFormValues): ProjectUpdateBody {
   return {
-    code: v.code,
+    code: orNull(v.code),
     name: v.name,
     job_code: orNull(v.job_code),
     planning_plant_id: orNull(v.planning_plant_id),
