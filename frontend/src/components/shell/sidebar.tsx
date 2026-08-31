@@ -249,7 +249,13 @@ export function Sidebar({ collapsed = false, onToggleCollapsed }: SidebarProps) 
   );
 
   return (
-    <nav className="flex h-full flex-col border-r border-border bg-secondary/40">
+    // `overflow-hidden` is the rail's clip while the grid column animates
+    // between 72px and 240px - the expanded header and labels briefly need more
+    // room than the box has. It lives HERE, on a static element, and never on
+    // the sticky wrapper in app-shell: `overflow` on a sticky element makes it a
+    // scroll container, which is re-rastered against its clip every scroll frame
+    // and made the logo and the toggle icon shimmer.
+    <nav className="flex h-full flex-col overflow-hidden border-r border-border bg-secondary/40">
       {/* The header owns no inherited padding — it sits flush against the nav's
           edges (h-full stretch), which is what keeps its border-bottom at the
           same y-position as TopNav's regardless of the collapsed/expanded
