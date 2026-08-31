@@ -15,7 +15,20 @@ export type WorkReport = Omit<
   periods: WorkReportPeriod[];
   /** Continuations rejected on this report - detail read only, see below. */
   rejected_continuations?: RejectedContinuation[];
+  /**
+   * Who/what created the report (backend WorkReportOut.origin, migration 0079).
+   * Declared here rather than off openapi.json for the same reason as the row
+   * fields below, and optional so a build served by an older backend simply
+   * reads as "not automatic" instead of crashing.
+   *
+   * Read-only: the client renders the AUTO badge from it and never writes it
+   * back. It is never restamped server-side either, so an automatic report the
+   * employee later edits stays "auto" - see isAutoReport in report-origin.ts.
+   */
+  origin?: ReportOrigin | null;
 };
+/** Report origin values the backend can serve (models.py ReportOrigin). */
+export type ReportOrigin = "employee" | "auto";
 /**
  * A lump-sum continuation the Project Head rejected on this report (backend
  * RejectedContinuationOut, migration 0077). The rows entered under it were

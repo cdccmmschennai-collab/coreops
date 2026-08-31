@@ -23,7 +23,7 @@ import { can } from "@/lib/rbac";
 
 import { DeleteDialog } from "./delete-dialog";
 import { RequestEditDialog } from "./request-edit-dialog";
-import { StatusBadge } from "./status-badge";
+import { AutoBadge, StatusBadge } from "./status-badge";
 import {
   useGrantEditWorkReport,
   useSubmitWorkReport,
@@ -379,7 +379,18 @@ export function WorkReportDetail({ id }: { id: string }) {
           <CardContent className="divide-y divide-border">
             <Row label="Employee" value={employeeName} />
             <Row label="Date" value={report.report_date} />
-            <Row label="Status" value={<StatusBadge status={report.status} editRequested={editRequested} />} />
+            {/* AUTO sits with the status, exactly as it does in the report
+                list, so the two surfaces read the same way. Informational
+                only - it never affects the actions offered above. */}
+            <Row
+              label="Status"
+              value={
+                <span className="inline-flex items-center gap-1.5">
+                  <StatusBadge status={report.status} editRequested={editRequested} />
+                  <AutoBadge origin={report.origin} />
+                </span>
+              }
+            />
             {report.report_mode === "split_day" && (
               <Row label="Day Format" value="Split Day" />
             )}

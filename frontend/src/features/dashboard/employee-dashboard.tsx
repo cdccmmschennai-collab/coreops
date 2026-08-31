@@ -22,7 +22,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benchmark-guide-button";
 import { BenchmarkActivities } from "@/features/benchmarks/components/benchmark-activities";
 import { useProjects } from "@/features/projects/hooks";
-import { StatusBadge } from "@/features/work-reports/components/status-badge";
+import { AutoBadge, StatusBadge } from "@/features/work-reports/components/status-badge";
 import { useWorkReportList, useReportScope } from "@/features/work-reports/hooks";
 import { projectSummary } from "@/features/work-reports/project-summary";
 import { useLeaveList } from "@/features/leave/hooks";
@@ -178,7 +178,12 @@ export function EmployeeDashboard() {
                       >
                         {proj.label}
                       </TableCell>
-                      <TableCell><StatusBadge status={r.status} /></TableCell>
+                      <TableCell>
+                        <span className="inline-flex items-center gap-1.5">
+                          <StatusBadge status={r.status} />
+                          <AutoBadge origin={r.origin} />
+                        </span>
+                      </TableCell>
                     </TableRow>
                   );
                 })}

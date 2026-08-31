@@ -25,6 +25,7 @@ from app.modules.work_reports.models import (
     DayPart,
     DayStatus,
     ReportMode,
+    ReportOrigin,
     WorkLocation,
     WorkReportStatus,
 )
@@ -435,6 +436,12 @@ class WorkReportOut(BaseModel):
     employee_name: str | None = None
     report_date: date
     status: WorkReportStatus
+    # Who/what created the row (migration 0079): 'employee' for an authored
+    # report, 'auto' for one the 01:00 generator produced (week-off / leave).
+    # Read-only and informational - the client renders an "AUTO" badge from it
+    # and never sends it back. `origin` is never restamped, so an AUTO report
+    # the employee later edits stays 'auto' (reconciliation depends on that).
+    origin: ReportOrigin = ReportOrigin.employee
     # Full-Day vs Split-Day (migration 0060). `periods` carries each period's
     # metadata + its own task rows; the flat `tasks` list below is preserved
     # unchanged for existing clients (every period task also appears there).

@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 
+import { isAutoReport } from "../report-origin";
 import { WORK_REPORT_STATUS_LABEL } from "../schemas";
 import type { WorkReportStatus } from "../types";
 
@@ -37,6 +38,27 @@ export function StatusBadge({
   return (
     <Badge variant={VARIANT[status]} dot>
       {WORK_REPORT_STATUS_LABEL[status]}
+    </Badge>
+  );
+}
+
+/**
+ * "AUTO" pill for a report the 01:00 generator produced instead of the employee
+ * - a week-off day, or a day covered by approved leave. Purely informational:
+ * it says where the row came from and changes nothing about who may edit it,
+ * which the API alone decides.
+ *
+ * Rendered next to the status pill rather than replacing it, because the two
+ * answer different questions ("Submitted" vs "nobody typed this"). Outline
+ * variant keeps it quieter than the coloured status pill it sits beside.
+ *
+ * Renders nothing unless `origin` is exactly "auto" - see isAutoReport.
+ */
+export function AutoBadge({ origin }: { origin?: string | null }) {
+  if (!isAutoReport({ origin })) return null;
+  return (
+    <Badge variant="outline" title="Generated automatically by the system">
+      AUTO
     </Badge>
   );
 }

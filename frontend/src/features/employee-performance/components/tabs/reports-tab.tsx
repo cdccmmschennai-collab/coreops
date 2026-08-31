@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { StatusBadge } from "@/features/work-reports/components/status-badge";
+import { AutoBadge, StatusBadge } from "@/features/work-reports/components/status-badge";
 import type { WorkReport } from "@/features/work-reports/types";
 
 import { useEmployeeWeekReports } from "../../hooks";
@@ -61,7 +61,10 @@ export function ReportsTab({ employeeId }: { employeeId: string }) {
                 <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{projectLabel(r)}</TableCell>
                 <TableCell>
-                  <StatusBadge status={r.status} />
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusBadge status={r.status} />
+                    <AutoBadge origin={r.origin} />
+                  </span>
                 </TableCell>
               </TableRow>
             ))}
