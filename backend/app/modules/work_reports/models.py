@@ -47,6 +47,16 @@ class WorkReportStatus(str, enum.Enum):
     granted = "granted"        # the Project Head reopened the report on an edit request
 
 
+class ReportOrigin(str, enum.Enum):
+    """Who/what created the report row (migration 0079). Every report created
+    before this migration is unambiguously employee-authored, hence the
+    'employee' default. 'auto' is reserved for future system-generated reports
+    (weekend/holiday/leave) — no such generation exists yet."""
+
+    employee = "employee"
+    auto = "auto"
+
+
 class DayStatus(str, enum.Enum):
     # Company day-status taxonomy (replaces the original Google-Form placeholders
     # in migration 0048). The four NO-ACTIVITY statuses (leave, company_holiday,
@@ -128,6 +138,15 @@ class DailyWorkReport(UUIDMixin, TimestampMixin, Base):
         ),
         nullable=False,
         server_default=WorkReportStatus.draft.value,
+    )
+    origin: Mapped[ReportOrigin] = mapped_column(
+        SAEnum(
+            ReportOrigin,
+            name="report_origin",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=False,
+        server_default=ReportOrigin.employee.value,
     )
     # Google Form fields (migration 0006)
     day_status: Mapped[DayStatus | None] = mapped_column(

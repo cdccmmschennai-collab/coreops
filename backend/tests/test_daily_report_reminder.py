@@ -644,6 +644,128 @@ def test_pm_with_only_pm_reports_gets_no_email(db):
     assert _collect(db) == []
 
 
+# -- leave awareness ----------------------------------------------------------
+
+
+def _make_leave(db, *, employee_id, start_date, end_date, status):
+    from app.modules.leave.models import LeaveRequest
+
+    leave = LeaveRequest(
+        employee_id=employee_id,
+        leave_type="casual",
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+    )
+    db.add(leave)
+    db.commit()
+    db.refresh(leave)
+    return leave
+
+
+def test_approved_leave_covering_target_date_suppresses_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db,
+        employee_id=emp.id,
+        start_date=_TUE,
+        end_date=_THU,
+        status="approved",
+    )
+
+    assert _collect(db) == []
+
+
+def test_approved_leave_starting_on_target_date_suppresses_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=emp.id, start_date=_WED, end_date=_THU, status="approved"
+    )
+
+    assert _collect(db) == []
+
+
+def test_approved_leave_ending_on_target_date_suppresses_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=emp.id, start_date=_TUE, end_date=_WED, status="approved"
+    )
+
+    assert _collect(db) == []
+
+
+def test_approved_leave_spanning_target_date_suppresses_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=emp.id, start_date=_PREV_FRI, end_date=_THU, status="approved"
+    )
+
+    assert _collect(db) == []
+
+
+def test_pending_leave_does_not_suppress_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=emp.id, start_date=_WED, end_date=_WED, status="pending"
+    )
+
+    assert _missing_codes(_collect(db)) == {"EMP001"}
+
+
+def test_rejected_leave_does_not_suppress_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=emp.id, start_date=_WED, end_date=_WED, status="rejected"
+    )
+
+    assert _missing_codes(_collect(db)) == {"EMP001"}
+
+
+def test_cancelled_leave_does_not_suppress_missing(db):
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=emp.id, start_date=_WED, end_date=_WED, status="cancelled"
+    )
+
+    assert _missing_codes(_collect(db)) == {"EMP001"}
+
+
+def test_cancellation_requested_leave_suppresses_missing(db):
+    """Approved leave still being withdrawn counts as active leave."""
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_leave(
+        db,
+        employee_id=emp.id,
+        start_date=_WED,
+        end_date=_WED,
+        status="cancellation_requested",
+    )
+
+    assert _collect(db) == []
+
+
+def test_leave_for_one_employee_does_not_suppress_another(db):
+    """Leave scoping is per employee_id, never leaks across employees."""
+    pm = _make_pm_user(db, "alex@example.com")
+    on_leave = _make_reporting_employee(
+        db, code="EMP001", first_name="David", pm_id=pm.id
+    )
+    _make_reporting_employee(db, code="EMP004", first_name="Erin", pm_id=pm.id)
+    _make_leave(
+        db, employee_id=on_leave.id, start_date=_WED, end_date=_WED, status="approved"
+    )
+
+    assert _missing_codes(_collect(db)) == {"EMP004"}
+
+
 # --- Celery task ------------------------------------------------------------
 
 

@@ -42,8 +42,15 @@ from app.modules.calendar.working_days import (
     previous_working_day,
 )
 from app.modules.employees.models import Employee, EmployeeStatus
+from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus
+
+# Leave states that still count as an active absence on the target date, so a
+# missing report must not be raised for them. `cancellation_requested` stays
+# here because the leave model treats the absence as still in force until the
+# cancellation is actually decided.
+_ACTIVE_LEAVE_STATUSES = (LeaveStatus.approved, LeaveStatus.cancellation_requested)
 
 logger = logging.getLogger("coreops.reminders.daily_report")
 
@@ -119,12 +126,13 @@ class DailyReportReminderService:
             return []
 
         reported = self._employees_with_report(db, all_employee_ids, target)
+        on_leave = self._employees_on_leave(db, all_employee_ids, target)
         pm_names = self._pm_display_names(db, pms)
 
         reminders: list[PMReminder] = []
         for pm in pms:
             pm_employees = employees_by_pm.get(pm.id, [])
-            missing = self._missing_employees(pm_employees, reported, target)
+            missing = self._missing_employees(pm_employees, reported, on_leave, target)
             if not missing:
                 continue
             reminders.append(
@@ -197,6 +205,26 @@ class DailyReportReminderService:
         ).scalars()
         return set(rows)
 
+    def _employees_on_leave(
+        self, db: Session, employee_ids: list[uuid.UUID], target: date
+    ) -> set[uuid.UUID]:
+        """Employees whose leave is active over the target date.
+
+        Active here means it would still suppress a missing-report: ``approved``
+        or ``cancellation_requested`` (the absence stands until the cancellation
+        is actually decided). ``pending``, ``rejected`` and ``cancelled`` never
+        suppress.
+        """
+        rows = db.execute(
+            select(LeaveRequest.employee_id).where(
+                LeaveRequest.employee_id.in_(employee_ids),
+                LeaveRequest.status.in_(_ACTIVE_LEAVE_STATUSES),
+                LeaveRequest.start_date <= target,
+                LeaveRequest.end_date >= target,
+            )
+        ).scalars()
+        return set(rows)
+
     def _pm_display_names(
         self, db: Session, pms: list[User]
     ) -> dict[uuid.UUID, str]:
@@ -232,6 +260,7 @@ class DailyReportReminderService:
         self,
         employees: list[Employee],
         reported: set[uuid.UUID],
+        on_leave: set[uuid.UUID],
         target: date,
     ) -> list[MissingEmployee]:
         missing = [
@@ -239,7 +268,9 @@ class DailyReportReminderService:
                 employee_id=emp.id, name=emp.full_name, code=emp.employee_code
             )
             for emp in employees
-            if self._owes_report(emp, target) and emp.id not in reported
+            if self._owes_report(emp, target)
+            and emp.id not in reported
+            and emp.id not in on_leave
         ]
         missing.sort(key=lambda e: e.name.lower())
         return missing
