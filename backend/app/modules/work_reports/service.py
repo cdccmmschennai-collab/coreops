@@ -49,6 +49,7 @@ from app.modules.activity_master.service import (
 from app.modules.continuation_requests import service as continuation_requests_service
 from app.modules.continuation_requests.models import ContinuationRequest
 from app.modules.work_reports import work_items as wi
+from app.modules.work_reports.auto_reports import auto_report_author_editable
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.job_codes.models import JobCode
@@ -283,11 +284,18 @@ def _decorate(
         # may grant edit on their own report). Derived from the same
         # `reviewable` set as can_review, so the UI and the write-side guard in
         # update_work_report agree.
+        # The second arm keeps an automatically generated non-working-day report
+        # editable by its author: it is submitted because the day is accounted
+        # for, not because it is locked. Derived from the same predicate as the
+        # write-side `auto_self_edit` guard so the UI and the API cannot diverge.
         r.can_self_edit = (
             me is not None
             and r.employee_id == me.id
             and r.status == WorkReportStatus.submitted
-            and any(t.project_id in reviewable for t in r.tasks)
+            and (
+                auto_report_author_editable(r)
+                or any(t.project_id in reviewable for t in r.tasks)
+            )
         )
     return reports
 
@@ -2117,15 +2125,29 @@ def update_work_report(
 ) -> DailyWorkReport:
     report = _fetch(db, report_id)
     me = _assert_author(db, actor, report)
-    # A submitted report is normally locked. The one exception: its author is
-    # the *current* Project Head of one of its projects — they edit directly,
-    # skipping the request-edit/grant-edit handshake. Same `reviewable` set as
-    # the can_self_edit flag surfaced to the UI, so the two never disagree.
+    # A submitted report is normally locked. Two exceptions, both of which reopen
+    # the report to draft below rather than mutating it in place:
+    #
+    #   head_self_edit  its author is the *current* Project Head of one of its
+    #                   projects - they edit directly, skipping the
+    #                   request-edit/grant-edit handshake. Same `reviewable` set
+    #                   as the can_self_edit flag surfaced to the UI, so the two
+    #                   never disagree.
+    #   auto_self_edit  the report was generated for a non-working day
+    #                   (origin=auto). It is born `submitted` because the day is
+    #                   already accounted for, NOT because it is locked - see
+    #                   `auto_reports.auto_report_author_editable`, which keeps
+    #                   an automatic LEAVE report locked and lets the others
+    #                   through. Never true for an employee-authored report.
     head_self_edit = (
         report.status == WorkReportStatus.submitted
         and _report_in_projects(db, report.id, authz.reviewable_project_ids(db, actor))
     )
-    if report.status not in _EDITABLE and not head_self_edit:
+    auto_self_edit = (
+        report.status == WorkReportStatus.submitted
+        and auto_report_author_editable(report)
+    )
+    if report.status not in _EDITABLE and not head_self_edit and not auto_self_edit:
         raise AppError(
             "forbidden", "Only draft or rejected reports can be edited.", 403
         )
@@ -2284,10 +2306,13 @@ def update_work_report(
     # clears the prior review. A Project Head editing their own submitted report
     # (head_self_edit) reopens it the same way — the edit lands as a draft they
     # then resubmit, so benchmarks recompute and no report is silently mutated
-    # while still marked "submitted".
+    # while still marked "submitted". An author editing an automatic non-working
+    # day report (auto_self_edit) takes the identical route, for the identical
+    # reason: the moment they put real work on it, it is an ordinary draft.
     if (
         report.status in (WorkReportStatus.rejected, WorkReportStatus.granted)
         or head_self_edit
+        or auto_self_edit
     ):
         report.status = WorkReportStatus.draft
         report.submitted_at = None

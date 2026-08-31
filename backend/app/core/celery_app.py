@@ -17,6 +17,11 @@ on the 1st: the job is idempotent per (employee, month), so the first run of a
 month sends and the rest of the month is a no-op, while a worker that was down on
 the 1st still delivers on the 2nd. See
 `app/reminders/leave_balance/dispatcher.py`.
+
+Automatic week-off report generation shares the same beat and the same
+reasoning, for the same reason again: it is idempotent per (employee, date), so
+it runs every morning and re-sweeps the days behind it rather than depending on
+one fragile midnight execution. See `app/modules/work_reports/auto_reports.py`.
 """
 from __future__ import annotations
 
@@ -29,6 +34,8 @@ from app.core.config import settings
 BUSINESS_TIMEZONE = "Asia/Kolkata"
 DAILY_REPORT_REMINDER_TASK = "coreops.reminders.send_daily_report_reminders"
 LEAVE_BALANCE_NOTICE_TASK = "coreops.reminders.send_monthly_leave_balance_notices"
+# Automatic week-off report generation (app/modules/work_reports/auto_reports.py).
+AUTO_REPORT_GENERATION_TASK = "coreops.work_reports.generate_auto_reports"
 # Generic "deliver one email" task (app/tasks/email_tasks.py). NOT scheduled -
 # it is fired on demand by app.notifications.email_dispatch.enqueue_email, so it
 # appears in `include` below but never in the beat schedule.
@@ -57,6 +64,16 @@ class ScheduleSettings(BaseSettings):
     LEAVE_BALANCE_NOTICE_ENABLED: bool = True
     LEAVE_BALANCE_NOTICE_HOUR: int = 8
     LEAVE_BALANCE_NOTICE_MINUTE: int = 0
+
+    # Automatic week-off report generation. Early morning IST so a weekend day
+    # is filed on the day itself, and its own flag/time like every other entry.
+    # AUTO_REPORT_LOOKBACK_DAYS is the self-healing margin, not a catch-up
+    # window: the job is idempotent, so re-sweeping covered dates writes
+    # nothing and a worker that was down simply catches up on its next run.
+    AUTO_REPORT_GENERATION_ENABLED: bool = True
+    AUTO_REPORT_HOUR: int = 1
+    AUTO_REPORT_MINUTE: int = 0
+    AUTO_REPORT_LOOKBACK_DAYS: int = 7
 
 
 schedule_settings = ScheduleSettings()
@@ -89,6 +106,18 @@ def _build_schedule() -> dict:
             "schedule": crontab(
                 hour=schedule_settings.LEAVE_BALANCE_NOTICE_HOUR,
                 minute=schedule_settings.LEAVE_BALANCE_NOTICE_MINUTE,
+            ),
+        }
+
+    if schedule_settings.AUTO_REPORT_GENERATION_ENABLED:
+        # Daily, on the same beat, for the same reason the leave notice is daily:
+        # the run is idempotent, so firing it every morning files today's weekend
+        # report and re-covers the days behind it at the cost of one SELECT each.
+        schedule["auto-report-generation"] = {
+            "task": AUTO_REPORT_GENERATION_TASK,
+            "schedule": crontab(
+                hour=schedule_settings.AUTO_REPORT_HOUR,
+                minute=schedule_settings.AUTO_REPORT_MINUTE,
             ),
         }
 

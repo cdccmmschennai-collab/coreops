@@ -4,6 +4,26 @@ RBAC:
   all roles  read (list / get)
   manager    create / update / delete
   admin      create / update / delete
+
+AUTOMATIC-REPORT RECONCILIATION (Phase 3D)
+==========================================
+A calendar write can turn a date the office was closed on into a working one - a
+`working_day` override added to a Saturday, a holiday deleted off a weekday, an
+event's type or date edited. Automatic week-off reports (`origin = auto`) already
+generated for such a date are then wrong, and the 01:00 generator can never
+correct them: it only ever CREATES, and an existing report always wins.
+
+So every write path here calls
+`work_reports.auto_reports.reconcile_auto_reports_for_calendar_change` with the
+dates it may have re-classified, AFTER flushing its own change and BEFORE
+committing. Two consequences that are the point of doing it that way:
+
+  * the calendar row and the reconciliation share one transaction - either both
+    land or neither does;
+  * the direction is not decided here. The reconciler re-reads each date through
+    `is_working_day` after the flush, and does nothing for a date that is still
+    non-working, so a working -> closed change (where generation, not
+    reconciliation, is responsible) simply finds nothing to do.
 """
 import uuid
 from datetime import date
@@ -14,6 +34,9 @@ from sqlalchemy.orm import Session
 from app.modules.calendar.models import CalendarEvent, CalendarEventType
 from app.modules.calendar.schemas import CalendarEventCreate, CalendarEventUpdate
 from app.modules.users.models import User, UserRole
+from app.modules.work_reports.auto_reports import (
+    reconcile_auto_reports_for_calendar_change,
+)
 from app.shared.errors import AppError
 
 _EVENT_TYPE_LABEL = {
@@ -105,6 +128,11 @@ def create_event(
         updated_by=actor.id,
     )
     db.add(ev)
+    # Flush first so the reconciler's own calendar read sees this event: a
+    # `working_day` here may have just opened the office on a date whose AUTO
+    # week-off reports are now stale.
+    db.flush()
+    reconcile_auto_reports_for_calendar_change(db, [ev.event_date], commit=False)
     db.commit()
     db.refresh(ev)
     _notify_all_users(db, ev)
@@ -116,11 +144,19 @@ def update_event(
 ) -> CalendarEvent:
     _assert_can_write(actor)
     ev = _fetch(db, event_id)
+    # An edit re-classifies BOTH ends when the date moves: the date the event
+    # left (which may fall back to non-working - nothing to do) and the date it
+    # landed on. An event_type change re-classifies the one date it is on.
+    previous_date = ev.event_date
     fields = data.model_dump(exclude_unset=True)
     for key, value in fields.items():
         setattr(ev, key, value)
     ev.updated_by = actor.id
     db.add(ev)
+    db.flush()
+    reconcile_auto_reports_for_calendar_change(
+        db, {previous_date, ev.event_date}, commit=False
+    )
     db.commit()
     db.refresh(ev)
     return ev
@@ -129,5 +165,10 @@ def update_event(
 def delete_event(db: Session, actor: User, event_id: uuid.UUID) -> None:
     _assert_can_write(actor)
     ev = _fetch(db, event_id)
+    # Deleting a holiday re-opens the office on that date; the AUTO week-off
+    # reports the holiday produced are stale from this commit on.
+    event_date = ev.event_date
     db.delete(ev)
+    db.flush()
+    reconcile_auto_reports_for_calendar_change(db, [event_date], commit=False)
     db.commit()
