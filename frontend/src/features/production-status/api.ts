@@ -34,11 +34,12 @@ function historyQuery(params: ProductionStatusHistoryParams): string {
 }
 
 /**
- * The three Phase 1 per-project endpoints plus the Phase 4 PM report.
+ * The per-project endpoints plus the Phase 4 PM report.
  *
- * There is no update and no delete because the backend has neither: production
- * status is append-only, so a correction is a new POST that supersedes the
- * previous row without touching it.
+ * There is no update because the backend has none: production status is
+ * append-only, so a correction is a new POST that supersedes the previous row
+ * without touching it. `remove` is not an update - it is the author withdrawing
+ * a record they entered by mistake.
  */
 export const productionStatusApi = {
   /** Current status of every (revision, activity) - derived server-side. */
@@ -54,6 +55,17 @@ export const productionStatusApi = {
   /** Append ONE update. Never a PATCH/PUT - see the module note above. */
   create: (projectId: string, body: ProductionStatusCreateBody) =>
     api.post<ProductionStatus>(`/projects/${projectId}/production-status`, body),
+
+  /**
+   * Withdraw ONE record the CALLER recorded.
+   *
+   * Ownership is not asserted here: the backend re-resolves it from the token
+   * against the record's `created_by` and answers 403 for anyone else, so
+   * hiding the button is convenience and this call carries no identity of its
+   * own. Still not an edit path - correcting a figure remains a new `create`.
+   */
+  remove: (projectId: string, recordId: string) =>
+    api.del<void>(`/projects/${projectId}/production-status/${recordId}`),
 
   /**
    * The PM cumulative report - every project's current status in ONE request.

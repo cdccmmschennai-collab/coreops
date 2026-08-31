@@ -1,10 +1,20 @@
 "use client";
 
 import * as React from "react";
-import { ClipboardList, History } from "lucide-react";
+import { ClipboardList, History, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,9 +33,10 @@ import type { Project } from "@/features/projects/types";
 import { AppError } from "@/lib/api-client";
 import { formatDateTime } from "@/lib/format";
 
-import { useLatestProductionStatus } from "../hooks";
+import { useDeleteProductionStatus, useLatestProductionStatus } from "../hooks";
 import {
   buildProductionStatusRows,
+  canDeleteProductionStatusRow,
   canRecordProductionStatus,
   canTypeNewActivity,
   formatProjectDisplay,
@@ -37,6 +48,7 @@ import {
   READ_ONLY_HINT,
   READ_ONLY_TITLE,
   submittableActivityOptions,
+  type ProductionStatusRow,
 } from "../production-status";
 import { ProductionStatusForm } from "./production-status-form";
 import {
@@ -82,11 +94,15 @@ export function ProductionStatusTab({
   canManage,
   isHead,
 }: ProductionStatusTabProps) {
-  const { employeeId } = useAuth();
+  const { employeeId, user } = useAuth();
   const [historyTarget, setHistoryTarget] = React.useState<HistoryTarget | null>(null);
+  // The row awaiting confirmation. Held rather than a bare boolean so the
+  // dialog can name what is about to go.
+  const [rowToDelete, setRowToDelete] = React.useState<ProductionStatusRow | null>(null);
 
   const staffingQuery = useActivityStaffing(project.id);
   const latestQuery = useLatestProductionStatus(project.id);
+  const deleteMutation = useDeleteProductionStatus(project.id);
 
   const viewer = React.useMemo(
     () => ({ canManage, isHead, employeeId }),
@@ -242,16 +258,32 @@ export function ProductionStatusTab({
                       {r.updated}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        // The trail is this ROW's revision + activity, so the
-                        // dialog can only ever show that one combination.
-                        onClick={() => setHistoryTarget(historyTargetFor(r))}
-                      >
-                        <History className="h-3.5 w-3.5" />
-                        History
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          // The trail is this ROW's revision + activity, so the
+                          // dialog can only ever show that one combination.
+                          onClick={() => setHistoryTarget(historyTargetFor(r))}
+                        >
+                          <History className="h-3.5 w-3.5" />
+                          History
+                        </Button>
+                        {/* Shown only to the person who recorded THIS row. The
+                            backend re-resolves the same ownership, so this is
+                            tidiness rather than the control. */}
+                        {canDeleteProductionStatusRow(r, user?.id) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => setRowToDelete(r)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -268,6 +300,51 @@ export function ProductionStatusTab({
           if (!open) setHistoryTarget(null);
         }}
       />
+
+      {/* The same AlertDialog confirmation every other destructive action in
+          CoreOps uses (see submissions-tab, deliverables-tab). */}
+      <AlertDialog
+        open={!!rowToDelete}
+        onOpenChange={(open) => {
+          if (!open && !deleteMutation.isPending) setRowToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this production status record?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {rowToDelete
+                ? `The ${rowToDelete.revision} update you recorded for ${rowToDelete.activity} will be permanently removed. If an earlier update exists for it, that one becomes the current status again.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              variant="danger"
+              loading={deleteMutation.isPending}
+              onClick={async () => {
+                if (!rowToDelete) return;
+                try {
+                  await deleteMutation.mutateAsync(rowToDelete.key);
+                  setRowToDelete(null);
+                  toast.success("Production status record deleted");
+                } catch (err) {
+                  // The module's own error wording, so a 403 from a record that
+                  // is not the caller's reads the same here as anywhere else.
+                  const status = err instanceof AppError ? err.status : null;
+                  const message = err instanceof AppError ? err.message : null;
+                  toast.error(productionStatusErrorMessage(status, message));
+                }
+              }}
+            >
+              Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

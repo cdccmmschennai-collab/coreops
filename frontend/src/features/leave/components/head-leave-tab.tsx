@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Tabs } from "@/components/ui/tabs";
 import { useUrlState } from "@/lib/use-url-state";
 
+import { resolveLeaveView } from "../types";
 import { LeaveHistory } from "./leave-history";
 import { LeaveManagementPanel } from "./leave-management-panel";
 
@@ -19,13 +20,19 @@ interface Props {
  *  come back pre-scoped for a Head actor.
  *
  *  Defaults to "My leave" so a Head landing on the tab cold sees exactly what
- *  a plain employee always saw; the homepage shortcut
- *  (?tab=leave&queue=pending) forces "Team approvals" straight open by
- *  checking for a `queue` param before applying that default. */
+ *  a plain employee always saw; the homepage shortcut and the leave
+ *  notifications (?tab=leave&queue=pending) force "Team approvals" straight
+ *  open by naming a queue - see `resolveLeaveView`. */
 export function HeadLeaveTab({ employeeId }: Props) {
   const searchParams = useSearchParams();
   const hasQueueParam = searchParams.get("queue") !== null;
-  const [view, setView] = useUrlState("view", hasQueueParam ? "team" : "my");
+  // Fallback "" rather than "my": `useUrlState` strips a value equal to its
+  // fallback from the URL, so with "my" as the fallback NEITHER choice was
+  // durable - "my" was erased, and "team" was only implied by `queue`, which is
+  // itself erased the moment the Pending queue is selected. Both are now
+  // written explicitly, which is exactly what browser Back reads back.
+  const [rawView, setView] = useUrlState("view", "");
+  const view = resolveLeaveView(rawView, hasQueueParam);
 
   return (
     <div className="space-y-4">

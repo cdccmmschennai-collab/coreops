@@ -212,6 +212,78 @@ export function resolveLeaveQueue(raw: string | null | undefined): LeaveQueue {
     : "pending";
 }
 
+// ---------- A Project Head's My leave / Team approvals switch ---------------
+
+export const LEAVE_VIEWS = ["my", "team"] as const;
+
+export type LeaveView = (typeof LEAVE_VIEWS)[number];
+
+/** Resolve the `view` URL parameter for a Project Head's Leave tab.
+ *
+ *  An explicit `view` always wins, and it is what Back restores: both choices
+ *  are written into the URL, so neither has to be inferred from anything else.
+ *
+ *  `hasQueue` only covers the links that predate that parameter - the PM/Head
+ *  dashboard shortcut and the backend's leave notifications, which name a
+ *  QUEUE (`?tab=leave&queue=pending&id=...`). A queue is a Team approvals
+ *  queue, so those links still open on Team approvals. Nothing else infers it. */
+export function resolveLeaveView(
+  raw: string | null | undefined,
+  hasQueue: boolean,
+): LeaveView {
+  if ((LEAVE_VIEWS as readonly string[]).includes(raw ?? "")) return raw as LeaveView;
+  return hasQueue ? "team" : "my";
+}
+
+// ---------- Leave list -> Leave detail -> back to the SAME list -------------
+
+/** Where "← Leave" goes when the detail page was opened cold (an email link, a
+ *  bookmark, a pasted URL). Exactly what that link has always done. */
+export const LEAVE_LIST_HREF = "/attendance?tab=leave";
+
+/** The detail page's "which list did I come from" parameter. */
+export const LEAVE_RETURN_PARAM = "from";
+
+/**
+ * The detail URL for one request, carrying the list it is being opened FROM.
+ *
+ * `from` is the caller's own current URL, so it already encodes whatever that
+ * list was showing - `view=team`, `queue=cancellation`, a month, a page. This
+ * function does not know or care which: it round-trips the address instead of
+ * rebuilding it, which is why My leave, the three approval queues and any future
+ * queue all come back correctly without a case each.
+ *
+ * Omitted when there is nothing to return to, so the detail URL stays exactly as
+ * short as it is today for callers that have no list behind them.
+ */
+export function leaveDetailHref(
+  requestId: string,
+  from?: string | null,
+): string {
+  const base = `/attendance/leave/${requestId}`;
+  const target = (from ?? "").trim();
+  return target
+    ? `${base}?${LEAVE_RETURN_PARAM}=${encodeURIComponent(target)}`
+    : base;
+}
+
+/**
+ * Resolve the `from` parameter back into the href "← Leave" points at.
+ *
+ * Accepted only when it is the Attendance page itself - the one page a Leave
+ * list can live on. A `from` is a convenience the app writes for itself, never
+ * a destination a hand-edited or forwarded URL gets to choose, so anything else
+ * (another route, an absolute URL, a protocol-relative `//host`, a look-alike
+ * like `/attendance-x`) falls back to the plain Leave list rather than being
+ * followed. Deep links that carry no `from` at all take that same fallback,
+ * which is precisely the behaviour they have today.
+ */
+export function leaveReturnHref(raw: string | null | undefined): string {
+  const target = (raw ?? "").trim();
+  const [path] = target.split("?");
+  return path === "/attendance" ? target : LEAVE_LIST_HREF;
+}
+
 /** The list params a queue's TAB BADGE counts with.
  *
  *  `limit: 1` because only `total` is read - the badge never renders rows. The

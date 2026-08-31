@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 
 import { ErrorState } from "@/components/feedback/error-state";
@@ -20,7 +20,9 @@ import { cn } from "@/lib/utils";
 import { useDeliverableImpact, useLeaveRequest } from "../hooks";
 import {
   formatLeaveDuration,
+  LEAVE_RETURN_PARAM,
   LEAVE_TYPE_LABEL,
+  leaveReturnHref,
   type DeliverableConflict,
 } from "../types";
 import { LeaveStatusBadge } from "./leave-status-badge";
@@ -104,6 +106,14 @@ export function LeaveDetail({ id }: { id: string }) {
   const query = useLeaveRequest(id);
   const { byId } = useEmployeeOptions();
 
+  // The Leave list that opened this page, as it looked at the time - so the
+  // link below returns to Team approvals / Pending, or to My leave, or to
+  // whichever queue it actually came from. A page reached cold (an email link,
+  // a bookmark) carries no `from` and falls back to the plain Leave tab, which
+  // is exactly what this link has always done.
+  const searchParams = useSearchParams();
+  const backHref = leaveReturnHref(searchParams.get(LEAVE_RETURN_PARAM));
+
   // Deliverable conflicts are PM-only decision support; the endpoint rejects
   // non-managers, so only query for managers.
   const impactQuery = useDeliverableImpact(isManager ? [id] : []);
@@ -147,7 +157,7 @@ export function LeaveDetail({ id }: { id: string }) {
   return (
     <>
       <Link
-        href="/attendance?tab=leave"
+        href={backHref}
         className="text-sm text-primary hover:underline"
       >
         ← Leave

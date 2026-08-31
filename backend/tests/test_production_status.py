@@ -666,20 +666,29 @@ def test_multiline_remarks_are_preserved(db, scene):
     assert blank.remarks is None
 
 
-# --- 19. append-only: nothing can edit or delete -----------------------------
+# --- 19. append-only: nothing can edit, and the only delete is the author's --
 
 def test_module_exposes_no_update_or_delete(db, scene):
-    """The append-only guarantee is structural, not a convention."""
+    """The no-in-place-edit guarantee is structural, not a convention.
+
+    The one DELETE is the author withdrawing a record they entered by mistake
+    (see 33-35 below); it is not an edit path, and it is not open to anyone but
+    the person who created the record.
+    """
     from app.modules.production_status import router as ps_router
 
     methods = set()
     for route in ps_router.router.routes:
         methods |= set(getattr(route, "methods", set()))
-    assert methods == {"GET", "POST"}
-    assert not (methods & {"PUT", "PATCH", "DELETE"})
+    assert methods == {"GET", "POST", "DELETE"}
+    assert not (methods & {"PUT", "PATCH"})
 
-    # No service function offers one either.
-    assert not [n for n in dir(ps_svc) if n.startswith(("update_", "delete_", "edit_"))]
+    # No service function offers an in-place edit, and the only delete is the
+    # owner-scoped one.
+    assert not [n for n in dir(ps_svc) if n.startswith(("update_", "edit_"))]
+    assert [n for n in dir(ps_svc) if n.startswith("delete_")] == [
+        "delete_production_status"
+    ]
 
     # The table carries no updated_at / deleted_at to make an in-place edit
     # expressible in the first place.
@@ -892,3 +901,112 @@ def test_a_typed_name_is_stored_trimmed(db, scene):
                                status="in_progress"),
     )
     assert out.activity_label == "PM PREPARATION"
+
+
+# ===========================================================================
+# UX Phase 1 - the author withdraws a record they entered by mistake.
+# ===========================================================================
+
+# --- 33. the author can delete their own record ------------------------------
+
+def test_author_can_delete_their_own_record(db, scene):
+    """The one deletion path, and the whole of it: you recorded it, so you may
+    withdraw it. Nothing about the record's own values decides this."""
+    own = ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id, _payload(scene.activity.id)
+    )
+    assert [r.id for r in ps_svc.list_latest(db, scene.lead_u, scene.project.id)] == [own.id]
+
+    ps_svc.delete_production_status(db, scene.lead_u, scene.project.id, own.id)
+
+    assert ps_svc.list_latest(db, scene.lead_u, scene.project.id) == []
+    assert ps_svc.list_history(db, scene.lead_u, scene.project.id) == []
+    assert db.get(ProjectProductionStatus, own.id) is None
+
+
+# --- 34. nobody else can, whatever else they are -----------------------------
+
+def test_only_the_author_can_delete_a_record(db, scene, client, login):
+    """Ownership is the ONLY key. Deliberately not widened by role: the Head who
+    owns the project, the Lead of another activity and the project_manager all
+    get 403 for a record they did not record themselves."""
+    theirs = ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id, _payload(scene.activity.id)
+    )
+
+    for actor in (scene.head_u, scene.other_lead_u, scene.pm):
+        with pytest.raises(AppError) as ei:
+            ps_svc.delete_production_status(db, actor, scene.project.id, theirs.id)
+        assert ei.value.status_code == 403
+        db.rollback()
+
+    # Still there after every attempt.
+    assert db.get(ProjectProductionStatus, theirs.id) is not None
+
+    # Hiding the button is not the control - the route enforces the same rule,
+    # so a hand-made DELETE is refused too.
+    url = f"/api/v1/projects/{scene.project.id}/production-status/{theirs.id}"
+    assert client.delete(url, headers=login("head@x.com")).status_code == 403
+    assert client.delete(url, headers=login("pm@x.com")).status_code == 403
+    # A viewer with no read authority at all is refused before ownership even
+    # comes into it.
+    assert client.delete(url, headers=login("contrib@x.com")).status_code == 403
+    assert db.get(ProjectProductionStatus, theirs.id) is not None
+
+    # ...and the author's own DELETE over the same route succeeds. Read back in
+    # SQL after a rollback: the request ran in the app's own session, so this
+    # session's identity map still holds the row it loaded earlier.
+    assert client.delete(url, headers=login("lead@x.com")).status_code == 204
+    db.rollback()
+    assert db.execute(
+        text("SELECT count(*) FROM project_production_statuses WHERE id = :i"),
+        {"i": str(theirs.id)},
+    ).scalar() == 0
+
+
+# --- 35. deleting the current row uncovers the previous one ------------------
+
+def test_deleting_the_current_row_restores_the_previous_update(db, scene):
+    """"Latest" is derived, so removing the newest row simply makes the update
+    before it current again. Nothing is recomputed and no other trail moves."""
+    first = ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id, _payload(scene.activity.id, tag_count=180)
+    )
+    second = ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id,
+        _payload(scene.activity.id, status="closed", tag_count=225),
+    )
+    latest = ps_svc.list_latest(db, scene.lead_u, scene.project.id)
+    assert [r.id for r in latest] == [second.id]
+
+    ps_svc.delete_production_status(db, scene.lead_u, scene.project.id, second.id)
+
+    latest = ps_svc.list_latest(db, scene.lead_u, scene.project.id)
+    assert [r.id for r in latest] == [first.id]
+    assert latest[0].status == "in_progress"
+    assert latest[0].tag_count == 180
+
+
+# --- 36. an id that is not this project's record -----------------------------
+
+def test_delete_rejects_an_unknown_or_foreign_record(db, scene, make_project):
+    import uuid as _uuid
+
+    own = ps_svc.create_production_status(
+        db, scene.lead_u, scene.project.id, _payload(scene.activity.id)
+    )
+
+    with pytest.raises(AppError) as ei:
+        ps_svc.delete_production_status(
+            db, scene.lead_u, scene.project.id, _uuid.uuid4()
+        )
+    assert ei.value.status_code == 404
+
+    # The record exists, but not on the project named in the path - the project
+    # is what the caller was authorized against, so this is a 404, not a delete.
+    other = make_project(code="PS-2", name="Other", status=ProjectStatus.active)
+    proj_svc.set_project_head(db, scene.pm, other.id, scene.lead_e.id)
+    with pytest.raises(AppError) as ei:
+        ps_svc.delete_production_status(db, scene.lead_u, other.id, own.id)
+    assert ei.value.status_code == 404
+    assert db.get(ProjectProductionStatus, own.id) is not None

@@ -30,6 +30,7 @@ import {
   LEAVE_TYPE_LABEL,
   attendanceSummaryLabel,
   formatLeavePeriod,
+  leaveDetailHref,
   type LeaveRequest,
 } from "../types";
 
@@ -144,7 +145,16 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
                 <TableRow
                   key={req.id}
                   className="cursor-pointer hover:bg-muted/40"
-                  onClick={() => router.push(`/attendance/leave/${req.id}`)}
+                  // The Cancellation queue's own address - see the Pending
+                  // queue's identical call.
+                  onClick={() =>
+                    router.push(
+                      leaveDetailHref(
+                        req.id,
+                        `${window.location.pathname}${window.location.search}`,
+                      ),
+                    )
+                  }
                 >
                   <TableCell className="font-medium">
                     {req.employee_name ??

@@ -14,6 +14,7 @@ import { test } from "node:test";
 
 import {
   ATTENDANCE_SUMMARY_LABEL,
+  LEAVE_LIST_HREF,
   LEAVE_QUEUES,
   LEAVE_STATUS_LABEL,
   attendanceSummaryLabel,
@@ -21,7 +22,10 @@ import {
   canCancelLeave,
   canRequestLeaveCancellation,
   formatLeavePeriod,
+  leaveDetailHref,
+  leaveReturnHref,
   resolveLeaveQueue,
+  resolveLeaveView,
 } from "./types.ts";
 import type { LeaveStatus } from "./types.ts";
 
@@ -196,4 +200,100 @@ test("every status has a user-friendly label", () => {
     cancelled: "Cancelled",
     cancellation_requested: "Cancellation Requested",
   });
+});
+
+
+// ── a Head's My leave / Team approvals switch, and browser Back ─────────────
+
+test("an explicit ?view always wins, so Back restores what was open", () => {
+  // Both choices are written into the URL, which is the whole point: Back
+  // reads them straight back instead of inferring anything.
+  assert.equal(resolveLeaveView("team", false), "team");
+  assert.equal(resolveLeaveView("my", true), "my");
+  assert.equal(resolveLeaveView("team", true), "team");
+  assert.equal(resolveLeaveView("my", false), "my");
+});
+
+test("a link that names only a queue still opens Team approvals", () => {
+  // The dashboard shortcut and the backend leave notifications predate ?view
+  // and carry ?tab=leave&queue=pending&id=... - a queue is a Team approvals
+  // queue, so those keep working.
+  const legacy = new URLSearchParams("tab=leave&queue=pending&id=abc");
+  assert.equal(
+    resolveLeaveView(legacy.get("view"), legacy.get("queue") !== null),
+    "team",
+  );
+});
+
+test("with neither parameter a Head lands on their own leave", () => {
+  const bare = new URLSearchParams("tab=leave");
+  assert.equal(
+    resolveLeaveView(bare.get("view"), bare.get("queue") !== null),
+    "my",
+  );
+  // A hand-edited or stale value is not a third view.
+  assert.equal(resolveLeaveView("banana", false), "my");
+  assert.equal(resolveLeaveView("", false), "my");
+  assert.equal(resolveLeaveView(undefined, false), "my");
+});
+
+
+// ── Leave list -> detail -> "← Leave" back to the SAME list ─────────────────
+
+test("a detail link carries the list it was opened from", () => {
+  assert.equal(
+    leaveDetailHref("req-1", "/attendance?tab=leave&view=team&queue=pending"),
+    "/attendance/leave/req-1?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending",
+  );
+});
+
+test("with nothing to return to the detail URL is unchanged", () => {
+  assert.equal(leaveDetailHref("req-1"), "/attendance/leave/req-1");
+  assert.equal(leaveDetailHref("req-1", null), "/attendance/leave/req-1");
+  assert.equal(leaveDetailHref("req-1", "   "), "/attendance/leave/req-1");
+});
+
+test("the detail link round-trips through the URL it was built from", () => {
+  // Team approvals -> Pending: the queue and the view both survive.
+  const list = "/attendance?tab=leave&view=team&queue=pending";
+  const href = leaveDetailHref("req-1", list);
+  const from = new URLSearchParams(href.split("?")[1]).get("from");
+  assert.equal(leaveReturnHref(from), list);
+});
+
+test("every Leave list comes back to itself, with no case per queue", () => {
+  for (const list of [
+    "/attendance?tab=leave",
+    "/attendance?tab=leave&view=my",
+    "/attendance?tab=leave&view=team&queue=pending",
+    "/attendance?tab=leave&view=team&queue=cancellation",
+    "/attendance?tab=leave&queue=permission",
+    "/attendance?tab=leave&view=team&queue=all&ls=approved&lo=20",
+  ]) {
+    const href = leaveDetailHref("req-1", list);
+    const from = new URLSearchParams(href.split("?")[1]).get("from");
+    assert.equal(leaveReturnHref(from), list, list);
+  }
+});
+
+test("a deep-linked detail page still falls back to the Leave tab", () => {
+  // An email link or a bookmark carries no `from` at all - unchanged behaviour.
+  assert.equal(leaveReturnHref(null), LEAVE_LIST_HREF);
+  assert.equal(leaveReturnHref(undefined), LEAVE_LIST_HREF);
+  assert.equal(leaveReturnHref(""), LEAVE_LIST_HREF);
+});
+
+test("a from that is not the Attendance page is never followed", () => {
+  // `from` is written by the app for itself; a forwarded or hand-edited URL
+  // does not get to choose where this link goes.
+  for (const hostile of [
+    "https://evil.example/attendance",
+    "//evil.example/attendance",
+    "/attendance-x?tab=leave",
+    "/projects?tab=leave",
+    "javascript:alert(1)",
+    "/login?next=/attendance",
+  ]) {
+    assert.equal(leaveReturnHref(hostile), LEAVE_LIST_HREF, hostile);
+  }
 });

@@ -28,6 +28,30 @@ export function useUrlState(
   // server and client, so no hydration mismatch).
   const [value, setValue] = React.useState(() => searchParams.get(key) ?? fallback);
 
+  /**
+   * Browser Back / Forward.
+   *
+   * A navigation that leaves the route unmounts this component and the initial
+   * read above restores the state. A history move that stays ON the route does
+   * not - the URL changes underneath a component that keeps its state - so the
+   * page would keep rendering the previous tab/filter while the address bar said
+   * otherwise, and Forward would be just as wrong.
+   *
+   * `popstate` is deliberately the trigger, and the live `window.location` is
+   * deliberately the source. `popstate` fires ONLY for a real history move,
+   * never for the `pushState`/`replaceState` this hook and the router make, so
+   * this can never race a user's own click and revert it - which reading
+   * `useSearchParams` here could, since Next applies those writes to the router
+   * in a transition.
+   */
+  React.useEffect(() => {
+    function syncFromUrl() {
+      setValue(new URLSearchParams(window.location.search).get(key) ?? fallback);
+    }
+    window.addEventListener("popstate", syncFromUrl);
+    return () => window.removeEventListener("popstate", syncFromUrl);
+  }, [key, fallback]);
+
   const set = React.useCallback(
     (next: string) => {
       setValue(next);

@@ -20,6 +20,7 @@ import {
   activityLabel,
   AUTHOR_UNKNOWN,
   buildProductionStatusRows,
+  canDeleteProductionStatusRow,
   COUNT_UNITS,
   formatCount,
   formatProductionDate,
@@ -1063,4 +1064,50 @@ test("no data means an empty list, never a thrown render", () => {
   for (const input of [null, undefined, []] as const) {
     assert.deepEqual(buildProductionStatusRows(input, fmt), []);
   }
+});
+
+
+// --- deleting a record you recorded (UX Phase 1) ----------------------------
+
+test("only the author of a row may delete it", () => {
+  const mine = { createdBy: "user-1" };
+  const theirs = { createdBy: "user-2" };
+
+  assert.equal(canDeleteProductionStatusRow(mine, "user-1"), true);
+  assert.equal(canDeleteProductionStatusRow(theirs, "user-1"), false);
+
+  // Never a role and never a name: an unknown author on either side is "no",
+  // so a row can't become deletable by an id going missing.
+  assert.equal(canDeleteProductionStatusRow({ createdBy: null }, "user-1"), false);
+  assert.equal(canDeleteProductionStatusRow(mine, null), false);
+  assert.equal(canDeleteProductionStatusRow(mine, undefined), false);
+  assert.equal(canDeleteProductionStatusRow({ createdBy: null }, null), false);
+});
+
+test("a row carries the author's id alongside the displayed name", () => {
+  const [row] = buildProductionStatusRows(
+    [
+      {
+        id: "r1",
+        revision: "REV-0",
+        activity_id: "a1",
+        activity_name: "FMTL",
+        status: "in_progress",
+        tag_count: 180,
+        doc_count: 0,
+        spares_count: 0,
+        crs_count: 0,
+        created_by: "user-1",
+        created_by_name: "Santhosh Kumar",
+        created_at: "2026-08-31T10:00:00Z",
+      },
+    ],
+    () => "31 Aug 2026",
+  );
+
+  assert.equal(row.createdBy, "user-1");
+  assert.equal(row.by, "Santhosh Kumar");
+  // The display name is not the ownership key - two people can share one.
+  assert.equal(canDeleteProductionStatusRow(row, "user-1"), true);
+  assert.equal(canDeleteProductionStatusRow(row, "Santhosh Kumar"), false);
 });

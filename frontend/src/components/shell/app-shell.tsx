@@ -29,8 +29,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         className="min-h-screen transition-[grid-template-columns] duration-200 ease-out motion-reduce:transition-none md:grid md:grid-cols-[var(--sidebar-width)_minmax(0,1fr)]"
         style={{ "--sidebar-width": collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH } as React.CSSProperties}
       >
-        <aside className="hidden overflow-hidden md:block">
-          <div className="sticky top-0 h-screen">
+        {/* No `overflow-hidden` HERE: an overflow-hidden ancestor makes the
+            sticky child below stick to that box instead of the viewport, so the
+            rail — and its border-r — scrolled away with the page and the content
+            below the fold had no left boundary at all. The clipping the rail
+            needs while its width animates is done on the sticky element itself,
+            where it does not break stickiness. */}
+        <aside className="hidden md:block">
+          <div className="sticky top-0 h-screen overflow-hidden">
             <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
           </div>
         </aside>

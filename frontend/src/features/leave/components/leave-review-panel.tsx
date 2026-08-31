@@ -24,7 +24,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
 
 import { useApproveLeave, useDeliverableImpact, useLeaveList, useRejectLeave } from "../hooks";
-import { LEAVE_TYPE_LABEL, type DeliverableConflict } from "../types";
+import { LEAVE_TYPE_LABEL, leaveDetailHref, type DeliverableConflict } from "../types";
 
 interface Props {
   /** If set, only show requests for this employee's team. Admin: leave undefined for all. */
@@ -151,7 +151,17 @@ export function LeaveReviewPanel({ employeeId: _eid, excludeSelf = false }: Prop
                   <React.Fragment key={req.id}>
                     <TableRow
                       className="cursor-pointer hover:bg-muted/40"
-                      onClick={() => router.push(`/attendance/leave/${req.id}`)}
+                      // Carries THIS list's own address, so "← Leave" on the
+                      // detail page comes back to the queue and view that
+                      // opened it rather than to the bare Leave tab.
+                      onClick={() =>
+                        router.push(
+                          leaveDetailHref(
+                            req.id,
+                            `${window.location.pathname}${window.location.search}`,
+                          ),
+                        )
+                      }
                     >
                       <TableCell className="font-medium">{empName}</TableCell>
                       <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>

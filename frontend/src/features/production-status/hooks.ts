@@ -112,3 +112,25 @@ export function useCreateProductionStatus(projectId: string) {
     },
   });
 }
+
+/**
+ * Withdraw one record the current user recorded.
+ *
+ * Invalidates exactly what `useCreateProductionStatus` does, and for the same
+ * reason: "latest" is derived server-side, so removing the current row for a
+ * revision+activity may uncover the update before it rather than empty the row.
+ * The client must not guess which - it asks.
+ */
+export function useDeleteProductionStatus(projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (recordId: string) =>
+      productionStatusApi.remove(projectId, recordId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: productionStatusKeys.latest(projectId) });
+      qc.invalidateQueries({
+        queryKey: ["production-status", "history", projectId],
+      });
+    },
+  });
+}

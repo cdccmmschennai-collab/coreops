@@ -22,6 +22,7 @@ import {
   LEAVE_TYPE_LABEL,
   canCancelLeave,
   canRequestLeaveCancellation,
+  leaveDetailHref,
   type LeaveRequest,
 } from "../types";
 import { LeaveCancelDialog, type CancelDialogMode } from "./leave-cancel-dialog";
@@ -80,7 +81,16 @@ export function LeaveHistory({ employeeId }: Props) {
             <TableRow
               key={req.id}
               className="cursor-pointer hover:bg-muted/40"
-              onClick={() => router.push(`/attendance/leave/${req.id}`)}
+              // My leave's own address, so "← Leave" comes back HERE - the same
+              // mechanism the approval queues use, with no view of its own.
+              onClick={() =>
+                router.push(
+                  leaveDetailHref(
+                    req.id,
+                    `${window.location.pathname}${window.location.search}`,
+                  ),
+                )
+              }
             >
               <TableCell className="font-medium">
                 {LEAVE_TYPE_LABEL[req.leave_type]}

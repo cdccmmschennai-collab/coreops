@@ -26,7 +26,12 @@ interface Props {
  *
  *  Counts come from API totals, never `items.length` — the lists are paged. */
 export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }: Props) {
-  const [rawQueue, setQueue] = useUrlState("queue", "pending");
+  // Fallback "" rather than "pending": `useUrlState` strips a value equal to its
+  // fallback, so selecting Pending used to ERASE `queue` from the URL - which
+  // both lost the queue on Back and, for a Head, took the only signal that they
+  // were on Team approvals with it. `resolveLeaveQueue` still maps "" (and any
+  // stale value) to the pending queue, so the default is unchanged.
+  const [rawQueue, setQueue] = useUrlState("queue", "");
   const queue = resolveLeaveQueue(rawQueue);
 
   // `showPermissionQueue` is only ever passed `false` for a Project Head's

@@ -2,9 +2,12 @@
 
 Per project (Phase 1 - the minimum Phase 2 needs):
 
-  GET  /projects/{project_id}/production-status          latest per revision+activity
-  GET  /projects/{project_id}/production-status/history  full trail (filterable)
-  POST /projects/{project_id}/production-status          append one update
+  GET    /projects/{project_id}/production-status          latest per revision+activity
+  GET    /projects/{project_id}/production-status/history  full trail (filterable)
+  POST   /projects/{project_id}/production-status          append one update
+  DELETE /projects/{project_id}/production-status/{id}     the AUTHOR withdraws
+                                                           a record they entered
+                                                           by mistake
 
 Cumulative, across every project (Phase 4 - the PM report):
 
@@ -14,8 +17,10 @@ Cumulative, across every project (Phase 4 - the PM report):
 Both take one optional `?month=YYYY-MM`, and both pass it to the same service
 call, so the download is always the preview's rows.
 
-No PATCH / PUT / DELETE by design: production status is append-only history, so
-a correction is a new update, not an edit of an old one.
+No PATCH / PUT by design: production status is append-only history, so a
+correction is a new update, not an edit of an old one. The one DELETE is not an
+edit either - it lets the person who entered a record withdraw it, and only
+them (see service.delete_production_status).
 
 On the per-project routes the project is always taken from the path - it is what
 the caller is authorized against, and it is what the plant information is
@@ -96,6 +101,23 @@ def create_production_status(
     db: Session = Depends(get_db),
 ) -> ProductionStatusOut:
     return service.create_production_status(db, current, project_id, body)
+
+
+@router.delete("/{project_id}/production-status/{record_id}", status_code=204)
+def delete_production_status(
+    project_id: uuid.UUID,
+    record_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """Delete one record - the person who recorded it, and only them.
+
+    Ownership is resolved server-side from the token against the record's
+    `created_by`, inside the service. Hiding the Delete button from everyone
+    else is convenience; this is the control, so a hand-made DELETE for someone
+    else's record is refused with 403 exactly the same way.
+    """
+    service.delete_production_status(db, current, project_id, record_id)
 
 
 # ---------------------------------------------------------------------------

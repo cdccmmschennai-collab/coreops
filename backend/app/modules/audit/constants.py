@@ -116,9 +116,14 @@ class AuditAction:
     # --- production status (Tier B, migration 0070) ---
     # The status table is itself append-only, so this row is not the history -
     # it is the security trail: who recorded a production figure, from which IP,
-    # against which project/revision/activity. There is no update or delete
-    # action because the module has no update or delete path.
+    # against which project/revision/activity. There is still no update action:
+    # a correction is a new record that supersedes the old one.
     PRODUCTION_STATUS_RECORD = "production_status.record"
+    # The one exception to append-only: the AUTHOR withdrawing a record they
+    # entered by mistake. The record itself is gone afterwards, so this audit
+    # row is the only trace it existed - which is why it carries the record's
+    # values, not just its id.
+    PRODUCTION_STATUS_DELETE = "production_status.delete"
 
 
 # Statuses

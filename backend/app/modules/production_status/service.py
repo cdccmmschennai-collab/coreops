@@ -23,11 +23,16 @@ RBAC (resolved through app.core.authz, never re-implemented here):
          project-scoped read authority above, which is deliberately not the
          same thing as reading every project at once.
 
-History: `create_production_status` only ever INSERTs. Nothing here updates or
-deletes a row, so an INPROGRESS -> CLOSED change appends a second row and both
-remain readable. "Latest" is derived (newest `created_at` per project+revision+
+History: `create_production_status` only ever INSERTs. Nothing here UPDATES a
+row, so an INPROGRESS -> CLOSED change appends a second row and both remain
+readable. "Latest" is derived (newest `created_at` per project+revision+
 activity), never stored - and it is derived in exactly ONE place, `_latest_stmt`,
 which both the per-project tab and the cumulative PM report read.
+
+The one deletion path is `delete_production_status`: the AUTHOR of a record may
+withdraw a record they entered by mistake, and nobody else may - not a Head, not
+another Lead, not the PM. That is a correction of a data-entry error, not an
+edit of history; every other correction is still a new record.
 """
 import re
 import uuid
@@ -607,6 +612,77 @@ def create_production_status(
     db.commit()
     db.refresh(row)
     return _to_out(db, project, [row])[0]
+
+
+def delete_production_status(
+    db: Session, actor: User, project_id: uuid.UUID, record_id: uuid.UUID
+) -> None:
+    """Delete ONE record - only the person who entered it may do so.
+
+    The single exception to this module's append-only rule, and a narrow one: a
+    record entered by mistake belongs to whoever entered it, and only they can
+    withdraw it. There is deliberately no wider power here - a Head cannot
+    delete a Lead's record, a Lead cannot delete another Lead's, and the
+    project_manager (read-only on this tab by design - see `_record_authority`)
+    cannot delete anyone's. Nothing else in the module changed: correcting a
+    figure is still a new record that supersedes the old one.
+
+    Ownership is `created_by`, the users.id stamped from the token when the
+    record was saved. There is no second ownership field and no client-supplied
+    identity - the same fact `created_by_name` is rendered from.
+
+    Refuses, in this order:
+      404  project does not exist (or is archived)
+      403  caller may not even read this project's production status
+      404  record does not exist, or belongs to another project
+      403  the caller did not create it
+
+    Deleting the current row simply uncovers the one before it: "latest" is
+    derived per project+revision+activity (`_latest_stmt`), so the previous
+    update in that trail becomes current again with nothing to recompute. If it
+    was the only row, the combination leaves the table entirely.
+    """
+    project = _fetch_project(db, project_id)
+    # The read gate first, so someone with no business on this project gets the
+    # same 403 whether or not the id they guessed exists.
+    _assert_can_read(db, actor, project)
+
+    row = db.get(ProjectProductionStatus, record_id)
+    if row is None or row.project_id != project.id:
+        raise AppError("not_found", "Production status record not found.", 404)
+
+    # THE control. The Delete button is hidden from everyone else purely for
+    # convenience; this is what actually stops a direct API call.
+    if row.created_by != actor.id:
+        raise AppError(
+            "forbidden",
+            "You can only delete a production status record you recorded "
+            "yourself.",
+            403,
+        )
+
+    audit.record_audit(
+        db,
+        action=AuditAction.PRODUCTION_STATUS_DELETE,
+        actor=actor,
+        entity_type=EntityType.PRODUCTION_STATUS,
+        entity_id=project.id,
+        details={
+            "project_id": str(project.id),
+            "record_id": str(row.id),
+            "revision": row.revision,
+            "activity_id": str(row.activity_id) if row.activity_id else None,
+            "activity_label": row.activity_label,
+            "status": row.status,
+            "tag_count": row.tag_count,
+            "doc_count": row.doc_count,
+            "spares_count": row.spares_count,
+            "crs_count": row.crs_count,
+            "completed_on": row.completed_on.isoformat() if row.completed_on else None,
+        },
+    )
+    db.delete(row)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------

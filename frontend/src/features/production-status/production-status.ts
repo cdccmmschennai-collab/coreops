@@ -428,6 +428,9 @@ export interface ProductionStatusRecordLike {
   crs_count: number;
   completed_on?: string | null;
   remarks?: string | null;
+  /** The AUTHOR's users.id - the record's ownership, and the only thing the
+   *  Delete control is decided from. Never an employee id and never a role. */
+  created_by?: string | null;
   created_by_name?: string | null;
   created_at: string;
 }
@@ -452,7 +455,32 @@ export interface ProductionStatusRow {
   /** Raw remarks - rendered with whitespace preserved, never trimmed to one line. */
   remarks: string | null;
   by: string;
+  /** The author's users.id, for `canDeleteProductionStatusRow`. Distinct from
+   *  `by`, which is a display name and can legitimately repeat. */
+  createdBy: string | null;
   updated: string;
+}
+
+/**
+ * May this viewer delete this record?
+ *
+ * They recorded it. That is the whole rule, and it is deliberately not widened
+ * by role: a Head cannot delete a Lead's record, a Lead cannot delete another
+ * Lead's, and the PM - read-only on this tab - cannot delete anyone's.
+ *
+ * Comparing users.id, the same identity the backend stamped into `created_by`
+ * from the token. Never the author's NAME: two people can share one, and a name
+ * is display data. A missing id on either side is "no", so an unknown author is
+ * never deletable by accident.
+ *
+ * Hiding the button is convenience only - `DELETE /production-status/{id}`
+ * re-resolves this same comparison server-side and answers 403 regardless.
+ */
+export function canDeleteProductionStatusRow(
+  row: Pick<ProductionStatusRow, "createdBy">,
+  viewerUserId: string | null | undefined,
+): boolean {
+  return !!row.createdBy && !!viewerUserId && row.createdBy === viewerUserId;
 }
 
 /**
@@ -490,6 +518,7 @@ export function buildProductionStatusRows(
     completedOn: formatProductionDate(r.completed_on),
     remarks: r.remarks && r.remarks.trim() !== "" ? r.remarks : null,
     by: r.created_by_name?.trim() || AUTHOR_UNKNOWN,
+    createdBy: r.created_by ?? null,
     updated: formatDateTime(r.created_at),
   }));
 }
