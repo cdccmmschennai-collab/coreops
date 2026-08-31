@@ -50,6 +50,7 @@ from app.modules.biometric.service import settled_present_days
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.effects import (
+    MAX_LEAVE_RANGE_DAYS,
     apply_leave_approved,
     leave_working_days,
     plan_leave_days,
@@ -69,6 +70,7 @@ from app.modules.leave.schemas import (
     LeaveReviewBody,
 )
 from app.modules.users.models import User, UserRole
+from app.modules.work_reports.auto_reports import reconcile_auto_leave_reports
 from app.shared.errors import AppError
 
 # Number of calendar days before/after a deliverable's planned date that a
@@ -697,6 +699,41 @@ def update_leave_request(
     return req
 
 
+def _reconcile_auto_leave_reports(db: Session, req: LeaveRequest) -> None:
+    """PHASE 3F: take back the automatic leave reports this request produced.
+
+    Called only from the transitions that actually END the absence, and only
+    after the new status is on the object, so the reconciler reads the decision
+    that was just made. FLUSHES via the reconciler, never commits: the status
+    change and the reports it withdraws land in one transaction, exactly as the
+    attendance rows above them do.
+
+    EVERY CALENDAR DAY of the range is offered, not `leave_working_days`. The
+    calendar the 01:00 generator saw is not necessarily today's - a day declared
+    a company holiday after the report was written would drop out of the working
+    set and leave a locked report behind with nothing left to remove it. Offering
+    a day that never had a report costs nothing: `reconcile_auto_leave_reports`
+    matches on `origin = auto AND day_status = leave` for this employee alone, so
+    a day with no automatic report, an employee-authored report, or an automatic
+    week-off report simply is not found.
+
+    Bounded by the leave module's own `MAX_LEAVE_RANGE_DAYS`, the same guard
+    `effects._range_days` puts on a malformed range.
+    """
+    span = (req.end_date - req.start_date).days
+    if span < 0:
+        return
+    span = min(span, MAX_LEAVE_RANGE_DAYS - 1)
+    reconcile_auto_leave_reports(
+        db,
+        [
+            (req.employee_id, req.start_date + timedelta(days=offset))
+            for offset in range(span + 1)
+        ],
+        commit=False,
+    )
+
+
 def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRequest:
     """pending -> cancelled, by the employee who filed it.
 
@@ -717,6 +754,14 @@ def cancel_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveRe
     db.add(req)
     # A pending request never marked a day or moved a balance, so cancelling it
     # has nothing to reverse (section 12D).
+    #
+    # PHASE 3F: the direct pending -> cancelled path, hooked for completeness.
+    # It is a no-op BY CONSTRUCTION today - only `approved` leave generates an
+    # automatic report (`auto_reports.AUTO_LEAVE_STATUSES`), and a request that
+    # reaches here was never approved - but this is a path on which an absence
+    # ceases to exist, and the rule is that every such path reconciles. The cost
+    # when there is nothing to find is one indexed SELECT.
+    _reconcile_auto_leave_reports(db, req)
     _audit_decision(
         db, actor=actor, action=AuditAction.LEAVE_REQUEST_CANCEL, req=req
     )
@@ -809,6 +854,16 @@ def approve_leave_cancellation(
     db.add(req)
 
     effect = reverse_leave_approved(db, actor, req)
+    # PHASE 3F: this is the one leave transition that ends an absence, so it is
+    # the one that takes back the automatic leave reports written for it. AFTER
+    # `reverse_leave_approved` and BEFORE the commit, so reconciliation reads the
+    # `cancelled` status and the removed attendance rows, and so the cancellation
+    # and its reconciliation land in one transaction or neither does.
+    #
+    # Requesting the withdrawal does NOT come here, and rejecting one returns the
+    # row to `approved` - both leave the absence standing, so both leave the
+    # reports locked. See `auto_reports.ACTIVE_LEAVE_STATUSES`.
+    _reconcile_auto_leave_reports(db, req)
     _audit_decision(
         db,
         actor=actor,

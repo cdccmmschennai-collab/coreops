@@ -20,9 +20,40 @@ from app.modules.audit.service import record_audit
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.users.models import User, UserRole
+from app.modules.work_reports.auto_reports import reconcile_auto_leave_reports
 from app.shared.errors import AppError
 
 STANDARD_WORKDAY_MINUTES = 480  # 8 hours; anything beyond counts as overtime
+
+
+def _reconcile_auto_leave_reports(db: Session, touched: list[AttendanceRecord]) -> None:
+    """PHASE 3F: unlock the automatic leave report for any day just ruled NOT
+    leave.
+
+    A PM changing a day from Leave to Present does not touch `leave_requests` -
+    the two systems stay separate, as they always have - but it does settle what
+    the day meant, and an automatic leave report sitting on it is locked against
+    the very reporting the employee now owes. So the row is withdrawn (or, if
+    somebody has typed on it, reclassified and reopened); see
+    `work_reports/auto_reports.py`, "LEAVE RECONCILIATION - PHASE 3F".
+
+    Offered for every written row whose resulting status is not `leave`, which is
+    exactly the condition under which the absence can have ended. That is a wider
+    net than "was leave, is now present" on purpose: a day whose leave attendance
+    row was deleted and then re-entered as present has no previous status to
+    compare against, and would slip through the narrower test.
+
+    One batched call, no commit: the attendance write and the reports it unlocks
+    belong to the caller's single transaction. A day still on leave, a day with
+    no automatic report, and an employee-authored report are all no-ops.
+    """
+    pairs = [
+        (record.employee_id, record.attendance_date)
+        for record in touched
+        if record.status != AttendanceStatus.leave
+    ]
+    if pairs:
+        reconcile_auto_leave_reports(db, pairs, commit=False)
 
 
 def _clean_note(value: str | None) -> str | None:
@@ -261,6 +292,7 @@ def create_attendance(db: Session, actor: User, data: AttendanceCreate) -> Atten
             note=data.note,
             previous_status=None,
         )
+        _reconcile_auto_leave_reports(db, [record])
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -304,6 +336,7 @@ def update_attendance(
         note=data.note,
         previous_status=previous_status,
     )
+    _reconcile_auto_leave_reports(db, [record])
     db.commit()
     db.refresh(record)
     return record
@@ -455,6 +488,7 @@ def bulk_save_attendance(
                 note=None,
                 previous_status=previous_status,
             )
+        _reconcile_auto_leave_reports(db, [record for record, _, _ in touched])
         db.commit()
     except IntegrityError:
         db.rollback()

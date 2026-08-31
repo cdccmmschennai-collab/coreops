@@ -207,6 +207,86 @@ It does not lock, unlock, notify, email, approve, or touch `leave_requests`,
 an automatic leave report is not author-editable while an automatic week-off one
 is. That rule and its test predate this phase; generating the row is what makes
 it live, and nothing here changed it.
+
+LEAVE RECONCILIATION - PHASE 3F
+===============================
+An automatic leave report is LOCKED (above), so the day it claims is a day the
+employee cannot report on. That is correct exactly as long as the absence it was
+written for still stands. When the absence stops standing, the lock becomes a
+report the employee can neither use nor get rid of, and something has to take
+the row back - which is precisely the obligation Phase 3E deferred.
+
+WHEN DOES AN ABSENCE STOP STANDING
+----------------------------------
+Two events, and only two, and they come from different tables:
+
+  FORMAL CANCELLATION. `leave/service.approve_leave_cancellation` moves
+  `cancellation_requested -> cancelled`. Requesting the withdrawal does NOT stop
+  it - the absence stands until a manager rules - and a REJECTED withdrawal
+  returns the row to `approved`, which is still standing. So the only leave
+  transition that reconciles is the one that actually reaches `cancelled`.
+
+  A PM RE-DECIDING THE DAY. `attendance/service` writes an `attendance_records`
+  row saying the employee was PRESENT (or anything else that is not `leave`) on
+  a day their approved leave covers. The `leave_requests` row is NOT touched by
+  that - the two systems stay separate, as they always were - but the day's
+  official meaning is now "worked", and a locked leave report contradicts it.
+
+`leave_is_active_on` is the one answer to "is this employee's absence in force
+on this date", and both halves are read from the systems that already own them:
+
+    an attendance row that is NOT `leave`     -> the absence is over for that day
+    otherwise, a leave request covering it in
+    ACTIVE_LEAVE_STATUSES                     -> in force
+
+`ACTIVE_LEAVE_STATUSES` is `{approved, cancellation_requested}` - deliberately
+the SAME pair `leave_balances.ledger.LIVE_LEAVE_STATUSES` and
+`reminders.daily_report.service._ACTIVE_LEAVE_STATUSES` use, because this is the
+same question they ask. It is NOT `AUTO_LEAVE_STATUSES`, which is narrower on
+purpose: generating a row for a leave under withdrawal is a commitment Phase 3E
+declined to make, while keeping one already generated is merely refusing to act
+before the manager has. Generation is a stricter test than continuation, and the
+two constants exist so neither can be widened into the other by accident.
+
+WHAT RECONCILIATION DOES TO THE ROW
+-----------------------------------
+Exactly what Phase 3D does to a stale week-off report, through the same two
+functions - `is_untouched_auto_report` and `_reclassify_auto_report`, which this
+phase parameterised by `day_status` rather than copying:
+
+    untouched -> DELETED, freeing the (employee, date) slot so the employee can
+                 file the ordinary report the day now needs.
+    touched   -> PRESERVED and RECLASSIFIED: `day_status -> NULL`, and a
+                 submitted row reopens to `draft`. Nothing a person put there is
+                 removed.
+
+`total_minutes == 0` is never the test - every automatic leave report has zero
+minutes, including one somebody has since typed remarks onto.
+
+HOW THE LOCK LIFTS
+------------------
+`auto_report_author_editable` is unchanged, and stays a pure function of the
+row. It does not need to learn about leave requests, because reconciliation runs
+INSIDE the transaction that ends the absence: after that commit there is no row
+left that is `origin = auto AND day_status = leave` on a date whose leave is
+over. A deleted row is gone; a reclassified one carries `day_status = NULL`,
+which is not in `AUTO_LOCKED_DAY_STATUSES`, and is a `draft` besides. The lock
+lifts because the row that justified it no longer exists in that shape.
+
+AND WHY THE 01:00 SWEEP WILL NOT PUT IT BACK
+--------------------------------------------
+A PM marking the day PRESENT does not cancel the leave request, so `approved`
+leave still covers the date and the next morning's sweep would cheerfully
+re-create the report it just took away - reconciliation would last until 01:00
+and no longer. `_generate_leave_for_date` therefore drops any employee whose
+attendance for that date says something other than `leave`, using the same
+`leave_is_active_on` reading. This narrows generation and never widens it: on
+the ordinary path an approval writes `leave` attendance rows for exactly the
+days it claims, so nothing changes for them.
+
+NOT DONE HERE. No badge, no UI, no notification, no email, and nothing written
+to `leave_requests`, `attendance_records` or any balance - reconciliation only
+ever takes back a claim this module itself made.
 """
 from __future__ import annotations
 
@@ -220,6 +300,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.calendar.working_days import is_working_day, load_calendar_overrides
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.leave.effects import leave_working_days
@@ -261,6 +342,25 @@ AUTO_LEAVE_DAY_STATUS = DayStatus.leave
 # A tuple, not a set, because it goes straight into an `IN (...)` - the same
 # shape `reminders.daily_report.service._ACTIVE_LEAVE_STATUSES` is used in.
 AUTO_LEAVE_STATUSES = (LeaveStatus.approved,)
+
+# The leave states whose automatic report STAYS. Phase 3F, and deliberately WIDER
+# than `AUTO_LEAVE_STATUSES` above: `cancellation_requested` does not generate a
+# report but does keep one already generated, because the absence stands until a
+# manager rules on the withdrawal.
+#
+# Generating is a commitment; continuing is a refusal to act early. The stricter
+# test belongs on the commitment, which is why these are two constants and not
+# one - widening either into the other would either write rows the withdrawal
+# might have to unwrite, or unwrite rows the withdrawal has not yet earned.
+#
+# This pair is the SAME one the two modules that already answer "is this leave
+# live" use - `leave_balances.ledger.LIVE_LEAVE_STATUSES` and
+# `reminders.daily_report.service._ACTIVE_LEAVE_STATUSES` - because it is the
+# same question. A tuple, for the same `IN (...)` reason as above.
+ACTIVE_LEAVE_STATUSES = (
+    LeaveStatus.approved,
+    LeaveStatus.cancellation_requested,
+)
 
 # The day statuses whose AUTOMATIC report is locked to its author. Only `leave`:
 # an automatic leave report must not be edited while the leave stands. Every
@@ -835,6 +935,20 @@ def _generate_leave_for_date(
     if not on_leave:
         return
 
+    # A day a PM has ruled on is not an absence any more, whatever the leave
+    # request still says (Phase 3F). Without this the sweep would re-create every
+    # automatic leave report an attendance change had just reconciled away, and
+    # the employee's day would re-lock itself at 01:00 the next morning.
+    #
+    # This can only ever NARROW the sweep. On the ordinary path an approval
+    # writes `leave` attendance rows for exactly the days it claims, so nothing
+    # is dropped; what is dropped is a day whose row says present, absent or
+    # comp_off - which `apply_leave_approved` had already refused to overwrite.
+    denied = _attendance_denies_leave(db, {(emp_id, target) for emp_id in on_leave})
+    on_leave = {emp_id for emp_id in on_leave if (emp_id, target) not in denied}
+    if not on_leave:
+        return
+
     # `report_submitters` first, so the leave sweep files for exactly the
     # population the week-off sweep does: active, not soft-deleted, not a PM
     # login, and not before their joining date. An employee outside it owes no
@@ -964,15 +1078,28 @@ class AutoReconcileResult:
     dates: list[date] = field(default_factory=list)
     # Dates that are STILL non-working after the calendar change - nothing to
     # reconcile on those, which is the whole of the working -> closed direction.
+    # Filled by the CALENDAR reconciliation (Phase 3D).
     still_non_working: int = 0
-    # In-scope AUTO week_off reports found on the now-working dates.
+    # The mirror, filled by the LEAVE reconciliation (Phase 3F): reports whose
+    # backing absence is still in force, so the row stands and stays locked.
+    # Both counters live on one dataclass for the same reason the two run
+    # counters do - the same shape read from two sides - and each leaves the
+    # other at 0.
+    still_on_leave: int = 0
+    # In-scope AUTO reports found (week_off on now-working dates for Phase 3D,
+    # leave on the requested employee/date pairs for Phase 3F).
     examined: int = 0
     deleted: int = 0
     reclassified: int = 0
     outcomes: list[ReconcileOutcome] = field(default_factory=list)
 
 
-def is_untouched_auto_report(db: Session, report: DailyWorkReport) -> bool:
+def is_untouched_auto_report(
+    db: Session,
+    report: DailyWorkReport,
+    *,
+    day_status: DayStatus = AUTO_WEEKEND_DAY_STATUS,
+) -> bool:
     """Whether `report` still looks EXACTLY as the generator wrote it.
 
     The rule is conservative by construction: this returns True only for a row
@@ -991,15 +1118,25 @@ def is_untouched_auto_report(db: Session, report: DailyWorkReport) -> bool:
     The generated signature (`ensure_auto_report`):
 
         origin        = auto            status      = submitted (+ submitted_at)
-        day_status    = week_off        report_mode = full_day
+        day_status    = <day_status>    report_mode = full_day
         total_minutes = 0               tasks       = none
         every field in _PRISTINE_NULL_FIELDS NULL
         every count in _PRISTINE_ZERO_COUNT_FIELDS 0 (or NULL)
-        periods: at most one, and it is the generated Full-Day week_off period
+        periods: at most one, and it is the generated Full-Day period, carrying
+                 `day_status` as its own status
+
+    `day_status` names WHICH generated shape is being checked - `week_off` for
+    Phase 3D's calendar reconciliation (the default, so that caller is unchanged)
+    and `leave` for Phase 3F's. It is a parameter rather than a second copy of
+    this function because everything else about the two shapes is identical:
+    `ensure_auto_report` is the single writer, and `day_status` is the only field
+    its callers vary. A row whose day_status is not the one asked about is not
+    the generated shape in question and returns False, so the two reconciliations
+    can never read each other's rows.
     """
     if report.origin != ReportOrigin.auto:
         return False
-    if report.day_status != AUTO_WEEKEND_DAY_STATUS:
+    if report.day_status != day_status:
         return False
     # Still born-submitted: an author edit reopens the report to draft and clears
     # `submitted_at`, so a draft (or a resubmitted, hence author-touched) row
@@ -1035,7 +1172,7 @@ def is_untouched_auto_report(db: Session, report: DailyWorkReport) -> bool:
     for period in periods:
         if (
             period.day_part != DayPart.full_day.value
-            or period.period_status != AUTO_WEEKEND_DAY_STATUS
+            or period.period_status != day_status
             or period.location is not None
             or period.remarks is not None
             or period.is_legacy_half_day
@@ -1044,8 +1181,13 @@ def is_untouched_auto_report(db: Session, report: DailyWorkReport) -> bool:
     return True
 
 
-def _reclassify_auto_report(db: Session, report: DailyWorkReport) -> None:
-    """Strip the now-false `week_off` label off a report that holds real data.
+def _reclassify_auto_report(
+    db: Session,
+    report: DailyWorkReport,
+    *,
+    day_status: DayStatus = AUTO_WEEKEND_DAY_STATUS,
+) -> None:
+    """Strip the now-false generated label off a report that holds real data.
 
     Everything else is left exactly as it stands - tasks, periods, minutes,
     remarks, counts, `origin`. Only two things change:
@@ -1068,20 +1210,26 @@ def _reclassify_auto_report(db: Session, report: DailyWorkReport) -> None:
     `origin` stays `auto`: the row really was generated, and that is permanent
     audit history, not a classification. Review / edit-request fields are not
     touched either - reconciliation is not a review and has no actor.
+
+    `day_status` names which generated label is being stripped - `week_off` for
+    Phase 3D's calendar reconciliation (the default) and `leave` for Phase 3F's.
+    The outcome is identical either way, which is why this is one function: a
+    label the system wrote and the system has now withdrawn, removed from a row
+    whose contents belong to somebody else.
     """
     report.day_status = None
     if report.status == WorkReportStatus.submitted:
         report.status = WorkReportStatus.draft
         report.submitted_at = None
     # Keep the report's own periods coherent with the header. Only a period still
-    # carrying the generated week_off status is cleared; a period the employee
-    # gave a real status is left alone. work_fraction is untouched: a Full-Day
-    # period is 1.0 with or without a status (`service._full_day_fraction`).
+    # carrying the generated status is cleared; a period the employee gave a real
+    # status is left alone. work_fraction is untouched: a Full-Day period is 1.0
+    # with or without a status (`service._full_day_fraction`).
     db.execute(
         update(WorkReportPeriod)
         .where(
             WorkReportPeriod.report_id == report.id,
-            WorkReportPeriod.period_status == AUTO_WEEKEND_DAY_STATUS,
+            WorkReportPeriod.period_status == day_status,
         )
         .values(period_status=None)
     )
@@ -1175,3 +1323,232 @@ def reconcile_auto_reports_for_calendar_change(
     if commit:
         db.commit()
     return result
+
+
+# ---------------------------------------------------------------------------
+# LEAVE RECONCILIATION (Phase 3F) - the absence stops standing
+# ---------------------------------------------------------------------------
+#
+# SCOPE. Exactly `origin = auto AND day_status = leave`, on the (employee, date)
+# pairs the caller names. Nothing else is ever read: an employee's own leave
+# report carries origin = 'employee', an automatic WEEK-OFF report carries a
+# different day_status, another employee's rows are outside the pair set, and so
+# is another date. See the module docstring for the full rationale.
+
+# A (employee_id, report_date) pair. The unit of every query below, because the
+# unique constraint `work_reports_emp_date_uq` makes it the unit of a report.
+LeaveDay = tuple[uuid.UUID, date]
+
+
+def _split_pairs(
+    pairs: set[LeaveDay],
+) -> tuple[list[uuid.UUID], list[date]]:
+    """`(employee ids, dates)` for an `IN (...) AND IN (...)` prefilter.
+
+    The product of the two is a superset of `pairs`, so every caller re-checks
+    membership in Python afterwards. Deliberately not a row-value
+    `(employee_id, report_date) IN ((...),(...))`: the prefilter is a cheap
+    index-friendly narrowing over a handful of ids and usually ONE date, and the
+    exact test costs nothing once the rows are in hand.
+    """
+    return sorted({e for e, _ in pairs}), sorted({d for _, d in pairs})
+
+
+def _attendance_denies_leave(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
+    """The pairs whose `attendance_records` row says something OTHER than leave.
+
+    A PM marking a day present - or absent, or comp-off - is an official ruling
+    on what that day meant, and it is the ruling `leave/service` already treats
+    as beating a leave request (`_worked_attendance_dates` refuses to approve
+    leave over one). So for the day it covers, that row ends the absence, whatever
+    `leave_requests` still says.
+
+    A day with NO row is not a denial: `reverse_leave_approved` DELETES the leave
+    rows it wrote, and a deleted row must not read as "the employee worked".
+    """
+    if not pairs:
+        return set()
+    employee_ids, dates = _split_pairs(pairs)
+    rows = db.execute(
+        select(AttendanceRecord.employee_id, AttendanceRecord.attendance_date).where(
+            AttendanceRecord.employee_id.in_(employee_ids),
+            AttendanceRecord.attendance_date.in_(dates),
+            AttendanceRecord.status != AttendanceStatus.leave,
+        )
+    ).all()
+    return {(emp, day) for emp, day in rows} & pairs
+
+
+def _live_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
+    """The pairs a leave request in :data:`ACTIVE_LEAVE_STATUSES` covers.
+
+    Plain range containment, NOT `leave_working_days`. The calendar already had
+    its say when the report was generated, and re-asking it here would let a
+    later calendar edit delete a leave report behind Phase 3D's back - a date
+    that stops being a working day is the calendar reconciliation's business, not
+    this one's. Containment is also the conservative reading: it says "still on
+    leave" in every case the narrower one would, and deleting is the
+    irreversible outcome.
+    """
+    if not pairs:
+        return set()
+    employee_ids, dates = _split_pairs(pairs)
+    requests = db.execute(
+        select(
+            LeaveRequest.employee_id, LeaveRequest.start_date, LeaveRequest.end_date
+        ).where(
+            LeaveRequest.employee_id.in_(employee_ids),
+            LeaveRequest.status.in_(ACTIVE_LEAVE_STATUSES),
+            LeaveRequest.start_date <= dates[-1],
+            LeaveRequest.end_date >= dates[0],
+        )
+    ).all()
+    return {
+        (emp, day)
+        for emp, day in pairs
+        for req_emp, start, end in requests
+        if req_emp == emp and start <= day <= end
+    }
+
+
+def active_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
+    """Which of `pairs` are days the employee's absence is still IN FORCE on.
+
+    The whole of Phase 3F's central question, in one place, over a batch. Two
+    reads of two tables that already own their half of the answer:
+
+        a live leave request covers the day          -> in force
+        MINUS an attendance row that is not `leave`  -> a PM ruled otherwise
+
+    Nothing is written and no decision is made here; the callers decide what an
+    inactive day means for a report (reconciliation) or for generation.
+    """
+    if not pairs:
+        return set()
+    return _live_leave_pairs(db, pairs) - _attendance_denies_leave(db, pairs)
+
+
+def leave_is_active_on(
+    db: Session, employee_id: uuid.UUID, report_date: date
+) -> bool:
+    """Whether this employee's absence still stands on this date. One pair."""
+    pair = (employee_id, report_date)
+    return pair in active_leave_pairs(db, {pair})
+
+
+def reconcile_auto_leave_reports(
+    db: Session,
+    targets: list[LeaveDay] | set[LeaveDay],
+    *,
+    commit: bool = True,
+) -> AutoReconcileResult:
+    """Remove or reclassify AUTO LEAVE reports whose absence no longer stands.
+
+    Call it with every (employee, date) pair an event may have taken the absence
+    off - the days of a cancelled leave request, or the one day a PM just
+    re-decided. The direction does not have to be worked out by the caller: each
+    pair is re-read through :func:`active_leave_pairs` AFTER the change, and a
+    pair whose leave is still in force is left completely alone, so passing a
+    pair that moved the other way (or did not move at all) is free and does
+    nothing.
+
+    Only `origin = auto AND day_status = leave` rows on exactly those pairs are
+    ever loaded. An employee-authored report, an automatic week-off report,
+    another employee and another date are all outside the query.
+
+    Idempotent. The first run leaves no in-scope row behind - a deleted report is
+    gone and a reclassified one no longer carries `leave` - so a second run
+    selects nothing and writes nothing.
+
+    `commit=False` keeps the work in the caller's transaction, which is how
+    `leave.service` and `attendance.service` use it: the cancellation or the
+    attendance row and its reconciliation commit together or not at all.
+    """
+    pairs = {(emp, day) for emp, day in targets}
+    result = AutoReconcileResult(dates=sorted({d for _, d in pairs}))
+    if not pairs:
+        return result
+
+    employee_ids, dates = _split_pairs(pairs)
+    candidates = [
+        report
+        for report in db.execute(
+            select(DailyWorkReport).where(
+                DailyWorkReport.employee_id.in_(employee_ids),
+                DailyWorkReport.report_date.in_(dates),
+                DailyWorkReport.origin == ReportOrigin.auto,
+                DailyWorkReport.day_status == AUTO_LEAVE_DAY_STATUS,
+            )
+        )
+        .scalars()
+        .all()
+        # The prefilter above is the cross product of the ids and the dates; this
+        # is what makes the function pair-scoped rather than rectangle-scoped.
+        if (report.employee_id, report.report_date) in pairs
+    ]
+    result.examined = len(candidates)
+    if not candidates:
+        return result
+
+    # One batched read for every candidate, not one per report.
+    still_active = active_leave_pairs(
+        db, {(r.employee_id, r.report_date) for r in candidates}
+    )
+
+    for report in candidates:
+        if (report.employee_id, report.report_date) in still_active:
+            # The absence stands - including while a withdrawal is merely
+            # REQUESTED. The row is untouched and stays locked.
+            result.still_on_leave += 1
+            continue
+        # Read off the row BEFORE it is deleted: a deleted instance is expired by
+        # the flush below.
+        report_id, employee_id = report.id, report.employee_id
+        report_date = report.report_date
+        if is_untouched_auto_report(db, report, day_status=AUTO_LEAVE_DAY_STATUS):
+            # Nothing of anyone's in it. The period (and any task rows, of which
+            # there are none by definition here) goes with it via the DB cascade,
+            # and the freed slot is what lets the employee file the day normally.
+            db.delete(report)
+            action = "deleted"
+            result.deleted += 1
+        else:
+            # Somebody's data is on this row. Nothing of it is removed; only the
+            # now-false `leave` label goes, which also unlocks it.
+            _reclassify_auto_report(db, report, day_status=AUTO_LEAVE_DAY_STATUS)
+            action = "reclassified"
+            result.reclassified += 1
+        result.outcomes.append(
+            ReconcileOutcome(
+                report_id=report_id,
+                employee_id=employee_id,
+                report_date=report_date,
+                action=action,
+            )
+        )
+        logger.info(
+            "auto_leave_report.reconciled action=%s employee=%s date=%s report=%s",
+            action,
+            employee_id,
+            report_date,
+            report_id,
+        )
+
+    db.flush()
+    if commit:
+        db.commit()
+    return result
+
+
+def reconcile_auto_leave_report(
+    db: Session,
+    employee_id: uuid.UUID,
+    report_date: date,
+    *,
+    commit: bool = True,
+) -> AutoReconcileResult:
+    """One employee, one date. The single-pair spelling of
+    :func:`reconcile_auto_leave_reports`, for the callers that have exactly one."""
+    return reconcile_auto_leave_reports(
+        db, [(employee_id, report_date)], commit=commit
+    )
