@@ -137,6 +137,76 @@ Nothing in this module may therefore convert an existing AUTO report into an
 employee report, clear its day_status outside reconciliation, or "adopt" it on
 edit. Doing so would erase the only evidence reconciliation has to work with.
 There is a regression test pinning this (`test_auto_report_stays_identifiable_*`).
+
+AUTOMATIC LEAVE REPORTS - PHASE 3E
+==================================
+The second thing that accounts for a day without anybody typing a report is an
+approved absence, so `generate_auto_leave_reports` files the mirror image of the
+week-off sweep:
+
+    origin        = auto            status      = submitted (+ submitted_at)
+    day_status    = leave           report_mode = full_day
+    total_minutes = 0               one Full-Day period, no tasks
+
+Every piece of machinery below is shared with the week-off sweep - the same
+`ensure_auto_report` writer, the same `report_submitters` population, the same
+"an existing report always wins" rule, the same idempotency. Exactly two things
+differ, and they are the whole of the phase:
+
+  WHICH SIDE OF THE CALENDAR. A week-off report exists because the office was
+  CLOSED; a leave report exists because the office was OPEN and this one person
+  was not there. So `ensure_auto_report` takes `on_working_day`, and the leave
+  sweep passes True: a Sunday inside a Mon-Fri leave gets a week_off report from
+  the other sweep, never a leave one, and the two can never both fire on the
+  same date. `is_working_day` still decides - the weekend/holiday/working_day
+  rules are not restated here any more than they were above.
+
+  WHICH EMPLOYEES. Not everyone - only those an APPROVED `leave_requests` row
+  covers on that date, and the days of that row are resolved by the leave
+  module's own `effects.leave_working_days`, the same function that decided
+  which days the approval marked in `attendance_records` and which days the
+  ledger charged. Reusing it is what keeps the generated reports and the
+  attendance rows on exactly the same set of dates; a second day-walking loop
+  here would be free to drift from both.
+
+ONLY `approved`, AND WHAT THAT LEAVES OUT
+=========================================
+`AUTO_LEAVE_STATUSES` is `{approved}` and nothing else. `pending` is not yet an
+absence, and `rejected` / `cancelled` never were.
+
+`cancellation_requested` is the interesting exclusion, and it is a DELIBERATE
+divergence from the rest of the codebase, recorded here so nobody "fixes" it by
+accident. Two existing modules treat that state as still-active leave:
+
+    leave_balances/ledger.py   LIVE_LEAVE_STATUSES
+    reminders/daily_report/service.py  _ACTIVE_LEAVE_STATUSES
+
+and they are right to: the absence stands until a manager rules on the
+withdrawal, so the day still costs balance and must still not raise a missing
+report. Both of those are READS, though - they interpret a day nobody has
+written to. This module WRITES a row, and a row written for a leave that is in
+the middle of being withdrawn is a row something has to take back. Withdrawal
+handling (and the reconciliation that would go with it) is explicitly a later
+phase, so this phase writes nothing it would have to unwrite: a leave under
+cancellation simply gets no automatic report, and the employee's day stays open
+to them.
+
+The consequence, stated plainly: an employee whose approved leave enters
+`cancellation_requested` BEFORE 01:00 gets no automatic report for it, even if
+the cancellation is later refused and the leave stands. Their day is not
+accounted for automatically and they can file it themselves. Nothing generated
+before the withdrawal request is touched or re-examined - this module has no
+reconciliation for leave, by design, and the row it already wrote stands.
+
+WHAT AN AUTOMATIC LEAVE REPORT DOES NOT DO
+==========================================
+It does not lock, unlock, notify, email, approve, or touch `leave_requests`,
+`attendance_records` or any balance. One caveat that is NOT new behaviour: the
+`AUTO_LOCKED_DAY_STATUSES` rule written in Phase 3C as the default-deny half of
+`auto_report_author_editable` becomes REACHABLE the moment this sweep runs, so
+an automatic leave report is not author-editable while an automatic week-off one
+is. That rule and its test predate this phase; generating the row is what makes
+it live, and nothing here changed it.
 """
 from __future__ import annotations
 
@@ -152,6 +222,8 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.modules.calendar.working_days import is_working_day, load_calendar_overrides
 from app.modules.employees.models import Employee, EmployeeStatus
+from app.modules.leave.effects import leave_working_days
+from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.models import (
     DAY_PART_FRACTIONS,
@@ -172,12 +244,30 @@ logger = logging.getLogger("coreops.work_reports.auto_reports")
 # copied into a second place.
 AUTO_WEEKEND_DAY_STATUS = DayStatus.week_off
 
+# The day_status every Phase 3E automatic LEAVE report carries. Separate constant
+# from the week-off one above even though both are one enum member, because they
+# answer different questions and a later phase may split either.
+AUTO_LEAVE_DAY_STATUS = DayStatus.leave
+
+# The leave states that get an automatic report. Exactly `approved`.
+#
+# NOT `cancellation_requested`, deliberately, and NOT by oversight - see "ONLY
+# `approved`, AND WHAT THAT LEAVES OUT" in the module docstring. The two modules
+# that DO count it as live leave (`leave_balances.ledger.LIVE_LEAVE_STATUSES` and
+# `reminders.daily_report.service._ACTIVE_LEAVE_STATUSES`) only read; this one
+# writes a row, and a leave under withdrawal is one whose row might have to be
+# taken back. Nothing in this phase takes rows back, so nothing writes them.
+#
+# A tuple, not a set, because it goes straight into an `IN (...)` - the same
+# shape `reminders.daily_report.service._ACTIVE_LEAVE_STATUSES` is used in.
+AUTO_LEAVE_STATUSES = (LeaveStatus.approved,)
+
 # The day statuses whose AUTOMATIC report is locked to its author. Only `leave`:
 # an automatic leave report must not be edited while the leave stands. Every
 # other automatic report - week_off now, holiday and natural hazard later - stays
-# editable despite being submitted. Phase 3C generates no leave reports, so this
-# set matches nothing yet; it is stated now so the rule is default-deny rather
-# than an omission a later phase has to remember.
+# editable despite being submitted. Written in Phase 3C as the default-deny half
+# of the rule, when nothing generated a leave report; Phase 3E's leave sweep is
+# what makes it reachable. The predicate itself is unchanged.
 AUTO_LOCKED_DAY_STATUSES = frozenset({DayStatus.leave})
 
 # How many days back the scheduled sweep re-checks, ending at `today`. Not a
@@ -208,7 +298,11 @@ class AutoReportOutcome:
 
     employee_id: uuid.UUID
     report_date: date
-    # One of: "created", "working_day", "report_exists", "error".
+    # One of: "created", "report_exists", "error", or a calendar refusal -
+    # "working_day"     the office was OPEN and this run files closed days
+    #                   (the week-off sweep),
+    # "non_working_day" the office was CLOSED and this run files open days
+    #                   (the leave sweep).
     reason: str
     report_id: uuid.UUID | None = None
     error: str | None = None
@@ -223,9 +317,15 @@ class AutoReportRunResult:
     dates: list[date] = field(default_factory=list)
     # DATES in the swept range the calendar reported as working - counted per
     # date, not per employee, because a working day is settled before any
-    # employee is looked at.
+    # employee is looked at. Filled by the WEEK-OFF sweep, for which a working
+    # date is the one that produces nothing.
     working_dates: int = 0
-    # Employees examined, summed over the non-working dates only.
+    # The mirror, filled by the LEAVE sweep: dates skipped because the office was
+    # closed, so the week-off sweep owns them and no leave report is due. Both
+    # counters live on one dataclass because the two sweeps are the same run
+    # shape read from opposite sides of the calendar; each leaves the other at 0.
+    non_working_dates: int = 0
+    # Employees examined, summed over the dates this sweep actually generates for.
     employees_considered: int = 0
     created: int = 0
     skipped_existing: int = 0
@@ -309,15 +409,35 @@ def ensure_auto_report(
     employee: Employee,
     report_date: date,
     *,
+    day_status: DayStatus = AUTO_WEEKEND_DAY_STATUS,
+    on_working_day: bool = False,
     non_working: set[date] | None = None,
     working_overrides: set[date] | None = None,
     commit: bool = True,
 ) -> AutoReportOutcome:
-    """Create the automatic week-off report for one employee and one date, if
-    the calendar says the office was closed and the slot is free.
+    """Create ONE automatic report for one employee and one date, if the
+    calendar agrees with what this report is for and the slot is free.
 
-    Idempotent and non-destructive: an existing report of ANY origin or status
-    is left exactly as it is.
+    The single writer for every automatic report there is. `day_status` is the
+    only thing that differs between the kinds - `week_off` (Phase 3C) and
+    `leave` (Phase 3E) - so neither has a generation path of its own to drift.
+
+    `on_working_day` states which side of the calendar this kind belongs to, and
+    is the ONLY calendar question asked here:
+
+        False (default)  the office must be CLOSED. A week-off report exists
+                         because nobody worked that day, so a `working_day`
+                         override - or an ordinary weekday - refuses it.
+        True             the office must be OPEN. A leave report exists because
+                         the office worked and this person was absent, so a
+                         Sunday or a company holiday refuses it; that date is the
+                         week-off sweep's, and the two can never both fire.
+
+    `is_working_day` answers it in both directions, so the weekend, holiday and
+    `working_day`-override rules are honoured without being restated.
+
+    Idempotent and non-destructive: an existing report of ANY origin, status or
+    day_status is left exactly as it is.
 
     `non_working` / `working_overrides` come from
     :func:`calendar.working_days.load_calendar_overrides`. Pass them when
@@ -330,13 +450,17 @@ def ensure_auto_report(
         )
 
     # The single business decision, delegated whole to the calendar. A
-    # `working_day` override on a Saturday lands here as True and stops the run
-    # for that date - that is the rule this phase exists to honour.
-    if is_working_day(
+    # `working_day` override on a Saturday lands here as True, which stops the
+    # week-off sweep for that date and is exactly what lets the leave sweep
+    # cover it - one rule, read from both sides.
+    working = is_working_day(
         report_date, non_working=non_working, working_overrides=working_overrides
-    ):
+    )
+    if working != on_working_day:
         return AutoReportOutcome(
-            employee_id=employee.id, report_date=report_date, reason="working_day"
+            employee_id=employee.id,
+            report_date=report_date,
+            reason="working_day" if working else "non_working_day",
         )
 
     existing = db.execute(
@@ -365,7 +489,7 @@ def ensure_auto_report(
         submitted_at=datetime.now(timezone.utc),
         origin=ReportOrigin.auto,
         report_mode=ReportMode.full_day.value,
-        day_status=AUTO_WEEKEND_DAY_STATUS,
+        day_status=day_status,
         total_minutes=0,
         # No actor: nobody authored this. `origin` is the source-of-truth
         # indicator; a NULL created_by is a consequence, never the test.
@@ -375,16 +499,16 @@ def ensure_auto_report(
     db.add(report)
     try:
         db.flush()
-        # One Full-Day period, identical to what a hand-entered full-day week_off
-        # report gets from `service._sync_legacy_full_day_period`: work_fraction
-        # 1.0, no location, not a legacy half day. Written here so an AUTO report
-        # is structurally the same row shape as an employee one and no
-        # period-reading consumer has to special-case it.
+        # One Full-Day period, identical to what a hand-entered full-day report
+        # of this day_status gets from `service._sync_legacy_full_day_period`:
+        # work_fraction 1.0, no location, not a legacy half day. Written here so
+        # an AUTO report is structurally the same row shape as an employee one
+        # and no period-reading consumer has to special-case it.
         db.add(
             WorkReportPeriod(
                 report_id=report.id,
                 day_part=DayPart.full_day.value,
-                period_status=AUTO_WEEKEND_DAY_STATUS,
+                period_status=day_status,
                 location=None,
                 work_fraction=DAY_PART_FRACTIONS[DayPart.full_day],
                 is_legacy_half_day=False,
@@ -408,9 +532,10 @@ def ensure_auto_report(
         )
 
     logger.info(
-        "auto_report.created employee=%s date=%s report=%s",
+        "auto_report.created employee=%s date=%s day_status=%s report=%s",
         employee.id,
         report_date,
+        day_status.value,
         report.id,
     )
     return AutoReportOutcome(
@@ -551,6 +676,219 @@ def _generate_for_date(
         elif outcome.reason == "report_exists":
             # Only reachable via the unique-constraint race inside
             # `ensure_auto_report`; the `taken` fast path above caught the rest.
+            result.skipped_existing += 1
+
+
+# ---------------------------------------------------------------------------
+# AUTOMATIC LEAVE REPORTS (Phase 3E) - an approved absence on a WORKING day
+# ---------------------------------------------------------------------------
+
+
+def approved_leave_days(db: Session, dates: list[date]) -> dict[date, set[uuid.UUID]]:
+    """`{date: employees whose approved leave covers it}`, over `dates` only.
+
+    Inverts `leave_requests` from range-per-employee into employee-set-per-date,
+    which is the shape the date-at-a-time sweep needs. Dates with nobody on leave
+    are simply absent from the mapping.
+
+    The days a request contributes are NOT walked here. They come from
+    `leave.effects.leave_working_days`, the leave module's own answer to "which
+    days of this range actually cost the employee anything" - the very function
+    `apply_leave_approved` used to decide which days to mark in
+    `attendance_records`, and the one `leave/service.py` reports as a request's
+    `working_days`. So an automatic leave report can only ever land on a day the
+    approval already marked, and the Saturday / Sunday / holiday /
+    `working_day`-override rules are honoured by reuse rather than by a second
+    copy of the loop.
+
+    Each request's range is clamped to the swept window BEFORE that call: a
+    three-month absence must not walk three months of calendar to contribute at
+    most `len(dates)` days.
+    """
+    if not dates:
+        return {}
+    wanted = set(dates)
+    window_start, window_end = min(wanted), max(wanted)
+
+    requests = (
+        db.execute(
+            select(LeaveRequest).where(
+                LeaveRequest.status.in_(AUTO_LEAVE_STATUSES),
+                # Overlap, not containment: a leave that starts before the window
+                # and ends inside it (or spans the whole of it) still covers days
+                # in it.
+                LeaveRequest.start_date <= window_end,
+                LeaveRequest.end_date >= window_start,
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    by_date: dict[date, set[uuid.UUID]] = {}
+    for req in requests:
+        start = max(req.start_date, window_start)
+        end = min(req.end_date, window_end)
+        for day in leave_working_days(db, start, end):
+            if day in wanted:
+                # A set, so two approved requests touching the same day - which
+                # `_assert_no_overlap` forbids, but which historical data may
+                # still hold - produce one report attempt, not two.
+                by_date.setdefault(day, set()).add(req.employee_id)
+    return by_date
+
+
+def generate_auto_leave_reports(
+    db: Session | None = None,
+    *,
+    today: date | None = None,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    dates: list[date] | None = None,
+) -> AutoReportRunResult:
+    """Sweep recent dates and file an automatic LEAVE report for every employee
+    an approved leave covers on a working day.
+
+    The mirror of :func:`generate_auto_reports` in every respect except which
+    side of the calendar it works and which employees it looks at, and it shares
+    that function's whole rationale: same window, same idempotency (re-covering a
+    covered date writes nothing), no cursor, so a late, repeated, restarted or
+    half-finished run is harmless.
+
+    Only PAST-AND-PRESENT dates are ever generated for, because the window ends
+    at `today`. Leave approved for next month is therefore filed on each of its
+    mornings rather than up front - which is what keeps this phase free of any
+    obligation to unwrite a report when a leave is later withdrawn.
+
+    Safe from a Celery worker (opens its own session when `db` is omitted) and
+    from a request handler (pass the request session). `dates` overrides the
+    range outright and exists for tests and manual backfills.
+    """
+    owns_session = db is None
+    db = db or SessionLocal()
+    today = today or date.today()
+    if dates is None:
+        dates = [
+            today - timedelta(days=offset) for offset in range(lookback_days, -1, -1)
+        ]
+    result = AutoReportRunResult(dates=list(dates))
+
+    logger.info(
+        "auto_leave_report.started dates=%d from=%s to=%s",
+        len(result.dates),
+        result.dates[0] if result.dates else None,
+        result.dates[-1] if result.dates else None,
+    )
+    try:
+        if result.dates:
+            non_working, working_overrides = load_calendar_overrides(
+                db, min(result.dates), max(result.dates)
+            )
+            # One leave query for the whole window, not one per date.
+            on_leave = approved_leave_days(db, result.dates)
+            for target in result.dates:
+                _generate_leave_for_date(
+                    db,
+                    target,
+                    on_leave.get(target, set()),
+                    non_working,
+                    working_overrides,
+                    result,
+                )
+    finally:
+        if owns_session:
+            db.close()
+
+    logger.info(
+        "auto_leave_report.completed dates=%d non_working_dates=%d considered=%d "
+        "created=%d existing=%d failed=%d",
+        len(result.dates),
+        result.non_working_dates,
+        result.employees_considered,
+        result.created,
+        result.skipped_existing,
+        result.failed,
+    )
+    return result
+
+
+def _generate_leave_for_date(
+    db: Session,
+    target: date,
+    on_leave: set[uuid.UUID],
+    non_working: set[date],
+    working_overrides: set[date],
+    result: AutoReportRunResult,
+) -> None:
+    """One date, every employee approved leave covers on it. Never raises: a
+    single employee's failure is rolled back on its own and the sweep carries on,
+    and because nothing was committed for them the next run picks them up
+    again."""
+    if not is_working_day(
+        target, non_working=non_working, working_overrides=working_overrides
+    ):
+        # The office was closed, so nobody's absence is remarkable and the
+        # week-off sweep owns this date. Counted before any employee query, and
+        # `approved_leave_days` has already excluded the date for the same
+        # reason - this is the guard, not the filter.
+        result.non_working_dates += 1
+        return
+    if not on_leave:
+        return
+
+    # `report_submitters` first, so the leave sweep files for exactly the
+    # population the week-off sweep does: active, not soft-deleted, not a PM
+    # login, and not before their joining date. An employee outside it owes no
+    # report on this date, on leave or otherwise.
+    employees = [e for e in report_submitters(db, target) if e.id in on_leave]
+    result.employees_considered += len(employees)
+    if not employees:
+        return
+
+    taken = existing_report_employee_ids(db, [e.id for e in employees], target)
+
+    for employee in employees:
+        if employee.id in taken:
+            # The employee filed their own report for a day they were on leave.
+            # It stands, untouched - exactly as in the week-off sweep.
+            result.skipped_existing += 1
+            result.outcomes.append(
+                AutoReportOutcome(
+                    employee_id=employee.id,
+                    report_date=target,
+                    reason="report_exists",
+                )
+            )
+            continue
+        try:
+            outcome = ensure_auto_report(
+                db,
+                employee,
+                target,
+                day_status=AUTO_LEAVE_DAY_STATUS,
+                on_working_day=True,
+                non_working=non_working,
+                working_overrides=working_overrides,
+            )
+        except Exception as exc:  # noqa: BLE001 - one employee must not stop the run
+            db.rollback()
+            result.failed += 1
+            result.outcomes.append(
+                AutoReportOutcome(
+                    employee_id=employee.id,
+                    report_date=target,
+                    reason="error",
+                    error=str(exc),
+                )
+            )
+            logger.exception(
+                "auto_leave_report.failed employee=%s date=%s", employee.id, target
+            )
+            continue
+
+        result.outcomes.append(outcome)
+        if outcome.reason == "created":
+            result.created += 1
+        elif outcome.reason == "report_exists":
             result.skipped_existing += 1
 
 

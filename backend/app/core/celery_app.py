@@ -18,10 +18,12 @@ month sends and the rest of the month is a no-op, while a worker that was down o
 the 1st still delivers on the 2nd. See
 `app/reminders/leave_balance/dispatcher.py`.
 
-Automatic week-off report generation shares the same beat and the same
+Automatic report generation - week-off reports on closed days and leave reports
+on the working days an approved leave covers - shares the same beat and the same
 reasoning, for the same reason again: it is idempotent per (employee, date), so
 it runs every morning and re-sweeps the days behind it rather than depending on
-one fragile midnight execution. See `app/modules/work_reports/auto_reports.py`.
+one fragile midnight execution. Both sweeps hang off the one task; see
+`app/modules/work_reports/auto_reports.py`.
 """
 from __future__ import annotations
 
@@ -34,7 +36,8 @@ from app.core.config import settings
 BUSINESS_TIMEZONE = "Asia/Kolkata"
 DAILY_REPORT_REMINDER_TASK = "coreops.reminders.send_daily_report_reminders"
 LEAVE_BALANCE_NOTICE_TASK = "coreops.reminders.send_monthly_leave_balance_notices"
-# Automatic week-off report generation (app/modules/work_reports/auto_reports.py).
+# Automatic report generation - week-off AND leave sweeps, one task
+# (app/modules/work_reports/auto_reports.py).
 AUTO_REPORT_GENERATION_TASK = "coreops.work_reports.generate_auto_reports"
 # Generic "deliver one email" task (app/tasks/email_tasks.py). NOT scheduled -
 # it is fired on demand by app.notifications.email_dispatch.enqueue_email, so it

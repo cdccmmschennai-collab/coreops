@@ -12,7 +12,10 @@ from app.core.celery_app import (
     celery_app,
     schedule_settings,
 )
-from app.modules.work_reports.auto_reports import generate_auto_reports
+from app.modules.work_reports.auto_reports import (
+    generate_auto_leave_reports,
+    generate_auto_reports,
+)
 from app.reminders.daily_report.dispatcher import run_daily_report_reminders
 from app.reminders.leave_balance.dispatcher import run_monthly_leave_balance_notices
 
@@ -46,10 +49,22 @@ def send_monthly_leave_balance_notices() -> dict:
 
 @celery_app.task(name=AUTO_REPORT_GENERATION_TASK)
 def generate_automatic_reports() -> dict:
-    """File an automatic week-off report for every employee on every recently
-    closed day. Idempotent: a date already covered produces nothing, so running
-    this late, twice, or after a failed run is harmless."""
+    """File the automatic reports for every recent day that accounts for itself:
+    a week-off report for everybody on a closed day, and a leave report for
+    everybody an approved leave covers on an open one.
+
+    Two sweeps, one task and one beat entry, because they are the same job read
+    from opposite sides of the calendar and can never both claim a date. Both are
+    idempotent, so a date already covered produces nothing and running this late,
+    twice, or after a failed run is harmless.
+
+    The leave sweep runs SECOND and on its own session, so a failure in it cannot
+    lose the week-off reports the first sweep already committed.
+    """
     result = generate_auto_reports(
+        lookback_days=schedule_settings.AUTO_REPORT_LOOKBACK_DAYS
+    )
+    leave = generate_auto_leave_reports(
         lookback_days=schedule_settings.AUTO_REPORT_LOOKBACK_DAYS
     )
     return {
@@ -59,4 +74,8 @@ def generate_automatic_reports() -> dict:
         "created": result.created,
         "skipped_existing": result.skipped_existing,
         "failed": result.failed,
+        "leave_employees_considered": leave.employees_considered,
+        "leave_created": leave.created,
+        "leave_skipped_existing": leave.skipped_existing,
+        "leave_failed": leave.failed,
     }
