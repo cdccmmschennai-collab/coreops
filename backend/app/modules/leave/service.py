@@ -277,8 +277,11 @@ def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
     candidate = resolve_in_app_recipient(db, employee, req)
     if candidate is None:
         return
+    # Both rungs are approvers, so both open the request's own detail page with
+    # Team approvals behind it - the queue they were working stays the Back
+    # target, and the actions are on the page itself.
     _push(db, candidate.employee.user_id, type_, title, message, req.id,
-          leave_request_path(req, is_head=candidate.is_head, queue=queue))
+          leave_request_path(req, view="team", queue=queue or "pending"))
 
 
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
@@ -976,7 +979,7 @@ def approve_leave_cancellation(
         f"Your leave cancellation request for {_period(req)} was approved."
         + _restored_sentence(effect),
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     return req
 
@@ -1009,7 +1012,7 @@ def reject_leave_cancellation(
         f"Your leave cancellation request for {_period(req)} was rejected. "
         "The approved leave remains active.",
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     return req
 
@@ -1174,7 +1177,7 @@ def approve_leave_request(
         f"Your leave request ({req.start_date} to {req.end_date}) has been approved."
         + _effect_sentence(effect, req),
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     # Tell the employee by email too. Placed AFTER the commit and after the bell
     # on purpose: the decision is already durable and the notification already
@@ -1217,7 +1220,7 @@ def reject_leave_request(
         f"Your leave request ({req.start_date} to {req.end_date}) was not approved."
         + (f" Note: {data.comment}" if data.comment else ""),
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     # See the note in `approve_leave_request`: after the commit, after the bell,
     # never raises, and reached from this function alone.

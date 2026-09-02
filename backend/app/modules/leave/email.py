@@ -492,7 +492,7 @@ def send_submission_email(db: Session, employee: Employee, req: LeaveRequest) ->
             reason=req.reason,
             request_id=str(req.id),
             link=build_link(
-                leave_request_path(req, is_head=recipient.is_head)
+                leave_request_path(req, view="team", queue="pending")
             ),
         )
         result = enqueue_email(
@@ -596,10 +596,11 @@ def _send_decision_email(
             reason=req.reason,
             reviewer_comment=req.manager_comment,
             request_id=str(req.id),
-            # The rung the EMPLOYEE reads their own request at - the same path
-            # the `leave_approved` / `leave_rejected` notification deep-links to,
-            # built by the same helper so the bell and the inbox cannot drift.
-            link=build_link(leave_request_path(req, is_head=False)),
+            # The request's own detail page, with My leave behind it - the same
+            # path the `leave_approved` / `leave_rejected` notification
+            # deep-links to, built by the same helper so the bell and the inbox
+            # cannot drift.
+            link=build_link(leave_request_path(req, view="my")),
         )
         result = enqueue_email(
             to=address,

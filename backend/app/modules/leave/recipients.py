@@ -36,6 +36,7 @@ stored on `LeaveRequest.routed_project_id`; this module only reads that column.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -50,8 +51,9 @@ class LeaveRecipient:
     """One candidate approver for a leave request.
 
     `is_head` says which rung of the chain this is - the routed project's Head,
-    or the PM fallback - and picks the deep-link shape in
-    :func:`leave_request_path`.
+    or the PM fallback. It no longer picks a deep-link shape: both rungs are
+    approvers and both open the same detail page, on the same Team approvals
+    list (see :func:`leave_request_path`).
     """
 
     employee: Employee
@@ -159,23 +161,45 @@ def resolve_in_app_recipient(
     return None
 
 
+def leave_list_path(*, view: str, queue: str | None = None) -> str:
+    """One Leave LIST address: the Attendance page's Leave tab.
+
+    `view` is the Leave tab's own My leave / Team approvals switch, and `queue`
+    the inner approval queue (`pending`, `cancellation`, ...). Both are named
+    explicitly rather than left to be inferred - the frontend's `resolveLeaveView`
+    used to guess "a link with a queue must be a Team approvals link", which is
+    only true by accident.
+    """
+    path = f"/attendance?tab=leave&view={view}"
+    return f"{path}&queue={queue}" if queue is not None else path
+
+
 def leave_request_path(
-    req: LeaveRequest, *, is_head: bool, queue: str | None = None
+    req: LeaveRequest, *, view: str, queue: str | None = None
 ) -> str:
-    """The in-app path this request is reached at, for the given recipient rung.
+    """The in-app address a notification or an email opens this request AT.
+
+    THE DETAIL PAGE, NOT THE LIST
+    -----------------------------
+    `/attendance/leave/<id>` - the page that shows this one request and carries
+    the actions that can be taken on it (Approve/Reject for a reviewer, Request
+    Cancellation for the owner). It used to be `/attendance?tab=leave&id=<id>`,
+    which is the LIST: nothing on the Attendance page has ever read an `id`
+    parameter, so every leave notification - the employee's "your request was
+    rejected" just as much as the approver's - dropped the reader on a table of
+    all their requests and left them to find the one they were told about. The
+    request id was in the URL the whole time and was simply ignored.
+
+    `view`/`queue` are no longer the destination; they are the LIST BEHIND it,
+    passed as the `from` parameter that the detail page's "← Leave" reads
+    (`leave/types.ts::leaveReturnHref`). So an approver still lands back in the
+    queue they were working, and the employee back in My leave. A caller whose
+    notification is about something NOT in the pending queue - namely
+    `request_leave_cancellation`, which moves the request straight to
+    `cancellation_requested` - passes `queue="cancellation"`.
 
     In one place so the notification's `target_url` and the email's link cannot
-    disagree. The two shapes are pre-existing and deliberately NOT unified: the
-    Head rung always names a queue, defaulting to `pending` (the queue a freshly
-    submitted or cancelled request is actually in), while the fallback rung omits
-    `&queue=` entirely unless a caller asked for one. A caller whose notification
-    is about something NOT in the pending queue - namely
-    `request_leave_cancellation`, which moves the request straight to
-    `cancellation_requested` - passes `queue="cancellation"` so both rungs
-    deep-link to the queue that can actually contain it.
+    disagree.
     """
-    if is_head:
-        return f"/attendance?tab=leave&queue={queue or 'pending'}&id={req.id}"
-    if queue is not None:
-        return f"/attendance?tab=leave&queue={queue}&id={req.id}"
-    return f"/attendance?tab=leave&id={req.id}"
+    back_to = leave_list_path(view=view, queue=queue)
+    return f"/attendance/leave/{req.id}?from={quote(back_to, safe='')}"

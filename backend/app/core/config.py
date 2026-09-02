@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:3100"
 
     # Public base URL of the CoreOps web app, used to turn the relative paths
-    # notifications already carry (e.g. /attendance?tab=leave&id=...) into
+    # notifications already carry (e.g. /attendance/leave/<id>?from=...) into
     # absolute links for OUTBOUND EMAIL. Browser-facing pages never need it.
     #
     # Deliberately its own setting rather than something derived from

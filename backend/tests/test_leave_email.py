@@ -173,15 +173,20 @@ def test_every_leave_email_carries_a_minimal_html_alternative(
         work_email="emp.15@cdccmms.com",
     )
     req = _leave(db, emp.id)
-    link = leave_email.build_link(leave_email.leave_request_path(req, is_head=False))
-    escaped_href = html_module.escape(link, quote=True)
+    # All three open the request's own detail page; they differ only in the list
+    # each reader comes back to - the approver's queue, the employee's My leave.
+    approver_link = leave_email.build_link(
+        leave_email.leave_request_path(req, view="team", queue="pending")
+    )
+    employee_link = leave_email.build_link(leave_email.leave_request_path(req, view="my"))
 
     leave_email.send_submission_email(db, emp, req)
     leave_email.send_approval_email(db, req, reviewer)
     leave_email.send_rejection_email(db, req, reviewer)
 
     assert len(recorder.calls) == 3
-    for call in recorder.calls:
+    for call, link in zip(recorder.calls, [approver_link, employee_link, employee_link]):
+        escaped_href = html_module.escape(link, quote=True)
         assert not call.get("text_only")
         _assert_no_markup(call["text_body"])
         assert "View Leave Request" in call["text_body"]
@@ -1072,12 +1077,11 @@ def test_a_configured_app_base_url_produces_an_absolute_decision_link(
 
     leave_email.send_approval_email(db, req, None)
 
-    expected = f"https://coreops.cdccmms.com/attendance?tab=leave&id={req.id}"
-    assert expected in recorder.calls[0]["text_body"]
-    # The same path the in-app `leave_approved` notification deep-links to.
-    assert f"/attendance?tab=leave&id={req.id}" == leave_email.leave_request_path(
-        req, is_head=False
-    )
+    # The request's own detail page, not the Leave list: the id is what the
+    # reader was notified about, so it is what the link opens.
+    path = leave_email.leave_request_path(req, view="my")
+    assert path.startswith(f"/attendance/leave/{req.id}?from=")
+    assert f"https://coreops.cdccmms.com{path}" in recorder.calls[0]["text_body"]
 
 
 # ---------- end-to-end wiring ----------------------------------------------
@@ -1148,10 +1152,14 @@ def test_submitting_emails_the_head_and_still_rings_the_bell(
     assert recorder.recipients == ["head.e2e@cdccmms.com"]
     assert "Karthikeyan K" in recorder.calls[0]["subject"]
 
-    # ...and the in-app notification is exactly as it was before this phase.
+    # ...and the in-app notification opens the request's own detail page, with
+    # the pending queue as the list behind it.
     note = db.query(Notification).filter(Notification.user_id == hu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_submitting_with_no_routed_project_emails_the_pm_and_rings_their_bell(
@@ -1199,11 +1207,15 @@ def test_submitting_with_no_routed_project_emails_the_pm_and_rings_their_bell(
     assert recorder.recipients == ["pm.fallback@cdccmms.com"]
     assert "Nainar B" in recorder.calls[0]["subject"]
 
-    # ...and the bell rang for the PM's login, at the fallback rung's deep link
-    # (no `queue=` - that shape belongs to the Head rung).
+    # ...and the bell rang for the PM's login, at the SAME deep link the Head
+    # rung gets: both rungs are approvers, so both open the request itself with
+    # the pending queue behind it.
     note = db.query(Notification).filter(Notification.user_id == mu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def _decision_fixture(db, make_user, make_employee):
@@ -1372,13 +1384,15 @@ def test_the_decision_bell_still_rings_alongside_the_email(
         n.type: n
         for n in db.query(Notification).filter(Notification.user_id == eu.id).all()
     }
+    # Each decision opens the request it decided, with My leave behind it - not
+    # the list, which would leave the employee to hunt for the row.
     assert "leave_approved" in notes
     assert notes["leave_approved"].target_url == (
-        f"/attendance?tab=leave&id={first['id']}"
+        f"/attendance/leave/{first['id']}?from=%2Fattendance%3Ftab%3Dleave%26view%3Dmy"
     )
     assert "leave_rejected" in notes
     assert notes["leave_rejected"].target_url == (
-        f"/attendance?tab=leave&id={second['id']}"
+        f"/attendance/leave/{second['id']}?from=%2Fattendance%3Ftab%3Dleave%26view%3Dmy"
     )
 
     # BOTH channels, for BOTH outcomes. The bell above and the email here are the

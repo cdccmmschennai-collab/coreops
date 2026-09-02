@@ -254,10 +254,11 @@ export type LeaveView = (typeof LEAVE_VIEWS)[number];
  *  An explicit `view` always wins, and it is what Back restores: both choices
  *  are written into the URL, so neither has to be inferred from anything else.
  *
- *  `hasQueue` only covers the links that predate that parameter - the PM/Head
- *  dashboard shortcut and the backend's leave notifications, which name a
- *  QUEUE (`?tab=leave&queue=pending&id=...`). A queue is a Team approvals
- *  queue, so those links still open on Team approvals. Nothing else infers it. */
+ *  `hasQueue` only covers the links that predate that parameter - chiefly the
+ *  PM/Head dashboard shortcut, which names a QUEUE and no view. A queue is a
+ *  Team approvals queue, so those links still open on Team approvals. Nothing
+ *  else infers it. (Leave notifications no longer rely on this: they deep-link
+ *  to the request's detail page and name `view` explicitly in their `from`.) */
 export function resolveLeaveView(
   raw: string | null | undefined,
   hasQueue: boolean,

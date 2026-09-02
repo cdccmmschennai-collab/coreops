@@ -358,7 +358,10 @@ def test_leave_submitted_notification_has_target_url(
     h_mgr = login("mgr@tu.com")
     notifs = client.get("/api/v1/notifications", headers=h_mgr).json()["items"]
     assert len(notifs) == 1
-    assert notifs[0]["target_url"] == f"/attendance?tab=leave&id={leave_id}"
+    assert notifs[0]["target_url"] == (
+        f"/attendance/leave/{leave_id}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_project_assigned_notification_has_target_url(

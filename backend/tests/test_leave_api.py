@@ -345,7 +345,12 @@ def test_create_routes_to_project_head_and_notifies(
 
     note = db.query(Notification).filter(Notification.user_id == hu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
+    # The request's OWN page - where the Head can actually approve or reject it -
+    # with the pending queue as the list "← Leave" returns to.
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_create_routes_off_an_older_working_day_and_notifies_that_head(
@@ -436,7 +441,10 @@ def test_create_no_head_falls_back_to_pm_notification(
 
     note = db.query(Notification).filter(Notification.user_id == mu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_a_project_heads_own_leave_is_unrouted_and_goes_to_the_pm(
@@ -558,7 +566,10 @@ def test_the_pm_is_notified_of_a_cancellation_request_on_an_unrouted_leave(
                 Notification.type == "leave_cancellation_requested")
         .one()
     )
-    assert note.target_url == f"/attendance?tab=leave&queue=cancellation&id={req.id}"
+    assert note.target_url == (
+        f"/attendance/leave/{req.id}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dcancellation"
+    )
 
 
 def test_an_employee_with_no_reporting_pm_notifies_nobody_without_failing(
