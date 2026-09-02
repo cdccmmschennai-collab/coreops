@@ -17,7 +17,12 @@ leave date in the past exercises it exactly as a real one would.
 """
 from datetime import date, timedelta
 
-from app.modules.calendar.working_days import previous_working_day
+from app.modules.calendar.models import CalendarEvent, CalendarEventType
+from app.modules.calendar.working_days import (
+    NON_WORKING_SATURDAY_OCCURRENCES,
+    previous_working_day,
+    saturday_occurrence,
+)
 from app.modules.leave import routing
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.work_reports import service as wr_svc
@@ -44,12 +49,29 @@ def _working_days_back(db, count: int) -> list[date]:
 
 
 def _recent_monday() -> date:
-    """The most recent Monday strictly before today, so the Friday before it and
-    the Saturday between them are both in the past and can carry a report."""
+    """A past Monday whose preceding Saturday is a CLOSED one (2nd/4th).
+
+    The weekend-skipping tests need a genuinely shut weekend behind their Monday.
+    Only the 2nd and 4th Saturday are non-working - the 1st, 3rd and 5th are
+    ordinary working days - so a plain "most recent Monday" landed on an OPEN
+    Saturday roughly three weeks in five and asserted the resolver ignore a day
+    the office was actually open. It walks back a week at a time until the
+    Saturday two days earlier is one the calendar closes.
+    """
     day = date.today() - timedelta(days=1)
     while day.weekday() != 0:
         day -= timedelta(days=1)
+    while saturday_occurrence(day - timedelta(days=2)) not in NON_WORKING_SATURDAY_OCCURRENCES:
+        day -= timedelta(days=7)
     return day
+
+
+def _close_the_office(db, day: date) -> None:
+    """Declare `day` a company holiday, so the calendar reports it non-working."""
+    db.add(CalendarEvent(
+        event_date=day, title="Company holiday", event_type=CalendarEventType.holiday,
+    ))
+    db.commit()
 
 
 def test_routed_project_id_persists(db, make_employee, make_user, make_project):
@@ -194,7 +216,7 @@ def test_an_unusable_report_on_the_start_date_does_not_reach_past_it(
     assert routing.resolve_routed_project(db, emp.id, leave_day) is None
 
 
-# ---------- multi-day and stale evidence ------------------------------------
+# ---------- multi-day leave and the backward search --------------------------
 
 def test_multi_day_leave_routes_from_its_start_date_alone(
     db, make_user, make_employee, make_project, make_project_member,
@@ -215,30 +237,32 @@ def test_multi_day_leave_routes_from_its_start_date_alone(
     assert routing.resolve_routed_project(db, emp.id, leave_start) == project.id
 
 
-def test_a_stale_report_does_not_establish_a_project(
+def test_the_search_walks_back_over_working_days_with_no_report(
     db, make_user, make_employee, make_project, make_project_member,
 ):
-    """The employee's latest report is two working days before the leave. The
-    project cannot be established AT THE BOUNDARY, so it is the PM's - there is
-    deliberately no N-day window that would let older evidence back in."""
+    """The employee's latest report is two working days before the leave, with a
+    reported-nothing working day in between. The search keeps stepping back
+    until it finds a report - one missed daily report must not silently divert
+    the request to the PM."""
     u = make_user("stale@x.com")
     emp = make_employee(employee_code="ES2", user_id=u.id)
     project = make_project(code="ST-1")
     make_project_member(project_id=project.id, employee_id=emp.id)
-    leave_day, _skipped, stale_day = _working_days_back(db, 3)
+    leave_day, _no_report_day, older_day = _working_days_back(db, 3)
 
     wr_svc.create_work_report(
-        db, u, WorkReportCreate(report_date=stale_day, tasks=[_task(project.id)])
+        db, u, WorkReportCreate(report_date=older_day, tasks=[_task(project.id)])
     )
 
-    assert routing.resolve_routed_project(db, emp.id, leave_day) is None
+    assert routing.resolve_routed_project(db, emp.id, leave_day) == project.id
 
 
-def test_a_far_future_leave_does_not_establish_a_project(
+def test_a_leave_filed_weeks_ahead_still_routes_off_the_latest_report(
     db, make_user, make_employee, make_project, make_project_member,
 ):
-    """Leave filed weeks out. Neither evidence date has a report, so the PM
-    decides it however recent the employee's last report was."""
+    """Leave filed weeks out. There is no report anywhere near the boundary, but
+    the employee's most recent one still says which project they are on - there
+    is no staleness window that hands an established project to the PM."""
     u = make_user("future@x.com")
     emp = make_employee(employee_code="ES3", user_id=u.id)
     project = make_project(code="ST-2")
@@ -249,7 +273,58 @@ def test_a_far_future_leave_does_not_establish_a_project(
         db, u, WorkReportCreate(report_date=recent_day, tasks=[_task(project.id)])
     )
 
-    assert routing.resolve_routed_project(db, emp.id, recent_day + timedelta(days=18)) is None
+    got = routing.resolve_routed_project(db, emp.id, recent_day + timedelta(days=18))
+    assert got == project.id
+
+
+def test_the_search_walks_back_over_several_consecutive_non_working_days(
+    db, make_user, make_employee, make_project, make_project_member,
+):
+    """A long weekend: leave on Monday, with Friday declared a company holiday on
+    top of the closed Saturday and Sunday. The search skips all three and lands
+    on Thursday's report."""
+    u = make_user("longweekend@x.com")
+    emp = make_employee(employee_code="ES4", user_id=u.id)
+    project = make_project(code="ST-3")
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    monday = _recent_monday()
+    friday = monday - timedelta(days=3)
+    thursday = monday - timedelta(days=4)
+
+    wr_svc.create_work_report(
+        db, u, WorkReportCreate(report_date=thursday, tasks=[_task(project.id)])
+    )
+    _close_the_office(db, friday)
+
+    assert routing.resolve_routed_project(db, emp.id, monday) == project.id
+
+
+def test_a_no_activity_report_is_skipped_and_the_search_continues(
+    db, make_user, make_employee, make_project, make_project_member,
+):
+    """The day before the leave carries a report with no task lines - a leave,
+    week-off or comp-off day, which `work_reports.auto_reports` also generates by
+    itself. It names no project, so it is not the evidence; the project the
+    employee most recently WORKED on is the day before that."""
+    from app.modules.work_reports.models import DayStatus
+
+    u = make_user("noactivity@x.com")
+    emp = make_employee(employee_code="ES5", user_id=u.id)
+    project = make_project(code="ST-4")
+    make_project_member(project_id=project.id, employee_id=emp.id)
+    leave_day, blank_day, worked_day = _working_days_back(db, 3)
+
+    wr_svc.create_work_report(
+        db, u, WorkReportCreate(report_date=worked_day, tasks=[_task(project.id)])
+    )
+    wr_svc.create_work_report(
+        db, u, WorkReportCreate(
+            report_date=blank_day, day_status=DayStatus.leave, tasks=[]
+        )
+    )
+
+    assert routing.resolve_routed_project(db, emp.id, leave_day) == project.id
 
 
 # ---------- unresolvable evidence -------------------------------------------
@@ -264,7 +339,8 @@ def test_resolve_routed_project_no_report_falls_back(db, make_user, make_employe
 
 def test_resolve_routed_project_no_tasks_falls_back(db, make_user, make_employee):
     """A no-activity day (leave/holiday/week-off) legitimately has zero task
-    rows - that's a real state, not an error, and must fall back cleanly.
+    rows - that's a real state, not an error. It names no project, so the search
+    steps past it, finds nothing older, and falls back cleanly.
     `day_status` must be one of NO_ACTIVITY_DAY_STATUSES (e.g. week_off) or
     `create_work_report` itself rejects an empty-task report as invalid."""
     from app.modules.work_reports.models import DayStatus

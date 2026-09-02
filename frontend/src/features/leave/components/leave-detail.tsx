@@ -337,7 +337,7 @@ export function LeaveDetail({ id }: { id: string }) {
                   whose cancelling actor the system does not record. */}
               {actorRow && <InfoRow label={actorRow.label} value={actorRow.name} />}
               {leave.manager_comment ? (
-                <InfoRow label="Manager note" value={leave.manager_comment} />
+                <InfoRow label="Note" value={leave.manager_comment} />
               ) : null}
             </CardContent>
           </Card>

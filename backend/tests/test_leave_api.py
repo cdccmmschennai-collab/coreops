@@ -348,6 +348,56 @@ def test_create_routes_to_project_head_and_notifies(
     assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
 
 
+def test_create_routes_off_an_older_working_day_and_notifies_that_head(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    """The resolver's backward walk reaches the API and the bell.
+
+    The working day immediately before the leave has no report at all. The
+    request still routes to the project the employee last actually worked on, and
+    the notification goes to THAT project's Head - the routed recipient and the
+    notified person stay the same person, resolved once by `leave/routing.py`.
+    (The no-activity-report case is a resolver detail and is pinned in
+    `test_leave_routing.py`.)
+    """
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    hu = make_user("head4@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HEAD4", user_id=hu.id)
+    project = make_project(code="RP-4", head_employee_id=head.id)
+
+    mu = make_user("mgr13@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="MGR13", user_id=mu.id)
+    eu = make_user("emp13@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E13", user_id=eu.id, reporting_pm_id=mu.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    worked_day = previous_working_day(db, date.today() + timedelta(days=1))
+    blank_day = next_working_day(db, worked_day)
+    leave_date = next_working_day(db, blank_day)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=worked_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp13@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["routed_project_id"] == str(project.id)
+
+    note = db.query(Notification).filter(Notification.user_id == hu.id).one()
+    assert note.type == "leave_submitted"
+    assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 0
+
+
 def test_create_no_head_falls_back_to_pm_notification(
     client, db, make_user, make_employee, make_project, make_project_member, login,
 ):

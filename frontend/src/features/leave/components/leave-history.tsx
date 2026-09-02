@@ -72,7 +72,7 @@ export function LeaveHistory({ employeeId }: Props) {
             <TableHead>To</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Reason</TableHead>
-            <TableHead>Manager note</TableHead>
+            <TableHead>Note</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>

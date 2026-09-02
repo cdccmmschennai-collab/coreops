@@ -385,7 +385,7 @@ export function leaveDecisionActor(
  *   rejected   Rejected by   who refused it
  *
  * Everything else returns null and the card renders nothing between Status and
- * Manager note:
+ * the Note row:
  *
  *   cancelled               the cancellation actor is NOT recorded anywhere.
  *                           `manager_id` on a cancelled row is its former
