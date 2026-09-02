@@ -136,6 +136,29 @@ def resolve_leave_recipients(
     return out
 
 
+def resolve_in_app_recipient(
+    db: Session, employee: Employee, req: LeaveRequest
+) -> LeaveRecipient | None:
+    """The ONE person the in-app channel delivers this request to, or None.
+
+    The chain above is an ordered list of candidates; this applies the bell's own
+    reachability test to it - a linked `user_id` - and stops at the first that
+    passes, which is precisely what `service._notify_routed_approver` has always
+    done inline. It is extracted here so that the "Routed to" line the leave
+    detail page shows the EMPLOYEE and the notification that actually reached
+    somebody are answered by one function. A page that named a different person
+    from the one who got the request would be worse than no page at all, and two
+    copies of a four-line loop is all it would take.
+
+    Email is deliberately NOT folded in: it tests `work_email`, not `user_id`,
+    and may legitimately land on a different rung (see the module docstring).
+    """
+    for candidate in resolve_leave_recipients(db, employee, req):
+        if candidate.employee.user_id is not None:
+            return candidate
+    return None
+
+
 def leave_request_path(
     req: LeaveRequest, *, is_head: bool, queue: str | None = None
 ) -> str:

@@ -31,6 +31,7 @@ import {
   formatLeaveDuration,
   LEAVE_RETURN_PARAM,
   LEAVE_CLASSIFICATION_LABEL,
+  leaveActorRow,
   leaveReturnHref,
   type DeliverableConflict,
 } from "../types";
@@ -286,6 +287,10 @@ export function LeaveDetail({ id }: { id: string }) {
     leave.employee_id.slice(0, 8);
   const showImpact = isManager && conflicts.length > 0;
   const canReview = canReviewLeave(leave, isManager || isProjectHead, employeeId);
+  // What the card SAYS about the request's actor. Independent of `canReview`,
+  // which decides what this reader may DO - the request owner sees this row and
+  // still gets no Review card.
+  const actorRow = leaveActorRow(leave);
 
   return (
     <>
@@ -325,6 +330,12 @@ export function LeaveDetail({ id }: { id: string }) {
               <InfoRow label="To" value={fmtDate(leave.end_date)} />
               <InfoRow label="Duration" value={formatLeaveDuration(leave.working_days)} />
               <InfoRow label="Status" value={<LeaveStatusBadge status={leave.status} />} />
+              {/* Routed to / Approved by / Rejected by - at most one of them,
+                  chosen by status. Informational only: it says who holds or
+                  decided the request, never what this reader may do, which stays
+                  `canReviewLeave` below. Absent entirely for a cancelled request,
+                  whose cancelling actor the system does not record. */}
+              {actorRow && <InfoRow label={actorRow.label} value={actorRow.name} />}
               {leave.manager_comment ? (
                 <InfoRow label="Manager note" value={leave.manager_comment} />
               ) : null}

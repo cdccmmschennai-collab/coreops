@@ -34,6 +34,12 @@ export interface LeaveRequest {
   manager_name: string | null;
   manager_comment: string | null;
   routed_project_id: string | null;
+  /** Who a still-pending request is waiting on, by name - the routed project's
+   *  current Head, else the requester's reporting PM, resolved by the backend
+   *  through the same chain that delivers the submission notification. Only the
+   *  DETAIL endpoint fills this in, and only while the request is pending; it is
+   *  null on list rows and on settled requests. Read through `leaveActorRow`. */
+  routed_to_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -365,6 +371,57 @@ export function leaveDecisionActor(
 ): string | null {
   if (req.status !== "approved" && req.status !== "rejected") return null;
   return req.manager_name?.trim() || null;
+}
+
+/**
+ * The ONE actor/routing row the Leave Request card shows under Status, or null
+ * for no row at all.
+ *
+ * It answers a different question per status, which is why it is one row and not
+ * three:
+ *
+ *   pending    Routed to     who is holding this request right now
+ *   approved   Approved by   who granted it
+ *   rejected   Rejected by   who refused it
+ *
+ * Everything else returns null and the card renders nothing between Status and
+ * Manager note:
+ *
+ *   cancelled               the cancellation actor is NOT recorded anywhere.
+ *                           `manager_id` on a cancelled row is its former
+ *                           APPROVER, so "Cancelled ... by <approver>" would name
+ *                           the wrong person. Unchanged from Phase 3.
+ *   cancellation_requested  the standing approval is under review again; neither
+ *                           question has a settled answer.
+ *
+ * INFORMATIONAL, NEVER PERMISSION. This is what the reader is TOLD, and it is
+ * deliberately shown to the request owner too - an employee is entitled to know
+ * who their request went to. What the reader may DO is `canReviewLeave`, which
+ * is unrelated and unchanged: a Project Head looking at their own pending
+ * request sees "Routed to ..." here and still gets no Review card.
+ *
+ * The approved/rejected half goes through `leaveDecisionActor` rather than
+ * reading `manager_name` again, so the detail page and the All-leave "By" column
+ * cannot disagree about which statuses have an actor.
+ */
+export interface LeaveActorRow {
+  label: string;
+  name: string;
+}
+
+export function leaveActorRow(
+  req: Pick<LeaveRequest, "status" | "manager_name" | "routed_to_name">,
+): LeaveActorRow | null {
+  if (req.status === "pending") {
+    const routedTo = req.routed_to_name?.trim();
+    return routedTo ? { label: "Routed to", name: routedTo } : null;
+  }
+  const actor = leaveDecisionActor(req);
+  if (!actor) return null;
+  return {
+    label: req.status === "approved" ? "Approved by" : "Rejected by",
+    name: actor,
+  };
 }
 
 /** `3 August 2026`, or `29 July 2026 - 30 July 2026` for a range. */

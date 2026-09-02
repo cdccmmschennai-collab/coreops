@@ -63,7 +63,7 @@ from app.modules.leave.classification import (
 from app.modules.leave.models import RETIRED_LEAVE_TYPE, LeaveRequest, LeaveStatus
 from app.modules.leave import email as leave_email
 from app.modules.leave import routing
-from app.modules.leave.recipients import leave_request_path, resolve_leave_recipients
+from app.modules.leave.recipients import leave_request_path, resolve_in_app_recipient
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
     DeliverableConflictOut,
@@ -263,19 +263,22 @@ def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
     `req.routed_project_id` if one is assigned (and isn't the requester
     themself), else the employee's reporting PM.
 
-    Walks `resolve_leave_recipients` and takes the first candidate with a login
-    to deliver to, then STOPS - exactly one person is notified, never all
-    candidates. A Head with no linked user account falls through to the PM,
-    which is the rule this function has always applied; only the identity of
-    that fallback rung changed (line manager -> reporting PM), so that the
-    person notified is a person who can actually approve the request.
+    Takes the first candidate with a login to deliver to, then STOPS - exactly
+    one person is notified, never all candidates. A Head with no linked user
+    account falls through to the PM, which is the rule this function has always
+    applied; only the identity of that fallback rung changed (line manager ->
+    reporting PM), so that the person notified is a person who can actually
+    approve the request.
+
+    That selection now lives in `recipients.resolve_in_app_recipient` rather than
+    inline here, because `_attach_routed_to` has to answer the same question for
+    the detail page's "Routed to" line. Same function, same answer.
     """
-    for candidate in resolve_leave_recipients(db, employee, req):
-        if candidate.employee.user_id is None:
-            continue
-        _push(db, candidate.employee.user_id, type_, title, message, req.id,
-              leave_request_path(req, is_head=candidate.is_head, queue=queue))
+    candidate = resolve_in_app_recipient(db, employee, req)
+    if candidate is None:
         return
+    _push(db, candidate.employee.user_id, type_, title, message, req.id,
+          leave_request_path(req, is_head=candidate.is_head, queue=queue))
 
 
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
@@ -585,7 +588,47 @@ def get_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveReque
     req = _fetch(db, req_id)
     _assert_can_read(db, actor, req)
     _attach_employee_names(db, [req])
+    _attach_routed_to(db, req)
     return req
+
+
+def _attach_routed_to(db: Session, req: LeaveRequest) -> None:
+    """Set `.routed_to_name` - who a STILL-PENDING request is waiting on.
+
+    Same non-mapped-attribute trick as `_attach_employee_names`, and the same
+    reason: routing is not a column. `routed_project_id` is, but the person is
+    derived from it fresh on every read by `recipients.resolve_in_app_recipient`
+    - the routed project's CURRENT Head, else the requester's reporting PM, first
+    one with a login. That is the whole point of deriving rather than storing: a
+    Head reassigned after the request was filed is honoured here exactly as it is
+    at approval time, and no migration is needed to say who is holding a request.
+
+    IT IS THE SAME FUNCTION THE NOTIFICATION WALKS. The employee reading "Routed
+    to NAINAR B" is being told the name of the person whose bell actually rang.
+
+    DETAIL-PAGE ONLY, AND PENDING ONLY.
+      - Only the detail endpoint calls this. Resolving a Head and a PM per row
+        would add two queries to every row of a 20-row All-leave page for a
+        column that page does not have.
+      - Only `pending` gets an answer. Once a request is approved, rejected or
+        cancelled the routing is spent and the question the page asks becomes
+        "who decided this", which `manager_name` answers. A request awaiting a
+        CANCELLATION decision is left alone too: it shows no actor row at all
+        (see `leaveActorRow` in the frontend), so there is nothing to resolve.
+
+    None is a legitimate answer - an unrouted request whose requester has no
+    reporting PM, or one whose only candidate has no login - and the page simply
+    omits the row.
+    """
+    req.routed_to_name = None
+    if req.status != LeaveStatus.pending:
+        return
+    employee = db.get(Employee, req.employee_id)
+    if employee is None:
+        return
+    recipient = resolve_in_app_recipient(db, employee, req)
+    if recipient is not None:
+        req.routed_to_name = recipient.employee.full_name
 
 
 def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:

@@ -58,6 +58,16 @@ class LeaveRequestOut(BaseModel):
     manager_name: str | None = None
     manager_comment: str | None = None
     routed_project_id: uuid.UUID | None = None
+    # WHO A PENDING REQUEST IS WAITING ON, by name. Derived - not stored - from
+    # `routed_project_id` by `service._attach_routed_to`, which walks the very
+    # same `recipients.resolve_in_app_recipient` the submission notification
+    # walks, so the name shown to the employee is the person whose bell rang.
+    #
+    # Populated by the DETAIL endpoint only, and only while the request is
+    # pending; None everywhere else (the list, the mutation responses, and any
+    # settled request, where `manager_name` is the relevant actor instead). See
+    # `_attach_routed_to` for why.
+    routed_to_name: str | None = None
     created_at: datetime
     updated_at: datetime
 
