@@ -183,6 +183,25 @@ export function canCancelLeave(
   return req.status === "pending" && isOwn(req, myEmployeeId);
 }
 
+/** Whether to offer Approve/Reject on the leave detail page.
+ *
+ *  `isReviewer` is passed in rather than derived from a role, because leave is
+ *  reviewable by a project manager AND by a Project Head - and Head-ness is not
+ *  a role, it is per-project and comes from the report scope (see
+ *  `leave-tab.tsx`). Beyond that the rule matches the permission detail page:
+ *  still pending, and not the reviewer's own request - a PM and a Head are both
+ *  employees who file their own leave. The backend refuses each case
+ *  independently; this only decides what renders. */
+export function canReviewLeave(
+  req: Pick<LeaveRequest, "status" | "employee_id">,
+  isReviewer: boolean,
+  myEmployeeId: string | null | undefined,
+): boolean {
+  if (!isReviewer) return false;
+  if (req.status !== "pending") return false;
+  return !myEmployeeId || req.employee_id !== myEmployeeId;
+}
+
 /** Whether to offer "Request Cancellation". Approved leave stays eligible for
  *  as long as any of it is still ahead — an employee who returned to work
  *  partway through an absence needs to withdraw the remainder. */

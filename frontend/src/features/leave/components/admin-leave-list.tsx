@@ -102,7 +102,6 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
                 <TableHead>To</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Reason</TableHead>
-                <TableHead>Manager note</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -119,9 +118,6 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
                   <TableCell><LeaveStatusBadge status={req.status} /></TableCell>
                   <TableCell className="max-w-[160px] truncate text-muted-foreground">
                     {req.reason ?? "—"}
-                  </TableCell>
-                  <TableCell className="max-w-[160px] truncate text-muted-foreground">
-                    {req.manager_comment ?? "—"}
                   </TableCell>
                 </TableRow>
               ))}
