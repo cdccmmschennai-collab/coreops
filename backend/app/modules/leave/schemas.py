@@ -50,6 +50,12 @@ class LeaveRequestOut(BaseModel):
     reason: str | None = None
     status: LeaveStatus
     manager_id: uuid.UUID | None = None
+    # WHO RULED ON THIS REQUEST, by name. Resolved from `manager_id` - which
+    # `approve_leave_request`/`reject_leave_request` already stamp at decision
+    # time - by `service._attach_employee_names`, so no column, no migration and
+    # no second source of truth. None on a request nobody has decided yet, and on
+    # the mutation responses, which don't run that batch lookup.
+    manager_name: str | None = None
     manager_comment: str | None = None
     routed_project_id: uuid.UUID | None = None
     created_at: datetime

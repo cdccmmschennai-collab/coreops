@@ -26,6 +26,12 @@ export interface LeaveRequest {
   reason: string | null;
   status: LeaveStatus;
   manager_id: string | null;
+  /** The reviewer who approved or rejected the request, by name - resolved by
+   *  the backend from the `manager_id` it stamps at decision time. Null until
+   *  somebody has ruled, and on the responses mutations return. Read through
+   *  `leaveDecisionActor`, never directly: a request approved and later
+   *  cancelled still carries its approver here. */
+  manager_name: string | null;
   manager_comment: string | null;
   routed_project_id: string | null;
   created_at: string;
@@ -330,6 +336,35 @@ export function leaveQueueCountParams(
  *  side of the wire any more; the backend is the only place that rule lives. */
 export function formatLeaveDuration(workingDays: number): string {
   return `${workingDays} ${workingDays === 1 ? "day" : "days"}`;
+}
+
+/**
+ * The "By" column of the All-leave table: who ruled on this request.
+ *
+ * ONLY A SETTLED DECISION HAS AN ACTOR. Approved and rejected name the reviewer
+ * who took that decision; every other status returns null and the table renders
+ * an em dash:
+ *
+ *   pending                 nobody has decided yet
+ *   cancellation_requested  the standing approval is under review again
+ *   cancelled               deliberately blank (Phase 3 section 7)
+ *
+ * `cancelled` is the case worth stating, because the underlying row is NOT
+ * blank. A leave that was approved and then withdrawn keeps its approver in
+ * `manager_id` - that is the honest record of what happened - and the
+ * cancellation itself is a DIFFERENT act by a DIFFERENT person, which nothing
+ * currently records. Showing the approver's name against "Cancelled" would
+ * therefore name the wrong actor, so this returns null rather than guessing; the
+ * cancellation actor is out of scope for this phase.
+ *
+ * Null is also what an un-named actor gives: a request decided before the id was
+ * recorded, or one whose reviewer's employee row has since gone.
+ */
+export function leaveDecisionActor(
+  req: Pick<LeaveRequest, "status" | "manager_name">,
+): string | null {
+  if (req.status !== "approved" && req.status !== "rejected") return null;
+  return req.manager_name?.trim() || null;
 }
 
 /** `3 August 2026`, or `29 July 2026 - 30 July 2026` for a range. */

@@ -545,10 +545,27 @@ def list_leave_requests(
         stmt = stmt.where(LeaveRequest.employee_id == employee_id)
     if status is not None:
         stmt = stmt.where(LeaveRequest.status == status)
+    # THE DATE WINDOW IS AN OVERLAP, NOT A CONTAINMENT.
+    #
+    # A leave request matches when its LEAVE PERIOD intersects [date_from,
+    # date_to] - `start <= window_end AND end >= window_start`, the same
+    # two-sided test `_assert_no_overlap` above uses to decide two ranges clash.
+    # `created_at` is never consulted: the question the All-leave window answers
+    # is "who was away in September", and a request filed in August for
+    # September is exactly what that has to return.
+    #
+    # It used to be containment (`start >= from AND end <= to`), which silently
+    # dropped every absence straddling either edge of the window - the 30 Aug -
+    # 2 Sep leave vanished from a September filter. Nothing consumed these two
+    # parameters before this phase (no frontend call site, no test), so the
+    # correction changes no existing behaviour.
+    #
+    # Either bound may be given alone: `from` on its own means "still running on
+    # or after this date", `to` on its own "had started by this date".
     if date_from is not None:
-        stmt = stmt.where(LeaveRequest.start_date >= date_from)
+        stmt = stmt.where(LeaveRequest.end_date >= date_from)
     if date_to is not None:
-        stmt = stmt.where(LeaveRequest.end_date <= date_to)
+        stmt = stmt.where(LeaveRequest.start_date <= date_to)
 
     total = db.execute(
         select(func.count()).select_from(stmt.order_by(None).subquery())
@@ -572,7 +589,7 @@ def get_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveReque
 
 
 def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
-    """Set `.employee_name` on each row from one batch query.
+    """Set `.employee_name` and `.manager_name` on each row from one batch query.
 
     `LeaveRequest` has no ORM relationship to `Employee` (by design - a bare
     `employee_id` column), so the name isn't a mapped attribute. Setting it here
@@ -584,20 +601,37 @@ def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
     two functions, rather than depending on `GET /employees`, which returns only
     the caller's own row for a plain-employee-role actor (which a Project Head
     still is) - the bug this exists to fix.
+
+    `manager_name` is THE DECISION ACTOR, and it is not new information: both
+    `approve_leave_request` and `reject_leave_request` already stamp
+    `req.manager_id` with the reviewing employee at decision time, precisely so
+    the ruling survives a later change of reporting line. All that was missing
+    was the human-readable name, so the two ids are resolved together in the one
+    query that was already being run rather than through a second column, a
+    second table or a migration.
+
+    Both names come out of the SAME id->name map, so the actor is rendered
+    exactly as the requester is. NULL for a request nobody has ruled on yet, and
+    for the historical rows that were decided before `manager_id` was recorded.
+    Note that a request approved and later CANCELLED keeps the approver's id -
+    that is the truth of what happened - so "which statuses show an actor" is a
+    display decision, taken once in the frontend's `leaveDecisionActor`.
     """
     if not rows:
         return
-    employee_ids = {r.employee_id for r in rows}
+    people_ids = {r.employee_id for r in rows}
+    people_ids |= {r.manager_id for r in rows if r.manager_id is not None}
     names = {
         row.id: f"{row.first_name} {row.last_name}".strip()
         for row in db.execute(
             select(Employee.id, Employee.first_name, Employee.last_name).where(
-                Employee.id.in_(employee_ids)
+                Employee.id.in_(people_ids)
             )
         ).all()
     }
     for r in rows:
         r.employee_name = names.get(r.employee_id)
+        r.manager_name = names.get(r.manager_id) if r.manager_id is not None else None
 
 
 def attach_computed_fields(db: Session, rows: list[LeaveRequest]) -> None:
