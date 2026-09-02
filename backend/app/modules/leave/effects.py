@@ -81,6 +81,7 @@ from app.modules.calendar.working_days import (
     is_working_day,
     load_calendar_overrides,
 )
+from app.modules.leave.classification import classification_label, classify_leave
 from app.modules.leave.models import LeaveRequest, LeaveType
 from app.modules.leave_balances import ledger
 from app.modules.users.models import User
@@ -254,6 +255,9 @@ def apply_leave_approved(
     """
     to_mark, skipped = plan_leave_days(db, req)
     effect = LeaveEffect(days=list(to_mark), skipped=list(skipped))
+    # Every working day of the range, marked or already decided - the count the
+    # classification is defined on, not just the days this approval writes.
+    classification = classify_leave(len(to_mark) + len(skipped))
 
     # Read before the days are written, so the pair recorded below is the real
     # movement. Only for types that draw on the pool - an unpaid approval moves
@@ -277,7 +281,10 @@ def apply_leave_approved(
             check_out_at=None,
             total_minutes=0,
             overtime_minutes=0,
-            note=f"Approved {req.leave_type.value} leave ({_period(req)}).",
+            note=(
+                f"Approved {classification_label(classification)} "
+                f"({_period(req)})."
+            ),
             created_by=actor.id,
             updated_by=actor.id,
         )

@@ -170,7 +170,7 @@ def test_leave_submitted_notifies_manager(
     end   = str(date.today() + timedelta(days=9))
     h = login("emp@lv.com")
     res = client.post("/api/v1/leave-requests", headers=h,
-                      json={"leave_type": "casual", "start_date": start, "end_date": end})
+                      json={"start_date": start, "end_date": end})
     assert res.status_code == 201
 
     h_mgr = login("mgr@lv.com")
@@ -351,7 +351,7 @@ def test_leave_submitted_notification_has_target_url(
     end   = str(date.today() + timedelta(days=9))
     h = login("emp@tu.com")
     res = client.post("/api/v1/leave-requests", headers=h,
-                      json={"leave_type": "casual", "start_date": start, "end_date": end})
+                      json={"start_date": start, "end_date": end})
     assert res.status_code == 201
     leave_id = res.json()["id"]
 

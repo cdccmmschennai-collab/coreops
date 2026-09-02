@@ -21,7 +21,7 @@ import { useDeliverableImpact, useLeaveRequest } from "../hooks";
 import {
   formatLeaveDuration,
   LEAVE_RETURN_PARAM,
-  LEAVE_TYPE_LABEL,
+  LEAVE_CLASSIFICATION_LABEL,
   leaveReturnHref,
   type DeliverableConflict,
 } from "../types";
@@ -165,7 +165,7 @@ export function LeaveDetail({ id }: { id: string }) {
       <PageHeader
         className="mt-2"
         title={empName}
-        subtitle={`${LEAVE_TYPE_LABEL[leave.leave_type]} leave`}
+        subtitle={`${LEAVE_CLASSIFICATION_LABEL[leave.classification]} leave`}
         actions={<LeaveStatusBadge status={leave.status} />}
       />
 
@@ -183,7 +183,10 @@ export function LeaveDetail({ id }: { id: string }) {
             </CardHeader>
             <CardContent className="divide-y divide-border">
               <InfoRow label="Employee" value={empName} />
-              <InfoRow label="Leave Type" value={LEAVE_TYPE_LABEL[leave.leave_type]} />
+              <InfoRow
+                label="Leave Type"
+                value={LEAVE_CLASSIFICATION_LABEL[leave.classification]}
+              />
               <InfoRow label="Requested On" value={fmtDateTime(leave.created_at)} />
               <InfoRow label="From" value={fmtDate(leave.start_date)} />
               <InfoRow label="To" value={fmtDate(leave.end_date)} />

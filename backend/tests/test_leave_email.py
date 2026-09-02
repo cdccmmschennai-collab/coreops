@@ -32,6 +32,7 @@ import pytest
 
 from app.modules.calendar.working_days import next_working_day, previous_working_day
 from app.modules.leave import email as leave_email
+from app.modules.leave.classification import LeaveClassification, classification_label
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave.recipients import resolve_leave_recipients
 from app.modules.users.models import UserRole
@@ -481,7 +482,7 @@ def _render(**overrides):
     kwargs = {
         "recipient_name": "Giridharan",
         "employee_name": "Karthikeyan K",
-        "leave_type": LeaveType.casual,
+        "classification": LeaveClassification.normal,
         "start_date": _START,
         "end_date": _END,
         "working_days": 2,
@@ -500,7 +501,7 @@ def test_subject_names_the_employee_and_the_action():
 def test_body_carries_the_business_facts():
     body = _render().text_body
     assert "Karthikeyan K" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026" in body
     assert "Personal reasons" in body
     assert "requires your review" in body
@@ -519,7 +520,7 @@ def test_the_submission_body_matches_the_agreed_letter_shape():
         "A new leave request has been submitted by Karthikeyan K and requires "
         "your review.",
         "",
-        "Leave Type: Casual Leave",
+        "Leave Type: Normal Leave",
         "Leave Period: 28 Aug 2026 - 29 Aug 2026 (2 days)",
         "Reason: Personal reasons",
         "",
@@ -618,7 +619,7 @@ def test_the_html_body_carries_the_same_facts_as_the_text_body():
     rendered = _render()
     text = _visible_text(rendered.html_body)
     assert "Karthikeyan K" in text
-    assert "Casual Leave" in text
+    assert "Normal Leave" in text
     assert "Personal reasons" in text
     assert "Dear Giridharan," in text
 
@@ -646,9 +647,9 @@ def test_untrusted_text_is_passed_through_verbatim_not_escaped():
     assert "&lt;" not in body
 
 
-def test_leave_type_labels_cover_every_stored_value():
-    for leave_type in LeaveType:
-        label = leave_email.leave_type_label(leave_type)
+def test_classification_labels_cover_both_values():
+    for classification in LeaveClassification:
+        label = classification_label(classification)
         assert label and "_" not in label
 
 
@@ -671,7 +672,7 @@ def _decision(**overrides):
         "approved": True,
         "employee_name": "Santhosh Kumar",
         "reviewer_name": "Giridharan",
-        "leave_type": LeaveType.casual,
+        "classification": LeaveClassification.normal,
         "start_date": _START,
         "end_date": _END,
         "working_days": 2,
@@ -694,7 +695,7 @@ def test_the_approval_body_carries_the_business_facts():
     assert "Dear Santhosh Kumar," in body
     assert "approved by" in body
     assert "Giridharan" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
     assert "View Leave Request" in body
     assert "CoreOps" in body
@@ -708,7 +709,7 @@ def test_the_approval_body_matches_the_agreed_letter_shape():
         "",
         "Your leave request has been approved by Giridharan.",
         "",
-        "Leave Type: Casual Leave",
+        "Leave Type: Normal Leave",
         "Leave Period: 28 Aug 2026 (1 day)",
         "",
         "Your leave request has been successfully approved in the CoreOps system.",
@@ -731,7 +732,7 @@ def test_the_rejection_body_carries_the_business_facts():
     assert "Dear Santhosh Kumar," in body
     assert "rejected by" in body
     assert "Giridharan" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
     # The employee's own reason, and the reviewer's answer to it.
     assert "Personal reasons" in body
@@ -813,7 +814,7 @@ def test_a_decision_html_body_carries_the_same_facts_as_the_text_body():
     approved_text = _visible_text(approved.html_body)
     assert "Dear Santhosh Kumar," in approved_text
     assert "Giridharan" in approved_text
-    assert "Casual Leave" in approved_text
+    assert "Normal Leave" in approved_text
 
     rejected = _decision(
         approved=False, reviewer_comment="Leave cannot be approved for these dates."
@@ -882,7 +883,7 @@ def test_approval_emails_the_requesting_employees_work_email(
     body = recorder.calls[0]["text_body"]
     assert "Dear Santhosh Kumar," in body
     assert "Giri D" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
 
 
@@ -1093,9 +1094,8 @@ def _recent_working_day(db) -> date:
     return previous_working_day(db, date.today() + timedelta(days=1))
 
 
-def _payload(start: date, end: date, leave_type: str = "casual") -> dict:
+def _payload(start: date, end: date) -> dict:
     return {
-        "leave_type": leave_type,
         "start_date": str(start),
         "end_date": str(end),
         "reason": "Family trip",

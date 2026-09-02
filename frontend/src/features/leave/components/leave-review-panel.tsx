@@ -24,7 +24,11 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { AppError } from "@/lib/api-client";
 
 import { useApproveLeave, useDeliverableImpact, useLeaveList, useRejectLeave } from "../hooks";
-import { LEAVE_TYPE_LABEL, leaveDetailHref, type DeliverableConflict } from "../types";
+import {
+  LEAVE_CLASSIFICATION_LABEL,
+  leaveDetailHref,
+  type DeliverableConflict,
+} from "../types";
 
 interface Props {
   /** If set, only show requests for this employee's team. Admin: leave undefined for all. */
@@ -164,7 +168,7 @@ export function LeaveReviewPanel({ employeeId: _eid, excludeSelf = false }: Prop
                       }
                     >
                       <TableCell className="font-medium">{empName}</TableCell>
-                      <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>
+                      <TableCell>{LEAVE_CLASSIFICATION_LABEL[req.classification]}</TableCell>
                       <TableCell className="tabular">{req.start_date}</TableCell>
                       <TableCell className="tabular">{req.end_date}</TableCell>
                       <TableCell className="max-w-[180px] truncate text-muted-foreground">

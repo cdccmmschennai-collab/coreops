@@ -23,7 +23,7 @@ import {
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 
 import { useLeaveList } from "../hooks";
-import { LEAVE_TYPE_LABEL } from "../types";
+import { LEAVE_CLASSIFICATION_LABEL } from "../types";
 import type { LeaveStatus } from "../types";
 import { LeaveStatusBadge } from "./leave-status-badge";
 
@@ -113,7 +113,7 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
                       empById.get(req.employee_id) ??
                       req.employee_id.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>
+                  <TableCell>{LEAVE_CLASSIFICATION_LABEL[req.classification]}</TableCell>
                   <TableCell className="tabular">{req.start_date}</TableCell>
                   <TableCell className="tabular">{req.end_date}</TableCell>
                   <TableCell><LeaveStatusBadge status={req.status} /></TableCell>

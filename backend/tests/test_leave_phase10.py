@@ -109,7 +109,7 @@ def test_pending_request_reserves_nothing(client, login, team, fund, db):
     """Section 12A - the balance moves on approval, never on submission."""
     fund("10.00")
     res = client.post(API, headers=login("emp@x.com"), json={
-        "leave_type": "casual", "start_date": MON.isoformat(),
+        "start_date": MON.isoformat(),
         "end_date": TUE.isoformat(), "reason": "Family function",
     })
     assert res.status_code == 201, res.text
@@ -372,13 +372,12 @@ def test_overlapping_requests_are_refused_but_dead_ones_do_not_block(
     """Section 12I - the exact duplicate and every partial overlap with it. A
     rejected or cancelled request is not an absence, so it never blocks."""
     h = login("emp@x.com")
-    body = {"leave_type": "casual", "start_date": MON.isoformat(),
-            "end_date": WED.isoformat()}
+    body = {"start_date": MON.isoformat(), "end_date": WED.isoformat()}
     assert client.post(API, headers=h, json=body).status_code == 201
 
     assert client.post(API, headers=h, json=body).status_code == 422   # duplicate
     partial = client.post(API, headers=h, json={
-        "leave_type": "casual", "start_date": TUE.isoformat(),
+        "start_date": TUE.isoformat(),
         "end_date": FRI.isoformat(),
     })
     assert partial.status_code == 422
@@ -389,7 +388,7 @@ def test_overlapping_requests_are_refused_but_dead_ones_do_not_block(
         status=LeaveStatus.rejected,
     )
     assert client.post(API, headers=h, json={
-        "leave_type": "casual", "start_date": NEXT_MON.isoformat(),
+        "start_date": NEXT_MON.isoformat(),
         "end_date": NEXT_MON.isoformat(),
     }).status_code == 201
 

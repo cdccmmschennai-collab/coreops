@@ -72,7 +72,6 @@ def _make_leave(db, employee_id, *, routed_project_id=None, start=None, end=None
 
 def _payload(**overrides):
     base = {
-        "leave_type": "casual",
         "start_date": str(date.today() + timedelta(days=7)),
         "end_date": str(date.today() + timedelta(days=9)),
         "reason": "Family trip",
@@ -91,7 +90,8 @@ def test_employee_can_create(client, make_user, make_employee, login):
     assert res.status_code == 201, res.text
     body = res.json()
     assert body["status"] == "pending"
-    assert body["leave_type"] == "casual"
+    # Derived, not submitted: the payload carries no type at all.
+    assert body["classification"] in {"normal", "special"}
 
 
 def test_create_requires_employee_profile(client, make_user, login):
@@ -165,10 +165,9 @@ def test_employee_can_update_pending(client, make_user, make_employee, make_leav
                               end_date=date.today() + timedelta(days=7))
     h = login("e@x.com")
     res = client.patch(f"/api/v1/leave-requests/{req.id}", headers=h,
-                       json={"reason": "Updated reason", "leave_type": "sick"})
+                       json={"reason": "Updated reason"})
     assert res.status_code == 200
     assert res.json()["reason"] == "Updated reason"
-    assert res.json()["leave_type"] == "sick"
 
 
 def test_cannot_update_approved(client, make_user, make_employee, make_leave_request, login):

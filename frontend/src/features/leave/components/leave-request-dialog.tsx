@@ -16,22 +16,20 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
 
-import { useCreateLeave } from "../hooks";
-import { LEAVE_TYPE_LABEL, LEAVE_TYPES, SELECTABLE_LEAVE_TYPES } from "../types";
+import { useCreateLeave, useLeaveClassificationPreview } from "../hooks";
+import { LEAVE_CLASSIFICATION_LABEL } from "../types";
 
+// Leave type stays on the form, but it is READ-ONLY. Normal/Special is decided
+// by how many working days the chosen dates cost, so it is shown - updating as
+// the dates change - rather than picked. The value comes from the backend's own
+// working-day count, never from arithmetic done here, which is why the field
+// can never promise a classification the saved request disagrees with.
 const schema = z
   .object({
-    leave_type: z.enum(SELECTABLE_LEAVE_TYPES),
     start_date: z.string().min(1, "Start date is required"),
     end_date: z.string().min(1, "End date is required"),
     reason: z.string().trim().max(2000),
@@ -52,17 +50,27 @@ export function LeaveRequestDialog({ onClose }: Props) {
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      leave_type: "casual",
       start_date: "",
       end_date: "",
       reason: "",
     },
   });
 
+  const startDate = form.watch("start_date");
+  const endDate = form.watch("end_date");
+  const preview = useLeaveClassificationPreview(startDate, endDate);
+
+  // Blank until there is a range to classify - a placeholder value would be a
+  // guess, and this field exists precisely so the employee does not have to
+  // guess. The hook keeps the previous answer on screen while a new one is in
+  // flight, so the field does not blank out on every keystroke.
+  const leaveTypeText = preview.data
+    ? LEAVE_CLASSIFICATION_LABEL[preview.data.classification]
+    : "";
+
   async function onSubmit(values: FormValues) {
     try {
       await create.mutateAsync({
-        leave_type: values.leave_type,
         start_date: values.start_date,
         end_date: values.end_date,
         reason: values.reason || null,
@@ -78,30 +86,20 @@ export function LeaveRequestDialog({ onClose }: Props) {
     <div className="space-y-4">
       <Form {...form}>
         <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)} noValidate>
-          <FormField
-            control={form.control}
-            name="leave_type"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Leave type</FormLabel>
-                <Select value={field.value} onValueChange={field.onChange}>
-                  <FormControl>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                  </FormControl>
-                  <SelectContent>
-                    {LEAVE_TYPES.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {LEAVE_TYPE_LABEL[t]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {/* Deliberately NOT FormField/FormItem/FormLabel: those read the
+              react-hook-form field context, and this is not a form field - it
+              is a derived read-out with no value to submit or validate. Plain
+              Label + Input, styled to match the fields around it. */}
+          <div className="space-y-2">
+            <Label htmlFor="leave-classification">Leave type</Label>
+            <Input
+              id="leave-classification"
+              readOnly
+              disabled
+              value={leaveTypeText}
+              placeholder="Set by the dates you choose"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <FormField
               control={form.control}

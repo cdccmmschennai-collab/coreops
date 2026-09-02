@@ -56,7 +56,11 @@ from app.modules.leave.effects import (
     plan_leave_days,
     reverse_leave_approved,
 )
-from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave.classification import (
+    classification_label,
+    classify_leave,
+)
+from app.modules.leave.models import RETIRED_LEAVE_TYPE, LeaveRequest, LeaveStatus
 from app.modules.leave import email as leave_email
 from app.modules.leave import routing
 from app.modules.leave.recipients import leave_request_path, resolve_leave_recipients
@@ -303,7 +307,11 @@ def _audit_decision(
     details: dict = {
         "leave_request_id": str(req.id),
         "employee_id": str(req.employee_id),
-        "leave_type": req.leave_type.value,
+        # Normal / Special, derived from the same working-day count the decision
+        # is being taken on - not the retired stored category.
+        "classification": classify_leave(
+            len(leave_working_days(db, req.start_date, req.end_date))
+        ).value,
         "start_date": req.start_date.isoformat(),
         "end_date": req.end_date.isoformat(),
         "status": req.status.value,
@@ -592,16 +600,21 @@ def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
         r.employee_name = names.get(r.employee_id)
 
 
-def attach_working_days(db: Session, rows: list[LeaveRequest]) -> None:
-    """Set `.working_days` on each row: the days the range actually costs.
+def attach_computed_fields(db: Session, rows: list[LeaveRequest]) -> None:
+    """Set `.working_days` and `.classification` on each row.
 
     Same non-mapped-attribute trick as `_attach_employee_names` above, and the
-    same reason - the count is not a column, it is a question for the company
-    calendar. The answer comes from `effects.leave_working_days`, which is what
-    an approval charges against, so the number the Leave Detail page shows and
-    the number deducted from the employee's balance are the same calculation:
-    28-31 August 2026 is 3, because the 5th Saturday works and the Sunday does
-    not. Nothing here re-implements the weekend/holiday rule.
+    same reason - neither is a column. The count is a question for the company
+    calendar, and the answer comes from `effects.leave_working_days`, which is
+    what an approval charges against, so the number the Leave Detail page shows
+    and the number deducted from the employee's balance are the same
+    calculation: 28-31 August 2026 is 3, because the 5th Saturday works and the
+    Sunday does not. Nothing here re-implements the weekend/holiday rule.
+
+    `.classification` is Normal or Special, read straight off that count by
+    `classification.classify_leave`. Deriving it here rather than storing it is
+    what makes a historical request classify correctly with no backfill, and
+    what stops the answer going stale when the dates or the calendar move.
 
     Called by the router for every `LeaveRequestOut` it builds. One overrides
     query per row; the pages that use it are small and the alternative was a
@@ -609,6 +622,7 @@ def attach_working_days(db: Session, rows: list[LeaveRequest]) -> None:
     """
     for r in rows:
         r.working_days = len(leave_working_days(db, r.start_date, r.end_date))
+        r.classification = classify_leave(r.working_days)
 
 
 # ---------- employee writes -----------------------------------------------
@@ -633,7 +647,9 @@ def create_leave_request(
 
     req = LeaveRequest(
         employee_id=me.id,
-        leave_type=data.leave_type,
+        # The retired category column, which is NOT NULL. Nothing reads it back
+        # as a classification - see `models.RETIRED_LEAVE_TYPE`.
+        leave_type=RETIRED_LEAVE_TYPE,
         start_date=data.start_date,
         end_date=data.end_date,
         reason=data.reason,
@@ -645,10 +661,14 @@ def create_leave_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+    classification = classify_leave(
+        len(leave_working_days(db, req.start_date, req.end_date))
+    )
     _notify_routed_approver(
         db, me, req, "leave_submitted",
         f"{me.full_name} submitted a leave request",
-        f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
+        f"{me.full_name} requested {classification_label(classification)} "
+        f"from {data.start_date} to {data.end_date}.",
     )
     # Email the same approver the notification above just reached - both walk
     # `resolve_leave_recipients`, so they cannot route differently. Placed AFTER

@@ -27,7 +27,7 @@ import {
   useRejectLeaveCancellation,
 } from "../hooks";
 import {
-  LEAVE_TYPE_LABEL,
+  LEAVE_CLASSIFICATION_LABEL,
   attendanceSummaryLabel,
   formatLeavePeriod,
   leaveDetailHref,
@@ -161,7 +161,7 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
                       empById.get(req.employee_id) ??
                       req.employee_id.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>
+                  <TableCell>{LEAVE_CLASSIFICATION_LABEL[req.classification]}</TableCell>
                   <TableCell className="tabular">{req.start_date}</TableCell>
                   <TableCell className="tabular">{req.end_date}</TableCell>
                   {isManager && (

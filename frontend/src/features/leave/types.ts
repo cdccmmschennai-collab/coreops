@@ -1,4 +1,8 @@
-export type LeaveType = "casual" | "sick" | "annual" | "comp_off" | "unpaid" | "other";
+/** Normal (<= 3 working days) or Special (> 3). Derived by the backend from
+ *  `working_days` and never chosen by the employee - see
+ *  `backend/app/modules/leave/classification.py`. The old Casual/Sick/Annual/
+ *  Comp Off/Unpaid categories no longer exist. */
+export type LeaveClassification = "normal" | "special";
 export type LeaveStatus =
   | "pending"
   | "approved"
@@ -10,7 +14,6 @@ export interface LeaveRequest {
   id: string;
   employee_id: string;
   employee_name: string | null;
-  leave_type: LeaveType;
   start_date: string;
   end_date: string;
   /** Days the office is actually open across [start_date, end_date] - the
@@ -18,6 +21,8 @@ export interface LeaveRequest {
    *  company calendar (weekends, working Saturdays, holidays and working-day
    *  overrides); never recalculated here. */
   working_days: number;
+  /** Normal or Special, derived by the backend from `working_days`. */
+  classification: LeaveClassification;
   reason: string | null;
   status: LeaveStatus;
   manager_id: string | null;
@@ -34,15 +39,22 @@ export interface LeaveRequestPage {
   offset: number;
 }
 
+/** `GET /leave-requests/classification-preview` - what a range costs and is
+ *  classified as, asked while the employee is still choosing dates. */
+export interface LeaveClassificationPreview {
+  start_date: string;
+  end_date: string;
+  working_days: number;
+  classification: LeaveClassification;
+}
+
 export interface LeaveRequestCreateBody {
-  leave_type: LeaveType;
   start_date: string;
   end_date: string;
   reason?: string | null;
 }
 
 export interface LeaveRequestUpdateBody {
-  leave_type?: LeaveType;
   start_date?: string;
   end_date?: string;
   reason?: string | null;
@@ -124,24 +136,12 @@ export interface LeaveListParams {
   exclude_self?: boolean;
 }
 
-// Full label map — keeps `sick`/`unpaid` so any historical requests still
-// render correctly even though they're no longer offered when filing a new one.
-export const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
-  casual: "Casual",
-  sick: "Sick",
-  annual: "Annual",
-  comp_off: "Comp Off",
-  unpaid: "Unpaid",
-  other: "Other",
+// The only two classifications there are. Nothing is selectable: the backend
+// derives the value from the request's working days, historical rows included.
+export const LEAVE_CLASSIFICATION_LABEL: Record<LeaveClassification, string> = {
+  normal: "Normal",
+  special: "Special",
 };
-
-// Selectable types when filing a leave request (Casual / Annual / Comp Off / Other).
-// `sick` and `unpaid` are intentionally excluded — display-only legacy values.
-export const SELECTABLE_LEAVE_TYPES = ["casual", "annual", "comp_off", "other"] as const;
-
-export type SelectableLeaveType = (typeof SELECTABLE_LEAVE_TYPES)[number];
-
-export const LEAVE_TYPES: LeaveType[] = [...SELECTABLE_LEAVE_TYPES];
 
 export const LEAVE_STATUS_LABEL: Record<LeaveStatus, string> = {
   pending: "Pending",

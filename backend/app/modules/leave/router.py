@@ -2,6 +2,7 @@
 
   GET    /leave-requests                     list (RBAC-scoped) + filters/pagination
   POST   /leave-requests                     create (any employee/manager/admin with profile)
+  GET    /leave-requests/classification-preview  working days + Normal/Special for a range
   GET    /leave-requests/{id}                get (RBAC-scoped)
   PATCH  /leave-requests/{id}                edit own pending (author only)
   POST   /leave-requests/{id}/cancel         cancel own pending (author only)
@@ -22,13 +23,15 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
-from app.modules.leave import service
+from app.modules.leave import effects, service
+from app.modules.leave.classification import classify_leave
 from app.modules.leave.models import LeaveStatus
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
     AttendanceSummaryResponse,
     DeliverableImpactRequest,
     DeliverableImpactResponse,
+    LeaveClassificationPreviewOut,
     LeaveRequestCreate,
     LeaveRequestOut,
     LeaveRequestPage,
@@ -43,13 +46,15 @@ require_reviewer = require_role("project_manager")
 
 
 def _out(db: Session, req) -> LeaveRequestOut:
-    """Serialize one leave request, with its working-day count attached.
+    """Serialize one leave request, with its working-day count and Normal/
+    Special classification attached.
 
     Every endpoint below goes through this rather than calling `model_validate`
-    directly, so `working_days` is present on every response shape - including
-    the ones a mutation returns straight into the client's cache.
+    directly, so `working_days` and `classification` are present on every
+    response shape - including the ones a mutation returns straight into the
+    client's cache.
     """
-    service.attach_working_days(db, [req])
+    service.attach_computed_fields(db, [req])
     return LeaveRequestOut.model_validate(req)
 
 
@@ -91,6 +96,34 @@ def create_leave_request(
     db: Session = Depends(get_db),
 ) -> LeaveRequestOut:
     return _out(db, service.create_leave_request(db, current, body))
+
+
+@router.get("/classification-preview", response_model=LeaveClassificationPreviewOut)
+def classification_preview(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LeaveClassificationPreviewOut:
+    """What the given range costs in working days, and whether that is Normal
+    or Special. Reads nothing but the company calendar and writes nothing.
+
+    Declared BEFORE `GET /{req_id}` so the literal path is not swallowed by the
+    uuid route. An inverted range is reported as zero days rather than an error
+    - the form asks on every keystroke, and a half-typed range is not a fault.
+    """
+    if end_date < start_date:
+        working_days = 0
+    else:
+        working_days = len(
+            effects.leave_working_days(db, start_date, end_date)
+        )
+    return LeaveClassificationPreviewOut(
+        start_date=start_date,
+        end_date=end_date,
+        working_days=working_days,
+        classification=classify_leave(working_days),
+    )
 
 
 @router.post("/deliverable-impact", response_model=DeliverableImpactResponse)

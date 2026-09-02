@@ -29,12 +29,33 @@ from app.shared.base import TimestampMixin, UUIDMixin
 
 
 class LeaveType(str, enum.Enum):
+    """RETIRED. The leave categories CoreOps used before Normal/Special.
+
+    Nobody chooses one of these any more: a request's classification is derived
+    from its authoritative working-day count by `leave/classification.py`, and
+    that is the only classification the API accepts or exposes.
+
+    The enum and its column survive - unchanged, and with no migration - for one
+    reason: `unpaid` still means "the pool does not pay for this absence" to
+    `effects.BALANCE_DEDUCTING_TYPES` and `leave_balances/ledger.py`. Rewriting
+    the historical rows would silently restate past leave balances, so the
+    stored values are left exactly as they were filed and simply stopped being
+    read as a classification.
+    """
+
     casual = "casual"
     sick = "sick"
     annual = "annual"
     comp_off = "comp_off"
     unpaid = "unpaid"
     other = "other"
+
+
+# What a NEW request stores in the retired column, which is NOT NULL. `other`
+# is the neutral member: it deducts from the pool exactly as `casual`, `annual`
+# and `comp_off` did, so every request filed from here on behaves precisely as
+# a request filed yesterday. The value is never read back as a classification.
+RETIRED_LEAVE_TYPE = LeaveType.other
 
 
 class LeaveStatus(str, enum.Enum):
