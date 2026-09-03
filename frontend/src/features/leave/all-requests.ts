@@ -164,7 +164,7 @@ export function allRequestTypeLabel(row: AllRequest): string {
   }
   if (row.period) return COMPACT_PERMISSION_PERIOD_LABEL[row.period];
   const hours = row.duration_hours ?? 0;
-  return `P · ${hours} ${hours === 1 ? "hr" : "hrs"}`;
+  return `P · ${hours}${hours === 1 ? "hr" : "hrs"}`;
 }
 
 /**
