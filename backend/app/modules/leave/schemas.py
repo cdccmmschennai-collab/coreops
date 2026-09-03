@@ -62,13 +62,12 @@ class LeaveRequestOut(BaseModel):
     # the routed recipient and the person who ends up deciding may be different
     # people, and the card shows both.
     #
-    # While pending it is derived from `routed_project_id` by
-    # `service._attach_routed_to`, which walks the very same
-    # `recipients.resolve_in_app_recipient` the submission notification walks, so
-    # the name shown to the employee is the person whose bell rang. Once approved
-    # or rejected it is read instead from the submission notification actually
-    # delivered, so a Head reassigned since cannot rewrite who the request was
-    # sent to.
+    # Answered by `service._attach_routed_to` for every pending, approved and
+    # rejected request. A decided request reports the person its submission
+    # notification actually reached, so a Head reassigned since cannot rewrite
+    # who it was sent to; a pending one - and a decided one with no notification
+    # on record - reports the routing chain itself, walked by the very same
+    # `recipients.resolve_in_app_recipient` the notification walks.
     #
     # Populated by the DETAIL endpoint only; None on the list and the mutation
     # responses, and on the cancellation statuses, which show no actor row.

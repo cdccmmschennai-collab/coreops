@@ -600,66 +600,78 @@ def get_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveReque
 
 
 def _attach_routed_to(db: Session, req: LeaveRequest) -> None:
-    """Set `.routed_to_name` - who a STILL-PENDING request is waiting on.
+    """Set `.routed_to_name` - WHO THIS REQUEST WENT TO.
 
     Same non-mapped-attribute trick as `_attach_employee_names`, and the same
-    reason: routing is not a column. `routed_project_id` is, but the person is
-    derived from it fresh on every read by `recipients.resolve_in_app_recipient`
-    - the routed project's CURRENT Head, else the requester's reporting PM, first
-    one with a login. That is the whole point of deriving rather than storing: a
-    Head reassigned after the request was filed is honoured here exactly as it is
-    at approval time, and no migration is needed to say who is holding a request.
+    reason: routing is not a column. `routed_project_id` is; the PERSON is
+    answered here, from the two things that already record one.
 
-    IT IS THE SAME FUNCTION THE NOTIFICATION WALKS. The employee reading "Routed
-    to NAINAR B" is being told the name of the person whose bell actually rang.
+    TWO SOURCES, IN THIS ORDER, AND EVERY PENDING/APPROVED/REJECTED REQUEST GETS
+    AN ANSWER FROM ONE OF THEM
+    ===========================================================================
+    1. THE SUBMISSION NOTIFICATION, for a request that has been decided. One row,
+       written once, to exactly the person the routing chose - the only record of
+       who it was actually SENT to, and immune to a Head reassignment since.
+    2. THE ROUTING CHAIN, resolved fresh by `recipients.resolve_in_app_recipient`
+       - the routed project's current Head, else the requester's reporting PM.
+       This is the answer while the request is still pending (nobody could hold
+       it but whoever holds it now), and it is the FALLBACK for a decided request
+       that has no notification on record.
+
+    That fallback is the fix for a real gap. Until the fallback rung became
+    `reporting_pm_id` it was `manager_id`, the line manager, which is set on
+    almost nobody - so a PM-routed request notified NOBODY, recorded nothing, and
+    its detail page showed no "Routed to" at all even after a PM decided it. The
+    row went missing exactly when the audit trail mattered. Source 1 is still
+    preferred wherever it exists, so a recorded routing is never overwritten by a
+    re-derivation; source 2 only speaks when there is nothing recorded, and what
+    it then reports is the chain that request follows - the same chain that
+    decided who could review it.
+
+    "Routed to" and "Approved by" / "Rejected by" are two different facts and a
+    settled request shows both. The decision actor is `manager_id` ->
+    `.manager_name`, set by `_attach_employee_names`, and nothing here reads it:
+    the approver is never allowed to stand in for the recipient.
 
     DETAIL-PAGE ONLY. Only the detail endpoint calls this. Resolving a Head and
     a PM per row would add two queries to every row of a 20-row All-leave page
     for a column that page does not have.
 
-    ONCE DECIDED, THE ANSWER STOPS BEING DERIVED. A settled request still shows
-    who it went to - "Routed to" and "Approved by" are two different facts and
-    the card shows both - but re-deriving the routed person after the fact would
-    name whoever heads that project TODAY, which is not who the request was sent
-    to. So the settled answer comes from the SUBMISSION NOTIFICATION actually
-    delivered at submission time: one row, written once, to exactly the person
-    the routing chose. That is the only historically accurate record there is,
-    and reading it needs no new column and no migration.
-
     A request awaiting a CANCELLATION decision, or already cancelled, is left
     alone: those statuses show no actor row at all (see `leaveActorRows` in the
     frontend), so there is nothing to resolve.
 
-    None is a legitimate answer - an unrouted request whose requester has no
-    reporting PM, one whose only candidate has no login, or a settled request
-    whose submission notification was never written - and the page simply omits
-    the row.
+    None is what remains when the request has no recipient to name at all - an
+    unrouted request whose requester has no reporting PM, or one whose only
+    candidate has no login - and the page simply omits the row.
     """
     req.routed_to_name = None
-    if req.status == LeaveStatus.pending:
-        employee = db.get(Employee, req.employee_id)
-        if employee is None:
-            return
-        recipient = resolve_in_app_recipient(db, employee, req)
-        if recipient is not None:
-            req.routed_to_name = recipient.employee.full_name
+    if req.status not in (
+        LeaveStatus.pending, LeaveStatus.approved, LeaveStatus.rejected
+    ):
         return
 
-    if req.status not in (LeaveStatus.approved, LeaveStatus.rejected):
+    if req.status in (LeaveStatus.approved, LeaveStatus.rejected):
+        user_id = notifications_service.first_notified_user_id(
+            db,
+            type_="leave_submitted",
+            entity_type="leave_request",
+            entity_id=req.id,
+        )
+        if user_id is not None:
+            notified = db.execute(
+                select(Employee).where(Employee.user_id == user_id)
+            ).scalars().first()
+            if notified is not None:
+                req.routed_to_name = notified.full_name
+                return
+
+    employee = db.get(Employee, req.employee_id)
+    if employee is None:
         return
-    user_id = notifications_service.first_notified_user_id(
-        db,
-        type_="leave_submitted",
-        entity_type="leave_request",
-        entity_id=req.id,
-    )
-    if user_id is None:
-        return
-    recipient_employee = db.execute(
-        select(Employee).where(Employee.user_id == user_id)
-    ).scalars().first()
-    if recipient_employee is not None:
-        req.routed_to_name = recipient_employee.full_name
+    recipient = resolve_in_app_recipient(db, employee, req)
+    if recipient is not None:
+        req.routed_to_name = recipient.employee.full_name
 
 
 def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:

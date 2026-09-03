@@ -1,20 +1,23 @@
-"""Phase 4: `routed_to_name` - the "Routed to" line on the leave detail page.
+"""`routed_to_name` - the "Routed to" line on the leave detail page.
 
 The value is DERIVED, never stored. There is no migration behind this file: the
-name comes from `recipients.resolve_in_app_recipient`, which reads the routed
-project's CURRENT head and the requester's `reporting_pm_id`, both of which
-already existed. Two properties matter and are asserted here:
+name comes from the submission notification that was actually delivered, and
+from `recipients.resolve_in_app_recipient` - which reads the routed project's
+CURRENT head and the requester's `reporting_pm_id` - both of which already
+existed. Three properties matter and are asserted here:
 
-  * it names THE PERSON WHO ACTUALLY GOT THE REQUEST - the same function the
-    submission notification walks, so the page and the bell cannot disagree;
-  * it is resolved FRESH, so a Head reassigned after the request was filed is
-    honoured, exactly as approval authority is.
+  * it names THE PERSON WHO GOT THE REQUEST - the same chain the submission
+    notification walks, so the page and the bell cannot disagree;
+  * while pending it is resolved FRESH, so a Head reassigned after the request
+    was filed is honoured, exactly as approval authority is;
+  * EVERY pending, approved and rejected request answers. A decided request
+    prefers its submission notification, so a Head reassigned since cannot
+    rewrite who it was sent to - and when no notification was ever recorded
+    (the PM-fallback requests that reached nobody back when the fallback rung
+    was `manager_id`) it falls back to the chain rather than showing nothing.
 
-Once the request is SETTLED the answer stops being derived: "Routed to" is a
-separate fact from "Approved by" and the card shows both, so it is read from the
-submission notification actually delivered rather than re-resolved from the
-project - a Head reassigned since must not rewrite who the request was sent to.
-
+"Routed to" and "Approved by"/"Rejected by" are separate facts and a settled
+request shows both; the approver is never allowed to stand in for the recipient.
 The decision actors (`manager_name`) are Phase 3's and are covered in
 `test_leave_all_visibility.py`.
 """
@@ -23,10 +26,11 @@ from datetime import date, timedelta
 
 import pytest
 
+from app.modules.calendar.working_days import next_working_day, previous_working_day
 from app.modules.employees.models import Employee
-from app.modules.leave.models import LeaveStatus
+from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.notifications.models import Notification
-from app.modules.users.models import UserRole
+from app.modules.users.models import User, UserRole
 
 LIST = "/api/v1/leave-requests"
 
@@ -45,7 +49,12 @@ def cast(make_user, make_employee, make_project, login):
     )
     head_user = make_user("head@x.com", role=UserRole.employee)
     head = make_employee(
-        employee_code="H1", first_name="NAINAR", last_name="B", user_id=head_user.id
+        employee_code="H1", first_name="NAINAR", last_name="B", user_id=head_user.id,
+        # A Head is an employee who takes leave too, and their own request is
+        # never routed to a Head - it falls to their PM. Giving them one here is
+        # what makes that case (`test_a_heads_own_leave_is_routed_to_their_pm`)
+        # testable; no other test in this file files leave as the Head.
+        reporting_pm_id=pm_user.id,
     )
     emp_user = make_user("emp@x.com", role=UserRole.employee)
     emp = make_employee(
@@ -96,14 +105,14 @@ def test_an_unrouted_pending_request_falls_back_to_the_reporting_pm(
     assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] == "Alex Manager"
 
 
-def test_the_head_is_resolved_fresh_not_frozen_at_submission(
+def test_the_head_is_resolved_fresh_while_the_request_is_pending(
     client, cast, make_leave_request, make_employee, make_user, db
 ):
-    """A Head reassignment AFTER the request was filed is honoured.
-
-    This is why the name is derived rather than stored: the request keeps its
-    `routed_project_id`, and the person it reports is whoever heads that project
-    now - which is also who may actually approve it.
+    """A Head reassignment while the request is STILL PENDING is honoured: the
+    request keeps its `routed_project_id`, and the person it reports is whoever
+    heads that project now - which is also who may actually approve it. Once
+    decided the answer stops moving; that is
+    `test_a_settled_routing_is_history_not_a_fresh_lookup` below.
     """
     req = _pending(make_leave_request, cast, routed_project_id=cast["project"].id)
     assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] == "NAINAR B"
@@ -256,11 +265,19 @@ def test_a_settled_routing_is_history_not_a_fresh_lookup(
     assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] == "NAINAR B"
 
 
-def test_a_settled_request_with_no_submission_on_record_says_nothing(
+def test_a_settled_request_with_no_submission_on_record_still_names_its_chain(
     client, cast, make_leave_request
 ):
-    """No notification row - a request from before this was readable, or one whose
-    recipient had no login. Null, never a guess from the current routing."""
+    """THE PRODUCTION SYMPTOM. A decided request with no notification row - the
+    PM-fallback requests that reached nobody when the fallback rung was the line
+    manager - used to show no "Routed to" at all, so a rejected request named its
+    rejector and nothing else. It now falls back to the routing chain, which for
+    this row is the routed project's Head.
+
+    The recorded notification still WINS wherever there is one
+    (`test_a_settled_routing_is_history_not_a_fresh_lookup`); this is only what
+    happens when nothing was recorded.
+    """
     req = make_leave_request(
         employee_id=cast["employee"].id,
         start_date=date.today() + timedelta(days=7),
@@ -269,7 +286,28 @@ def test_a_settled_request_with_no_submission_on_record_says_nothing(
         routed_project_id=cast["project"].id,
         manager_id=cast["pm"].id,
     )
-    assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] is None
+    body = _detail(client, cast["pm_login"], req.id)
+    assert body["routed_to_name"] == "NAINAR B"
+    # And it is NOT the decision actor wearing the routing's hat.
+    assert body["manager_name"] == "Alex Manager"
+
+
+def test_a_rejected_pm_fallback_request_names_both_the_pm_and_the_rejector(
+    client, cast, make_leave_request
+):
+    """The exact production shape: rejected, no routed project, no notification.
+    "Rejected by" was the only row it showed; "Routed to" must be there too, and
+    must name the chain (the reporting PM), not the rejector by coincidence."""
+    req = make_leave_request(
+        employee_id=cast["employee"].id,
+        start_date=date.today() + timedelta(days=7),
+        end_date=date.today() + timedelta(days=7),
+        status=LeaveStatus.rejected,
+        manager_id=cast["pm"].id,
+    )
+    body = _detail(client, cast["pm_login"], req.id)
+    assert body["routed_to_name"] == "Alex Manager"
+    assert body["manager_name"] == "Alex Manager"
 
 
 @pytest.mark.parametrize(
@@ -349,3 +387,142 @@ def test_the_page_names_the_person_whose_bell_actually_rang(
     # Named explicitly so this test fails loudly if either side starts inventing
     # a routing the other does not share.
     assert displayed == "Alex Manager"
+
+
+# ---------- the three routing cases, filed through the real endpoint ---------
+#
+# Everything below goes through `POST /leave-requests`, so the routing rule that
+# runs is the real one and the submission notification written is the real one.
+# The three cases are the whole of `leave/routing.py`'s contract: a Head when the
+# evidence names one project, the reporting PM when it does not, and the PM again
+# for a Head's own leave.
+
+
+def _file(client, headers, when) -> str:
+    res = client.post(
+        LIST,
+        headers=headers,
+        json={"start_date": str(when), "end_date": str(when), "reason": "Family trip"},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()["id"]
+
+
+def _route_through(db, cast, make_project_member):
+    """Give the requester the work-report evidence `routing.resolve_routed_project`
+    reads, and return a leave date that routes off it.
+
+    A report on a working day logging exactly one project IS the routing rule -
+    nothing here reimplements it, and the leave date is the next working day
+    after that report, which is what the resolver walks back from.
+    """
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    employee, project = cast["employee"], cast["project"]
+    make_project_member(project_id=project.id, employee_id=employee.id)
+    report_day = previous_working_day(db, date.today() + timedelta(days=1))
+    wr_svc.create_work_report(
+        db, db.get(User, employee.user_id), WorkReportCreate(
+            report_date=report_day,
+            tasks=[WorkReportTaskIn(
+                project_id=project.id, description="work", minutes_spent=120
+            )],
+        ),
+    )
+    return next_working_day(db, report_day)
+
+
+def test_a_request_routed_to_a_head_shows_that_head(
+    client, cast, db, make_project_member
+):
+    """CASE 1: one valid work report, one project, that project has a Head."""
+    req_id = _file(client, cast["emp_login"], _route_through(db, cast, make_project_member))
+
+    body = _detail(client, cast["emp_login"], req_id)
+    assert body["status"] == "pending"
+    assert body["routed_to_name"] == "NAINAR B"
+    assert db.get(LeaveRequest, uuid.UUID(req_id)).routed_project_id == cast["project"].id
+
+
+def test_a_request_with_no_project_evidence_shows_the_pm(client, cast, db):
+    """CASE 2: no usable work report, so no project - the reporting PM holds it,
+    and the page says so."""
+    req_id = _file(client, cast["emp_login"], date.today() + timedelta(days=7))
+
+    assert _detail(client, cast["emp_login"], req_id)["routed_to_name"] == "Alex Manager"
+    assert db.get(LeaveRequest, uuid.UUID(req_id)).routed_project_id is None
+
+
+def test_a_heads_own_leave_is_routed_to_their_pm(client, cast, db):
+    """CASE 3: a Head's own request is never routed to a Head - not even to
+    themselves on the project they run. `routing.resolve_routed_project`
+    short-circuits to None and the chain falls to their reporting PM."""
+    req_id = _file(client, cast["head_login"], date.today() + timedelta(days=7))
+
+    assert _detail(client, cast["head_login"], req_id)["routed_to_name"] == "Alex Manager"
+    assert db.get(LeaveRequest, uuid.UUID(req_id)).routed_project_id is None
+
+
+def test_approving_keeps_the_routing_and_names_the_approver(
+    client, cast, db, make_project_member
+):
+    """Routed to = the Head it went to. Approved by = the PM who actually ruled.
+    Two facts, two names, neither standing in for the other."""
+    req_id = _file(client, cast["emp_login"], _route_through(db, cast, make_project_member))
+
+    res = client.post(f"{LIST}/{req_id}/approve", headers=cast["pm_login"], json={})
+    assert res.status_code == 200, res.text
+
+    after = _detail(client, cast["pm_login"], req_id)
+    assert after["status"] == "approved"
+    assert (after["routed_to_name"], after["manager_name"]) == ("NAINAR B", "Alex Manager")
+
+
+def test_rejecting_keeps_the_stored_recipient_and_names_the_rejector(
+    client, cast, db, make_project_member
+):
+    """The production symptom, in test form: a REJECTED request must still say
+    who it was routed to."""
+    req_id = _file(client, cast["emp_login"], _route_through(db, cast, make_project_member))
+
+    res = client.post(f"{LIST}/{req_id}/reject", headers=cast["pm_login"], json={})
+    assert res.status_code == 200, res.text
+
+    after = _detail(client, cast["pm_login"], req_id)
+    assert after["status"] == "rejected"
+    assert (after["routed_to_name"], after["manager_name"]) == ("NAINAR B", "Alex Manager")
+
+
+def test_replacing_the_head_and_the_pm_does_not_rewrite_a_decided_request(
+    client, cast, db, make_employee, make_user, make_project_member
+):
+    """THE HISTORICAL GUARANTEE, end to end through the real endpoint.
+
+    The request is filed, delivered to the Head and decided by the PM. THEN the
+    project gets a new Head and the requester a new reporting PM - both of the
+    things a fresh derivation would read. Neither name on the settled request
+    moves: "Routed to" is the person the submission notification actually
+    reached, and "Rejected by" the person who actually ruled.
+    """
+    req_id = _file(client, cast["emp_login"], _route_through(db, cast, make_project_member))
+    assert _detail(client, cast["emp_login"], req_id)["routed_to_name"] == "NAINAR B"
+
+    res = client.post(f"{LIST}/{req_id}/reject", headers=cast["pm_login"], json={})
+    assert res.status_code == 200, res.text
+
+    new_head_user = make_user("head9@x.com", role=UserRole.employee)
+    new_head = make_employee(
+        employee_code="H9", first_name="GIRIDHARAN", last_name="SUBRAMANIAN",
+        user_id=new_head_user.id,
+    )
+    cast["project"].head_employee_id = new_head.id
+    new_pm_user = make_user("pm9@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="PM9", first_name="New", last_name="Boss",
+                  user_id=new_pm_user.id)
+    cast["employee"].reporting_pm_id = new_pm_user.id
+    db.commit()
+
+    after = _detail(client, cast["emp_login"], req_id)
+    assert after["routed_to_name"] == "NAINAR B"
+    assert after["manager_name"] == "Alex Manager"
