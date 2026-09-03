@@ -259,7 +259,10 @@ def test_rejected_and_cancelled_details_report_zero_consumed(client, login, team
 
     cancelled = _submit(client, login, TUE, 2)
     _approve(client, login, cancelled["id"])
-    client.post(f"{API}/{cancelled['id']}/cancel", headers=login("emp@x.com"))
+    # Withdrawn outright by the PM. Since Phase 4E the employee's own route out
+    # of an APPROVED permission is a cancellation request a reviewer decides;
+    # either way the settled row must read as having consumed nothing.
+    client.post(f"{API}/{cancelled['id']}/cancel", headers=login("mgr@x.com"))
 
     for req_id in (rejected["id"], cancelled["id"]):
         b = client.get(f"{API}/{req_id}", headers=login("emp@x.com")).json()["balance"]
@@ -307,7 +310,7 @@ def test_submitting_notifies_the_manager_and_not_the_author(client, login, team,
     note = mgr_notes[0]
     assert "Arun Kumar" in note.message
     assert "01 Mar 2027" in note.message
-    assert "1st Half — 2 Hours" in note.message
+    assert "1st Half - 2 Hours" in note.message
     assert note.target_url == f"/attendance/permission/{req['id']}"
     assert note.entity_type == "permission_request"
 
@@ -326,7 +329,7 @@ def test_approval_notifies_the_employee_with_date_duration_and_status(
     notes = _notifications(db, team["employee_user"].id)
     assert [n.type for n in notes] == ["permission_approved"]
     msg = notes[0].message
-    assert "Your permission request for 01 Mar 2027 for 1st Half — 2 Hours has been approved." in msg
+    assert "Your permission request for 01 Mar 2027 for 1st Half - 2 Hours has been approved." in msg
     assert "2h of permission remaining" in msg
     assert notes[0].target_url == f"/attendance/permission/{req['id']}"
 
@@ -348,7 +351,7 @@ def test_rejection_notifies_the_employee_and_includes_the_manager_note(
     notes = _notifications(db, team["employee_user"].id)
     assert [n.type for n in notes] == ["permission_rejected"]
     msg = notes[0].message
-    assert "Your permission request for 01 Mar 2027 for 1st Half — 2 Hours has been rejected." in msg
+    assert "Your permission request for 01 Mar 2027 for 1st Half - 2 Hours has been rejected." in msg
     assert "Note: Delivery day - please reschedule" in msg
 
 
@@ -364,9 +367,12 @@ def test_a_rejection_without_a_note_says_nothing_about_one(client, login, team, 
 def test_an_employee_cancelling_notifies_their_manager_not_themselves(
     client, login, team, db
 ):
+    """A PENDING request - the only one an employee still withdraws in one step
+    since Phase 4E. The manager owns the queue it has just left, so they are the
+    one told, and no hours are quoted because a pending request never held any.
+    """
     req = _submit(client, login, MON, 2)
-    _approve(client, login, req["id"])
-    # Clear the approval notification so the cancellation is unambiguous.
+    # Clear the submission notification so the cancellation is unambiguous.
     db.query(Notification).delete()
     db.commit()
 
@@ -378,8 +384,7 @@ def test_an_employee_cancelling_notifies_their_manager_not_themselves(
     mgr_notes = _notifications(db, team["manager_user"].id)
     assert [n.type for n in mgr_notes] == ["permission_cancelled"]
     assert "Arun Kumar" in mgr_notes[0].message
-    # The restored hours are stated, because they moved.
-    assert "4h of permission remaining" in mgr_notes[0].message
+    assert "of permission remaining" not in mgr_notes[0].message
 
 
 def test_a_manager_cancelling_notifies_the_employee(client, login, team, db):

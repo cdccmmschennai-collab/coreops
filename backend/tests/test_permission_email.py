@@ -222,7 +222,7 @@ def test_the_email_carries_the_actual_selected_option_not_the_plain_hour_count(
     assert "Nainar B" in body
     assert "01 Mar 2027" in body
     # The actual selected option, never collapsed to a plain "2 hours".
-    assert "2nd Half — 2 Hours" in body
+    assert "2nd Half - 2 Hours" in body
     assert "2 hours" not in body
     assert "Medical appointment" in body
     assert f"https://coreops.cdccmms.com/attendance/permission/{req.id}" in body

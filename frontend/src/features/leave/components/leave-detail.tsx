@@ -281,7 +281,15 @@ export function LeaveDetail({ id }: { id: string }) {
   }
 
   const leave = query.data;
+  // The SERVER-resolved name first. `byId` comes from `GET /employees`, which is
+  // RBAC-scoped and returns only their own row to a plain employee-role actor -
+  // which a Project Head still is - so reading it first meant a Head opening a
+  // colleague's request fell all the way through to eight characters of a UUID.
+  // The backend has always sent `employee_name` on this response; it just was
+  // not being read. The remaining fallbacks are kept for the responses that
+  // carry no name (a mutation's) rather than removed.
   const empName =
+    leave.employee_name ??
     byId.get(leave.employee_id) ??
     (leave.employee_id === employeeId ? employee?.full_name : undefined) ??
     leave.employee_id.slice(0, 8);

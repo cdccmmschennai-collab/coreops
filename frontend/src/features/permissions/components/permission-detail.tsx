@@ -18,14 +18,19 @@ import { AppError } from "@/lib/api-client";
 
 import {
   useApprovePermission,
+  useApprovePermissionCancellation,
   useCancelPermission,
   usePermissionRequest,
   useRejectPermission,
+  useRejectPermissionCancellation,
+  useRequestPermissionCancellation,
 } from "../hooks";
 import {
   PERMISSION_HISTORY_PATH,
   canCancelPermission,
+  canRequestPermissionCancellation,
   canReviewPermission,
+  canReviewPermissionCancellation,
   formatHours,
   formatPermissionDuration,
   formatMonthLabel,
@@ -86,7 +91,12 @@ function BalanceCard({ detail }: { detail: Detail }) {
         <InfoRow label="Month" value={month} />
         <InfoRow label="Monthly allowance" value={formatHours(b.allowance_hours)} />
 
-        {detail.status === "approved" && (
+        {/* A permission awaiting a WITHDRAWAL decision still holds its hours, so
+            it reports them exactly as an approved one does - `consumed_by_
+            request` comes back non-zero for both, from the same server-side
+            rule. Saying anything else here would contradict the balance. */}
+        {(detail.status === "approved" ||
+          detail.status === "cancellation_requested") && (
           <>
             <InfoRow
               label="Before approval"
@@ -97,6 +107,16 @@ function BalanceCard({ detail }: { detail: Detail }) {
               value={formatHours(b.consumed_by_request)}
             />
             <InfoRow label="Remaining" value={formatHours(b.remaining_hours)} />
+            {detail.status === "cancellation_requested" && (
+              <InfoRow
+                label="Cancellation"
+                value={
+                  <span className="text-muted-foreground">
+                    Requested - the hours return only if it is approved
+                  </span>
+                }
+              />
+            )}
           </>
         )}
 
@@ -241,6 +261,82 @@ function ReviewActions({ id, onDone }: { id: string; onDone: () => void }) {
   );
 }
 
+// ── cancellation review ─────────────────────────────────────────────────────
+
+/** Approve / reject a withdrawal an employee has asked for.
+ *
+ *  Deliberately no comment box: neither `/approve-cancellation` nor
+ *  `/reject-cancellation` takes one - the leave cancellation queue's two buttons
+ *  don't either - so offering a field the API would discard would be a lie. */
+function CancellationReviewActions({
+  detail,
+  onDone,
+}: {
+  detail: Detail;
+  onDone: () => void;
+}) {
+  const approve = useApprovePermissionCancellation();
+  const reject = useRejectPermissionCancellation();
+  const busy = approve.isPending || reject.isPending;
+
+  async function decide(decision: "approve" | "reject") {
+    try {
+      if (decision === "approve") {
+        await approve.mutateAsync(detail.id);
+        toast.success(
+          "Cancellation approved. The permission is withdrawn and its hours are back.",
+        );
+      } else {
+        await reject.mutateAsync(detail.id);
+        toast.success("Cancellation rejected. The approved permission remains active.");
+      }
+      onDone();
+    } catch (err) {
+      toast.error(
+        err instanceof AppError
+          ? err.message
+          : "Could not update the cancellation request.",
+      );
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Cancellation request</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          {detail.employee_name ?? "This employee"} has asked to withdraw this
+          approved permission. It stays approved - and keeps using{" "}
+          {formatHours(detail.balance.consumed_by_request)} of{" "}
+          {formatMonthLabel(detail.balance.month)} - until you decide.
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="danger"
+            onClick={() => void decide("approve")}
+            loading={approve.isPending}
+            disabled={busy}
+          >
+            <Check className="h-4 w-4" />
+            Approve cancellation
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => void decide("reject")}
+            loading={reject.isPending}
+            disabled={busy}
+          >
+            <X className="h-4 w-4" />
+            Keep approved permission
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── page ────────────────────────────────────────────────────────────────────
 
 /** One permission request in full: who, when, how long, what was decided and
@@ -264,6 +360,7 @@ export function PermissionDetail({ id }: { id: string }) {
 
   const query = usePermissionRequest(id);
   const cancel = useCancelPermission();
+  const requestCancellation = useRequestPermissionCancellation();
 
   if (query.isLoading) {
     return (
@@ -303,9 +400,20 @@ export function PermissionDetail({ id }: { id: string }) {
 
   const detail = query.data;
   const empName = detail.employee_name ?? detail.employee_id.slice(0, 8);
-  const showReview = canReviewPermission(detail, isManager || isProjectHead, employeeId);
+  const isReviewer = isManager || isProjectHead;
+  const showReview = canReviewPermission(detail, isReviewer, employeeId);
   const showCancel = canCancelPermission(detail, employeeId);
+  const showRequestCancellation = canRequestPermissionCancellation(detail, employeeId);
+  const showCancellationReview = canReviewPermissionCancellation(
+    detail,
+    isReviewer,
+    employeeId,
+  );
   const reviewed = detail.reviewed_at || detail.reviewer_name || detail.manager_comment;
+  // Whether this reader has ANY action here. Drives the closing "nothing more to
+  // do" line, which must not appear beside a card offering something.
+  const hasAction =
+    showReview || showCancel || showRequestCancellation || showCancellationReview;
 
   async function onCancel() {
     try {
@@ -314,6 +422,21 @@ export function PermissionDetail({ id }: { id: string }) {
     } catch (err) {
       toast.error(
         err instanceof AppError ? err.message : "Could not cancel the request.",
+      );
+    }
+  }
+
+  async function onRequestCancellation() {
+    try {
+      await requestCancellation.mutateAsync(detail.id);
+      toast.success(
+        "Cancellation requested. The permission stays approved until a reviewer decides.",
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof AppError
+          ? err.message
+          : "Could not request cancellation of this permission.",
       );
     }
   }
@@ -383,6 +506,13 @@ export function PermissionDetail({ id }: { id: string }) {
           <ReviewActions id={detail.id} onDone={() => void query.refetch()} />
         )}
 
+        {showCancellationReview && (
+          <CancellationReviewActions
+            detail={detail}
+            onDone={() => void query.refetch()}
+          />
+        )}
+
         {showCancel && (
           <Card>
             <CardHeader>
@@ -390,9 +520,7 @@ export function PermissionDetail({ id }: { id: string }) {
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                {detail.status === "approved"
-                  ? "Cancelling an approved permission returns its hours to this month's allowance."
-                  : "Cancelling withdraws this request before it is reviewed."}
+                Cancelling withdraws this request before it is reviewed.
               </p>
               <Button
                 variant="danger"
@@ -406,13 +534,49 @@ export function PermissionDetail({ id }: { id: string }) {
           </Card>
         )}
 
-        {/* A settled request the reader can do nothing with still explains itself
-            rather than just ending. */}
-        {!showReview && !showCancel && detail.status !== "pending" && (
+        {/* An APPROVED permission is a granted absence: the employee asks, and a
+            reviewer decides. Same workflow, same wording, as approved leave. */}
+        {showRequestCancellation && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Withdraw</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                This permission is approved, so withdrawing it needs a reviewer&apos;s
+                decision. It stays approved - and keeps using its hours - until
+                they rule on your request.
+              </p>
+              <Button
+                variant="secondary"
+                onClick={() => void onRequestCancellation()}
+                loading={requestCancellation.isPending}
+                disabled={requestCancellation.isPending}
+              >
+                Request cancellation
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* The employee's own view while a withdrawal is being decided: no
+            action, but the page must not simply end without saying so. */}
+        {!hasAction && detail.status === "cancellation_requested" && (
           <p className="text-sm text-muted-foreground">
-            This request is {detail.status} and no further action is available.
+            A cancellation request for this permission is waiting for a
+            reviewer&apos;s decision.
           </p>
         )}
+
+        {/* A settled request the reader can do nothing with still explains itself
+            rather than just ending. */}
+        {!hasAction &&
+          detail.status !== "pending" &&
+          detail.status !== "cancellation_requested" && (
+            <p className="text-sm text-muted-foreground">
+              This request is {detail.status} and no further action is available.
+            </p>
+          )}
       </div>
     </>
   );

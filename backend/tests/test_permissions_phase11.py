@@ -172,18 +172,25 @@ def test_cancelling_an_approved_permission_restores_its_hours_once(
 ):
     """Sections 7, 12H and 12I. There is no stored counter to adjust: the row
     stops being summed, so the restore is exact by construction and the second
-    attempt is refused outright."""
+    attempt is refused outright.
+
+    The actor is the PROJECT MANAGER. Since Phase 4E an approved permission is a
+    granted absence that the employee withdraws through a cancellation request a
+    reviewer decides (`test_permission_cancellation.py`); the PM's authority to
+    withdraw one outright is unchanged, and it is that path - the one that still
+    moves hours in a single step - this test is about.
+    """
     req = _submit(client, login, MON, 2).json()
     _approve(client, login, req["id"])
     assert _remaining(client, login) == 2
 
-    first = client.post(f"{API}/{req['id']}/cancel", headers=login("emp@x.com"))
+    first = client.post(f"{API}/{req['id']}/cancel", headers=login("mgr@x.com"))
     assert first.status_code == 200, first.text
     assert first.json()["status"] == "cancelled"
     assert _remaining(client, login) == 4
 
     # 12I: a second cancellation must not restore again.
-    again = client.post(f"{API}/{req['id']}/cancel", headers=login("emp@x.com"))
+    again = client.post(f"{API}/{req['id']}/cancel", headers=login("mgr@x.com"))
     assert again.status_code == 409, again.text
     assert _remaining(client, login) == 4
 
@@ -468,7 +475,10 @@ def test_every_permission_event_lands_in_the_central_audit_log(
 
     req = _submit(client, login, MON, 2).json()
     _approve(client, login, req["id"])
-    client.post(f"{API}/{req['id']}/cancel", headers=login("emp@x.com"))
+    # The PM's outright withdrawal - the one-step path that still moves hours
+    # since Phase 4E. See `test_permission_cancellation.py` for the audit trail
+    # of the employee's three-step request.
+    client.post(f"{API}/{req['id']}/cancel", headers=login("mgr@x.com"))
 
     rejected = _submit(client, login, TUE, 1).json()
     client.post(f"{API}/{rejected['id']}/reject", headers=login("mgr@x.com"), json={})

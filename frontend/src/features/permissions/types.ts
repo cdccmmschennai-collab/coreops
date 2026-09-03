@@ -7,7 +7,16 @@
  * test can load this file directly - the repo has no DOM test harness, so the way
  * a rule is made testable is to keep it out of the component.
  */
-export type PermissionStatus = "pending" | "approved" | "rejected" | "cancelled";
+export type PermissionStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  /** Approved permission the employee has asked to withdraw (Phase 4E). The
+   *  permission still STANDS and its hours are still spent until an authorised
+   *  reviewer decides - the same state, with the same meaning, as
+   *  `LeaveStatus.cancellation_requested`. */
+  | "cancellation_requested";
 
 /** The only legal durations. No 30 minutes, no custom value, no decimals. */
 export const PERMISSION_DURATIONS = [1, 2] as const;
@@ -29,12 +38,18 @@ export const PERMISSION_PERIOD_OPTIONS = [
 
 export type PermissionPeriod = (typeof PERMISSION_PERIOD_OPTIONS)[number];
 
-/** The exact wording the form, the detail page and the email all show. */
+/** The exact wording the form, the detail page and the email all show.
+ *
+ *  A PLAIN ASCII hyphen, never an em or en dash - this used to be an em dash and
+ *  the product corrected it. It is a house rule across CoreOps, not a preference
+ *  local to permissions. Must stay character-for-character identical to
+ *  `permissions/models.py::PERIOD_LABELS`, which is what the emails and
+ *  notifications render from. */
 export const PERMISSION_PERIOD_LABEL: Record<PermissionPeriod, string> = {
-  first_half_1h: "1st Half — 1 Hour",
-  second_half_1h: "2nd Half — 1 Hour",
-  first_half_2h: "1st Half — 2 Hours",
-  second_half_2h: "2nd Half — 2 Hours",
+  first_half_1h: "1st Half - 1 Hour",
+  second_half_1h: "2nd Half - 1 Hour",
+  first_half_2h: "1st Half - 2 Hours",
+  second_half_2h: "2nd Half - 2 Hours",
 };
 
 /** How many hours each option costs - what the live balance preview and the
@@ -53,6 +68,13 @@ export const MONTHLY_ALLOWANCE_HOURS = 4;
 export interface PermissionRequest {
   id: string;
   employee_id: string;
+  /** Resolved by the BACKEND on every list row and on the detail (Phase 4E).
+   *  Never resolve this in the browser from `GET /employees`: that endpoint is
+   *  RBAC-scoped and returns only their own row to a plain employee-role actor -
+   *  which a Project Head still is - so a reviewer's queue had nothing to look a
+   *  colleague up in and printed a UUID prefix instead. Null only on the
+   *  responses a mutation returns, which carry no name and need none. */
+  employee_name: string | null;
   permission_date: string;
   duration_hours: number;
   /** NULL only for a request filed before Phase 4C, which recorded no half. */
@@ -153,6 +175,7 @@ export const PERMISSION_STATUS_LABEL: Record<PermissionStatus, string> = {
   approved: "Approved",
   rejected: "Rejected",
   cancelled: "Cancelled",
+  cancellation_requested: "Cancellation requested",
 };
 
 export const PERMISSION_DURATION_LABEL: Record<number, string> = {
@@ -173,7 +196,7 @@ export function formatDuration(hours: number): string {
 }
 
 /**
- * The actual selected option, e.g. "1st Half — 1 Hour" - what the request
+ * The actual selected option, e.g. "1st Half - 1 Hour" - what the request
  * dialog, the detail page and the history/review tables all show. Falls back
  * to the plain compact form only for a request filed before Phase 4C, which
  * has no period on record and none that could be safely guessed.
@@ -333,15 +356,76 @@ export function canReviewPermission(
   return !myEmployeeId || req.employee_id !== myEmployeeId;
 }
 
-/** Whether to offer "Cancel" on a row. The author may withdraw their own
- *  pending request, or an approved one whose day has not passed - a finished
- *  absence has nothing left to withdraw. The backend enforces this too. */
+/** Whether to offer the ONE-STEP "Cancel" on a row.
+ *
+ *  The author's own PENDING request only. Withdrawing something nobody has
+ *  granted yet has nothing to review, so it stays a single step - but an
+ *  APPROVED permission is a granted absence and now goes through
+ *  `canRequestPermissionCancellation` and a reviewer instead (Phase 4E), which
+ *  is why `approved` no longer appears here. The backend enforces the same
+ *  split; this only decides what renders. */
 export function canCancelPermission(
+  req: Pick<PermissionRequest, "status" | "employee_id" | "permission_date">,
+  myEmployeeId: string | null | undefined,
+): boolean {
+  if (!myEmployeeId || req.employee_id !== myEmployeeId) return false;
+  return req.status === "pending";
+}
+
+// ---------- cancellation of an APPROVED permission (Phase 4E) ----------------
+
+/** Whether the author may ask to withdraw this approved permission.
+ *
+ *  Own request, still `approved`, and its day has not passed - a finished
+ *  absence has nothing left to withdraw, and correcting the record afterwards is
+ *  an attendance job. Exactly the rule the backend's
+ *  `request_permission_cancellation` enforces. */
+export function canRequestPermissionCancellation(
   req: Pick<PermissionRequest, "status" | "employee_id" | "permission_date">,
   myEmployeeId: string | null | undefined,
   today: string = businessToday(),
 ): boolean {
   if (!myEmployeeId || req.employee_id !== myEmployeeId) return false;
-  if (req.status === "pending") return true;
   return req.status === "approved" && req.permission_date >= today;
+}
+
+/** What the Permission History "Cancellation" cell shows for one row.
+ *
+ *    "request"    offer the Request cancellation action
+ *    "requested"  a withdrawal is already awaiting review - this is what stops
+ *                 a duplicate being filed from the UI (the backend refuses one
+ *                 outright with a 409 regardless)
+ *    "none"       nothing to say: a pending, rejected or already-cancelled row,
+ *                 an approved one whose day has gone, or somebody else's
+ *
+ *  Deliberately says nothing about a `cancelled` row: the Status column beside
+ *  it already reads "Cancelled", and repeating that here would be two columns
+ *  saying one thing. */
+export type PermissionCancellationCell = "request" | "requested" | "none";
+
+export function permissionCancellationCell(
+  req: Pick<PermissionRequest, "status" | "employee_id" | "permission_date">,
+  myEmployeeId: string | null | undefined,
+  today: string = businessToday(),
+): PermissionCancellationCell {
+  if (req.status === "cancellation_requested") return "requested";
+  if (canRequestPermissionCancellation(req, myEmployeeId, today)) return "request";
+  return "none";
+}
+
+/** Whether to offer the Approve/Reject cancellation controls.
+ *
+ *  `isReviewer` is passed in for the same reason `canReviewPermission` takes it:
+ *  a permission is reviewable by a project manager AND by the routed Project
+ *  Head, and Head-ness is not a role. Beyond that: a withdrawal actually
+ *  awaiting a decision, and never the reviewer's own request. The backend
+ *  re-checks the routed project on every decision. */
+export function canReviewPermissionCancellation(
+  req: Pick<PermissionRequest, "status" | "employee_id">,
+  isReviewer: boolean,
+  myEmployeeId: string | null | undefined,
+): boolean {
+  if (!isReviewer) return false;
+  if (req.status !== "cancellation_requested") return false;
+  return !myEmployeeId || req.employee_id !== myEmployeeId;
 }

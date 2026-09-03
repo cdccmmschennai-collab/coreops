@@ -112,6 +112,14 @@ class AuditAction:
     PERMISSION_REQUEST_APPROVE = "permission.request.approve"
     PERMISSION_REQUEST_REJECT = "permission.request.reject"
     PERMISSION_REQUEST_CANCEL = "permission.request.cancel"
+    # Phase 4E - the three-step withdrawal of an APPROVED permission, named to
+    # match the leave triple above so the two workflows read alike in the log.
+    # The balance figures matter most here: `request` must show the hours
+    # UNMOVED (the permission still stands), and only `approve` shows them come
+    # back.
+    PERMISSION_CANCELLATION_REQUEST = "permission.cancellation.request"
+    PERMISSION_CANCELLATION_APPROVE = "permission.cancellation.approve"
+    PERMISSION_CANCELLATION_REJECT = "permission.cancellation.reject"
 
     # --- production status (Tier B, migration 0070) ---
     # The status table is itself append-only, so this row is not the history -

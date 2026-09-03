@@ -109,16 +109,25 @@ def test_every_period_maps_to_exactly_one_hour_count():
 
 def test_every_period_has_the_exact_label():
     assert PERIOD_LABELS == {
-        PermissionPeriod.first_half_1h: "1st Half — 1 Hour",
-        PermissionPeriod.second_half_1h: "2nd Half — 1 Hour",
-        PermissionPeriod.first_half_2h: "1st Half — 2 Hours",
-        PermissionPeriod.second_half_2h: "2nd Half — 2 Hours",
+        PermissionPeriod.first_half_1h: "1st Half - 1 Hour",
+        PermissionPeriod.second_half_1h: "2nd Half - 1 Hour",
+        PermissionPeriod.first_half_2h: "1st Half - 2 Hours",
+        PermissionPeriod.second_half_2h: "2nd Half - 2 Hours",
     }
 
 
+def test_the_separator_is_a_plain_hyphen_not_a_dash():
+    """The product corrected an em dash to a plain ASCII hyphen. Asserted on its
+    own so a copy-paste from a document that autocorrects punctuation fails here
+    rather than reaching an email."""
+    for label in PERIOD_LABELS.values():
+        assert " - " in label, label
+        assert "—" not in label and "–" not in label, label
+
+
 def test_duration_label_never_collapses_a_half_into_the_plain_hour_count():
-    assert duration_label(1, PermissionPeriod.first_half_1h) == "1st Half — 1 Hour"
-    assert duration_label(2, PermissionPeriod.second_half_2h) == "2nd Half — 2 Hours"
+    assert duration_label(1, PermissionPeriod.first_half_1h) == "1st Half - 1 Hour"
+    assert duration_label(2, PermissionPeriod.second_half_2h) == "2nd Half - 2 Hours"
 
 
 def test_duration_label_falls_back_to_the_plain_form_only_without_a_period():

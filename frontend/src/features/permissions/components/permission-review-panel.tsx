@@ -140,7 +140,13 @@ export function PermissionReviewPanel({ excludeSelf = false }: Props) {
                     onClick={() => router.push(permissionDetailPath(req.id))}
                   >
                     <TableCell className="font-medium">
-                      {empById.get(req.employee_id) ?? req.employee_id.slice(0, 8)}
+                      {/* Server-resolved name first: `GET /employees` (which
+                          `empById` comes from) returns only their own row to a
+                          Project Head, so it cannot name a colleague and the
+                          queue printed a UUID prefix instead. */}
+                      {req.employee_name ??
+                        empById.get(req.employee_id) ??
+                        req.employee_id.slice(0, 8)}
                     </TableCell>
                     <TableCell className="tabular">
                       {formatShortDate(req.permission_date)}

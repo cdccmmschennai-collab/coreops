@@ -4,13 +4,28 @@
 sanctioned absence inside an otherwise normal working day. A permission day stays
 `present` in `attendance_records` - the hours are a separate attribute, held here.
 
-Status lifecycle (four states, no fifth):
-  pending  -> approved | rejected | cancelled
-  approved -> cancelled            (restores the hours)
+Status lifecycle (five states):
+  pending                -> approved | rejected | cancelled
+  approved               -> cancellation_requested   (the employee asks to
+                            withdraw it; the permission still stands)
+  approved               -> cancelled                (a project manager
+                            withdrawing it outright - restores the hours)
+  cancellation_requested -> cancelled | approved     (the reviewer decides)
 
-Leave has a `cancellation_requested` state because an approved multi-day absence
-stands until a manager rules on its withdrawal. One or two hours has nothing to
-hold open, so cancellation here is a single step.
+`cancellation_requested` arrived in Phase 4E and is the SAME state Leave has had
+since the beginning, for the same reason: an approved absence somebody has asked
+to withdraw is not withdrawn yet - it stands until an authorised reviewer rules
+on it, so it needs a state of its own to sit in and a queue to sit in it.
+
+That reverses this module's original position, which was that "one or two hours
+has nothing to hold open". It does: the hours stay spent while the withdrawal is
+under review (`balance.CONSUMING_STATUSES` counts this state), so an employee
+cannot free their allowance simply by asking, and a reviewer's rejection puts the
+row back to `approved` having moved nothing.
+
+The employee's own one-step cancel survives for a `pending` request only - there
+is nothing to review in withdrawing something nobody has granted yet - exactly as
+`leave/service.py::cancel_leave_request` has always worked.
 
 `manager_id` is the reviewer, captured at decision time (denormalised audit
 column, exactly as `leave_requests.manager_id` is - the employee's manager may
@@ -44,6 +59,12 @@ class PermissionStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     cancelled = "cancelled"
+    # Approved permission the employee has asked to withdraw (Phase 4E). The
+    # absence still stands - and its hours stay spent - until an authorised
+    # reviewer decides, so this counts as an ACTIVE permission everywhere:
+    # `balance.CONSUMING_STATUSES` and `service._ACTIVE_STATUSES` both include
+    # it. Same state, same meaning, as `LeaveStatus.cancellation_requested`.
+    cancellation_requested = "cancellation_requested"
 
 
 class PermissionPeriod(str, enum.Enum):
@@ -77,18 +98,21 @@ PERIOD_HOURS: dict[PermissionPeriod, int] = {
     PermissionPeriod.second_half_2h: 2,
 }
 
-# The exact wording the form, the detail page and the email all show. An em
-# dash, not a hyphen, matching the label the product asked for verbatim.
+# The exact wording the form, the detail page and the email all show. A PLAIN
+# ASCII hyphen, never an em or en dash - this used to be an em dash and the
+# product corrected it. It is a house rule across CoreOps, not a preference
+# local to permissions, so mirror it in `frontend/src/features/permissions/
+# types.ts::PERMISSION_PERIOD_LABEL` if either is ever touched.
 PERIOD_LABELS: dict[PermissionPeriod, str] = {
-    PermissionPeriod.first_half_1h: "1st Half — 1 Hour",
-    PermissionPeriod.second_half_1h: "2nd Half — 1 Hour",
-    PermissionPeriod.first_half_2h: "1st Half — 2 Hours",
-    PermissionPeriod.second_half_2h: "2nd Half — 2 Hours",
+    PermissionPeriod.first_half_1h: "1st Half - 1 Hour",
+    PermissionPeriod.second_half_1h: "2nd Half - 1 Hour",
+    PermissionPeriod.first_half_2h: "1st Half - 2 Hours",
+    PermissionPeriod.second_half_2h: "2nd Half - 2 Hours",
 }
 
 
 def duration_label(duration_hours: int, period: PermissionPeriod | None) -> str:
-    """The exact selected option, e.g. "1st Half — 1 Hour" - the ONE authoritative
+    """The exact selected option, e.g. "1st Half - 1 Hour" - the ONE authoritative
     wording every surface (notification, email, detail page) uses. Falls back to
     a plain "N hour(s)" only for a request filed before Phase 4C, which has no
     period on record and none that could be safely guessed.

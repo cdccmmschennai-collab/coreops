@@ -24,7 +24,9 @@ import {
   PERMISSION_STATUS_LABEL,
   businessToday,
   canCancelPermission,
+  canRequestPermissionCancellation,
   canReviewPermission,
+  canReviewPermissionCancellation,
   currentBusinessMonth,
   formatAvailable,
   formatDuration,
@@ -34,6 +36,7 @@ import {
   formatShortDate,
   isDurationAffordable,
   monthStart,
+  permissionCancellationCell,
   remainingAfter,
   shiftMonth,
 } from "./types.ts";
@@ -125,11 +128,21 @@ test("exactly four period options exist, and there is no plain 1 Hour / 2 Hours"
     ["first_half_1h", "second_half_1h", "first_half_2h", "second_half_2h"],
   );
   assert.deepEqual(PERMISSION_PERIOD_LABEL, {
-    first_half_1h: "1st Half — 1 Hour",
-    second_half_1h: "2nd Half — 1 Hour",
-    first_half_2h: "1st Half — 2 Hours",
-    second_half_2h: "2nd Half — 2 Hours",
+    first_half_1h: "1st Half - 1 Hour",
+    second_half_1h: "2nd Half - 1 Hour",
+    first_half_2h: "1st Half - 2 Hours",
+    second_half_2h: "2nd Half - 2 Hours",
   });
+});
+
+test("the separator is a plain hyphen, not a dash", () => {
+  // The product corrected an em dash to a plain ASCII hyphen. Asserted on its
+  // own so a copy-paste from a document that autocorrects punctuation fails
+  // here rather than reaching the screen.
+  for (const label of Object.values(PERMISSION_PERIOD_LABEL)) {
+    assert.ok(label.includes(" - "), label);
+    assert.ok(!label.includes("—") && !label.includes("–"), label);
+  }
 });
 
 test("each period option costs the hours its label states", () => {
@@ -144,11 +157,11 @@ test("each period option costs the hours its label states", () => {
 test("a request with a period shows the actual selected option, never the plain hour count", () => {
   assert.equal(
     formatPermissionDuration({ period: "first_half_1h", duration_hours: 1 }),
-    "1st Half — 1 Hour",
+    "1st Half - 1 Hour",
   );
   assert.equal(
     formatPermissionDuration({ period: "second_half_2h", duration_hours: 2 }),
-    "2nd Half — 2 Hours",
+    "2nd Half - 2 Hours",
   );
 });
 
@@ -160,26 +173,119 @@ test("a pre-Phase-4C request with no period falls back to the plain compact form
 // ── which rows offer Cancel ─────────────────────────────────────────────────
 
 test("an own pending request can be cancelled whatever its date", () => {
-  assert.equal(canCancelPermission(row("pending", PAST), ME, TODAY), true);
-  assert.equal(canCancelPermission(row("pending", FUTURE), ME, TODAY), true);
+  assert.equal(canCancelPermission(row("pending", PAST), ME), true);
+  assert.equal(canCancelPermission(row("pending", FUTURE), ME), true);
 });
 
-test("an own approved request can be cancelled up to and including its day", () => {
-  assert.equal(canCancelPermission(row("approved", FUTURE), ME, TODAY), true);
-  assert.equal(canCancelPermission(row("approved", TODAY), ME, TODAY), true);
-  assert.equal(canCancelPermission(row("approved", PAST), ME, TODAY), false);
+test("an own APPROVED request no longer offers the one-step cancel", () => {
+  // Phase 4E: an approved permission is a granted absence, so withdrawing it
+  // goes through `canRequestPermissionCancellation` and a reviewer instead.
+  assert.equal(canCancelPermission(row("approved", FUTURE), ME), false);
+  assert.equal(canCancelPermission(row("approved", TODAY), ME), false);
 });
 
 test("terminal statuses offer nothing", () => {
   for (const status of ["rejected", "cancelled"] as PermissionStatus[]) {
-    assert.equal(canCancelPermission(row(status), ME, TODAY), false, status);
+    assert.equal(canCancelPermission(row(status), ME), false, status);
   }
 });
 
 test("another employee's rows offer nothing, and neither do unlinked accounts", () => {
-  assert.equal(canCancelPermission(row("pending", FUTURE, "emp-2"), ME, TODAY), false);
-  assert.equal(canCancelPermission(row("pending"), null, TODAY), false);
-  assert.equal(canCancelPermission(row("approved"), undefined, TODAY), false);
+  assert.equal(canCancelPermission(row("pending", FUTURE, "emp-2"), ME), false);
+  assert.equal(canCancelPermission(row("pending"), null), false);
+  assert.equal(canCancelPermission(row("approved"), undefined), false);
+});
+
+// ── requesting cancellation of an APPROVED permission (Phase 4E) ────────────
+
+test("an own approved request can be withdrawn up to and including its day", () => {
+  assert.equal(canRequestPermissionCancellation(row("approved", FUTURE), ME, TODAY), true);
+  assert.equal(canRequestPermissionCancellation(row("approved", TODAY), ME, TODAY), true);
+  // A finished absence has nothing left to withdraw.
+  assert.equal(canRequestPermissionCancellation(row("approved", PAST), ME, TODAY), false);
+});
+
+test("only an approved request can have cancellation requested", () => {
+  for (const status of [
+    "pending",
+    "rejected",
+    "cancelled",
+    "cancellation_requested",
+  ] as PermissionStatus[]) {
+    assert.equal(
+      canRequestPermissionCancellation(row(status), ME, TODAY),
+      false,
+      status,
+    );
+  }
+});
+
+test("nobody may withdraw somebody else's approved permission", () => {
+  assert.equal(
+    canRequestPermissionCancellation(row("approved", FUTURE, "emp-2"), ME, TODAY),
+    false,
+  );
+  assert.equal(canRequestPermissionCancellation(row("approved"), null, TODAY), false);
+});
+
+// ── the History table's Cancellation column ────────────────────────────────
+
+test("an eligible approved permission offers the action", () => {
+  assert.equal(permissionCancellationCell(row("approved", FUTURE), ME, TODAY), "request");
+});
+
+test("once requested, the action is replaced - no duplicate can be filed", () => {
+  assert.equal(
+    permissionCancellationCell(row("cancellation_requested", FUTURE), ME, TODAY),
+    "requested",
+  );
+});
+
+test("a row awaiting a decision says so even to a reader who is not its author", () => {
+  // The state is a fact about the request, not about who is looking.
+  assert.equal(
+    permissionCancellationCell(row("cancellation_requested", FUTURE, "emp-2"), ME, TODAY),
+    "requested",
+  );
+});
+
+test("every other row says nothing, so the column never repeats the Status cell", () => {
+  assert.equal(permissionCancellationCell(row("pending", FUTURE), ME, TODAY), "none");
+  assert.equal(permissionCancellationCell(row("rejected", FUTURE), ME, TODAY), "none");
+  assert.equal(permissionCancellationCell(row("cancelled", FUTURE), ME, TODAY), "none");
+  // Approved but its day has gone, and somebody else's approved row.
+  assert.equal(permissionCancellationCell(row("approved", PAST), ME, TODAY), "none");
+  assert.equal(
+    permissionCancellationCell(row("approved", FUTURE, "emp-2"), ME, TODAY),
+    "none",
+  );
+});
+
+// ── who may rule on a withdrawal ───────────────────────────────────────────
+
+test("a reviewer gets the cancellation controls only while one is awaiting review", () => {
+  assert.equal(
+    canReviewPermissionCancellation(row("cancellation_requested", FUTURE, "emp-2"), true, ME),
+    true,
+  );
+  for (const status of ["pending", "approved", "rejected", "cancelled"] as PermissionStatus[]) {
+    assert.equal(
+      canReviewPermissionCancellation(row(status, FUTURE, "emp-2"), true, ME),
+      false,
+      status,
+    );
+  }
+});
+
+test("a non-reviewer never gets them, and nobody rules on their own", () => {
+  assert.equal(
+    canReviewPermissionCancellation(row("cancellation_requested", FUTURE, "emp-2"), false, ME),
+    false,
+  );
+  assert.equal(
+    canReviewPermissionCancellation(row("cancellation_requested", FUTURE, ME), true, ME),
+    false,
+  );
 });
 
 // ── business-day boundary ───────────────────────────────────────────────────
@@ -193,17 +299,21 @@ test("today is taken from the Chennai business day, not UTC", () => {
 
 test("a permission whose IST day has passed is not reopened by a stale UTC date", () => {
   const today = businessToday(new Date("2026-08-16T20:00:00Z")); // 2026-08-17
-  assert.equal(canCancelPermission(row("approved", "2026-08-16"), ME, today), false);
+  assert.equal(
+    canRequestPermissionCancellation(row("approved", "2026-08-16"), ME, today),
+    false,
+  );
 });
 
 // ── status labels ───────────────────────────────────────────────────────────
 
-test("every status has a user-friendly label and there is no fifth one", () => {
+test("every status has a user-friendly label and there is no sixth one", () => {
   assert.deepEqual(PERMISSION_STATUS_LABEL, {
     pending: "Pending",
     approved: "Approved",
     rejected: "Rejected",
     cancelled: "Cancelled",
+    cancellation_requested: "Cancellation requested",
   });
 });
 
@@ -326,18 +436,33 @@ test("a Project Head passed as a reviewer gets the same actions a PM does", () =
 });
 
 test("a settled request offers no review actions to anyone", () => {
-  for (const status of ["approved", "rejected", "cancelled"] as PermissionStatus[]) {
+  for (const status of [
+    "approved",
+    "rejected",
+    "cancelled",
+    "cancellation_requested",
+  ] as PermissionStatus[]) {
     assert.equal(canReviewPermission(req(status), true, "emp-1"), false, status);
   }
 });
 
 test("review and cancel are never both offered on the same request", () => {
-  const statuses: PermissionStatus[] = ["pending", "approved", "rejected", "cancelled"];
+  const statuses: PermissionStatus[] = [
+    "pending",
+    "approved",
+    "rejected",
+    "cancelled",
+    "cancellation_requested",
+  ];
   for (const status of statuses) {
-    // Own request: cancel may be offered, review must not.
+    // Own request: an employee action may be offered, review must not.
     const own = { status, employee_id: ME, permission_date: FUTURE };
-    const both =
-      canReviewPermission(own, true, ME) && canCancelPermission(own, ME, TODAY);
-    assert.equal(both, false, status);
+    const mine =
+      canCancelPermission(own, ME) ||
+      canRequestPermissionCancellation(own, ME, TODAY);
+    const theirs =
+      canReviewPermission(own, true, ME) ||
+      canReviewPermissionCancellation(own, true, ME);
+    assert.equal(mine && theirs, false, status);
   }
 });

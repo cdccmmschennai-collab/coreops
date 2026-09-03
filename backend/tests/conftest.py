@@ -328,14 +328,22 @@ def make_permission_request(db):
         status: PermissionStatus = PermissionStatus.pending,
         manager_id=None,
         created_by=None,
+        period=None,
+        routed_project_id=None,
     ) -> PermissionRequest:
         req = PermissionRequest(
             employee_id=employee_id,
             permission_date=permission_date,
             duration_hours=duration_hours,
+            period=period,
             reason=reason,
             status=status,
             manager_id=manager_id,
+            # Phase 4B routing, so a test can put a request in a specific Head's
+            # queue without having to build the work-report evidence trail the
+            # resolver reads. Defaults to None, which is the PM-fallback flow
+            # every existing caller of this fixture already got.
+            routed_project_id=routed_project_id,
             created_by=created_by,
             updated_by=created_by,
         )

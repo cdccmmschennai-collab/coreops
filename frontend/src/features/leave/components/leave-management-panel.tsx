@@ -49,8 +49,19 @@ export function LeaveManagementPanel({ employeeId, excludeSelf = false }: Props)
   // tab whose list will not show it - see `leaveQueueCountParams`.
   const pendingCount =
     useLeaveList(leaveQueueCountParams("pending", excludeSelf)).data?.total ?? 0;
-  const cancellationCount =
+  // The Cancellation queue holds BOTH kinds since Phase 4E, so its badge is the
+  // sum of both totals - counting only the leave half would understate a queue
+  // the reviewer can see permission rows in.
+  const leaveCancellationCount =
     useLeaveList(leaveQueueCountParams("cancellation_requested", excludeSelf)).data?.total ?? 0;
+  const permissionCancellationCount =
+    usePermissionList({
+      status: "cancellation_requested",
+      limit: 1,
+      offset: 0,
+      exclude_self: excludeSelf,
+    }).data?.total ?? 0;
+  const cancellationCount = leaveCancellationCount + permissionCancellationCount;
   // Same rule as the two above: the badge and the list it labels must describe
   // ONE dataset, so it passes the same `exclude_self` the queue passes.
   const permissionCount =

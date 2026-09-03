@@ -30,6 +30,14 @@ class PermissionRequestOut(BaseModel):
 
     id: uuid.UUID
     employee_id: uuid.UUID
+    # Resolved SERVER-side by `service._attach_employee_names` (Phase 4E), the
+    # same non-mapped-attribute trick `leave/service.py` already uses and for the
+    # same reason: `GET /employees` returns only their own row to a plain
+    # employee-role actor, which a Project Head still is, so a reviewer's queue
+    # had nothing to resolve a name from and fell back to printing eight
+    # characters of a UUID. None on the responses a mutation returns, which
+    # carry no name and need none.
+    employee_name: str | None = None
     permission_date: date
     duration_hours: int
     # NULL only for a request filed before Phase 4C. See `PermissionRequest.period`.
@@ -112,9 +120,12 @@ class PermissionRequestDetailOut(PermissionRequestOut):
     list endpoint is manager-scoped: an employee opening their OWN request has no
     way to resolve a name through it. Sending them with the request also means the
     page needs exactly one call.
+
+    `employee_name` is inherited from `PermissionRequestOut` since Phase 4E - it
+    used to be declared here, which is why only the DETAIL response carried a
+    name and every list row printed a UUID prefix instead.
     """
 
-    employee_name: str | None = None
     employee_code: str | None = None
     reviewer_name: str | None = None
     balance: PermissionRequestBalanceOut

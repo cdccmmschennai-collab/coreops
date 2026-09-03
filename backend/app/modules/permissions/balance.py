@@ -11,6 +11,9 @@ makes the Phase 11 rules true by construction rather than by maintenance:
 
   pending      does not consume - only `approved` rows are summed
   rejected     does not consume - same reason
+  withdrawal   asking to cancel an approved permission does NOT give the hours
+   requested   back: `cancellation_requested` is summed exactly as `approved`
+               is, so the allowance moves only when a reviewer actually rules
   cancelled    restores exactly what it took - the row stops being summed, so
                there is no figure to adjust and no way to over-restore
   cancel twice cannot restore twice - the second attempt is refused by the status
@@ -66,7 +69,17 @@ ALLOWED_DURATIONS = (1, 2)
 # Statuses that still hold a claim on the employee's month. A pending request is
 # NOT one of them for balance purposes (it consumes nothing), but it is for the
 # duplicate-request guard - see `service._assert_no_active_request`.
-CONSUMING_STATUSES = (PermissionStatus.approved,)
+#
+# `cancellation_requested` IS one of them (Phase 4E). An approved permission the
+# employee has merely ASKED to withdraw has not been withdrawn: it stands until a
+# reviewer rules, so its hours stay spent. Leaving it out would let anyone free
+# their allowance by requesting a cancellation nobody has approved, and would
+# make a rejected withdrawal silently re-spend hours the month had already given
+# back - the same reason `leave` keeps the state in its active set.
+CONSUMING_STATUSES = (
+    PermissionStatus.approved,
+    PermissionStatus.cancellation_requested,
+)
 
 
 def month_bounds(value: date) -> tuple[date, date]:
