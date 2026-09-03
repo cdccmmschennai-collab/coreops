@@ -229,6 +229,47 @@ def test_the_email_carries_the_actual_selected_option_not_the_plain_hour_count(
     assert str(req.id) in body
 
 
+def test_the_link_is_this_requests_detail_page_and_no_list(
+    db, make_user, make_employee, recorder, monkeypatch,
+):
+    """EMAIL LINK -> EXACT REQUEST DETAIL PAGE.
+
+    The one thing the reader clicks must resolve to `/attendance/permission/<this
+    request's id>` and to nothing else - not the Permission queue, not Permission
+    History, not All Requests. The id in the URL is the row's own primary key, so
+    the page that opens is the request the letter is about; an employee id, a date
+    or a project id would all name something the reader would then have to search
+    through.
+    """
+    from app.core.config import settings
+
+    from app.modules.permissions.recipients import permission_request_path
+
+    monkeypatch.setattr(settings, "APP_BASE_URL", "https://coreops.cdccmms.com")
+    emp = make_employee(
+        employee_code="PEE21",
+        reporting_pm_id=_pm(make_user, make_employee, "21", work_email="ppm.21@cdccmms.com"),
+    )
+    other = _permission(db, emp.id)  # a second request, to prove the id is THIS one
+    req = _permission(db, emp.id, reason="Bank")
+
+    assert permission_request_path(req) == f"/attendance/permission/{req.id}"
+
+    permission_email.send_submission_email(db, emp, req)
+
+    for body in (recorder.calls[0]["text_body"], recorder.calls[0]["html_body"]):
+        assert f"https://coreops.cdccmms.com/attendance/permission/{req.id}" in body
+        assert str(other.id) not in body
+        # None of the list surfaces a permission row can also be reached from.
+        assert "/attendance?" not in body
+        assert "tab=leave" not in body
+        assert "queue=" not in body
+        # Not the bare history path either - the detail page hangs off it, so
+        # only the id-carrying form may appear.
+        assert "/attendance/permission\n" not in body
+        assert '"https://coreops.cdccmms.com/attendance/permission"' not in body
+
+
 def test_a_missing_reason_omits_the_row(db, make_user, make_employee, recorder):
     emp = make_employee(
         employee_code="PEE9",

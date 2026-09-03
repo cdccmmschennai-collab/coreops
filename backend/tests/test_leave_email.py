@@ -173,19 +173,17 @@ def test_every_leave_email_carries_a_minimal_html_alternative(
         work_email="emp.15@cdccmms.com",
     )
     req = _leave(db, emp.id)
-    # All three open the request's own detail page; they differ only in the list
-    # each reader comes back to - the approver's queue, the employee's My leave.
-    approver_link = leave_email.build_link(
-        leave_email.leave_request_path(req, view="team", queue="pending")
-    )
-    employee_link = leave_email.build_link(leave_email.leave_request_path(req, view="my"))
+    # All three open the request's own detail page, and all three open the SAME
+    # one: an email has no originating list, so none of them carries a `from`.
+    detail_link = leave_email.build_link(leave_email.leave_detail_path(req))
+    assert detail_link == f"https://coreops.cdccmms.com/attendance/leave/{req.id}"
 
     leave_email.send_submission_email(db, emp, req)
     leave_email.send_approval_email(db, req, reviewer)
     leave_email.send_rejection_email(db, req, reviewer)
 
     assert len(recorder.calls) == 3
-    for call, link in zip(recorder.calls, [approver_link, employee_link, employee_link]):
+    for call, link in zip(recorder.calls, [detail_link, detail_link, detail_link]):
         escaped_href = html_module.escape(link, quote=True)
         assert not call.get("text_only")
         _assert_no_markup(call["text_body"])
@@ -1078,10 +1076,75 @@ def test_a_configured_app_base_url_produces_an_absolute_decision_link(
     leave_email.send_approval_email(db, req, None)
 
     # The request's own detail page, not the Leave list: the id is what the
-    # reader was notified about, so it is what the link opens.
-    path = leave_email.leave_request_path(req, view="my")
-    assert path.startswith(f"/attendance/leave/{req.id}?from=")
-    assert f"https://coreops.cdccmms.com{path}" in recorder.calls[0]["text_body"]
+    # reader was notified about, so it is what the link opens. Nothing else is
+    # in the URL - no `from`, because an inbox has no queue behind it.
+    path = leave_email.leave_detail_path(req)
+    assert path == f"/attendance/leave/{req.id}"
+    body = recorder.calls[0]["text_body"]
+    assert f"https://coreops.cdccmms.com{path}" in body
+    assert "?from=" not in body
+    assert "tab=leave" not in body
+
+
+def test_the_link_is_this_requests_detail_page_and_no_list(
+    db, make_user, make_employee, recorder, monkeypatch,
+):
+    """EMAIL LINK -> EXACT REQUEST DETAIL PAGE.
+
+    The submission email's link must resolve to `/attendance/leave/<this
+    request's id>` and to nothing else - not Pending requests, not All Requests,
+    not Leave History, not the Leave tab. It used to carry the pending queue as a
+    `?from=`, which put a LIST address inside the one link whose job is to open
+    one request; an email has no originating queue to return to, so it names
+    none and the detail page falls back to its own history destination.
+    """
+    from app.core.config import settings
+
+    from app.modules.leave.recipients import leave_detail_path
+
+    monkeypatch.setattr(settings, "APP_BASE_URL", "https://coreops.cdccmms.com")
+    emp = make_employee(
+        employee_code="EE41",
+        reporting_pm_id=_pm(make_user, make_employee, "41", work_email="pm.41@cdccmms.com"),
+        work_email="emp.41@cdccmms.com",
+    )
+    other = _leave(db, emp.id)  # a second request, to prove the id is THIS one
+    req = _leave(db, emp.id)
+
+    assert leave_detail_path(req) == f"/attendance/leave/{req.id}"
+
+    leave_email.send_submission_email(db, emp, req)
+
+    for body in (recorder.calls[0]["text_body"], recorder.calls[0]["html_body"]):
+        assert f"https://coreops.cdccmms.com/attendance/leave/{req.id}" in body
+        assert str(other.id) not in body
+        # None of the list surfaces a leave row can also be reached from, in any
+        # spelling - raw, or percent-encoded inside a `from`.
+        assert "?from=" not in body
+        assert "/attendance?" not in body
+        assert "%2Fattendance%3F" not in body
+        assert "tab=leave" not in body
+        assert "queue=" not in body
+
+
+def test_the_in_app_notification_keeps_its_from_queue(db, make_employee):
+    """The `from` behaviour that belongs to links opened INSIDE the app is
+    untouched: the bell still deep-links to the detail page with the list behind
+    it, and both paths still name the same page. Only the inbox drops the queue.
+    """
+    from app.modules.leave.recipients import leave_detail_path, leave_request_path
+
+    emp = make_employee(employee_code="EE42")
+    req = _leave(db, emp.id)
+
+    assert leave_request_path(req, view="team", queue="pending") == (
+        f"/attendance/leave/{req.id}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
+    assert leave_request_path(req, view="my") == (
+        f"/attendance/leave/{req.id}?from=%2Fattendance%3Ftab%3Dleave%26view%3Dmy"
+    )
+    assert leave_request_path(req, view="my").startswith(leave_detail_path(req) + "?")
 
 
 # ---------- end-to-end wiring ----------------------------------------------

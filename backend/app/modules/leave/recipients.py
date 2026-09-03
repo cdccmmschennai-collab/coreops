@@ -174,6 +174,25 @@ def leave_list_path(*, view: str, queue: str | None = None) -> str:
     return f"{path}&queue={queue}" if queue is not None else path
 
 
+def leave_detail_path(req: LeaveRequest) -> str:
+    """One leave request's own detail page, and nothing else: `/attendance/leave/<id>`.
+
+    THE CANONICAL DETAIL URL. :func:`leave_request_path` is this plus a `from`,
+    so the address of the page itself is written in exactly one place and the
+    two callers cannot drift.
+
+    Used bare by OUTBOUND EMAIL (`leave/email.py`). A message that arrives in an
+    inbox has no originating list, so it names none: there is no queue to send
+    the reader "back" to, and inventing one made the email's own URL carry
+    `/attendance?tab=leave&view=team&queue=pending` as its `from` - a list
+    address, inside a link whose whole job is to open one request. The detail
+    page already handles a missing `from`: "← Leave Requests" falls back to the
+    plain Leave tab (`leave/types.ts::leaveReturnHref`), which is precisely the
+    cold-open behaviour it was written for.
+    """
+    return f"/attendance/leave/{req.id}"
+
+
 def leave_request_path(
     req: LeaveRequest, *, view: str, queue: str | None = None
 ) -> str:
@@ -198,8 +217,9 @@ def leave_request_path(
     `request_leave_cancellation`, which moves the request straight to
     `cancellation_requested` - passes `queue="cancellation"`.
 
-    In one place so the notification's `target_url` and the email's link cannot
-    disagree.
+    Used by the IN-APP notification (`leave/service.py`), which is read inside
+    the app and therefore does have a list to return to. Email uses
+    :func:`leave_detail_path` - the same page without a `from`.
     """
     back_to = leave_list_path(view=view, queue=queue)
-    return f"/attendance/leave/{req.id}?from={quote(back_to, safe='')}"
+    return f"{leave_detail_path(req)}?from={quote(back_to, safe='')}"

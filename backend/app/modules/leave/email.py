@@ -102,7 +102,7 @@ from app.modules.leave.effects import leave_working_days
 from app.modules.leave.models import LeaveRequest
 from app.modules.leave.recipients import (
     LeaveRecipient,
-    leave_request_path,
+    leave_detail_path,
     resolve_leave_recipients,
 )
 from app.notifications.email_dispatch import enqueue_email
@@ -491,9 +491,10 @@ def send_submission_email(db: Session, employee: Employee, req: LeaveRequest) ->
             working_days=working_days,
             reason=req.reason,
             request_id=str(req.id),
-            link=build_link(
-                leave_request_path(req, view="team", queue="pending")
-            ),
+            # THIS request's detail page and nothing else. No `from`: an email
+            # has no originating queue, so it names none - see
+            # `recipients.leave_detail_path`.
+            link=build_link(leave_detail_path(req)),
         )
         result = enqueue_email(
             to=recipient.employee.work_email,
@@ -596,11 +597,11 @@ def _send_decision_email(
             reason=req.reason,
             reviewer_comment=req.manager_comment,
             request_id=str(req.id),
-            # The request's own detail page, with My leave behind it - the same
-            # path the `leave_approved` / `leave_rejected` notification
-            # deep-links to, built by the same helper so the bell and the inbox
-            # cannot drift.
-            link=build_link(leave_request_path(req, view="my")),
+            # The request's own detail page - the same page the `leave_approved`
+            # / `leave_rejected` notification deep-links to, built from the same
+            # helper so the bell and the inbox cannot drift about WHICH page.
+            # The bell adds My leave as its `from`; an email carries none.
+            link=build_link(leave_detail_path(req)),
         )
         result = enqueue_email(
             to=address,
