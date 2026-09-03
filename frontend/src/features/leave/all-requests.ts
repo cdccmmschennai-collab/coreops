@@ -33,8 +33,6 @@ import {
   type LeaveStatus,
 } from "./types.ts";
 import {
-  PERMISSION_PERIOD_LABEL,
-  formatDuration,
   permissionDecisionActor,
   permissionDetailHref,
   type PermissionPeriod,
@@ -117,31 +115,56 @@ export interface AllRequestListParams {
 }
 
 /**
+ * The COMPACT permission wording, used by the Type cell of this table and
+ * nowhere else.
+ *
+ * The full wording - "Permission - 1st Half - 2 Hours", from
+ * `PERMISSION_PERIOD_LABEL` - is a two-line cell at this column width, which
+ * doubled the height of every permission row. The fix is a shorter label, NOT a
+ * smaller font: the table's typography is the system's and stays untouched.
+ *
+ * Only the presentation is short. The stored `period` value, the request
+ * dialog, the detail page, Permission History and the emails all keep the full
+ * authoritative wording - this is deliberately a separate map rather than a
+ * transformation of that one, because the two are allowed to differ and only
+ * this table may use the short form.
+ *
+ * `Record<PermissionPeriod, ...>` is what keeps it honest: adding a fifth
+ * option to `PERMISSION_PERIOD_OPTIONS` stops this file compiling until the
+ * compact label for it is written too.
+ *
+ * The separator is a MIDDLE DOT (U+00B7), not an em or en dash - the house rule
+ * this repo enforces is against dashes, and a dot is what keeps three fields
+ * legible in a cell this narrow.
+ */
+const COMPACT_PERMISSION_PERIOD_LABEL: Record<PermissionPeriod, string> = {
+  first_half_1h: "P · 1st Half · 1 hr",
+  second_half_1h: "P · 2nd Half · 1 hr",
+  first_half_2h: "P · 1st Half · 2 hrs",
+  second_half_2h: "P · 2nd Half · 2 hrs",
+};
+
+/**
  * The Type cell.
  *
- *   leave       "Normal" / "Special"          - unchanged from All leave
- *   permission  "Permission - 1st Half - 2 Hours"
+ *   leave       "Normal" / "Special"     - unchanged from All leave
+ *   permission  "P · 1st Half · 2 hrs"   - the compact form above
  *
- * The leave half is exactly what the tab rendered before, so no existing row
- * changes. The permission half prefixes the kind because in a mixed table the
- * status badge no longer tells a reader which sort of absence they are looking
- * at, and names the SELECTED OPTION rather than a bare hour count - the one
- * authoritative wording, taken from `PERMISSION_PERIOD_LABEL` so it stays
- * character-for-character what the request form, the detail page and the email
- * all say. A request filed before that option existed has no half on record and
- * none that could be safely guessed, so it falls back to the plain compact form.
- *
- * A PLAIN ASCII hyphen throughout, never an em or en dash - a house rule across
- * CoreOps, and the same one `PERMISSION_PERIOD_LABEL` itself follows.
+ * The leave half is exactly what the tab rendered before, so no existing leave
+ * row changes. The permission half still prefixes the kind - "P" - because in a
+ * mixed table the status badge does not tell a reader which sort of absence
+ * they are looking at, and still names the SELECTED OPTION rather than a bare
+ * hour count. A request filed before that option existed has no half on record
+ * and none that could be safely guessed, so it falls back to the kind and the
+ * hours alone.
  */
 export function allRequestTypeLabel(row: AllRequest): string {
   if (row.kind === "leave") {
     return row.classification ? LEAVE_CLASSIFICATION_LABEL[row.classification] : "Leave";
   }
-  const period = row.period
-    ? PERMISSION_PERIOD_LABEL[row.period]
-    : formatDuration(row.duration_hours ?? 0);
-  return `Permission - ${period}`;
+  if (row.period) return COMPACT_PERMISSION_PERIOD_LABEL[row.period];
+  const hours = row.duration_hours ?? 0;
+  return `P · ${hours} ${hours === 1 ? "hr" : "hrs"}`;
 }
 
 /**

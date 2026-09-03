@@ -85,20 +85,46 @@ test("a leave row's Type is unchanged from the old All-leave table", () => {
   assert.equal(allRequestTypeLabel(leaveRow({ classification: "special" })), "Special");
 });
 
-test("a permission row names its kind and its selected option", () => {
+test("a permission row names its kind and its selected option, compactly", () => {
+  // All four selectable options, because the compact map is the only place the
+  // short wording exists and a wrong half here is invisible to the type system.
   assert.equal(
-    allRequestTypeLabel(permissionRow()),
-    "Permission - 1st Half - 2 Hours",
+    allRequestTypeLabel(permissionRow({ period: "first_half_1h", duration_hours: 1 })),
+    "P · 1st Half · 1 hr",
   );
   assert.equal(
     allRequestTypeLabel(permissionRow({ period: "second_half_1h", duration_hours: 1 })),
-    "Permission - 2nd Half - 1 Hour",
+    "P · 2nd Half · 1 hr",
+  );
+  assert.equal(
+    allRequestTypeLabel(permissionRow({ period: "first_half_2h", duration_hours: 2 })),
+    "P · 1st Half · 2 hrs",
+  );
+  assert.equal(
+    allRequestTypeLabel(permissionRow({ period: "second_half_2h", duration_hours: 2 })),
+    "P · 2nd Half · 2 hrs",
   );
 });
 
-test("the Type label uses plain ASCII hyphens, never an em or en dash", () => {
+test("the Type label never uses an em or en dash", () => {
+  // The compact form separates with a middle dot; the house rule is only that
+  // no dash of either kind reaches a reader.
   const label = allRequestTypeLabel(permissionRow());
   assert.ok(!label.includes("—") && !label.includes("–"), label);
+});
+
+test("the compact permission label stays on one line's worth of text", () => {
+  // The whole point of the change: the cell is `whitespace-nowrap`, so the
+  // label has to be short enough that nowrap does not overflow the column.
+  for (const period of [
+    "first_half_1h",
+    "second_half_1h",
+    "first_half_2h",
+    "second_half_2h",
+  ] as const) {
+    const label = allRequestTypeLabel(permissionRow({ period }));
+    assert.ok(label.length <= 20, `${label} (${label.length} chars)`);
+  }
 });
 
 test("a permission filed before the period option existed falls back, not blank", () => {
@@ -106,7 +132,11 @@ test("a permission filed before the period option existed falls back, not blank"
   // still say what it is.
   assert.equal(
     allRequestTypeLabel(permissionRow({ period: null, duration_hours: 1 })),
-    "Permission - 1hr",
+    "P · 1hr",
+  );
+  assert.equal(
+    allRequestTypeLabel(permissionRow({ period: null, duration_hours: 2 })),
+    "P · 2hrs",
   );
 });
 

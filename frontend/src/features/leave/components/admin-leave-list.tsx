@@ -201,12 +201,19 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
                       empById.get(req.employee_id) ??
                       req.employee_id.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{allRequestTypeLabel(req)}</TableCell>
+                  {/* `whitespace-nowrap` on the three narrow cells, not a
+                      smaller font: a wrapped Type or a date broken after its
+                      "2026-09-" doubled the height of every permission row.
+                      The Table wrapper already scrolls horizontally, so no
+                      overflow escapes the panel. */}
+                  <TableCell className="whitespace-nowrap">
+                    {allRequestTypeLabel(req)}
+                  </TableCell>
                   {/* A permission is a single day, so its two cells hold the
                       same date - the shape the table already had, filled
                       honestly rather than left blank. */}
-                  <TableCell className="tabular">{req.from_date}</TableCell>
-                  <TableCell className="tabular">{req.to_date}</TableCell>
+                  <TableCell className="tabular whitespace-nowrap">{req.from_date}</TableCell>
+                  <TableCell className="tabular whitespace-nowrap">{req.to_date}</TableCell>
                   <TableCell>
                     {req.kind === "leave" ? (
                       <LeaveStatusBadge status={req.status} />
