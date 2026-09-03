@@ -35,6 +35,10 @@ class PermissionRequestOut(BaseModel):
     status: PermissionStatus
     manager_id: uuid.UUID | None = None
     manager_comment: str | None = None
+    # The project Phase 4B's routing resolved at creation, or None when it
+    # fell back to the reporting PM. See `permissions.models.PermissionRequest
+    # .routed_project_id`.
+    routed_project_id: uuid.UUID | None = None
     reviewed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

@@ -40,8 +40,11 @@ def team(make_user, make_employee):
     m2 = make_user("mgr2@x.com", role=UserRole.project_manager)
     mgr2 = make_employee(employee_code="MGR2", user_id=m2.id, manager_id=mgr.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
+    # `reporting_pm_id`, not just `manager_id`: Phase 4B's routing fallback
+    # (no report evidence here, so every submission below falls back) reads
+    # `reporting_pm_id`, exactly as `leave/recipients.py` already does.
     emp = make_employee(employee_code="EMP011", user_id=eu.id, manager_id=mgr.id,
-                        first_name="Arun", last_name="Kumar")
+                        reporting_pm_id=mu.id, first_name="Arun", last_name="Kumar")
     ou = make_user("other@x.com", role=UserRole.employee)
     other = make_employee(employee_code="EMP012", user_id=ou.id, manager_id=mgr.id)
     return {

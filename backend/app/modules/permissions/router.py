@@ -175,9 +175,16 @@ def cancel_permission_request(
 def approve_permission_request(
     req_id: uuid.UUID,
     body: PermissionReviewBody = PermissionReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PermissionRequestOut:
+    """PM (any request) or the request's routed Project Head (Phase 4B) may
+    review - the same PM-or-Head split `leave/router.py` uses, which is why
+    this depends on `get_current_user` rather than the PM-only
+    `require_reviewer`: a Head's role stays "employee", so a role-gated
+    dependency would 403 them before `service._assert_can_review` - the actual
+    authority check - ever runs.
+    """
     return PermissionRequestOut.model_validate(
         service.approve_permission_request(db, current, req_id, body)
     )
@@ -187,7 +194,7 @@ def approve_permission_request(
 def reject_permission_request(
     req_id: uuid.UUID,
     body: PermissionReviewBody = PermissionReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PermissionRequestOut:
     return PermissionRequestOut.model_validate(

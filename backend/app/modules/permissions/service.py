@@ -44,6 +44,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
 from app.modules.calendar.working_days import (
@@ -52,6 +53,7 @@ from app.modules.calendar.working_days import (
 )
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
+from app.modules.leave.routing import resolve_routed_project
 from app.modules.permissions.balance import (
     ALLOWED_DURATIONS,
     MONTHLY_ALLOWANCE_HOURS,
@@ -169,6 +171,55 @@ def _notify_employee(db: Session, actor: User, employee_id: uuid.UUID, type_: st
           message=message, entity_id=entity_id, target_url=target_url)
 
 
+def _reporting_pm_employee(db: Session, employee: Employee) -> Employee | None:
+    """The employee record of the requester's reporting PM, or None.
+
+    `Employee.reporting_pm_id` is a **users.id**, not an employees.id, so it is
+    resolved back to the PM's employee row - the same lookup
+    `leave/recipients.py::_reporting_pm_employee` performs for Leave. Kept as a
+    small local copy rather than a cross-module import: this is a four-line
+    query, not shared logic worth coupling the two modules over.
+    """
+    if employee.reporting_pm_id is None:
+        return None
+    return db.execute(
+        select(Employee)
+        .where(
+            Employee.user_id == employee.reporting_pm_id,
+            Employee.deleted_at.is_(None),
+        )
+        .limit(1)
+    ).scalars().first()
+
+
+def _routed_recipient(db: Session, employee: Employee, req: PermissionRequest) -> Employee | None:
+    """Who the in-app channel notifies about this request: the routed project's
+    CURRENT Head if reachable (a linked user_id), else the requester's
+    reporting PM - the SAME fallback order `leave/recipients.py` uses, and
+    deliberately NOT `employee.manager_id` (the line manager is not an
+    authorized reviewer here any more than for Leave).
+    """
+    if req.routed_project_id is not None:
+        head_id = authz.project_head_employee_id(db, req.routed_project_id)
+        if head_id is not None and head_id != employee.id:
+            head = db.get(Employee, head_id)
+            if head is not None and head.user_id is not None:
+                return head
+    pm = _reporting_pm_employee(db, employee)
+    if pm is not None and pm.id != employee.id and pm.user_id is not None:
+        return pm
+    return None
+
+
+def _notify_routed_approver(db: Session, actor: User, employee: Employee, req: PermissionRequest,
+                            type_: str, title: str, message: str) -> None:
+    recipient = _routed_recipient(db, employee, req)
+    if recipient is None:
+        return
+    _push(db, actor=actor, user_id=recipient.user_id, type_=type_, title=title,
+          message=message, entity_id=req.id, target_url=_detail_url(req.id))
+
+
 # ---------- audit -----------------------------------------------------------
 
 def _audit(
@@ -228,6 +279,10 @@ def _apply_scope(db: Session, actor: User, stmt):
 def _assert_can_read(db: Session, actor: User, req: PermissionRequest) -> None:
     if actor.role == UserRole.project_manager:
         return
+    if req.routed_project_id is not None and authz.can_review_report(
+        db, actor, {req.routed_project_id}
+    ):
+        return
     me = _current_employee(db, actor)
     if me is None or req.employee_id != me.id:
         raise AppError("forbidden", "You can only view your own permission requests.", 403)
@@ -237,21 +292,29 @@ def _assert_can_review(db: Session, actor: User, req: PermissionRequest) -> None
     """Who may rule on a permission request - enforced here, on every decision
     path, regardless of what the frontend chose to render.
 
-    NOBODY APPROVES THEIR OWN PERMISSION, project manager included. The role
-    check alone is not enough: project managers are employees too and file their
-    own requests, so without the second check a PM could grant themselves hours
-    out of their own allowance.
+    PM (any request) or the CURRENT Head of the request's routed project may
+    review (Phase 4B) - `authz.can_review_report` is the same PM-or-Head rule
+    Leave and Work Reports already use, so this stays a one-line delegation
+    rather than a second copy of it.
+
+    NOBODY APPROVES THEIR OWN PERMISSION, project manager or Head included: both
+    are employees too and file their own requests, so without the second check
+    either could grant themselves hours out of their own allowance.
     """
-    if actor.role != UserRole.project_manager:
+    project_ids = {req.routed_project_id} if req.routed_project_id is not None else set()
+    if not authz.can_review_report(db, actor, project_ids):
         raise AppError(
-            "forbidden", "Only project managers can review permission requests.", 403
+            "forbidden",
+            "Only a project manager or this request's assigned Project Head can "
+            "review it.",
+            403,
         )
     me = _current_employee(db, actor)
     if me is not None and req.employee_id == me.id:
         raise AppError(
             "forbidden",
-            "You can't review your own permission request - another project "
-            "manager has to decide it.",
+            "You can't review your own permission request - another reviewer "
+            "has to decide it.",
             403,
         )
 
@@ -625,6 +688,11 @@ def create_permission_request(
         duration_hours=data.duration_hours,
         reason=data.reason,
         status=PermissionStatus.pending,
+        # Phase 4B: the same work-report-evidence resolver Leave uses, given the
+        # permission date as the boundary. NULL when no single project can be
+        # established, which falls back to the existing PM / reporting_pm_id
+        # flow below via `_notify_routed_approver`.
+        routed_project_id=resolve_routed_project(db, me.id, data.permission_date),
         created_by=actor.id,
         updated_by=actor.id,
     )
@@ -635,15 +703,11 @@ def create_permission_request(
     db.refresh(req)
 
     hours = req.duration_hours
-    _notify_manager(
-        db, actor, me, "permission_submitted",
+    _notify_routed_approver(
+        db, actor, me, req, "permission_submitted",
         f"{me.full_name} submitted a permission request",
         f"{me.full_name} requested {hours} {hours_word(hours)} of permission for "
         f"{_short_date(req.permission_date)}.",
-        req.id,
-        # Straight to the detail page, which is where the manager's Approve and
-        # Reject live - not to the queue they would then have to search.
-        _detail_url(req.id),
     )
     return req
 

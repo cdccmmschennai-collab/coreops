@@ -73,6 +73,16 @@ class PermissionRequest(UUIDMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
     manager_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The project the employee's latest valid Daily Work Report evidence shows
+    # them on, resolved once at creation (Phase 4B) by the SAME resolver Leave
+    # uses - leave/routing.py::resolve_routed_project. Historical only, never a
+    # frozen approver: who reviews is always the project's CURRENT
+    # head_employee_id, looked up fresh via app.core.authz at read/review time.
+    # NULL means no single project could be determined and the request falls
+    # back to the existing PM / reporting_pm_id approval flow.
+    routed_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -84,4 +94,5 @@ class PermissionRequest(UUIDMixin, TimestampMixin, Base):
         Index("permission_employee_date_idx", "employee_id", "permission_date"),
         Index("permission_status_idx", "status"),
         Index("permission_manager_idx", "manager_id", "status"),
+        Index("permission_routed_project_idx", "routed_project_id"),
     )
