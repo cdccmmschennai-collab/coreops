@@ -22,7 +22,7 @@ import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 
 import { useApprovePermission, usePermissionList, useRejectPermission } from "../hooks";
-import { formatDuration, formatShortDate, permissionDetailPath } from "../types";
+import { formatPermissionDuration, formatShortDate, permissionDetailPath } from "../types";
 
 const COL_COUNT = 6;
 
@@ -127,7 +127,7 @@ export function PermissionReviewPanel() {
                       {formatShortDate(req.permission_date)}
                     </TableCell>
                     <TableCell className="tabular">
-                      {formatDuration(req.duration_hours)}
+                      {formatPermissionDuration(req)}
                     </TableCell>
                     <TableCell className="max-w-[220px] truncate text-muted-foreground">
                       {req.reason ?? "-"}

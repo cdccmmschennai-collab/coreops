@@ -46,6 +46,59 @@ class PermissionStatus(str, enum.Enum):
     cancelled = "cancelled"
 
 
+class PermissionPeriod(str, enum.Enum):
+    """The four selectable permission options (Phase 4C).
+
+    This is the ONE authoritative value a requester picks - the approver never
+    has to infer a half from `duration_hours` or any other column. `duration_hours`
+    stays on the row too, but only as bookkeeping DERIVED from this at creation
+    (see `PERIOD_HOURS` and `service.create_permission_request`): the balance sum,
+    the DB check constraint and the attendance join all read hours, and rewriting
+    every one of those to parse a period string is a bigger, riskier change than
+    this phase asks for.
+
+    Nullable on the row: a permission filed before this phase has no half on
+    record and none can be inferred, so it stays `None` and falls back to a plain
+    "N hour(s)" rendering - see `service._duration_label`.
+    """
+
+    first_half_1h = "first_half_1h"
+    second_half_1h = "second_half_1h"
+    first_half_2h = "first_half_2h"
+    second_half_2h = "second_half_2h"
+
+
+# How many hours each option costs. The only source of `duration_hours` for a
+# NEW request - see `service.create_permission_request`.
+PERIOD_HOURS: dict[PermissionPeriod, int] = {
+    PermissionPeriod.first_half_1h: 1,
+    PermissionPeriod.second_half_1h: 1,
+    PermissionPeriod.first_half_2h: 2,
+    PermissionPeriod.second_half_2h: 2,
+}
+
+# The exact wording the form, the detail page and the email all show. An em
+# dash, not a hyphen, matching the label the product asked for verbatim.
+PERIOD_LABELS: dict[PermissionPeriod, str] = {
+    PermissionPeriod.first_half_1h: "1st Half — 1 Hour",
+    PermissionPeriod.second_half_1h: "2nd Half — 1 Hour",
+    PermissionPeriod.first_half_2h: "1st Half — 2 Hours",
+    PermissionPeriod.second_half_2h: "2nd Half — 2 Hours",
+}
+
+
+def duration_label(duration_hours: int, period: PermissionPeriod | None) -> str:
+    """The exact selected option, e.g. "1st Half — 1 Hour" - the ONE authoritative
+    wording every surface (notification, email, detail page) uses. Falls back to
+    a plain "N hour(s)" only for a request filed before Phase 4C, which has no
+    period on record and none that could be safely guessed.
+    """
+    if period is not None:
+        return PERIOD_LABELS[period]
+    unit = "hour" if duration_hours == 1 else "hours"
+    return f"{duration_hours} {unit}"
+
+
 class PermissionRequest(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "permission_requests"
 
@@ -58,7 +111,24 @@ class PermissionRequest(UUIDMixin, TimestampMixin, Base):
     permission_date: Mapped[date] = mapped_column(Date, nullable=False)
     # Whole hours, 1 or 2 - enforced by the check constraint below as well as by
     # the API schema, so no script or fixture can create a 30-minute permission.
+    # For a request created since Phase 4C this is DERIVED from `period` via
+    # `PERIOD_HOURS`, never chosen independently - see `service.
+    # create_permission_request`.
     duration_hours: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    # The actual selected option (Phase 4C) - one of the four `PermissionPeriod`
+    # values, e.g. "1st Half - 1 Hour". NULL on every row created before this
+    # phase, which had no half to record; those keep displaying as a plain
+    # "N hour(s)" (see `service._duration_label`). This is the one field a
+    # reviewer or an email reads to know what was actually asked for - never
+    # inferred from `duration_hours` alone.
+    period: Mapped[PermissionPeriod | None] = mapped_column(
+        SAEnum(
+            PermissionPeriod,
+            name="permission_period",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=True,
+    )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[PermissionStatus] = mapped_column(
         SAEnum(

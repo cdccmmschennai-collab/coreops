@@ -24,8 +24,8 @@ import { usePermissionHistory } from "../hooks";
 import {
   currentBusinessMonth,
   formatAvailable,
-  formatDuration,
   formatMonthLabel,
+  formatPermissionDuration,
   formatShortDate,
   monthStart,
   permissionDetailPath,
@@ -147,7 +147,7 @@ export function PermissionHistory() {
                       {formatShortDate(req.permission_date)}
                     </TableCell>
                     <TableCell className="tabular">
-                      {formatDuration(req.duration_hours)}
+                      {formatPermissionDuration(req)}
                     </TableCell>
                     <TableCell>
                       <PermissionStatusBadge status={req.status} />

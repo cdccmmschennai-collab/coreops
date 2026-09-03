@@ -1,11 +1,10 @@
 """Permission Request pydantic schemas."""
 import uuid
 from datetime import date, datetime
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.permissions.models import PermissionStatus
+from app.modules.permissions.models import PermissionPeriod, PermissionStatus
 
 _REASON_MAX = 2000
 _COMMENT_MAX = 1000
@@ -13,10 +12,12 @@ _COMMENT_MAX = 1000
 
 class PermissionRequestCreate(BaseModel):
     permission_date: date
-    # `Literal[1, 2]` rather than a bounded int: it rejects 0, 3 and any decimal
-    # at the edge of the API and puts the two legal values in the OpenAPI schema,
-    # so the "no 30-minute permission" rule is documented, not just enforced.
-    duration_hours: Literal[1, 2]
+    # The one authoritative selection (Phase 4C) - one of the four options. Puts
+    # exactly the legal set in the OpenAPI schema, the same way `Literal[1, 2]`
+    # used to for the plain hour count. `duration_hours` is no longer taken from
+    # the caller at all: it is derived server-side from this value (see
+    # `service.create_permission_request`), so it cannot disagree with it.
+    period: PermissionPeriod
     reason: str | None = Field(default=None, max_length=_REASON_MAX)
 
 
@@ -31,6 +32,8 @@ class PermissionRequestOut(BaseModel):
     employee_id: uuid.UUID
     permission_date: date
     duration_hours: int
+    # NULL only for a request filed before Phase 4C. See `PermissionRequest.period`.
+    period: PermissionPeriod | None = None
     reason: str | None = None
     status: PermissionStatus
     manager_id: uuid.UUID | None = None

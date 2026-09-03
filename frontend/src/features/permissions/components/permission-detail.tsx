@@ -25,8 +25,8 @@ import {
   PERMISSION_HISTORY_PATH,
   canCancelPermission,
   canReviewPermission,
-  formatDuration,
   formatHours,
+  formatPermissionDuration,
   formatMonthLabel,
   formatShortDate,
   type PermissionRequestDetail as Detail,
@@ -332,7 +332,7 @@ export function PermissionDetail({ id }: { id: string }) {
               <InfoRow label="Employee" value={empName} />
               <InfoRow label="Employee ID" value={detail.employee_code ?? "-"} />
               <InfoRow label="Date" value={formatShortDate(detail.permission_date)} />
-              <InfoRow label="Duration" value={formatDuration(detail.duration_hours)} />
+              <InfoRow label="Duration" value={formatPermissionDuration(detail)} />
               <InfoRow
                 label="Status"
                 value={<PermissionStatusBadge status={detail.status} />}

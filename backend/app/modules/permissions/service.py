@@ -54,8 +54,9 @@ from app.modules.calendar.working_days import (
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.routing import resolve_routed_project
+from app.modules.permissions import email as permission_email
+from app.modules.permissions import recipients as permission_recipients
 from app.modules.permissions.balance import (
-    ALLOWED_DURATIONS,
     MONTHLY_ALLOWANCE_HOURS,
     PermissionBalance,
     balance_for,
@@ -65,7 +66,12 @@ from app.modules.permissions.balance import (
     month_bounds,
     month_has_closed,
 )
-from app.modules.permissions.models import PermissionRequest, PermissionStatus
+from app.modules.permissions.models import (
+    PERIOD_HOURS,
+    PermissionRequest,
+    PermissionStatus,
+    duration_label,
+)
 from app.modules.permissions.schemas import (
     PermissionBalanceOut,
     PermissionHistoryOut,
@@ -171,44 +177,20 @@ def _notify_employee(db: Session, actor: User, employee_id: uuid.UUID, type_: st
           message=message, entity_id=entity_id, target_url=target_url)
 
 
-def _reporting_pm_employee(db: Session, employee: Employee) -> Employee | None:
-    """The employee record of the requester's reporting PM, or None.
-
-    `Employee.reporting_pm_id` is a **users.id**, not an employees.id, so it is
-    resolved back to the PM's employee row - the same lookup
-    `leave/recipients.py::_reporting_pm_employee` performs for Leave. Kept as a
-    small local copy rather than a cross-module import: this is a four-line
-    query, not shared logic worth coupling the two modules over.
-    """
-    if employee.reporting_pm_id is None:
-        return None
-    return db.execute(
-        select(Employee)
-        .where(
-            Employee.user_id == employee.reporting_pm_id,
-            Employee.deleted_at.is_(None),
-        )
-        .limit(1)
-    ).scalars().first()
-
-
 def _routed_recipient(db: Session, employee: Employee, req: PermissionRequest) -> Employee | None:
     """Who the in-app channel notifies about this request: the routed project's
     CURRENT Head if reachable (a linked user_id), else the requester's
-    reporting PM - the SAME fallback order `leave/recipients.py` uses, and
-    deliberately NOT `employee.manager_id` (the line manager is not an
-    authorized reviewer here any more than for Leave).
+    reporting PM.
+
+    Thin wrapper around the ONE authoritative chain,
+    `permissions.recipients.resolve_in_app_recipient` (Phase 4C) - shared with
+    the submission email so the two channels can never disagree about who the
+    recipient is. Kept under this name/shape (returning the Employee, not a
+    Recipient wrapper) for `test_permission_routing.py`, which calls it
+    directly.
     """
-    if req.routed_project_id is not None:
-        head_id = authz.project_head_employee_id(db, req.routed_project_id)
-        if head_id is not None and head_id != employee.id:
-            head = db.get(Employee, head_id)
-            if head is not None and head.user_id is not None:
-                return head
-    pm = _reporting_pm_employee(db, employee)
-    if pm is not None and pm.id != employee.id and pm.user_id is not None:
-        return pm
-    return None
+    candidate = permission_recipients.resolve_in_app_recipient(db, employee, req)
+    return candidate.employee if candidate is not None else None
 
 
 def _notify_routed_approver(db: Session, actor: User, employee: Employee, req: PermissionRequest,
@@ -668,14 +650,12 @@ def create_permission_request(
     The balance is deliberately NOT checked here. A pending request holds no
     hours, so refusing to file one when the month is spent would be inventing a
     reservation the rest of the system does not have; the approval is where the
-    allowance is enforced. The duration is validated (1h or 2h) by the schema, by
-    the guard below, and by the DB check constraint.
+    allowance is enforced. `duration_hours` is no longer chosen by the caller
+    (Phase 4C): it is derived from `data.period` via `PERIOD_HOURS`, so it can
+    never disagree with the option the employee actually picked. The result is
+    still exactly 1 or 2, which is all the DB check constraint has ever allowed.
     """
     me = _author_employee(db, actor)
-    if data.duration_hours not in ALLOWED_DURATIONS:
-        raise AppError(
-            "validation_error", "A permission must be either 1 hour or 2 hours.", 422
-        )
     # Checked before the working-day rule: "August is over" is a better answer
     # than "16 August was a Sunday" for somebody who has navigated back a month.
     _assert_month_open(data.permission_date)
@@ -685,7 +665,8 @@ def create_permission_request(
     req = PermissionRequest(
         employee_id=me.id,
         permission_date=data.permission_date,
-        duration_hours=data.duration_hours,
+        duration_hours=PERIOD_HOURS[data.period],
+        period=data.period,
         reason=data.reason,
         status=PermissionStatus.pending,
         # Phase 4B: the same work-report-evidence resolver Leave uses, given the
@@ -702,13 +683,18 @@ def create_permission_request(
     db.commit()
     db.refresh(req)
 
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     _notify_routed_approver(
         db, actor, me, req, "permission_submitted",
         f"{me.full_name} submitted a permission request",
-        f"{me.full_name} requested {hours} {hours_word(hours)} of permission for "
+        f"{me.full_name} requested {label} of permission for "
         f"{_short_date(req.permission_date)}.",
     )
+    # Phase 4C: the SAME routed recipient the in-app notification above just
+    # reached, on the email channel - see `permissions/email.py`. Fired after
+    # the commit and after the bell, exactly where Leave fires its own
+    # submission email.
+    permission_email.send_submission_email(db, me, req)
     return req
 
 
@@ -774,13 +760,13 @@ def cancel_permission_request(
     # Whoever did NOT do it is the one who needs telling, which is the same
     # convention leave cancellation follows. `_push` suppresses the actor anyway,
     # so an author who is also a project manager is never told by themselves.
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     if is_author:
         # The manager owns the queue this request has just left.
         _notify_manager(
             db, actor, me, "permission_cancelled",
             f"{me.full_name} cancelled a permission request",
-            f"{me.full_name} cancelled their {hours}-{hours_word(hours)} permission "
+            f"{me.full_name} cancelled their {label} permission "
             f"request for {_short_date(req.permission_date)}."
             + (
                 f" {format_hours(after.remaining_hours)} of permission remaining "
@@ -795,7 +781,7 @@ def cancel_permission_request(
         _notify_employee(
             db, actor, req.employee_id, "permission_cancelled",
             "Your permission request was cancelled",
-            f"Your {hours}-{hours_word(hours)} permission request for "
+            f"Your {label} permission request for "
             f"{_short_date(req.permission_date)} was cancelled."
             + (
                 f" {format_hours(after.remaining_hours)} of permission remaining "
@@ -863,12 +849,12 @@ def approve_permission_request(
     db.commit()
     db.refresh(req)
 
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     _notify_employee(
         db, actor, req.employee_id, "permission_approved",
         "Your permission request was approved",
         f"Your permission request for {_short_date(req.permission_date)} for "
-        f"{hours} {hours_word(hours)} has been approved. "
+        f"{label} has been approved. "
         f"{format_hours(after.remaining_hours)} of permission remaining for "
         f"{_month_name(req.permission_date)}."
         + (f" Note: {data.comment.strip()}" if data.comment and data.comment.strip() else ""),
@@ -910,12 +896,12 @@ def reject_permission_request(
     db.commit()
     db.refresh(req)
 
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     _notify_employee(
         db, actor, req.employee_id, "permission_rejected",
         "Your permission request was rejected",
         f"Your permission request for {_short_date(req.permission_date)} for "
-        f"{hours} {hours_word(hours)} has been rejected."
+        f"{label} has been rejected."
         + (f" Note: {data.comment.strip()}" if data.comment and data.comment.strip() else ""),
         req.id,
         _detail_url(req.id),

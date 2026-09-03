@@ -14,7 +14,11 @@ from datetime import date, timedelta
 from app.modules.calendar.models import CalendarEvent, CalendarEventType
 from app.modules.calendar.working_days import previous_working_day
 from app.modules.permissions import service as perm_svc
-from app.modules.permissions.models import PermissionRequest, PermissionStatus
+from app.modules.permissions.models import (
+    PermissionPeriod,
+    PermissionRequest,
+    PermissionStatus,
+)
 from app.modules.permissions.schemas import PermissionRequestCreate
 from app.modules.users.models import UserRole
 from app.modules.work_reports import service as wr_svc
@@ -27,6 +31,14 @@ API = "/api/v1/permission-requests"
 # (see `_assert_month_open`) - the same constant `test_permissions_phase11.py`
 # already established for this reason.
 PERMISSION_DATE = date(2027, 3, 1)
+
+# Maps the old `hours` shorthand this file's tests use onto a period - routing
+# tests care about the routed project, not which half was picked, so any period
+# costing that many hours is an equally valid stand-in.
+_PERIOD_FOR_HOURS = {
+    1: PermissionPeriod.first_half_1h,
+    2: PermissionPeriod.first_half_2h,
+}
 
 
 def _task(project_id, minutes=120):
@@ -56,7 +68,10 @@ def _close_the_office(db, day: date) -> None:
 
 def _submit(db, actor, day=PERMISSION_DATE, hours=1):
     return perm_svc.create_permission_request(
-        db, actor, PermissionRequestCreate(permission_date=day, duration_hours=hours, reason="x")
+        db, actor,
+        PermissionRequestCreate(
+            permission_date=day, period=_PERIOD_FOR_HOURS[hours], reason="x"
+        ),
     )
 
 
@@ -157,6 +172,7 @@ def test_fallback_reads_reporting_pm_id_never_manager_id(db, make_user, make_emp
 
     req = PermissionRequest(
         employee_id=emp.id, permission_date=PERMISSION_DATE, duration_hours=1,
+        period=PermissionPeriod.first_half_1h,
         status=PermissionStatus.pending, routed_project_id=None,
     )
     recipient = perm_svc._routed_recipient(db, emp, req)
@@ -184,7 +200,7 @@ def test_routed_project_head_can_approve(
     )
 
     res = client.post(API, headers=login("apemp@x.com"), json={
-        "permission_date": PERMISSION_DATE.isoformat(), "duration_hours": 1, "reason": "x",
+        "permission_date": PERMISSION_DATE.isoformat(), "period": "first_half_1h", "reason": "x",
     })
     assert res.status_code == 201, res.text
     req_id = res.json()["id"]
@@ -214,7 +230,7 @@ def test_unrelated_employee_cannot_approve(
     make_employee(employee_code="OUT-1", user_id=outsider_u.id)
 
     res = client.post(API, headers=login("unrelemp@x.com"), json={
-        "permission_date": PERMISSION_DATE.isoformat(), "duration_hours": 1, "reason": "x",
+        "permission_date": PERMISSION_DATE.isoformat(), "period": "first_half_1h", "reason": "x",
     })
     req_id = res.json()["id"]
 
@@ -233,7 +249,7 @@ def test_pm_fallback_still_approves_when_no_project_routed(
     make_employee(employee_code="FE-1", user_id=eu.id, reporting_pm_id=pm_u.id)
 
     res = client.post(API, headers=login("fallbackemp@x.com"), json={
-        "permission_date": PERMISSION_DATE.isoformat(), "duration_hours": 1, "reason": "x",
+        "permission_date": PERMISSION_DATE.isoformat(), "period": "first_half_1h", "reason": "x",
     })
     assert res.status_code == 201, res.text
     req_id = res.json()["id"]

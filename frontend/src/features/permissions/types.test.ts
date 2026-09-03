@@ -18,6 +18,9 @@ import {
   PERMISSION_HISTORY_PATH,
   permissionDetailPath,
   PERMISSION_DURATION_LABEL,
+  PERMISSION_PERIOD_HOURS,
+  PERMISSION_PERIOD_LABEL,
+  PERMISSION_PERIOD_OPTIONS,
   PERMISSION_STATUS_LABEL,
   businessToday,
   canCancelPermission,
@@ -27,6 +30,7 @@ import {
   formatDuration,
   formatHours,
   formatMonthLabel,
+  formatPermissionDuration,
   formatShortDate,
   isDurationAffordable,
   monthStart,
@@ -111,6 +115,46 @@ test("hours render as the KPI shows them", () => {
 test("a duration renders compactly beside a status", () => {
   assert.equal(formatDuration(1), "1hr");
   assert.equal(formatDuration(2), "2hr");
+});
+
+// ── the four Phase 4C period options ────────────────────────────────────────
+
+test("exactly four period options exist, and there is no plain 1 Hour / 2 Hours", () => {
+  assert.deepEqual(
+    [...PERMISSION_PERIOD_OPTIONS],
+    ["first_half_1h", "second_half_1h", "first_half_2h", "second_half_2h"],
+  );
+  assert.deepEqual(PERMISSION_PERIOD_LABEL, {
+    first_half_1h: "1st Half — 1 Hour",
+    second_half_1h: "2nd Half — 1 Hour",
+    first_half_2h: "1st Half — 2 Hours",
+    second_half_2h: "2nd Half — 2 Hours",
+  });
+});
+
+test("each period option costs the hours its label states", () => {
+  assert.deepEqual(PERMISSION_PERIOD_HOURS, {
+    first_half_1h: 1,
+    second_half_1h: 1,
+    first_half_2h: 2,
+    second_half_2h: 2,
+  });
+});
+
+test("a request with a period shows the actual selected option, never the plain hour count", () => {
+  assert.equal(
+    formatPermissionDuration({ period: "first_half_1h", duration_hours: 1 }),
+    "1st Half — 1 Hour",
+  );
+  assert.equal(
+    formatPermissionDuration({ period: "second_half_2h", duration_hours: 2 }),
+    "2nd Half — 2 Hours",
+  );
+});
+
+test("a pre-Phase-4C request with no period falls back to the plain compact form", () => {
+  assert.equal(formatPermissionDuration({ period: null, duration_hours: 1 }), "1hr");
+  assert.equal(formatPermissionDuration({ period: null, duration_hours: 2 }), "2hr");
 });
 
 // ── which rows offer Cancel ─────────────────────────────────────────────────

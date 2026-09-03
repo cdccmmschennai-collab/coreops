@@ -14,6 +14,38 @@ export const PERMISSION_DURATIONS = [1, 2] as const;
 
 export type PermissionDuration = (typeof PERMISSION_DURATIONS)[number];
 
+/**
+ * The four selectable permission options (Phase 4C) - the ONE authoritative
+ * value a requester picks. There is no plain "1 Hour" / "2 Hours" choice any
+ * more: every request names a half, so a reviewer never has to infer one from
+ * `duration_hours` alone.
+ */
+export const PERMISSION_PERIOD_OPTIONS = [
+  "first_half_1h",
+  "second_half_1h",
+  "first_half_2h",
+  "second_half_2h",
+] as const;
+
+export type PermissionPeriod = (typeof PERMISSION_PERIOD_OPTIONS)[number];
+
+/** The exact wording the form, the detail page and the email all show. */
+export const PERMISSION_PERIOD_LABEL: Record<PermissionPeriod, string> = {
+  first_half_1h: "1st Half — 1 Hour",
+  second_half_1h: "2nd Half — 1 Hour",
+  first_half_2h: "1st Half — 2 Hours",
+  second_half_2h: "2nd Half — 2 Hours",
+};
+
+/** How many hours each option costs - what the live balance preview and the
+ *  affordability check (`isDurationAffordable`) run against. */
+export const PERMISSION_PERIOD_HOURS: Record<PermissionPeriod, PermissionDuration> = {
+  first_half_1h: 1,
+  second_half_1h: 1,
+  first_half_2h: 2,
+  second_half_2h: 2,
+};
+
 /** The company allowance, mirrored from `permissions/balance.py` for the preview
  *  only. Every decision is made against the server's figure. */
 export const MONTHLY_ALLOWANCE_HOURS = 4;
@@ -23,6 +55,8 @@ export interface PermissionRequest {
   employee_id: string;
   permission_date: string;
   duration_hours: number;
+  /** NULL only for a request filed before Phase 4C, which recorded no half. */
+  period: PermissionPeriod | null;
   reason: string | null;
   status: PermissionStatus;
   manager_id: string | null;
@@ -41,7 +75,7 @@ export interface PermissionRequestPage {
 
 export interface PermissionRequestCreateBody {
   permission_date: string;
-  duration_hours: PermissionDuration;
+  period: PermissionPeriod;
   reason?: string | null;
 }
 
@@ -133,6 +167,19 @@ export function formatHours(hours: number): string {
 /** `1hr` / `2hr` - the compact form used in a table cell beside a status. */
 export function formatDuration(hours: number): string {
   return `${hours}hr`;
+}
+
+/**
+ * The actual selected option, e.g. "1st Half — 1 Hour" - what the request
+ * dialog, the detail page and the history/review tables all show. Falls back
+ * to the plain compact form only for a request filed before Phase 4C, which
+ * has no period on record and none that could be safely guessed.
+ */
+export function formatPermissionDuration(
+  req: Pick<PermissionRequest, "period" | "duration_hours">,
+): string {
+  if (req.period) return PERMISSION_PERIOD_LABEL[req.period];
+  return formatDuration(req.duration_hours);
 }
 
 /**
