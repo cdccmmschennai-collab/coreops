@@ -251,13 +251,15 @@ def test_status_check_rejects_an_unknown_status(db):
 def test_biometric_added_nothing_to_the_attendance_schema(db):
     """0066 is additive: it left attendance_records alone.
 
-    `note` is here because of 0067 (a PM's reason for a decision), which is a
-    deliberate, separately-approved change - not biometric leaking into the
-    attendance table. Everything else is the original shape, and the guard below
-    still proves no punch/biometric column ever appeared here.
+    `note` is here because of 0067 (a PM's reason for a decision) and
+    `leave_day_fraction` because of 0083 (how much of the day the leave pool
+    paid for). Both are deliberate, separately-approved changes to the attendance
+    table - not biometric leaking into it. Everything else is the original shape,
+    and the guard below still proves no punch/biometric column ever appeared
+    here.
     """
     cols = _columns(db, "attendance_records")
-    assert set(cols) - {"note"} == {
+    assert set(cols) - {"note", "leave_day_fraction"} == {
         "id",
         "employee_id",
         "attendance_date",

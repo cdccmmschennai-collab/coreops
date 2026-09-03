@@ -64,6 +64,10 @@ export function RecordDecisionDialog({
   const [checkIn, setCheckIn] = React.useState("");
   const [checkOut, setCheckOut] = React.useState("");
   const [note, setNote] = React.useState("");
+  // Whether the OTHER half of a half day came out of the leave balance. Only a
+  // `half_day` can be ambiguous - a `leave` row is a whole day and a worked day
+  // is none - so this is the only status that asks.
+  const [chargesLeave, setChargesLeave] = React.useState(false);
 
   // Seed the form when a row is opened. Existing decision first; otherwise the
   // biometric boundary, so the common case is "confirm what the device saw"
@@ -76,6 +80,11 @@ export function RecordDecisionDialog({
     // Seed the existing reason so re-opening a decided day shows what was
     // written rather than a blank box that would erase it on save.
     setNote(row.attendance_note ?? "");
+    // Unticked unless this day already says it charged leave. A day that never
+    // stated a fraction (every row written before migration 0083, including the
+    // company-wide half day) opens as "no leave", which is exactly what it has
+    // always been worth - re-saving one cannot silently start billing it.
+    setChargesLeave((row.attendance_leave_day_fraction ?? 0) > 0);
   }, [row]);
 
   const pending = create.isPending || update.isPending;
@@ -87,6 +96,10 @@ export function RecordDecisionDialog({
       check_in_at: toInstant(date, checkIn),
       check_out_at: toInstant(date, checkOut),
       note: note.trim() || null,
+      // Sent for every save, so unticking the box CLEARS the charge rather than
+      // leaving the previous fraction behind. `null` on a non-half day means
+      // "priced by status alone", which is what a Leave or a Present day is.
+      leave_day_fraction: status === "half_day" ? (chargesLeave ? 0.5 : 0) : null,
     };
     try {
       if (row.attendance_record_id) {
@@ -151,6 +164,37 @@ export function RecordDecisionDialog({
                 </SelectContent>
               </Select>
             </div>
+
+            {/* The half a day a half day does not account for. `half_day` says
+                the employee worked half the day and nothing about the rest, and
+                the two possible rests cost completely different things:
+
+                  ticked    a half-day LEAVE  - 0.5 comes off the balance
+                  unticked  the office shut, or the half is unpaid - costs 0
+
+                Asked rather than assumed, because nothing in the row can tell
+                them apart and guessing either way is wrong for the other. */}
+            {status === "half_day" && (
+              <label
+                htmlFor="decision-charges-leave"
+                className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-secondary/40 p-3"
+              >
+                <input
+                  id="decision-charges-leave"
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                  checked={chargesLeave}
+                  onChange={(e) => setChargesLeave(e.target.checked)}
+                />
+                <span className="text-sm">
+                  <span className="font-medium">Half-day leave</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Deducts 0.5 from the leave balance. Leave this unticked for a
+                    company half day, which costs the employee nothing.
+                  </span>
+                </span>
+              </label>
+            )}
 
             {/* A time the device recorded is evidence and is not editable. Only
                 a boundary the device MISSED can be supplied by hand - that is

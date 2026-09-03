@@ -10,6 +10,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.shared.leave_units import validate_half_step
+
 # DECIMAL(6,2) range on `employee_leave_adjustments.days`. Balances may be
 # negative (loss-of-pay), e.g. -0.5 / -2, so the floor is deliberately negative
 # and there is no non-negative validation anywhere in this module.
@@ -110,6 +112,22 @@ class LeaveBalanceUpdate(BaseModel):
     # business month, which is what the Leave Balance tab means by "now".
     month: date | None = None
 
+    @field_validator("available_leave")
+    @classmethod
+    def _half_step(cls, value: float) -> float:
+        """Leave is whole and half days only - 2.1 and 2.4 are not balances.
+
+        Enforced HERE and not only by the dialog's `step="0.5"`, because the
+        input attribute governs the arrows and nothing else: a typed value, a
+        script, a replayed request or any other API client reaches this field
+        directly, and a balance is exactly the kind of number that must not be
+        quietly rounded on the way in.
+
+        The bound is deliberately not applied to the negative floor - a
+        loss-of-pay balance of -0.5 is as real as +0.5, and both are half steps.
+        """
+        return validate_half_step(value, "Available Leave")
+
     @field_validator("month")
     @classmethod
     def _month_start(cls, value: date | None) -> date | None:
@@ -131,6 +149,18 @@ class LeaveAllocationUpdate(BaseModel):
     monthly_days: float = Field(ge=0, le=_ALLOCATION_MAX)
     effective_from: date
     note: str | None = Field(default=None, max_length=_NOTE_MAX)
+
+    @field_validator("monthly_days")
+    @classmethod
+    def _half_step(cls, value: float) -> float:
+        """The accrual rate is in half days too.
+
+        A rate of 1.75 d/month would mint balances that are not half steps
+        however carefully every other write is validated - the accrual is added
+        to the balance every month, so an invalid rate is an invalid balance
+        forever. Validating the correction alone would leave that door open.
+        """
+        return validate_half_step(value, "Leave / month", minimum=0)
 
     @field_validator("effective_from")
     @classmethod

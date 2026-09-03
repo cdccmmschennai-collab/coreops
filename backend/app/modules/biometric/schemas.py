@@ -429,6 +429,12 @@ class DailyReviewRowOut(BaseModel):
     attendance_check_out_at: datetime | None = None
     # The reason the PM gave. Null when nobody explained the day.
     attendance_note: str | None = None
+    # How much of the day the leave pool paid for (migration 0083). Carried so
+    # the decision dialog can SEED its "Half-day leave" tick from what the day
+    # already says, rather than defaulting a half day to charging leave and
+    # billing an employee for a company closure on the next save. Null means the
+    # day never stated one - the pre-0083 reading, worth 0 on a half day.
+    attendance_leave_day_fraction: float | None = None
 
     # Phase 12. APPROVED permission hours (1 or 2) for this employee-day, or
     # null. An ATTRIBUTE of the day, joined from `permission_requests` - it does

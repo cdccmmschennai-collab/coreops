@@ -1405,6 +1405,11 @@ def _review_row(
         "attendance_check_in_at": record.check_in_at if record else None,
         "attendance_check_out_at": record.check_out_at if record else None,
         "attendance_note": record.note if record else None,
+        "attendance_leave_day_fraction": (
+            float(record.leave_day_fraction)
+            if record is not None and record.leave_day_fraction is not None
+            else None
+        ),
         # Phase 12. Joined, never derived - and deliberately the last key here,
         # after every value that was computed from evidence.
         "permission_hours": permission_hours,

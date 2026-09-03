@@ -23,6 +23,7 @@ import {
   useSetLeaveAllocation,
   useSetLeaveBalance,
 } from "../hooks";
+import { isHalfStep } from "../types";
 import type { LeaveBalance } from "../types";
 
 interface Props {
@@ -89,16 +90,31 @@ export function LeaveBalanceEditDialog({ balance, open, onOpenChange }: Props) {
 
   // Balances may be negative (loss-of-pay): e.g. -0.5 half-day LOP, -2 excess.
   // The allocation may not - it is a grant, and a deduction is a correction.
+  //
+  // Both must land on a half step. Leave is transacted in whole and half days
+  // and nothing else, so 2.1 and 2.4 are not small errors to be tidied up - they
+  // are not quantities of leave. The field REFUSES them rather than rounding:
+  // rounding 2.4 up credits half a day nobody granted and rounding it down takes
+  // half a day away, and neither leaves a trace of having happened.
   const balanceFieldValid =
     available.trim() !== "" &&
     Number.isFinite(value) &&
     value >= MIN_BALANCE &&
-    value <= MAX_BALANCE;
+    value <= MAX_BALANCE &&
+    isHalfStep(value);
   const allocationFieldValid =
     perMonth.trim() !== "" &&
     Number.isFinite(allocation) &&
     allocation >= 0 &&
-    allocation <= MAX_ALLOCATION;
+    allocation <= MAX_ALLOCATION &&
+    isHalfStep(allocation);
+
+  // Told apart from "empty" so the message names the real problem. A blank field
+  // is mid-edit and says nothing; a typed 2.4 is a mistake worth explaining.
+  const balanceNotHalfStep =
+    available.trim() !== "" && Number.isFinite(value) && !isHalfStep(value);
+  const allocationNotHalfStep =
+    perMonth.trim() !== "" && Number.isFinite(allocation) && !isHalfStep(allocation);
 
   const allocationChanged = allocationFieldValid && allocation !== balance.monthly_allocation;
   // A reason on its own still posts a correction, as it always did - the manager
@@ -173,10 +189,16 @@ export function LeaveBalanceEditDialog({ balance, open, onOpenChange }: Props) {
                 value={available}
                 onChange={(e) => setAvailable(e.target.value)}
               />
-              <p className="text-[11px] text-muted-foreground">
-                Balance for {monthKeyLabel(month)}
-                {!balance.in_ledger && " - no ledger for this month yet"}
-              </p>
+              {balanceNotHalfStep ? (
+                <p className="text-[11px] font-medium text-destructive">
+                  Use whole or half days only - 2, 2.5, 3.
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  Balance for {monthKeyLabel(month)}
+                  {!balance.in_ledger && " - no ledger for this month yet"}
+                </p>
+              )}
             </div>
             <div className="space-y-1.5 sm:col-span-3">
               <Label htmlFor="leave-per-month">Leave / month</Label>
@@ -191,9 +213,15 @@ export function LeaveBalanceEditDialog({ balance, open, onOpenChange }: Props) {
               />
               {/* Stated, never implied: this rate applies from the selected month
                   onwards and leaves earlier months exactly as they were. */}
-              <p className="text-[11px] text-muted-foreground">
-                From {monthKeyLabel(month)}
-              </p>
+              {allocationNotHalfStep ? (
+                <p className="text-[11px] font-medium text-destructive">
+                  Whole or half days only.
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  From {monthKeyLabel(month)}
+                </p>
+              )}
             </div>
           </div>
 

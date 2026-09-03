@@ -204,6 +204,12 @@ export interface DailyReviewRow {
   attendance_check_out_at: string | null;
   /** The reason the PM gave. Null when nobody explained the day. */
   attendance_note: string | null;
+  /** How much of the day the leave pool paid for (migration 0083): 1, 0.5 or 0.
+   *  Null means the day never stated one, which is every row written before
+   *  that migration and is worth 0 on a half day. Carried so the decision dialog
+   *  can seed its "Half-day leave" tick from the day itself rather than
+   *  defaulting a company half day into charging leave on its next save. */
+  attendance_leave_day_fraction?: number | null;
 
   /** Phase 12. APPROVED permission hours for this employee-day, or null. An
    *  attendance ATTRIBUTE shown beside `attendance_status` - it never replaces

@@ -425,7 +425,13 @@ def make_attendance(db):
         overtime_minutes: int = 0,
         check_in_at=None,
         check_out_at=None,
+        # How much of the day the leave pool pays for (migration 0083). Left
+        # None by default so every existing test keeps describing exactly the
+        # row it always did - a day priced by its status alone.
+        leave_day_fraction=None,
     ) -> AttendanceRecord:
+        from decimal import Decimal as _D
+
         record = AttendanceRecord(
             employee_id=employee_id,
             attendance_date=attendance_date,
@@ -434,6 +440,9 @@ def make_attendance(db):
             overtime_minutes=overtime_minutes,
             check_in_at=check_in_at,
             check_out_at=check_out_at,
+            leave_day_fraction=(
+                None if leave_day_fraction is None else _D(str(leave_day_fraction))
+            ),
         )
         db.add(record)
         db.commit()

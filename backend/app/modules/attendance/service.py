@@ -8,6 +8,7 @@ RBAC (this module):
 """
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +20,7 @@ from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
+from app.modules.leave_balances import ledger
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.auto_reports import reconcile_auto_leave_reports
 from app.shared.errors import AppError
@@ -54,6 +56,29 @@ def _reconcile_auto_leave_reports(db: Session, touched: list[AttendanceRecord]) 
     ]
     if pairs:
         reconcile_auto_leave_reports(db, pairs, commit=False)
+
+
+def _validated_leave_fraction(
+    fraction: Decimal | float | None, status: AttendanceStatus
+) -> Decimal | None:
+    """The leave fraction to store for a day of this status.
+
+    The SHAPE of the value is already checked by the schema (0, 0.5 or 1). What
+    is checked here is whether it makes sense on this day at all: only `leave`
+    and `half_day` can be funded absence, so a fraction on a `present` or
+    `holiday` row is a caller mistake and is refused rather than stored where
+    `leave_days_for` would ignore it. A row nobody can explain is worse than an
+    error message.
+    """
+    if fraction is None:
+        return None
+    if status not in ledger.LEAVE_BEARING_STATUSES:
+        raise AppError(
+            "validation_error",
+            "Only a Leave or Half day can be charged to the leave balance.",
+            422,
+        )
+    return Decimal(str(fraction))
 
 
 def _clean_note(value: str | None) -> str | None:
@@ -94,6 +119,11 @@ def _audit_record(
         "check_out_at": record.check_out_at.isoformat() if record.check_out_at else None,
         "total_minutes": record.total_minutes,
     }
+    # Audited because it SPENDS LEAVE. "Who charged me half a day" has to be
+    # answerable from the same trail as "who marked me half-day", and the two are
+    # now separate decisions about the same row.
+    if record.leave_day_fraction is not None:
+        details["leave_day_fraction"] = float(record.leave_day_fraction)
     if previous_status is not None and previous_status != record.status:
         details["previous_status"] = previous_status.value
     if note and note.strip():
@@ -278,6 +308,9 @@ def create_attendance(db: Session, actor: User, data: AttendanceCreate) -> Atten
         total_minutes=total,
         overtime_minutes=overtime,
         note=_clean_note(data.note),
+        leave_day_fraction=_validated_leave_fraction(
+            data.leave_day_fraction, data.status
+        ),
         created_by=actor.id,
         updated_by=actor.id,
     )
@@ -323,6 +356,16 @@ def update_attendance(
     # changes the status must not silently erase the explanation already there.
     if "note" in fields:
         record.note = _clean_note(fields["note"])
+    # Same rule for the leave charge, and one more of its own: a day moved OFF a
+    # leave-bearing status keeps no charge behind it. Without that, changing a
+    # half-day leave to Present would leave 0.5 stored on a `present` row, which
+    # `_validated_leave_fraction` would never have accepted in the first place.
+    if "leave_day_fraction" in fields:
+        record.leave_day_fraction = _validated_leave_fraction(
+            fields["leave_day_fraction"], record.status
+        )
+    elif record.status not in ledger.LEAVE_BEARING_STATUSES:
+        record.leave_day_fraction = None
 
     record.total_minutes, record.overtime_minutes = _compute_minutes(new_in, new_out)
     record.updated_by = actor.id

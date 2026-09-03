@@ -152,6 +152,55 @@ export function presentDayCredit(
   return 0;
 }
 
+/**
+ * What one attendance record cost the LEAVE POOL, in days.
+ *
+ * The mirror of `leave_balances/ledger.py::leave_days_for`, and it must stay
+ * one:
+ *
+ *   fraction stated   that fraction        1 / 0.5 / 0
+ *   fraction null     `leave` -> 1, anything else -> 0
+ *
+ * WHY THIS IS NOT A ROW COUNT
+ * ===========================
+ * "Leave taken" used to be `records.filter(r => r.status === "leave").length`.
+ * A count and a day total agree only while every leave is a whole day, so a
+ * half-day leave - which is a `half_day` row, not a `leave` one - added nothing
+ * and the card could never show a ".5" at all. It read 1d where the ledger,
+ * once fixed, charges 1.5.
+ *
+ * `half_day` alone still means 0, deliberately: it says the employee worked half
+ * a day and nothing about the other half. A company-wide half day is exactly
+ * that row, and it must not be billed to anyone. Only a STATED fraction charges
+ * leave.
+ */
+export function leaveDayCredit(record: {
+  status: AttendanceStatus;
+  leave_day_fraction?: number | null;
+}): number {
+  if (record.status !== "leave" && record.status !== "half_day") return 0;
+  if (record.leave_day_fraction != null) return record.leave_day_fraction;
+  return record.status === "leave" ? 1 : 0;
+}
+
+/**
+ * "Leave taken" for a set of attendance rows, in days.
+ *
+ * Summed in halves so the total is exact: 0.5 is representable in binary, but
+ * accumulating thirds of it is not, and a KPI that reads "1.4999999999999998d"
+ * is worse than one that reads nothing.
+ */
+export function leaveDaysTaken(
+  records: Iterable<{
+    status: AttendanceStatus;
+    leave_day_fraction?: number | null;
+  }>,
+): number {
+  let halves = 0;
+  for (const record of records) halves += leaveDayCredit(record) * 2;
+  return halves / 2;
+}
+
 /** A company calendar entry, reduced to what day resolution needs from it. */
 export interface CalendarDayEvent {
   event_date: string;

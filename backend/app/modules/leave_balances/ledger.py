@@ -67,16 +67,38 @@ of the requests in this database predate the phase that started marking days, so
 counting requests would charge people for absences that were never marked, and
 the KPI would disagree with the calendar sitting under it.
 
-Two deliberate exclusions:
+HOW MUCH A MARKED DAY COSTS
+===========================
+`leave_days_for` is the only function that turns an attendance row into a number
+of leave days, and it reads the row's `leave_day_fraction` (migration 0083):
+
+    fraction stated   ->  that fraction        1 / 0.5 / 0
+    fraction NULL     ->  `leave` -> 1, anything else -> 0
+
+The NULL branch is the rule this module applied before the column existed, kept
+exactly, so no row written before 0083 changes what it contributes.
+
+WHY THE FRACTION HAD TO EXIST
+=============================
+`status` cannot answer "how much leave was this day". `half_day` means the
+employee worked half the day and says nothing about the other half:
+
+  a half-day LEAVE       worked 0.5, leave 0.5  - the pool pays for the half off
+  a company half day     worked 0.5, leave 0    - the office shut at noon
+
+Both are `status = half_day` with no times, and they are indistinguishable in the
+row. This module used to treat every one of them as the second case - which is
+why the 29 `half_day` rows on 2026-08-14 (a company-wide half day) were correctly
+free, and why a genuine half-day leave was ALSO free and silently under-charged
+the employee by 0.5. Neither reading is right for both, so the fraction is now
+stated on the row instead of inferred from a status that does not carry it.
+
+One deliberate exclusion remains:
 
   `unpaid` leave      is absence that is BY DEFINITION not funded from the leave
                       pool (`effects.BALANCE_DEDUCTING_TYPES` already excludes
                       it), so its days are marked on the calendar but subtracted
                       from nothing.
-  `half_day`          is half a WORKING day, not half a day of leave. Every one
-                      of the 29 `half_day` rows in this database falls on
-                      2026-08-14, a company-wide half day; charging each of those
-                      employees half a day of leave would be plainly wrong.
 """
 from __future__ import annotations
 
@@ -156,6 +178,38 @@ def months_between(start: date, end: date) -> list[date]:
 
 def _q(value: Decimal) -> Decimal:
     return value.quantize(CENTS)
+
+
+# The statuses that can carry funded leave. `half_day` is here because half of
+# one may be leave - not because all of them are; `leave_days_for` decides, and
+# answers 0 for a `half_day` row that never stated a fraction.
+LEAVE_BEARING_STATUSES = (AttendanceStatus.leave, AttendanceStatus.half_day)
+
+
+def leave_days_for(
+    status: AttendanceStatus, leave_day_fraction: Decimal | None
+) -> Decimal:
+    """How many leave days one attendance row consumes. The single rule.
+
+    Pure, so the half-day arithmetic is testable without a database, and shared
+    so nothing counts leave a second way. `attendance_records` rows are the only
+    thing that consumes leave (see the module header), and this is the only
+    function that prices one.
+
+    A STATED fraction always wins, including a stated 0 - a manager who says a
+    half day cost no leave has said something, and it is not the same as saying
+    nothing. NULL falls back to the pre-0083 rule, which is what keeps every
+    historical row contributing exactly what it always did.
+
+    Returns 0 for `present`, `absent`, `holiday`, `weekend` and `comp_off`: none
+    of them is funded absence, and a stray fraction on one would be a data fault
+    rather than a licence to charge the pool.
+    """
+    if status not in LEAVE_BEARING_STATUSES:
+        return ZERO
+    if leave_day_fraction is not None:
+        return _q(Decimal(leave_day_fraction))
+    return Decimal(1) if status == AttendanceStatus.leave else ZERO
 
 
 # ---------- the answer ------------------------------------------------------
@@ -281,19 +335,27 @@ def _unpaid_dates(
     return covered
 
 
-def _leave_dates(
+def _leave_days(
     db: Session, employee_id: uuid.UUID, date_from: date, date_to: date
-) -> list[date]:
-    """Every date in the window marked `leave` on the employee's calendar."""
+) -> list[tuple[date, AttendanceStatus, Decimal | None]]:
+    """Every date in the window that could carry leave, with what it cost.
+
+    The fraction is fetched rather than assumed: pricing the day is
+    `leave_days_for`'s job, and a row cannot be priced from its date alone.
+    """
     return list(
         db.execute(
-            select(AttendanceRecord.attendance_date).where(
+            select(
+                AttendanceRecord.attendance_date,
+                AttendanceRecord.status,
+                AttendanceRecord.leave_day_fraction,
+            ).where(
                 AttendanceRecord.employee_id == employee_id,
-                AttendanceRecord.status == AttendanceStatus.leave,
+                AttendanceRecord.status.in_(LEAVE_BEARING_STATUSES),
                 AttendanceRecord.attendance_date >= date_from,
                 AttendanceRecord.attendance_date <= date_to,
             )
-        ).scalars()
+        ).all()
     )
 
 
@@ -302,19 +364,26 @@ def _consumed_by_month(
 ) -> dict[date, Decimal]:
     """Funded leave days consumed per month across the window.
 
-    Marked leave days, minus the ones an unpaid request covers. Two queries for
-    the whole span rather than two per month.
+    The SUM of what each marked day cost - not a COUNT of marked days. Those
+    agree only while every leave is a whole day, which is exactly why a half-day
+    leave used to cost nothing here. Days an unpaid request covers are dropped
+    whatever fraction they carry.
+
+    Two queries for the whole span rather than two per month.
     """
-    marked = _leave_dates(db, employee_id, date_from, date_to)
+    marked = _leave_days(db, employee_id, date_from, date_to)
     if not marked:
         return {}
     unpaid = _unpaid_dates(db, employee_id, date_from, date_to)
     out: dict[date, Decimal] = {}
-    for day in marked:
+    for day, status, fraction in marked:
         if day in unpaid:
             continue
+        cost = leave_days_for(status, fraction)
+        if cost == ZERO:
+            continue
         key = month_start(day)
-        out[key] = out.get(key, ZERO) + Decimal(1)
+        out[key] = out.get(key, ZERO) + cost
     return out
 
 

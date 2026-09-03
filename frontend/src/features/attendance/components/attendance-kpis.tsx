@@ -9,7 +9,7 @@ import { useMyLeaveBalance } from "@/features/leave-balances/hooks";
 import { formatBalance } from "@/features/leave-balances/types";
 import { PermissionRemainingKpi } from "@/features/permissions/components/permission-remaining-kpi";
 
-import { formatPresentDays, presentDaysInMonth } from "../day-status";
+import { formatPresentDays, leaveDaysTaken, presentDaysInMonth } from "../day-status";
 import { useAttendanceList } from "../hooks";
 import { monthRange } from "../month";
 import { isCurrentMonthKey, parseMonthKey, withMonth } from "../selected-month";
@@ -106,15 +106,27 @@ export function AttendanceKpis({ employeeId, month, currentMonth }: Props) {
     [year, monthIndex, query.data, eventsQuery.data, biometricQuery.data],
   );
 
-  // Untouched rule: leave taken is the month's `leave` attendance records - the
-  // same amber days the grid below paints. Only the month context changed, and
-  // those rows are already scoped to `from`..`to`.
+  // Leave taken is the month's marked leave, IN DAYS - the same amber days the
+  // grid below paints, priced the way the ledger prices them. Those rows are
+  // already scoped to `from`..`to`.
   //
-  // Deliberately NOT the ledger's `consumed`: that figure excludes unpaid leave
-  // and reads 0 for any month outside the employee's ledger (which begins
+  // It was a COUNT of `leave` rows, which is where the half-day bug surfaced on
+  // this card: a half-day leave is a `half_day` row carrying a 0.5 fraction, so
+  // it was not counted at all and the tile could never show a half. `leaveDaysTaken`
+  // is the frontend half of the rule in `leave_balances/ledger.py`.
+  //
+  // Still deliberately NOT the ledger's `consumed`: that figure excludes unpaid
+  // leave and reads 0 for any month outside the employee's ledger (which begins
   // 2026-08-01, and only for the employees who had a stored balance). This card
-  // has always meant "days you were marked on leave", and it still does.
-  const leave = items.filter((r) => r.status === "leave").length;
+  // has always meant "days you were marked on leave", and it still does - it now
+  // means it in days rather than in rows.
+  // Depends on `query.data`, not on the `items` binding above: that one is a
+  // fresh `?? []` array on every render and would defeat the memo - the same
+  // reason the presence memo below spells its dependency the same way.
+  const leave = React.useMemo(
+    () => leaveDaysTaken(query.data?.items ?? []),
+    [query.data],
+  );
 
   return (
     <KpiGrid>
@@ -126,7 +138,9 @@ export function AttendanceKpis({ employeeId, month, currentMonth }: Props) {
       />
       <Kpi
         label={withMonth("Leave taken", month, currentMonth)}
-        value={`${leave}d`}
+        // Formatted like the Present tile beside it: `1` never renders as
+        // "1.0", and a half day is never rounded away into "1" or "2".
+        value={`${formatPresentDays(leave)}d`}
       />
       <Kpi
         label={withMonth("Available Leave", month, currentMonth)}

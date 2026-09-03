@@ -3226,6 +3226,8 @@ export interface components {
             check_out_at?: string | null;
             /** Note */
             note?: string | null;
+            /** Leave Day Fraction */
+            leave_day_fraction?: number | null;
         };
         /** AttendanceOut */
         AttendanceOut: {
@@ -3255,6 +3257,8 @@ export interface components {
             status: components["schemas"]["AttendanceStatus"];
             /** Note */
             note?: string | null;
+            /** Leave Day Fraction */
+            leave_day_fraction?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -3343,6 +3347,8 @@ export interface components {
             check_out_at?: string | null;
             /** Note */
             note?: string | null;
+            /** Leave Day Fraction */
+            leave_day_fraction?: number | null;
         };
         /** AuditLogOut */
         AuditLogOut: {
@@ -3879,6 +3885,8 @@ export interface components {
             attendance_check_out_at?: string | null;
             /** Attendance Note */
             attendance_note?: string | null;
+            /** Attendance Leave Day Fraction */
+            attendance_leave_day_fraction?: number | null;
             /** Permission Hours */
             permission_hours?: number | null;
         };

@@ -117,6 +117,24 @@ export interface LeaveBalanceListParams {
 
 // ---------- pure helpers ----------------------------------------------------
 
+/**
+ * Whether a number is a whole or half day - the only quantities leave comes in.
+ *
+ * The mirror of `app/shared/leave_units.py`, which is the real guard: this one
+ * only decides whether the Save button is enabled and what the field says. The
+ * API refuses a bad value whatever the browser did, because `step="0.5"` on an
+ * input governs the little arrows and nothing else - a typed 2.4 passes it.
+ *
+ * Multiplied by 2 and tested against a rounded copy rather than using `% 0.5`,
+ * which inherits binary floating-point error (`2.4 % 0.5` is 0.3999999999999999,
+ * not 0.4, and the comparisons get worse from there). `x * 2` is exact for every
+ * value a manager can type into this field.
+ */
+export function isHalfStep(value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  return Math.abs(value * 2 - Math.round(value * 2)) < 1e-9;
+}
+
 /** How a balance figure prints: `1.5`, `-2`, `0` - and `-` for a month that
  *  precedes the employee's ledger, which is not the same as zero.
  *
