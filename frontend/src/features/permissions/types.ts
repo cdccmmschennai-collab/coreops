@@ -147,14 +147,17 @@ export interface PermissionRequestDetail extends PermissionRequest {
   /** WHO ACTUALLY DECIDED, by name - resolved by the backend from the
    *  `manager_id` the approve/reject endpoints stamp with the DECIDING employee.
    *  Never the routed project's current Head and never the reporting PM: both
-   *  can change after the decision, and "Reviewed by" must name who clicked.
-   *  Null until somebody has ruled. Read through `permissionActorRow`. */
+   *  can change after the decision, and "Approved by" / "Rejected by" must name
+   *  who clicked. Null until somebody has ruled. Read through
+   *  `permissionActorRows`. */
   reviewer_name: string | null;
-  /** WHO A STILL-PENDING REQUEST IS WAITING ON, by name - the routed project's
-   *  current Head, else the requester's reporting PM, derived per read by the
-   *  backend through the same chain that delivers the notification. Detail-only
-   *  and pending-only, exactly as Leave's `routed_to_name` is; null on a settled
-   *  request, where `reviewer_name` is the relevant actor instead. */
+  /** WHO THE REQUEST WENT TO, by name - a separate fact from `reviewer_name`,
+   *  which is who decided it. While pending the backend derives it from the
+   *  routed project's current Head, else the requester's reporting PM, through
+   *  the same chain that delivers the notification; once approved or rejected it
+   *  reads the submission notification actually delivered, so a Head reassigned
+   *  since cannot rewrite history. Detail-only, exactly as Leave's
+   *  `routed_to_name` is; null on the cancellation statuses. */
   routed_to_name: string | null;
   balance: PermissionRequestBalance;
 }
@@ -435,17 +438,23 @@ export function permissionDecisionActor(
 }
 
 /**
- * The ONE actor/routing row Permission Detail shows under Status, or null for no
- * row at all.
+ * The actor/routing rows Permission Detail shows under Status, in order.
  *
- * It answers a different question per status, which is why it is one row and not
- * two:
+ * TWO SEPARATE FACTS, AND A SETTLED REQUEST HAS BOTH. "Routed to" is who the
+ * request went to; "Approved by" / "Rejected by" is who actually ruled on it.
+ * They are frequently different people - a request routed to a Project Head can
+ * be decided by the PM - so one is never allowed to stand in for the other and
+ * neither is derived from the other:
  *
- *   pending    Routed to     who is holding this request right now
- *   approved   Reviewed by   who granted it
- *   rejected   Reviewed by   who refused it
+ *   pending    Routed to
+ *   approved   Routed to  +  Approved by
+ *   rejected   Routed to  +  Rejected by
  *
- * Everything else returns null and the card renders nothing there:
+ * The labels are Leave's labels, character for character (`leaveActorRows`), and
+ * the old "Reviewed by" is gone: the two kinds sit side by side in All Requests
+ * and a reader must not have to learn a second vocabulary to read one of them.
+ *
+ * Everything else returns an empty list and the card renders nothing there:
  *
  *   cancelled               no cancellation actor is recorded anywhere;
  *                           `manager_id` on a cancelled row is its former
@@ -453,12 +462,15 @@ export function permissionDecisionActor(
  *   cancellation_requested  the standing approval is under review again;
  *                           neither question has a settled answer.
  *
+ * Either row is dropped individually when its name is missing, so a request with
+ * no recorded routing still names its approver and vice versa.
+ *
  * INFORMATIONAL, NEVER PERMISSION. This is what the reader is TOLD, and it is
  * deliberately shown to the request's own author too - an employee is entitled
  * to know who their request went to. What the reader may DO is
  * `canReviewPermission`, which is unrelated and unchanged.
  *
- * The decided half goes through `permissionDecisionActor` rather than reading
+ * The decided row goes through `permissionDecisionActor` rather than reading
  * `reviewer_name` again, so the detail page and the All Requests "By" column
  * cannot disagree about which statuses have an actor.
  */
@@ -467,18 +479,30 @@ export interface PermissionActorRow {
   name: string;
 }
 
-export function permissionActorRow(
+export function permissionActorRows(
   req: Pick<PermissionRequestDetail, "status" | "reviewer_name" | "routed_to_name">,
-): PermissionActorRow | null {
-  if (req.status === "pending") {
-    const routedTo = req.routed_to_name?.trim();
-    return routedTo ? { label: "Routed to", name: routedTo } : null;
+): PermissionActorRow[] {
+  if (
+    req.status !== "pending" &&
+    req.status !== "approved" &&
+    req.status !== "rejected"
+  ) {
+    return [];
   }
+  const rows: PermissionActorRow[] = [];
+  const routedTo = req.routed_to_name?.trim();
+  if (routedTo) rows.push({ label: "Routed to", name: routedTo });
   const actor = permissionDecisionActor({
     status: req.status,
     manager_name: req.reviewer_name,
   });
-  return actor ? { label: "Reviewed by", name: actor } : null;
+  if (actor) {
+    rows.push({
+      label: req.status === "approved" ? "Approved by" : "Rejected by",
+      name: actor,
+    });
+  }
+  return rows;
 }
 
 // ---------- detail-page action visibility -----------------------------------

@@ -58,6 +58,10 @@ from app.modules.calendar.working_days import (
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave.routing import resolve_routed_project
+# Read-only: the submission notification is the durable record of WHO a settled
+# request was routed to. Safe at module level - `notifications.service` imports
+# only its own models and `users.models`, so there is no cycle back to here.
+from app.modules.notifications import service as notifications_service
 from app.modules.permissions import email as permission_email
 from app.modules.permissions import recipients as permission_recipients
 from app.modules.permissions.balance import (
@@ -583,23 +587,46 @@ def _routed_to_name(db: Session, req: PermissionRequest) -> str | None:
     IT IS THE SAME FUNCTION THE NOTIFICATION WALKS, so an employee reading
     "Routed to ..." is being told the name of the person whose bell actually rang.
 
-    PENDING ONLY. Once a request is approved, rejected or cancelled the routing
-    is spent and the question the page asks becomes "who decided this", which
-    `reviewer_name` - the actual actor stamped in `manager_id` - answers. A
-    request awaiting a CANCELLATION decision is left alone too: its standing
-    approval already names its approver.
+    ONCE DECIDED, THE ANSWER STOPS BEING DERIVED. A settled request must still
+    show who it went to - "Routed to" and "Approved by" are two different facts
+    and the page shows both - but re-deriving the routed person after the fact
+    would name whoever heads that project TODAY, which is not who the request
+    was sent to. So the settled answer comes from the SUBMISSION NOTIFICATION
+    that was actually delivered at submission time: one row, written once, to
+    exactly the person the routing chose. That is the only historically accurate
+    record there is, and reading it needs no new column and no migration.
+
+    A request awaiting a CANCELLATION decision, or already cancelled, is left
+    alone: those statuses show no actor row at all (see `permissionActorRows` in
+    the frontend), so there is nothing to resolve.
 
     None is a legitimate answer - an unrouted request whose requester has no
-    reporting PM, or one whose only candidate has no login - and the page simply
-    omits the row. Same rule, same reason, as `leave/service.py::_attach_routed_to`.
+    reporting PM, one whose only candidate has no login, or a settled request
+    whose submission notification was never written - and the page simply omits
+    the row. Same rule, same reason, as `leave/service.py::_attach_routed_to`.
     """
-    if req.status != PermissionStatus.pending:
+    if req.status == PermissionStatus.pending:
+        employee = db.get(Employee, req.employee_id)
+        if employee is None:
+            return None
+        recipient = permission_recipients.resolve_in_app_recipient(db, employee, req)
+        return recipient.employee.full_name if recipient is not None else None
+
+    if req.status not in (PermissionStatus.approved, PermissionStatus.rejected):
         return None
-    employee = db.get(Employee, req.employee_id)
-    if employee is None:
+
+    user_id = notifications_service.first_notified_user_id(
+        db,
+        type_="permission_submitted",
+        entity_type="permission_request",
+        entity_id=req.id,
+    )
+    if user_id is None:
         return None
-    recipient = permission_recipients.resolve_in_app_recipient(db, employee, req)
-    return recipient.employee.full_name if recipient is not None else None
+    recipient = db.execute(
+        select(Employee).where(Employee.user_id == user_id)
+    ).scalars().first()
+    return recipient.full_name if recipient is not None else None
 
 
 def _request_balance(

@@ -1,12 +1,13 @@
 /**
- * The actor/routing row on the Leave Request card (see `leaveActorRow`).
+ * The actor/routing rows on the Leave Request card (see `leaveActorRows`).
  *
- * One row, directly under Status, whose LABEL depends on the status: "Routed to"
- * while the request is waiting, "Approved by" / "Rejected by" once it is
- * settled, and nothing at all otherwise. These tests pin the label as well as
- * the name, because the label is the part that carries the meaning.
+ * Directly under Status: "Routed to" says who the request went to, and
+ * "Approved by" / "Rejected by" says who actually ruled on it. A settled request
+ * shows BOTH, because those are different questions with frequently different
+ * answers. These tests pin the labels as well as the names, because the label is
+ * the part that carries the meaning.
  *
- * The row is informational. Nothing here decides whether Approve/Reject renders
+ * The rows are informational. Nothing here decides whether Approve/Reject renders
  * - that is `canReviewLeave`, tested in types.review.test.ts and untouched by
  * this phase. The two are asserted to be independent below.
  *
@@ -15,8 +16,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { canReviewLeave, leaveActorRow } from "./types.ts";
-import type { LeaveStatus } from "./types.ts";
+import { canReviewLeave, leaveActorRows } from "./types.ts";
+import type { LeaveActorRow, LeaveStatus } from "./types.ts";
 
 const APPROVER = "NAINAR B";
 const ROUTED_TO = "Alex Manager";
@@ -37,53 +38,71 @@ const ALL_STATUSES: LeaveStatus[] = [
   "cancellation_requested",
 ];
 
+const labelsOf = (rows: LeaveActorRow[]) => rows.map((r) => r.label);
+const nameFor = (rows: LeaveActorRow[], label: string) =>
+  rows.find((r) => r.label === label)?.name ?? null;
+
 // ── 1. pending → Routed to ──────────────────────────────────────────────────
 
 test("a pending request names who it is routed to", () => {
-  assert.deepEqual(leaveActorRow(row("pending")), {
-    label: "Routed to",
-    name: ROUTED_TO,
-  });
+  assert.deepEqual(leaveActorRows(row("pending")), [
+    { label: "Routed to", name: ROUTED_TO },
+  ]);
 });
 
-test("a pending request ignores any decision actor on the row", () => {
+test("a pending request shows no decision actor", () => {
   // Nobody has decided it yet; only the routing is meaningful.
-  assert.equal(leaveActorRow(row("pending"))?.name, ROUTED_TO);
+  assert.deepEqual(labelsOf(leaveActorRows(row("pending"))), ["Routed to"]);
 });
 
 test("a pending request nobody could be routed to shows no row", () => {
   // Unrouted, requester has no reporting PM, or the only candidate has no login.
-  assert.equal(leaveActorRow(row("pending", { routed_to_name: null })), null);
-  assert.equal(leaveActorRow(row("pending", { routed_to_name: "  " })), null);
+  assert.deepEqual(leaveActorRows(row("pending", { routed_to_name: null })), []);
+  assert.deepEqual(leaveActorRows(row("pending", { routed_to_name: "  " })), []);
 });
 
-// ── 2./3. settled → Approved by / Rejected by ───────────────────────────────
+// ── 2./3. settled → Routed to AND Approved by / Rejected by ─────────────────
 
 test("an approved request names its approver", () => {
-  assert.deepEqual(leaveActorRow(row("approved")), {
-    label: "Approved by",
-    name: APPROVER,
-  });
+  assert.deepEqual(leaveActorRows(row("approved")), [
+    { label: "Routed to", name: ROUTED_TO },
+    { label: "Approved by", name: APPROVER },
+  ]);
 });
 
 test("a rejected request names its rejecter", () => {
-  assert.deepEqual(leaveActorRow(row("rejected")), {
-    label: "Rejected by",
-    name: APPROVER,
-  });
+  assert.deepEqual(leaveActorRows(row("rejected")), [
+    { label: "Routed to", name: ROUTED_TO },
+    { label: "Rejected by", name: APPROVER },
+  ]);
 });
 
-test("a settled request ignores any stale routing name", () => {
-  // The routing is spent once a decision exists - the question becomes who
-  // decided, not who was holding it.
-  assert.equal(leaveActorRow(row("approved"))?.name, APPROVER);
-  assert.equal(leaveActorRow(row("rejected"))?.name, APPROVER);
+test("a settled request keeps Routed to visible beside the decision", () => {
+  for (const status of ["approved", "rejected"] as const) {
+    assert.equal(nameFor(leaveActorRows(row(status)), "Routed to"), ROUTED_TO);
+  }
 });
 
-test("a settled request whose actor has no name shows no row", () => {
-  // Historical rows decided before the reviewer was recorded.
-  assert.equal(leaveActorRow(row("approved", { manager_name: null })), null);
-  assert.equal(leaveActorRow(row("rejected", { manager_name: "" })), null);
+test("the decision actor is never taken from the routing", () => {
+  assert.equal(nameFor(leaveActorRows(row("approved")), "Approved by"), APPROVER);
+  assert.equal(nameFor(leaveActorRows(row("rejected")), "Rejected by"), APPROVER);
+});
+
+test("a settled request whose actor has no name still names its routing", () => {
+  // Historical rows decided before the reviewer was recorded. The missing half
+  // is dropped, never guessed from the other.
+  assert.deepEqual(leaveActorRows(row("approved", { manager_name: null })), [
+    { label: "Routed to", name: ROUTED_TO },
+  ]);
+  assert.deepEqual(leaveActorRows(row("rejected", { manager_name: "" })), [
+    { label: "Routed to", name: ROUTED_TO },
+  ]);
+});
+
+test("a settled request with no recorded routing still names its actor", () => {
+  assert.deepEqual(leaveActorRows(row("approved", { routed_to_name: null })), [
+    { label: "Approved by", name: APPROVER },
+  ]);
 });
 
 // ── 4. cancelled → no row ───────────────────────────────────────────────────
@@ -92,34 +111,34 @@ test("a cancelled request shows no actor row at all", () => {
   // `manager_name` on a cancelled row is its former APPROVER, and the person who
   // cancelled it is not recorded anywhere - so naming anybody here would name
   // the wrong one. Same rule the All-leave "By" column applies.
-  assert.equal(leaveActorRow(row("cancelled")), null);
+  assert.deepEqual(leaveActorRows(row("cancelled")), []);
 });
 
 test("a request awaiting a cancellation decision shows no actor row", () => {
-  assert.equal(leaveActorRow(row("cancellation_requested")), null);
+  assert.deepEqual(leaveActorRows(row("cancellation_requested")), []);
 });
 
 // ── the whole rule ──────────────────────────────────────────────────────────
 
-test("exactly three statuses produce a row, each with its own label", () => {
-  const labels: Record<string, string | null> = {};
+test("exactly three statuses produce rows, each with its own labels", () => {
+  const labels: Record<string, string[]> = {};
   for (const status of ALL_STATUSES) {
-    labels[status] = leaveActorRow(row(status))?.label ?? null;
+    labels[status] = labelsOf(leaveActorRows(row(status)));
   }
   assert.deepEqual(labels, {
-    pending: "Routed to",
-    approved: "Approved by",
-    rejected: "Rejected by",
-    cancelled: null,
-    cancellation_requested: null,
+    pending: ["Routed to"],
+    approved: ["Routed to", "Approved by"],
+    rejected: ["Routed to", "Rejected by"],
+    cancelled: [],
+    cancellation_requested: [],
   });
 });
 
-test("the row is never labelled the generic 'By' used by the All-leave table", () => {
+test("no row is ever labelled the generic 'By' used by the All-leave table", () => {
   // The table needs one heading for mixed rows; the detail page has the status
   // in hand and says which decision it was.
   for (const status of ALL_STATUSES) {
-    assert.notEqual(leaveActorRow(row(status))?.label, "By");
+    assert.equal(labelsOf(leaveActorRows(row(status))).includes("By"), false);
   }
 });
 
@@ -129,20 +148,20 @@ test("the request owner sees the routing row but still gets no Review card", () 
   const ME = "emp-1";
   const own = { ...row("pending"), employee_id: ME };
   // Told who has it...
-  assert.equal(leaveActorRow(own)?.label, "Routed to");
+  assert.deepEqual(labelsOf(leaveActorRows(own)), ["Routed to"]);
   // ...and still cannot act on it, even as an authorised reviewer.
   assert.equal(canReviewLeave(own, true, ME), false);
 });
 
 test("a reviewer looking at somebody else's pending request gets both", () => {
   const other = { ...row("pending"), employee_id: "emp-2" };
-  assert.equal(leaveActorRow(other)?.label, "Routed to");
+  assert.deepEqual(labelsOf(leaveActorRows(other)), ["Routed to"]);
   assert.equal(canReviewLeave(other, true, "emp-1"), true);
 });
 
 test("a plain employee viewing a settled request still sees the actor", () => {
   // Informational, not gated on review authority.
   const settled = { ...row("approved"), employee_id: "emp-1" };
-  assert.equal(leaveActorRow(settled)?.name, APPROVER);
+  assert.equal(nameFor(leaveActorRows(settled), "Approved by"), APPROVER);
   assert.equal(canReviewLeave(settled, false, "emp-1"), false);
 });

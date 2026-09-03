@@ -2,15 +2,17 @@
 
 The point of these tests is to pin down a claim rather than to add a feature:
 `permission_requests.manager_id` is already stamped with the DECIDING employee by
-`approve_permission_request` / `reject_permission_request`, so "Reviewed by" needs
-no new column and no migration. They prove it by deciding through the real
+`approve_permission_request` / `reject_permission_request`, so "Approved by" /
+"Rejected by" needs no new column and no migration. They prove it by deciding through the real
 endpoints and reading the actor back off the detail response - and, crucially, by
 making the routed Head and the deciding PM DIFFERENT PEOPLE, so a value derived
 from the current routing would be visibly wrong.
 
-`routed_to_name` is the other half: who the request is waiting on right now. It
-is derived per read from `routed_project_id`, pending only, exactly as
-`LeaveRequestOut.routed_to_name` is.
+`routed_to_name` is the other half, and it is a SEPARATE FACT that survives the
+decision: while pending it is derived per read from `routed_project_id`; once
+approved or rejected it is read from the submission notification actually
+delivered, so it names who the request went to rather than whoever heads that
+project today. Exactly as `LeaveRequestOut.routed_to_name` behaves.
 
     docker exec wms-backend-1 pytest tests/test_permission_reviewer.py
 """
@@ -18,6 +20,7 @@ from datetime import date
 
 import pytest
 
+from app.modules.notifications.models import Notification
 from app.modules.permissions.models import PermissionPeriod, PermissionStatus
 from app.modules.users.models import UserRole
 
@@ -204,11 +207,94 @@ def test_a_pending_request_has_no_reviewer_but_names_who_it_is_routed_to(
     assert body["routed_to_name"] == "Nainar B"
 
 
-def test_routed_to_is_dropped_once_the_request_is_settled(
+def _record_submission(db, req_id, user_id):
+    """The submission notification exactly as `service._push` writes it.
+
+    That row IS the record of who a request was routed to. The `make_*` fixtures
+    insert rows straight into the table and so never send one; a request filed
+    through `POST /permission-requests` always does.
+    """
+    db.add(
+        Notification(
+            user_id=user_id,
+            type="permission_submitted",
+            title="t",
+            message="m",
+            entity_type="permission_request",
+            entity_id=req_id,
+        )
+    )
+    db.commit()
+
+
+def test_a_settled_request_still_names_who_it_was_routed_to(
+    client, cast, make_permission_request, db
+):
+    """ROUTED TO AND APPROVED BY ARE TWO DIFFERENT FACTS, and a decided request
+    shows both. The Head received it; the PM approved it; neither name is allowed
+    to stand in for the other."""
+    req = make_permission_request(
+        employee_id=cast["employee"].id,
+        permission_date=PERM_DATE,
+        period=PermissionPeriod.first_half_1h,
+        routed_project_id=cast["project"].id,
+    )
+    _record_submission(db, req.id, cast["head_employee"].user_id)
+    assert client.post(f"{API}/{req.id}/approve", headers=cast["pm"], json={}).status_code == 200
+
+    body = _detail(client, cast["pm"], req.id)
+    assert body["routed_to_name"] == "Nainar B"
+    assert body["reviewer_name"] == "Priya Ramesh"
+
+
+def test_a_rejected_request_names_both_as_well(
+    client, cast, make_permission_request, db
+):
+    req = make_permission_request(
+        employee_id=cast["employee"].id,
+        permission_date=PERM_DATE,
+        period=PermissionPeriod.first_half_1h,
+        routed_project_id=cast["project"].id,
+    )
+    _record_submission(db, req.id, cast["head_employee"].user_id)
+    assert client.post(f"{API}/{req.id}/reject", headers=cast["pm"], json={}).status_code == 200
+
+    body = _detail(client, cast["pm"], req.id)
+    assert body["routed_to_name"] == "Nainar B"
+    assert body["reviewer_name"] == "Priya Ramesh"
+
+
+def test_a_settled_routing_is_history_not_a_fresh_lookup(
+    client, cast, make_permission_request, make_employee, make_user, db
+):
+    """THE WHOLE REASON THE SETTLED ANSWER IS NOT DERIVED. Re-resolving the
+    routed project after the fact would name whoever heads it TODAY; the request
+    was sent to the Head who held the post then, and that must not change."""
+    req = make_permission_request(
+        employee_id=cast["employee"].id,
+        permission_date=PERM_DATE,
+        period=PermissionPeriod.first_half_1h,
+        routed_project_id=cast["project"].id,
+    )
+    _record_submission(db, req.id, cast["head_employee"].user_id)
+    assert client.post(f"{API}/{req.id}/approve", headers=cast["pm"], json={}).status_code == 200
+
+    new_head_u = make_user("head4f2@x.com", role=UserRole.employee)
+    new_head = make_employee(
+        employee_code="HD4F2", first_name="GIRIDHARAN", last_name="SUBRAMANIAN",
+        user_id=new_head_u.id,
+    )
+    cast["project"].head_employee_id = new_head.id
+    db.commit()
+
+    assert _detail(client, cast["pm"], req.id)["routed_to_name"] == "Nainar B"
+
+
+def test_a_settled_request_with_no_submission_on_record_says_nothing(
     client, cast, make_permission_request
 ):
-    """Pending only. A decided request's routing is spent, and the question the
-    page answers becomes "who decided this"."""
+    """No notification row - a request from before this was readable, or one whose
+    recipient had no login. Null, never a guess from the current routing."""
     req = make_permission_request(
         employee_id=cast["employee"].id,
         permission_date=PERM_DATE,
@@ -220,6 +306,25 @@ def test_routed_to_is_dropped_once_the_request_is_settled(
     body = _detail(client, cast["pm"], req.id)
     assert body["routed_to_name"] is None
     assert body["reviewer_name"] == "Priya Ramesh"
+
+
+@pytest.mark.parametrize(
+    "status", [PermissionStatus.cancelled, PermissionStatus.cancellation_requested]
+)
+def test_the_cancellation_statuses_report_no_routing(
+    client, cast, make_permission_request, db, status
+):
+    """Unchanged: those statuses show no actor row at all, so there is nothing to
+    resolve and cancellation is out of scope here."""
+    req = make_permission_request(
+        employee_id=cast["employee"].id,
+        permission_date=PERM_DATE,
+        period=PermissionPeriod.first_half_1h,
+        routed_project_id=cast["project"].id,
+        status=status,
+    )
+    _record_submission(db, req.id, cast["head_employee"].user_id)
+    assert _detail(client, cast["pm"], req.id)["routed_to_name"] is None
 
 
 def test_routed_to_falls_back_to_the_reporting_pm_when_there_is_no_head(

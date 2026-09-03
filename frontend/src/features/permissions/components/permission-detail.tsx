@@ -37,7 +37,7 @@ import {
   formatPermissionDuration,
   formatMonthLabel,
   formatShortDate,
-  permissionActorRow,
+  permissionActorRows,
   permissionReturnHref,
   type PermissionRequestDetail as Detail,
 } from "../types";
@@ -430,9 +430,10 @@ export function PermissionDetail({ id }: { id: string }) {
     employeeId,
   );
   const reviewed = detail.reviewed_at || detail.reviewer_name || detail.manager_comment;
-  // WHO IS HOLDING IT, or WHO DECIDED IT - one row, never both, because only one
-  // of the two questions has an answer at a time. See `permissionActorRow`.
-  const actorRow = permissionActorRow(detail);
+  // WHO IT WENT TO, and WHO DECIDED IT - two separate facts, and a settled
+  // request shows both, because the routed recipient and the person who ruled
+  // are frequently not the same person. See `permissionActorRows`.
+  const actorRows = permissionActorRows(detail);
   // The back link names where it actually goes: Permission History is the
   // employee's own list, anything else here is the Attendance Leave tab that
   // hosts All Requests.
@@ -497,29 +498,29 @@ export function PermissionDetail({ id }: { id: string }) {
                 label="Status"
                 value={<PermissionStatusBadge status={detail.status} />}
               />
-              {/* TWO DIFFERENT FACTS, ONE ROW AT A TIME.
-                  "Routed to" is who is holding a still-pending request, derived
-                  fresh from the routed project on every read. "Reviewed by" is
-                  the person who actually clicked Approve or Reject, read from
-                  the `manager_id` stamped at that moment - so a Head or PM
+              {/* TWO DIFFERENT FACTS, BOTH SHOWN ONCE THERE IS AN ANSWER.
+                  "Routed to" is who the request went to. "Approved by" /
+                  "Rejected by" is the person who actually clicked, read from the
+                  `manager_id` stamped at that moment - so a Head or PM
                   reassigned since the decision does not rewrite history, and a
-                  pending request never borrows the routed name to look decided.
-                  Neither is ever derived from the other. */}
-              {actorRow ? (
-                <InfoRow label={actorRow.label} value={actorRow.name} />
-              ) : null}
+                  routed recipient is never presented as the decider. Neither is
+                  ever derived from the other; the labels are Leave's. */}
+              {actorRows.map((row) => (
+                <InfoRow key={row.label} label={row.label} value={row.name} />
+              ))}
               <InfoRow label="Requested" value={fmtDateTime(detail.created_at)} />
               {/* The review fields appear only once there is something to show,
                   so a pending request does not render a column of dashes. */}
               {reviewed ? (
                 <>
                   <InfoRow label="Reviewed" value={fmtDateTime(detail.reviewed_at)} />
-                  {/* The reviewer's NAME is the `actorRow` above for a decided
+                  {/* The reviewer's NAME is in `actorRows` above for a decided
                       request. This row remains for the statuses that carry a
                       recorded reviewer but deliberately show no actor - a
                       cancelled or withdrawal-pending permission - where hiding
-                      the recorded name entirely would lose what the row knows. */}
-                  {!actorRow && detail.reviewer_name ? (
+                      the recorded name entirely would lose what the row knows.
+                      Unchanged: cancellation is out of scope here. */}
+                  {actorRows.length === 0 && detail.reviewer_name ? (
                     <InfoRow label="Approved by" value={detail.reviewer_name} />
                   ) : null}
                   {detail.manager_comment?.trim() ? (

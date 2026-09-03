@@ -31,7 +31,7 @@ import {
   formatLeaveDuration,
   LEAVE_RETURN_PARAM,
   LEAVE_CLASSIFICATION_LABEL,
-  leaveActorRow,
+  leaveActorRows,
   leaveReturnHref,
   type DeliverableConflict,
 } from "../types";
@@ -295,10 +295,11 @@ export function LeaveDetail({ id }: { id: string }) {
     leave.employee_id.slice(0, 8);
   const showImpact = isManager && conflicts.length > 0;
   const canReview = canReviewLeave(leave, isManager || isProjectHead, employeeId);
-  // What the card SAYS about the request's actor. Independent of `canReview`,
-  // which decides what this reader may DO - the request owner sees this row and
-  // still gets no Review card.
-  const actorRow = leaveActorRow(leave);
+  // What the card SAYS about the request's routing and its actor - two separate
+  // facts, both shown on a settled request. Independent of `canReview`, which
+  // decides what this reader may DO: the request owner sees these rows and still
+  // gets no Review card.
+  const actorRows = leaveActorRows(leave);
 
   return (
     <>
@@ -338,12 +339,15 @@ export function LeaveDetail({ id }: { id: string }) {
               <InfoRow label="To" value={fmtDate(leave.end_date)} />
               <InfoRow label="Duration" value={formatLeaveDuration(leave.working_days)} />
               <InfoRow label="Status" value={<LeaveStatusBadge status={leave.status} />} />
-              {/* Routed to / Approved by / Rejected by - at most one of them,
-                  chosen by status. Informational only: it says who holds or
-                  decided the request, never what this reader may do, which stays
+              {/* Routed to, then Approved by / Rejected by - a settled request
+                  shows both, because who it went to and who ruled on it are
+                  different questions with frequently different answers.
+                  Informational only: never what this reader may do, which stays
                   `canReviewLeave` below. Absent entirely for a cancelled request,
                   whose cancelling actor the system does not record. */}
-              {actorRow && <InfoRow label={actorRow.label} value={actorRow.name} />}
+              {actorRows.map((row) => (
+                <InfoRow key={row.label} label={row.label} value={row.name} />
+              ))}
               {leave.manager_comment ? (
                 <InfoRow label="Note" value={leave.manager_comment} />
               ) : null}

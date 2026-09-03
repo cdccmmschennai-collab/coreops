@@ -58,15 +58,20 @@ class LeaveRequestOut(BaseModel):
     manager_name: str | None = None
     manager_comment: str | None = None
     routed_project_id: uuid.UUID | None = None
-    # WHO A PENDING REQUEST IS WAITING ON, by name. Derived - not stored - from
-    # `routed_project_id` by `service._attach_routed_to`, which walks the very
-    # same `recipients.resolve_in_app_recipient` the submission notification
-    # walks, so the name shown to the employee is the person whose bell rang.
+    # WHO THE REQUEST WENT TO, by name - a SEPARATE FACT from `manager_name`:
+    # the routed recipient and the person who ends up deciding may be different
+    # people, and the card shows both.
     #
-    # Populated by the DETAIL endpoint only, and only while the request is
-    # pending; None everywhere else (the list, the mutation responses, and any
-    # settled request, where `manager_name` is the relevant actor instead). See
-    # `_attach_routed_to` for why.
+    # While pending it is derived from `routed_project_id` by
+    # `service._attach_routed_to`, which walks the very same
+    # `recipients.resolve_in_app_recipient` the submission notification walks, so
+    # the name shown to the employee is the person whose bell rang. Once approved
+    # or rejected it is read instead from the submission notification actually
+    # delivered, so a Head reassigned since cannot rewrite who the request was
+    # sent to.
+    #
+    # Populated by the DETAIL endpoint only; None on the list and the mutation
+    # responses, and on the cancellation statuses, which show no actor row.
     routed_to_name: str | None = None
     created_at: datetime
     updated_at: datetime

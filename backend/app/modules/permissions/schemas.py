@@ -134,16 +134,19 @@ class PermissionRequestDetailOut(PermissionRequestOut):
     # current Head, the requester's reporting PM or `manager_id` on the employee
     # row: all three can change after the decision, and the page must name the
     # person who clicked, not whoever holds the post today. Rendered as
-    # "Reviewed by". None while nobody has decided.
+    # "Approved by" / "Rejected by", matching Leave. None while nobody has decided.
     reviewer_name: str | None = None
-    # WHO A STILL-PENDING REQUEST IS WAITING ON, by name (Phase 4F). Derived -
-    # not stored - by `service._attach_routed_to` from `routed_project_id`
-    # through the same `recipients.resolve_in_app_recipient` the submission
-    # notification walks, so the name shown is the person whose bell rang.
-    # DETAIL-ONLY and PENDING-ONLY, exactly as `LeaveRequestOut.routed_to_name`
-    # is: once a request is settled the question becomes "who decided this",
-    # which `reviewer_name` answers. The two are separate fields because they
-    # are separate facts - routing is current, the reviewer is historical.
+    # WHO THE REQUEST WENT TO, by name (Phase 4F). DETAIL-ONLY, and a SEPARATE
+    # FACT from `reviewer_name`: the routed recipient and the person who ends up
+    # deciding may be different people, and the page shows both.
+    #
+    # While pending it is derived from `routed_project_id` through the same
+    # `recipients.resolve_in_app_recipient` the submission notification walks -
+    # "who is holding this now". Once approved or rejected it is read instead
+    # from the submission notification that was actually delivered, so a Head
+    # reassigned since cannot rewrite who the request was sent to. See
+    # `service._routed_to_name`. None on the list and mutation responses, and on
+    # the cancellation statuses, which show no actor row.
     routed_to_name: str | None = None
     balance: PermissionRequestBalanceOut
 

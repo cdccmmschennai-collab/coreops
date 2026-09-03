@@ -10,9 +10,13 @@ already existed. Two properties matter and are asserted here:
   * it is resolved FRESH, so a Head reassigned after the request was filed is
     honoured, exactly as approval authority is.
 
+Once the request is SETTLED the answer stops being derived: "Routed to" is a
+separate fact from "Approved by" and the card shows both, so it is read from the
+submission notification actually delivered rather than re-resolved from the
+project - a Head reassigned since must not rewrite who the request was sent to.
+
 The decision actors (`manager_name`) are Phase 3's and are covered in
-`test_leave_all_visibility.py`; this file only pins that a settled request stops
-reporting a routing.
+`test_leave_all_visibility.py`.
 """
 import uuid
 from datetime import date, timedelta
@@ -178,18 +182,104 @@ def test_a_head_reading_their_own_request_still_gets_no_review_authority(
     assert res.status_code == 403, res.text
 
 
-# ---------- 2./3./4. a settled request reports no routing -------------------
+# ---------- 2./3./4. a settled request keeps its routing --------------------
+
+def _record_submission(db, req_id, user_id):
+    """The submission notification exactly as `service._push` writes it.
+
+    That row IS the record of who a request was routed to. The `make_*` fixtures
+    insert rows straight into the table and so never send one; a request filed
+    through `POST /leave-requests` always does.
+    """
+    db.add(
+        Notification(
+            user_id=user_id,
+            type="leave_submitted",
+            title="t",
+            message="m",
+            entity_type="leave_request",
+            entity_id=req_id,
+        )
+    )
+    db.commit()
+
+
+def test_approving_keeps_routed_to_and_adds_the_decision_actor(
+    client, cast, make_leave_request, db
+):
+    """ROUTED TO AND APPROVED BY ARE TWO DIFFERENT FACTS, and a decided request
+    shows both. The Head received it; the PM approved it; neither name is allowed
+    to stand in for the other."""
+    req = _pending(make_leave_request, cast, routed_project_id=cast["project"].id)
+    _record_submission(db, req.id, cast["head"].user_id)
+    before = _detail(client, cast["pm_login"], req.id)
+    assert (before["routed_to_name"], before["manager_name"]) == ("NAINAR B", None)
+
+    res = client.post(f"{LIST}/{req.id}/approve", headers=cast["pm_login"], json={})
+    assert res.status_code == 200, res.text
+
+    after = _detail(client, cast["pm_login"], req.id)
+    assert (after["routed_to_name"], after["manager_name"]) == ("NAINAR B", "Alex Manager")
+
+
+def test_rejecting_does_the_same(client, cast, make_leave_request, db):
+    req = _pending(make_leave_request, cast, routed_project_id=cast["project"].id)
+    _record_submission(db, req.id, cast["head"].user_id)
+    res = client.post(f"{LIST}/{req.id}/reject", headers=cast["pm_login"], json={})
+    assert res.status_code == 200, res.text
+
+    after = _detail(client, cast["pm_login"], req.id)
+    assert after["routed_to_name"] == "NAINAR B"
+    assert after["manager_name"] == "Alex Manager"
+
+
+def test_a_settled_routing_is_history_not_a_fresh_lookup(
+    client, cast, make_leave_request, make_employee, make_user, db
+):
+    """THE WHOLE REASON THE SETTLED ANSWER IS NOT DERIVED. Re-resolving the
+    routed project after the fact would name whoever heads it TODAY; the request
+    was sent to the Head who held the post then, and that must not change - which
+    is the exact opposite of the pending rule asserted further up this file."""
+    req = _pending(make_leave_request, cast, routed_project_id=cast["project"].id)
+    _record_submission(db, req.id, cast["head"].user_id)
+    res = client.post(f"{LIST}/{req.id}/approve", headers=cast["pm_login"], json={})
+    assert res.status_code == 200, res.text
+
+    new_head_user = make_user("head3@x.com", role=UserRole.employee)
+    new_head = make_employee(
+        employee_code="H3", first_name="GIRIDHARAN", last_name="SUBRAMANIAN",
+        user_id=new_head_user.id,
+    )
+    cast["project"].head_employee_id = new_head.id
+    db.commit()
+
+    assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] == "NAINAR B"
+
+
+def test_a_settled_request_with_no_submission_on_record_says_nothing(
+    client, cast, make_leave_request
+):
+    """No notification row - a request from before this was readable, or one whose
+    recipient had no login. Null, never a guess from the current routing."""
+    req = make_leave_request(
+        employee_id=cast["employee"].id,
+        start_date=date.today() + timedelta(days=7),
+        end_date=date.today() + timedelta(days=7),
+        status=LeaveStatus.approved,
+        routed_project_id=cast["project"].id,
+        manager_id=cast["pm"].id,
+    )
+    assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] is None
+
 
 @pytest.mark.parametrize(
-    "status",
-    [LeaveStatus.approved, LeaveStatus.rejected, LeaveStatus.cancelled,
-     LeaveStatus.cancellation_requested],
+    "status", [LeaveStatus.cancelled, LeaveStatus.cancellation_requested],
 )
-def test_a_settled_request_reports_no_routing(
-    client, cast, make_leave_request, status
+def test_the_cancellation_statuses_report_no_routing(
+    client, cast, make_leave_request, db, status
 ):
-    """Once a decision exists the routing is spent; `manager_name` is the
-    relevant actor and the page switches label accordingly."""
+    """Unchanged: those statuses show no actor row at all, so there is nothing to
+    resolve and cancellation is out of scope here."""
     req = make_leave_request(
         employee_id=cast["employee"].id,
         start_date=date.today() + timedelta(days=7),
@@ -198,34 +288,8 @@ def test_a_settled_request_reports_no_routing(
         routed_project_id=cast["project"].id,
         manager_id=cast["pm"].id,
     )
+    _record_submission(db, req.id, cast["head"].user_id)
     assert _detail(client, cast["pm_login"], req.id)["routed_to_name"] is None
-
-
-def test_approving_swaps_routed_to_for_the_decision_actor(
-    client, cast, make_leave_request
-):
-    """The one transition, end to end: before the decision the page can only say
-    who holds it; after, it says who ruled - and both names come from data that
-    already existed."""
-    req = _pending(make_leave_request, cast, routed_project_id=cast["project"].id)
-    before = _detail(client, cast["pm_login"], req.id)
-    assert (before["routed_to_name"], before["manager_name"]) == ("NAINAR B", None)
-
-    res = client.post(f"{LIST}/{req.id}/approve", headers=cast["pm_login"], json={})
-    assert res.status_code == 200, res.text
-
-    after = _detail(client, cast["pm_login"], req.id)
-    assert (after["routed_to_name"], after["manager_name"]) == (None, "Alex Manager")
-
-
-def test_rejecting_does_the_same(client, cast, make_leave_request):
-    req = _pending(make_leave_request, cast, routed_project_id=cast["project"].id)
-    res = client.post(f"{LIST}/{req.id}/reject", headers=cast["pm_login"], json={})
-    assert res.status_code == 200, res.text
-
-    after = _detail(client, cast["pm_login"], req.id)
-    assert after["routed_to_name"] is None
-    assert after["manager_name"] == "Alex Manager"
 
 
 # ---------- the list is deliberately untouched ------------------------------

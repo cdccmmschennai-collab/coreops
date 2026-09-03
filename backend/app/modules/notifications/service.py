@@ -43,6 +43,38 @@ def create_notification(
     return notif
 
 
+def first_notified_user_id(
+    db: Session, *, type_: str, entity_type: str, entity_id: uuid.UUID
+) -> uuid.UUID | None:
+    """WHO THIS EVENT ACTUALLY REACHED, first delivery only.
+
+    A submission notification is written once, at submission time, to the ONE
+    person the request was routed to. That row is therefore the only durable,
+    historically accurate record of the routed recipient: routing itself is not
+    a column (see `leave/routing.py`), and the person is otherwise re-derived
+    per read from the routed project's CURRENT Head - which answers "who holds
+    this now", not "who was it sent to".
+
+    Read-only and additive: nothing about how notifications are created, read or
+    delivered changes. Notifications are never deleted by a user (the module has
+    no delete endpoint), so the row outlives the decision it announced.
+
+    None is a legitimate answer - a request whose recipient had no login, or one
+    whose notification insert failed best-effort - and every caller must be able
+    to say nothing rather than guess.
+    """
+    return db.execute(
+        select(Notification.user_id)
+        .where(
+            Notification.type == type_,
+            Notification.entity_type == entity_type,
+            Notification.entity_id == entity_id,
+        )
+        .order_by(Notification.created_at.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _find_active(
     db: Session, *, user_id: uuid.UUID, type_: str, entity_type: str, entity_id: uuid.UUID,
 ) -> Notification | None:
