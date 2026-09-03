@@ -3,6 +3,8 @@
 RBAC (identical to leave, deliberately - a permission is a smaller absence, not a
 different kind of thing):
   project_manager  list all, approve/reject/cancel any - but never their own
+  Project Head     list own + the requests routed to a project they head, and
+                   approve/reject those - but never their own (Phase 4B/4D)
   employee         list own, submit own, cancel own
 
 Workflow (four states):
@@ -41,7 +43,7 @@ import uuid
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core import authz
@@ -250,11 +252,36 @@ def _audit(
 # ---------- scope / authorisation ------------------------------------------
 
 def _apply_scope(db: Session, actor: User, stmt):
+    """What this reader may LIST - the same PM / Head / own-rows split
+    `leave/service.py::_apply_scope` already applies, and for the same reason: a
+    Project Head who may READ and REVIEW a request routed to their project (see
+    `_assert_can_read` / `_assert_can_review`) has to be able to find it in the
+    first place. Without the Head branch the routed approver's queue came back
+    empty while the decision endpoints accepted them, which is the same rule
+    disagreeing with itself.
+
+    Head-ness is per-project, never a role, so it comes from
+    `authz.reviewable_project_ids` and is matched against the request's
+    `routed_project_id` - a Head sees the requests routed to a project THEY head,
+    never another Head's. A Head with no projects falls through to own-rows only,
+    exactly as a plain employee does.
+    """
     if actor.role == UserRole.project_manager:
         return stmt, True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
+    head_project_ids = authz.reviewable_project_ids(db, actor)
+    if head_project_ids:
+        return (
+            stmt.where(
+                or_(
+                    PermissionRequest.employee_id == me.id,
+                    PermissionRequest.routed_project_id.in_(head_project_ids),
+                )
+            ),
+            True,
+        )
     return stmt.where(PermissionRequest.employee_id == me.id), True
 
 
@@ -427,6 +454,7 @@ def list_permission_requests(
     limit: int,
     offset: int,
     order_by: str = "created_at",
+    exclude_self: bool = False,
 ) -> tuple[list[PermissionRequest], int]:
     """The one scoped, filtered read every permission list is built from.
 
@@ -434,11 +462,22 @@ def list_permission_requests(
     neither should grow its own query: the review QUEUE is a work list, so oldest
     ask first is wrong and newest-submitted first is what a manager expects, while
     monthly HISTORY is a calendar, so it reads by the day the absence falls on.
+
+    `exclude_self` is what a REVIEW QUEUE passes, and it is the same flag and the
+    same reason as `leave/service.py`: nobody may review their own request, so a
+    Project Head's own requests must not sit in the queue they are working
+    through offering buttons the backend will refuse. It narrows a list, never
+    widens one.
     """
     stmt = select(PermissionRequest)
     stmt, allowed = _apply_scope(db, actor, stmt)
     if not allowed:
         return [], 0
+
+    if exclude_self:
+        me = _current_employee(db, actor)
+        if me is not None:
+            stmt = stmt.where(PermissionRequest.employee_id != me.id)
 
     if employee_id is not None:
         stmt = stmt.where(PermissionRequest.employee_id == employee_id)

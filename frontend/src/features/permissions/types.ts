@@ -143,6 +143,9 @@ export interface PermissionListParams {
   to?: string;
   limit: number;
   offset: number;
+  /** Drop the caller's own requests - what the review queue passes, since nobody
+   *  may review their own. Enforced server-side either way. */
+  exclude_self?: boolean;
 }
 
 export const PERMISSION_STATUS_LABEL: Record<PermissionStatus, string> = {
@@ -313,15 +316,19 @@ export function formatAvailable(remainingHours: number, allowanceHours: number):
 
 /** Whether to offer Approve/Reject on the detail page.
  *
- *  Project manager, still pending, and NOT their own request - a PM is an
- *  employee too and files their own. The backend refuses all three cases
+ *  `isReviewer` is passed in rather than derived from a role, because a
+ *  permission is reviewable by a project manager AND by the routed Project Head
+ *  (Phase 4B) - and Head-ness is not a role, it is per-project and comes from the
+ *  report scope, exactly as `canReviewLeave` takes it. Beyond that the rule is
+ *  unchanged: still pending, and NOT the reviewer's own request - a PM and a Head
+ *  are both employees who file their own. The backend refuses each case
  *  independently; this only decides what renders. */
 export function canReviewPermission(
   req: Pick<PermissionRequest, "status" | "employee_id">,
-  role: string | undefined,
+  isReviewer: boolean,
   myEmployeeId: string | null | undefined,
 ): boolean {
-  if (role !== "project_manager") return false;
+  if (!isReviewer) return false;
   if (req.status !== "pending") return false;
   return !myEmployeeId || req.employee_id !== myEmployeeId;
 }

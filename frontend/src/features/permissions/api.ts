@@ -19,6 +19,7 @@ function toQuery(p: PermissionListParams): string {
   if (p.to) sp.set("to", p.to);
   sp.set("limit", String(p.limit));
   sp.set("offset", String(p.offset));
+  if (p.exclude_self) sp.set("exclude_self", "true");
   return sp.toString();
 }
 

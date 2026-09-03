@@ -13,19 +13,29 @@ import { LeaveReviewPanel } from "./leave-review-panel";
 
 interface Props {
   employeeId?: string;
-  /** A Project Head gets Pending/Cancellation/All (leave only) - Permission
-   *  Requests is an unrelated, PM-only attendance-permission domain and stays
-   *  hidden for a Head, per Phase 1's leave-only scope. Defaults to true so
-   *  every existing PM call site is unaffected. */
-  showPermissionQueue?: boolean;
+  /** Drop the viewer's OWN requests from every queue here. Passed `true` only by
+   *  a Project Head's reused panel: a Head is an employee who files their own
+   *  requests, and nobody reviews their own, so their rows must not sit in the
+   *  queues they are working through. Defaults to false, which is exactly what
+   *  every existing PM call site got and still gets.
+   *
+   *  This used to be inferred from `showPermissionQueue`, which no longer exists:
+   *  Phase 4D gives a Head the Permission requests queue too, so the two facts
+   *  had to stop being the same flag. */
+  excludeSelf?: boolean;
 }
 
-/** The project manager's Leave tab: three queues behind an inner tab strip,
- *  so cancellation review lives inside Leave rather than adding another
- *  top-level Attendance tab.
+/** The approval Leave tab - a project manager's, and since Phase 4D a Project
+ *  Head's: four queues behind an inner tab strip, so cancellation and permission
+ *  review live inside Leave rather than adding more top-level Attendance tabs.
+ *
+ *  WHICH ROWS EACH READER SEES IS NOT DECIDED HERE. Both `/leave-requests` and
+ *  `/permission-requests` are already scoped server-side to the projects the
+ *  caller heads (a PM sees everything), so the same calls serve both and the
+ *  backend stays the only thing deciding access.
  *
  *  Counts come from API totals, never `items.length` — the lists are paged. */
-export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }: Props) {
+export function LeaveManagementPanel({ employeeId, excludeSelf = false }: Props) {
   // Fallback "" rather than "pending": `useUrlState` strips a value equal to its
   // fallback, so selecting Pending used to ERASE `queue` from the URL - which
   // both lost the queue on Back and, for a Head, took the only signal that they
@@ -34,12 +44,6 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
   const [rawQueue, setQueue] = useUrlState("queue", "");
   const queue = resolveLeaveQueue(rawQueue);
 
-  // `showPermissionQueue` is only ever passed `false` for a Project Head's
-  // reused panel (the Permission-requests queue is unrelated, PM-only). Reused
-  // here as the "am I rendering for a Head" signal rather than adding a second
-  // prop: a Head's own requests must not appear in their own approval queues.
-  const excludeSelf = !showPermissionQueue;
-
   // These two only exist to read `total` for the badges. They MUST pass the same
   // `excludeSelf` the queues below pass, or a Head's own request is counted on a
   // tab whose list will not show it - see `leaveQueueCountParams`.
@@ -47,11 +51,15 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
     useLeaveList(leaveQueueCountParams("pending", excludeSelf)).data?.total ?? 0;
   const cancellationCount =
     useLeaveList(leaveQueueCountParams("cancellation_requested", excludeSelf)).data?.total ?? 0;
+  // Same rule as the two above: the badge and the list it labels must describe
+  // ONE dataset, so it passes the same `exclude_self` the queue passes.
   const permissionCount =
-    usePermissionList(
-      { status: "pending", limit: 1, offset: 0 },
-      { enabled: showPermissionQueue },
-    ).data?.total ?? 0;
+    usePermissionList({
+      status: "pending",
+      limit: 1,
+      offset: 0,
+      exclude_self: excludeSelf,
+    }).data?.total ?? 0;
 
   return (
     <div className="space-y-4">
@@ -69,14 +77,12 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
             count: cancellationCount || undefined,
             countVariant: "info",
           },
-          ...(showPermissionQueue
-            ? [{
-                value: "permission",
-                label: "Permission requests",
-                count: permissionCount || undefined,
-                countVariant: "warning" as const,
-              }]
-            : []),
+          {
+            value: "permission",
+            label: "Permission requests",
+            count: permissionCount || undefined,
+            countVariant: "warning",
+          },
           { value: "all", label: "All leave" },
         ]}
         value={queue}
@@ -87,7 +93,7 @@ export function LeaveManagementPanel({ employeeId, showPermissionQueue = true }:
         <LeaveReviewPanel employeeId={employeeId} excludeSelf={excludeSelf} />
       )}
       {queue === "cancellation" && <LeaveCancellationReviewPanel excludeSelf={excludeSelf} />}
-      {queue === "permission" && showPermissionQueue && <PermissionReviewPanel />}
+      {queue === "permission" && <PermissionReviewPanel excludeSelf={excludeSelf} />}
       {queue === "all" && <AdminLeaveList excludeSelf={excludeSelf} />}
     </div>
   );

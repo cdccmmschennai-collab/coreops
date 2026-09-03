@@ -1,4 +1,4 @@
-"""Phase 4B - Permission Request routing to Project Head.
+﻿"""Phase 4B - Permission Request routing to Project Head.
 
 Permission reuses `leave/routing.py::resolve_routed_project` unchanged - that
 resolver's own exhaustive matrix (working-day walk, ambiguity, staleness, a
@@ -258,3 +258,101 @@ def test_pm_fallback_still_approves_when_no_project_routed(
     res = client.post(f"{API}/{req_id}/approve", headers=login("fallbackpm@x.com"), json={})
     assert res.status_code == 200, res.text
     assert res.json()["status"] == "approved"
+
+
+# ---------- the review QUEUE shows a Head exactly what they may review -------
+
+def _routed_request(db, client, login, project, emp_user, emp_email):
+    """File a permission that routes to `project` via yesterday's report."""
+    (prev_day,) = _working_days_back(db, 1)
+    wr_svc.create_work_report(
+        db, emp_user, WorkReportCreate(report_date=prev_day, tasks=[_task(project.id)])
+    )
+    res = client.post(API, headers=login(emp_email), json={
+        "permission_date": PERMISSION_DATE.isoformat(),
+        "period": "first_half_1h",
+        "reason": "x",
+    })
+    assert res.status_code == 201, res.text
+    assert res.json()["routed_project_id"] == str(project.id)
+    return res.json()["id"]
+
+
+def test_head_lists_requests_routed_to_their_project(
+    db, client, login, make_user, make_employee, make_project, make_project_member,
+):
+    """Phase 4D: the Permission requests queue a Head opens is the SAME endpoint
+    a PM's queue calls, scoped server-side. Before this, review authority said
+    yes and the list said nothing - the queue came back empty."""
+    head_u = make_user("qhead@x.com")
+    head = make_employee(employee_code="QH-1", user_id=head_u.id)
+    project = make_project(code="PR-6", head_employee_id=head.id)
+
+    eu = make_user("qemp@x.com")
+    emp = make_employee(employee_code="QE-1", user_id=eu.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+    req_id = _routed_request(db, client, login, project, eu, "qemp@x.com")
+
+    res = client.get(f"{API}?status=pending", headers=login("qhead@x.com"))
+    assert res.status_code == 200, res.text
+    assert req_id in [r["id"] for r in res.json()["items"]]
+
+
+def test_another_head_does_not_list_the_request(
+    db, client, login, make_user, make_employee, make_project, make_project_member,
+):
+    """A Head heads THEIR project, not permissions generally."""
+    head_u = make_user("ohead@x.com")
+    head = make_employee(employee_code="OH-1", user_id=head_u.id)
+    project = make_project(code="PR-7", head_employee_id=head.id)
+
+    other_head_u = make_user("ohead2@x.com")
+    other_head = make_employee(employee_code="OH-2", user_id=other_head_u.id)
+    make_project(code="PR-8", head_employee_id=other_head.id)
+
+    eu = make_user("oemp@x.com")
+    emp = make_employee(employee_code="OE-1", user_id=eu.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+    req_id = _routed_request(db, client, login, project, eu, "oemp@x.com")
+
+    res = client.get(f"{API}?status=pending", headers=login("ohead2@x.com"))
+    assert res.status_code == 200, res.text
+    assert req_id not in [r["id"] for r in res.json()["items"]]
+
+    res = client.post(f"{API}/{req_id}/approve", headers=login("ohead2@x.com"), json={})
+    assert res.status_code == 403, res.text
+
+
+def test_exclude_self_drops_the_heads_own_request_from_the_queue(
+    db, client, login, make_user, make_employee, make_project, make_project_member,
+):
+    """Nobody reviews their own, so a Head's own request must not sit in the
+    queue they work through. It stays visible WITHOUT the flag - the Head's own
+    history is still theirs to read.
+
+    The Head's own request carries no routed project (the resolver refuses to
+    route a Head's request to a project they head themselves), so it reaches the
+    list purely through the own-rows half of the scope - which is exactly why
+    `exclude_self` and not the scope is what removes it.
+    """
+    head_u = make_user("shead@x.com")
+    head = make_employee(employee_code="SH-1", user_id=head_u.id)
+    project = make_project(code="PR-9", head_employee_id=head.id)
+    make_project_member(project_id=project.id, employee_id=head.id)
+
+    hdr = login("shead@x.com")
+    res = client.post(API, headers=hdr, json={
+        "permission_date": PERMISSION_DATE.isoformat(),
+        "period": "first_half_1h",
+        "reason": "x",
+    })
+    assert res.status_code == 201, res.text
+    own_id = res.json()["id"]
+
+    plain = client.get(f"{API}?status=pending", headers=hdr)
+    assert own_id in [r["id"] for r in plain.json()["items"]]
+
+    filtered = client.get(f"{API}?status=pending&exclude_self=true", headers=hdr)
+    assert filtered.status_code == 200, filtered.text
+    assert own_id not in [r["id"] for r in filtered.json()["items"]]
+

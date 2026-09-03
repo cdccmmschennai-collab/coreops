@@ -60,6 +60,11 @@ def list_permission_requests(
     date_to: date | None = Query(default=None, alias="to"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    exclude_self: bool = Query(
+        default=False,
+        description="Drop the caller's own requests. What a review queue passes, "
+        "since nobody may review their own - same flag as /leave-requests.",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PermissionRequestPage:
@@ -72,6 +77,7 @@ def list_permission_requests(
         date_to=date_to,
         limit=limit,
         offset=offset,
+        exclude_self=exclude_self,
     )
     return PermissionRequestPage(
         items=[PermissionRequestOut.model_validate(r) for r in rows],

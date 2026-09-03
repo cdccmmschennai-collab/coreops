@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/features/auth/auth-provider";
+import { useReportScope } from "@/features/work-reports/hooks";
 import { AppError } from "@/lib/api-client";
 
 import {
@@ -251,6 +252,16 @@ function ReviewActions({ id, onDone }: { id: string; onDone: () => void }) {
  *  render, and the backend refuses each of them independently. */
 export function PermissionDetail({ id }: { id: string }) {
   const { role, employeeId } = useAuth();
+  const isManager = role === "project_manager";
+
+  // Head-ness is not a role - it is per-project and comes from the report scope,
+  // exactly as `leave-detail.tsx` decides the same question. Same fact, same
+  // source, so a Head who opens a request from their own Permission requests
+  // queue can act on it here too. The backend re-checks the routed project on
+  // every decision (`_assert_can_review`), so this only decides what renders.
+  const { data: scope } = useReportScope({ enabled: !isManager });
+  const isProjectHead = !isManager && scope?.is_project_head === true;
+
   const query = usePermissionRequest(id);
   const cancel = useCancelPermission();
 
@@ -292,7 +303,7 @@ export function PermissionDetail({ id }: { id: string }) {
 
   const detail = query.data;
   const empName = detail.employee_name ?? detail.employee_id.slice(0, 8);
-  const showReview = canReviewPermission(detail, role, employeeId);
+  const showReview = canReviewPermission(detail, isManager || isProjectHead, employeeId);
   const showCancel = canCancelPermission(detail, employeeId);
   const reviewed = detail.reviewed_at || detail.reviewer_name || detail.manager_comment;
 

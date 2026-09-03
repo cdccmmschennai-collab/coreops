@@ -305,29 +305,29 @@ const req = (status: PermissionStatus, employee_id = "emp-2") => ({
   employee_id,
 });
 
-test("a project manager may review somebody else's pending request", () => {
-  assert.equal(canReviewPermission(req("pending"), "project_manager", "emp-1"), true);
+test("a reviewer may review somebody else's pending request", () => {
+  assert.equal(canReviewPermission(req("pending"), true, "emp-1"), true);
 });
 
-test("nobody reviews their own request, project manager included", () => {
-  assert.equal(
-    canReviewPermission(req("pending", "emp-1"), "project_manager", "emp-1"),
-    false,
-  );
+test("nobody reviews their own request, reviewer or not", () => {
+  assert.equal(canReviewPermission(req("pending", "emp-1"), true, "emp-1"), false);
 });
 
-test("an employee never sees review actions", () => {
-  assert.equal(canReviewPermission(req("pending"), "employee", "emp-1"), false);
-  assert.equal(canReviewPermission(req("pending"), undefined, "emp-1"), false);
+test("a non-reviewer never sees review actions", () => {
+  assert.equal(canReviewPermission(req("pending"), false, "emp-1"), false);
+});
+
+// Phase 4D: reviewer-ness is a boolean, not a role, so a Project Head - whose
+// role stays "employee" - gets the same actions a PM does on a request routed to
+// their project. The routing itself is checked server-side on every decision.
+test("a Project Head passed as a reviewer gets the same actions a PM does", () => {
+  assert.equal(canReviewPermission(req("pending"), true, "emp-1"), true);
+  assert.equal(canReviewPermission(req("pending", "emp-1"), true, "emp-1"), false);
 });
 
 test("a settled request offers no review actions to anyone", () => {
   for (const status of ["approved", "rejected", "cancelled"] as PermissionStatus[]) {
-    assert.equal(
-      canReviewPermission(req(status), "project_manager", "emp-1"),
-      false,
-      status,
-    );
+    assert.equal(canReviewPermission(req(status), true, "emp-1"), false, status);
   }
 });
 
@@ -337,8 +337,7 @@ test("review and cancel are never both offered on the same request", () => {
     // Own request: cancel may be offered, review must not.
     const own = { status, employee_id: ME, permission_date: FUTURE };
     const both =
-      canReviewPermission(own, "project_manager", ME) &&
-      canCancelPermission(own, ME, TODAY);
+      canReviewPermission(own, true, ME) && canCancelPermission(own, ME, TODAY);
     assert.equal(both, false, status);
   }
 });

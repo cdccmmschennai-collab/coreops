@@ -14,10 +14,14 @@ interface Props {
 }
 
 /** A Project Head keeps their own employee Leave history AND gets the same
- *  approval UI a PM has (Pending/Cancellation/All), scoped server-side to the
- *  projects they Head via `authz.reviewable_project_ids` - no client-side
- *  filtering needed, the same `useLeaveList` calls PM's panel already makes
- *  come back pre-scoped for a Head actor.
+ *  approval UI a PM has (Pending/Cancellation/Permission/All), scoped
+ *  server-side to the projects they Head via `authz.reviewable_project_ids` - no
+ *  client-side filtering needed, the same `useLeaveList` / `usePermissionList`
+ *  calls PM's panel already makes come back pre-scoped for a Head actor.
+ *
+ *  Permission requests joined this set in Phase 4D: a permission routed to a
+ *  Head's project has been reviewable by that Head since Phase 4B, so the queue
+ *  was simply missing from the one place they could have acted on it.
  *
  *  Defaults to "My leave" so a Head landing on the tab cold sees exactly what
  *  a plain employee always saw; the homepage shortcut and the leave
@@ -46,7 +50,7 @@ export function HeadLeaveTab({ employeeId }: Props) {
       />
       {view === "my" && <LeaveHistory employeeId={employeeId} />}
       {view === "team" && (
-        <LeaveManagementPanel employeeId={employeeId} showPermissionQueue={false} />
+        <LeaveManagementPanel employeeId={employeeId} excludeSelf />
       )}
     </div>
   );
