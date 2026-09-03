@@ -22,7 +22,7 @@ import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 
 import { useApprovePermission, usePermissionList, useRejectPermission } from "../hooks";
-import { formatPermissionDuration, formatShortDate, permissionDetailPath } from "../types";
+import { formatPermissionDuration, formatShortDate, permissionDetailHref } from "../types";
 
 const COL_COUNT = 6;
 
@@ -134,10 +134,27 @@ export function PermissionReviewPanel({ excludeSelf = false }: Props) {
                 <React.Fragment key={req.id}>
                   {/* Row opens the detail page (full reason + balance context);
                       the action cell stops propagation so deciding in place still
-                      works without navigating away. */}
+                      works without navigating away.
+
+                      It carries THIS queue's own live address, the same way every
+                      leave queue's rows do. That is what lets the detail page's
+                      back link AND its post-decision navigation return here
+                      instead of falling back to the reviewer's own Permission
+                      History - which is exactly what they did while this passed a
+                      bare path. Read from `window.location` rather than
+                      `useSearchParams` because the tab strip above writes the
+                      address with `history.replaceState`, which Next's snapshot
+                      does not see. */}
                   <TableRow
                     className="cursor-pointer hover:bg-muted/40"
-                    onClick={() => router.push(permissionDetailPath(req.id))}
+                    onClick={() =>
+                      router.push(
+                        permissionDetailHref(
+                          req.id,
+                          `${window.location.pathname}${window.location.search}`,
+                        ),
+                      )
+                    }
                   >
                     <TableCell className="font-medium">
                       {/* Server-resolved name first: `GET /employees` (which

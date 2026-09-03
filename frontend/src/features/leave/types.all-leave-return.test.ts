@@ -1,5 +1,5 @@
 /**
- * All leave -> row click -> Leave Detail -> "← Leave" -> All leave.
+ * All leave -> row click -> Leave Detail -> "← Leave Requests" -> All leave.
  *
  * The round trip is `leaveDetailHref` (what the row navigates to) followed by
  * `leaveReturnHref` (what the back link resolves to), and it is a round trip on
@@ -46,7 +46,7 @@ test("the row carries the All-leave address it was clicked from", () => {
   );
 });
 
-// ── B. "← Leave" comes back to All leave ────────────────────────────────────
+// ── B. "← Leave Requests" comes back to All leave ────────────────────────────────────
 
 test("← Leave returns to the All-leave tab, not the default Leave view", () => {
   assert.equal(roundTrip(ALL_LEAVE), ALL_LEAVE);

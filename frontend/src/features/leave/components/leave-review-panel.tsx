@@ -155,7 +155,7 @@ export function LeaveReviewPanel({ employeeId: _eid, excludeSelf = false }: Prop
                   <React.Fragment key={req.id}>
                     <TableRow
                       className="cursor-pointer hover:bg-muted/40"
-                      // Carries THIS list's own address, so "← Leave" on the
+                      // Carries THIS list's own address, so "← Leave Requests" on the
                       // detail page comes back to the queue and view that
                       // opened it rather than to the bare Leave tab.
                       onClick={() =>

@@ -238,7 +238,7 @@ test("with neither parameter a Head lands on their own leave", () => {
 });
 
 
-// ── Leave list -> detail -> "← Leave" back to the SAME list ─────────────────
+// ── Leave list -> detail -> "← Leave Requests" back to the SAME list ─────────────────
 
 test("a detail link carries the list it was opened from", () => {
   assert.equal(

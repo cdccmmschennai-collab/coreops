@@ -129,7 +129,7 @@ function ConflictCard({ c }: { c: DeliverableConflict }) {
  * `onDone` is what returns the reviewer to the queue they came from. The panel
  * does not know or choose that destination; the page passes the href it already
  * resolved from `?from`, so Pending requests -> Approve -> Pending requests
- * follows from the SAME parameter the "← Leave" link has always used.
+ * follows from the SAME parameter the "← Leave Requests" link has always used.
  */
 function ReviewPanel({ id, onDone }: { id: string; onDone: () => void }) {
   const approve = useApproveLeave();
@@ -306,7 +306,7 @@ export function LeaveDetail({ id }: { id: string }) {
         href={backHref}
         className="text-sm text-primary hover:underline"
       >
-        ← Leave
+        ← Leave Requests
       </Link>
       {/* No status badge here. The Leave Request card below carries the one
           Status row this page shows - a badge in the header repeated it. */}
@@ -354,7 +354,7 @@ export function LeaveDetail({ id }: { id: string }) {
             <ReviewPanel
               id={leave.id}
               // Back to the queue this page was opened from - the same href
-              // "← Leave" uses, resolved from the same `?from`. Approving out of
+              // "← Leave Requests" uses, resolved from the same `?from`. Approving out of
               // Pending requests therefore lands back on Pending requests, and a
               // cold-opened page falls back to the Leave tab exactly as before.
               onDone={() => router.push(backHref)}

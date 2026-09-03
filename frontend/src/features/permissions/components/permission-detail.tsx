@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Check, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -173,7 +173,13 @@ function BalanceCard({ detail }: { detail: Detail }) {
 // ── review actions ──────────────────────────────────────────────────────────
 
 /** Approve / Reject with the same inline optional-note form the PM queue uses,
- *  so a decision made here and one made there are the same interaction. */
+ *  so a decision made here and one made there are the same interaction.
+ *
+ *  `onDone` is what returns the reviewer to the queue they came from. This panel
+ *  does not know or choose that destination; the page passes the href it already
+ *  resolved from `?from`, so Permission requests -> Approve -> Permission
+ *  requests follows from the SAME parameter the back link uses. Exactly how
+ *  `leave-detail.tsx::ReviewPanel` has always worked. */
 function ReviewActions({ id, onDone }: { id: string; onDone: () => void }) {
   const approve = useApprovePermission();
   const reject = useRejectPermission();
@@ -351,6 +357,7 @@ function CancellationReviewActions({
  *  separate PM detail page to keep in step. What differs is only which actions
  *  render, and the backend refuses each of them independently. */
 export function PermissionDetail({ id }: { id: string }) {
+  const router = useRouter();
   const { role, employeeId } = useAuth();
   const isManager = role === "project_manager";
 
@@ -431,7 +438,7 @@ export function PermissionDetail({ id }: { id: string }) {
   // hosts All Requests.
   const backLabel = backHref.startsWith(PERMISSION_HISTORY_PATH)
     ? "← Permission History"
-    : "← Leave";
+    : "← Leave Requests";
   // Whether this reader has ANY action here. Drives the closing "nothing more to
   // do" line, which must not appear beside a card offering something.
   const hasAction =
@@ -540,7 +547,17 @@ export function PermissionDetail({ id }: { id: string }) {
         </Card>
 
         {showReview && (
-          <ReviewActions id={detail.id} onDone={() => void query.refetch()} />
+          <ReviewActions
+            id={detail.id}
+            // Back to the queue this page was opened from - the SAME href the
+            // back link uses, resolved from the same `?from`. Approving out of
+            // Permission requests therefore lands back on Permission requests,
+            // out of All Requests back on All Requests with its filters, and a
+            // cold-opened page (a notification, an email link, a bookmark) falls
+            // back to Permission History exactly as before. Nothing here names a
+            // destination; `permissionReturnHref` is the only thing that does.
+            onDone={() => router.push(backHref)}
+          />
         )}
 
         {showCancellationReview && (

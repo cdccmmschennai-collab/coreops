@@ -25,7 +25,7 @@ import {
 } from "@/features/permissions/hooks";
 import {
   formatPermissionDuration,
-  permissionDetailPath,
+  permissionDetailHref,
   type PermissionRequest,
 } from "@/features/permissions/types";
 import { AppError } from "@/lib/api-client";
@@ -229,16 +229,17 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
                 <TableRow
                   key={`${row.kind}-${row.id}`}
                   className="cursor-pointer hover:bg-muted/40"
-                  // Each kind's own detail page - the Cancellation queue's own
-                  // address for leave, the permission detail for permission.
+                  // Each kind's own detail page, both carrying THIS queue's own
+                  // live address so either detail page comes back here. The
+                  // permission half used to pass a bare path, which left its
+                  // detail page with nothing to return to and dropped the
+                  // reviewer on their own Permission History instead.
                   onClick={() =>
                     router.push(
-                      row.kind === "leave"
-                        ? leaveDetailHref(
-                            row.id,
-                            `${window.location.pathname}${window.location.search}`,
-                          )
-                        : permissionDetailPath(row.id),
+                      (row.kind === "leave" ? leaveDetailHref : permissionDetailHref)(
+                        row.id,
+                        `${window.location.pathname}${window.location.search}`,
+                      ),
                     )
                   }
                 >

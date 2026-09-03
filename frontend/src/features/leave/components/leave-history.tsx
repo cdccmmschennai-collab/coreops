@@ -81,7 +81,7 @@ export function LeaveHistory({ employeeId }: Props) {
             <TableRow
               key={req.id}
               className="cursor-pointer hover:bg-muted/40"
-              // My leave's own address, so "← Leave" comes back HERE - the same
+              // My leave's own address, so "← Leave Requests" comes back HERE - the same
               // mechanism the approval queues use, with no view of its own.
               onClick={() =>
                 router.push(

@@ -269,7 +269,7 @@ export function resolveLeaveView(
 
 // ---------- Leave list -> Leave detail -> back to the SAME list -------------
 
-/** Where "← Leave" goes when the detail page was opened cold (an email link, a
+/** Where "← Leave Requests" goes when the detail page was opened cold (an email link, a
  *  bookmark, a pasted URL). Exactly what that link has always done. */
 export const LEAVE_LIST_HREF = "/attendance?tab=leave";
 
@@ -300,7 +300,7 @@ export function leaveDetailHref(
 }
 
 /**
- * Resolve the `from` parameter back into the href "← Leave" points at.
+ * Resolve the `from` parameter back into the href "← Leave Requests" points at.
  *
  * Accepted only when it is the Attendance page itself - the one page a Leave
  * list can live on. A `from` is a convenience the app writes for itself, never
