@@ -18,6 +18,16 @@ import {
 } from "@/components/ui/table";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
+import {
+  useApprovePermissionCancellation,
+  usePermissionList,
+  useRejectPermissionCancellation,
+} from "@/features/permissions/hooks";
+import {
+  formatPermissionDuration,
+  permissionDetailPath,
+  type PermissionRequest,
+} from "@/features/permissions/types";
 import { AppError } from "@/lib/api-client";
 
 import {
@@ -27,7 +37,7 @@ import {
   useRejectLeaveCancellation,
 } from "../hooks";
 import {
-  LEAVE_TYPE_LABEL,
+  LEAVE_CLASSIFICATION_LABEL,
   attendanceSummaryLabel,
   formatLeavePeriod,
   leaveDetailHref,
@@ -38,40 +48,86 @@ const LIMIT = 50;
 
 type Decision = "approve" | "reject";
 
+/** One row of the shared queue, whichever kind of absence it came from.
+ *
+ *  Flattened deliberately: the table renders five columns that mean the same
+ *  thing for both kinds, and every difference that is left - the label, where
+ *  the row navigates, which mutation the buttons call - is carried here rather
+ *  than branched on in the markup. */
+type QueueRow = {
+  id: string;
+  kind: "leave" | "permission";
+  employeeId: string;
+  employeeName: string | null;
+  /** The one cell that tells a reviewer WHAT they are looking at. */
+  typeLabel: string;
+  from: string;
+  to: string;
+  createdAt: string;
+  /** What the confirmation dialog names, e.g. "17 Aug 2026" or a leave period. */
+  period: string;
+};
+
 interface Props {
   /** True only when this panel is reused inside a Project Head's "Team
-   *  approvals" tab — excludes the Head's own requests from the queue so they
+   *  approvals" tab — excludes the Head's own requests from BOTH queries so they
    *  can't see (and get 403'd trying to act on) their own cancellation request
    *  here. */
   excludeSelf?: boolean;
 }
 
-/** PM queue for approved leave employees have asked to withdraw.
+/** The shared cancellation queue: approved LEAVE and approved PERMISSION an
+ *  employee has asked to withdraw, in one work list.
  *
- *  Approving cancels the leave outright — there is no second confirmation step
- *  for the employee. Attendance is never touched, which the confirmation says
- *  explicitly so the manager knows to review it afterwards. */
+ *  Permission joined it in Phase 4E rather than getting a tab of its own, because
+ *  it is the same question asked about a smaller absence - the reviewer decides
+ *  whether a granted absence stands. The Type column is what tells them apart;
+ *  everything else about the leave half is exactly as it was.
+ *
+ *  WHICH ROWS EACH READER SEES IS NOT DECIDED HERE. Both `/leave-requests` and
+ *  `/permission-requests` are already scoped server-side to the projects the
+ *  caller heads (a PM sees everything), so the same two calls serve both readers.
+ *
+ *  Approving cancels the absence outright — there is no second confirmation step
+ *  for the employee. Attendance is never touched, which the leave confirmation
+ *  says explicitly so the manager knows to review it afterwards. */
 export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
   const router = useRouter();
   const { role } = useAuth();
   const isManager = role === "project_manager";
-  const query = useLeaveList({
+  const leaveQuery = useLeaveList({
     status: "cancellation_requested",
     limit: LIMIT,
     offset: 0,
     exclude_self: excludeSelf,
   });
-  const approve = useApproveLeaveCancellation();
-  const reject = useRejectLeaveCancellation();
+  const permissionQuery = usePermissionList({
+    status: "cancellation_requested",
+    limit: LIMIT,
+    offset: 0,
+    exclude_self: excludeSelf,
+  });
+  const approveLeave = useApproveLeaveCancellation();
+  const rejectLeave = useRejectLeaveCancellation();
+  const approvePermission = useApprovePermissionCancellation();
+  const rejectPermission = useRejectPermissionCancellation();
   const { byId: empById } = useEmployeeOptions();
 
-  const rows = query.data?.items ?? [];
-  const ids = React.useMemo(() => rows.map((r) => r.id), [rows]);
+  const leaveRows = React.useMemo(
+    () => leaveQuery.data?.items ?? [],
+    [leaveQuery.data],
+  );
+  const permissionRows = React.useMemo(
+    () => permissionQuery.data?.items ?? [],
+    [permissionQuery.data],
+  );
   const COL_COUNT = isManager ? 6 : 5;
 
-  // Attendance summary is PM-only decision support; the endpoint rejects a
-  // Project Head, so the call itself — not just the column — is guarded.
-  const summaryQuery = useLeaveAttendanceSummary(isManager ? ids : []);
+  // Attendance summary is PM-only decision support and is a LEAVE endpoint, so
+  // the call itself — not just the column — is guarded, and it is asked only
+  // about the leave half of the queue.
+  const leaveIds = React.useMemo(() => leaveRows.map((r) => r.id), [leaveRows]);
+  const summaryQuery = useLeaveAttendanceSummary(isManager ? leaveIds : []);
   const summaryById = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const item of summaryQuery.data?.items ?? []) {
@@ -80,27 +136,53 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
     return map;
   }, [summaryQuery.data]);
 
+  const rows = React.useMemo<QueueRow[]>(() => {
+    const merged: QueueRow[] = [
+      ...leaveRows.map(toLeaveRow),
+      ...permissionRows.map(toPermissionRow),
+    ];
+    // Newest ask first, across both kinds — the order a manager works a queue
+    // in, and the same order each list already came back in on its own.
+    return merged.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }, [leaveRows, permissionRows]);
+
   const [confirming, setConfirming] = React.useState<
-    { request: LeaveRequest; decision: Decision } | null
+    { row: QueueRow; decision: Decision } | null
   >(null);
-  const busy = approve.isPending || reject.isPending;
+  const busy =
+    approveLeave.isPending ||
+    rejectLeave.isPending ||
+    approvePermission.isPending ||
+    rejectPermission.isPending;
 
   async function onConfirm() {
     if (!confirming || busy) return;
-    const { request, decision } = confirming;
+    const { row, decision } = confirming;
     try {
-      if (decision === "approve") {
-        await approve.mutateAsync(request.id);
-        toast.success("Leave cancellation approved. Attendance was not changed.", {
-          action: {
-            label: "Review attendance",
-            onClick: () =>
-              router.push(`/attendance?tab=history&employee=${request.employee_id}`),
-          },
-        });
+      if (row.kind === "leave") {
+        if (decision === "approve") {
+          await approveLeave.mutateAsync(row.id);
+          toast.success("Leave cancellation approved. Attendance was not changed.", {
+            action: {
+              label: "Review attendance",
+              onClick: () =>
+                router.push(`/attendance?tab=history&employee=${row.employeeId}`),
+            },
+          });
+        } else {
+          await rejectLeave.mutateAsync(row.id);
+          toast.success("Cancellation request rejected. The approved leave remains active.");
+        }
+      } else if (decision === "approve") {
+        await approvePermission.mutateAsync(row.id);
+        toast.success(
+          "Permission cancellation approved. The hours are back in the employee's allowance.",
+        );
       } else {
-        await reject.mutateAsync(request.id);
-        toast.success("Cancellation request rejected. The approved leave remains active.");
+        await rejectPermission.mutateAsync(row.id);
+        toast.success(
+          "Cancellation request rejected. The approved permission remains active.",
+        );
       }
       setConfirming(null);
     } catch (err) {
@@ -110,7 +192,9 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
     }
   }
 
-  if (query.isLoading) return <TableSkeleton rows={3} cols={COL_COUNT} />;
+  if (leaveQuery.isLoading || permissionQuery.isLoading) {
+    return <TableSkeleton rows={3} cols={COL_COUNT} />;
+  }
 
   if (rows.length === 0) {
     return (
@@ -118,7 +202,7 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
         <CardContent className="px-5 py-8">
           <EmptyState
             title="No cancellation requests"
-            description="Approved leave an employee asks to withdraw will appear here."
+            description="Approved leave and permission an employee asks to withdraw will appear here."
           />
         </CardContent>
       </Card>
@@ -141,32 +225,39 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((req) => (
+              {rows.map((row) => (
                 <TableRow
-                  key={req.id}
+                  key={`${row.kind}-${row.id}`}
                   className="cursor-pointer hover:bg-muted/40"
-                  // The Cancellation queue's own address - see the Pending
-                  // queue's identical call.
+                  // Each kind's own detail page - the Cancellation queue's own
+                  // address for leave, the permission detail for permission.
                   onClick={() =>
                     router.push(
-                      leaveDetailHref(
-                        req.id,
-                        `${window.location.pathname}${window.location.search}`,
-                      ),
+                      row.kind === "leave"
+                        ? leaveDetailHref(
+                            row.id,
+                            `${window.location.pathname}${window.location.search}`,
+                          )
+                        : permissionDetailPath(row.id),
                     )
                   }
                 >
                   <TableCell className="font-medium">
-                    {req.employee_name ??
-                      empById.get(req.employee_id) ??
-                      req.employee_id.slice(0, 8)}
+                    {row.employeeName ??
+                      empById.get(row.employeeId) ??
+                      row.employeeId.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{LEAVE_TYPE_LABEL[req.leave_type]}</TableCell>
-                  <TableCell className="tabular">{req.start_date}</TableCell>
-                  <TableCell className="tabular">{req.end_date}</TableCell>
+                  <TableCell>{row.typeLabel}</TableCell>
+                  <TableCell className="tabular">{row.from}</TableCell>
+                  <TableCell className="tabular">{row.to}</TableCell>
                   {isManager && (
                     <TableCell className="text-muted-foreground">
-                      {attendanceSummaryLabel(summaryById.get(req.id))}
+                      {/* Leave-only decision support: there is no permission
+                          equivalent, and a permission day stays `present` in
+                          attendance either way. */}
+                      {row.kind === "leave"
+                        ? attendanceSummaryLabel(summaryById.get(row.id))
+                        : "-"}
                     </TableCell>
                   )}
                   <TableCell>
@@ -177,7 +268,7 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
                       <Button
                         size="sm"
                         variant="danger"
-                        onClick={() => setConfirming({ request: req, decision: "approve" })}
+                        onClick={() => setConfirming({ row, decision: "approve" })}
                         disabled={busy}
                       >
                         Approve cancellation
@@ -185,10 +276,12 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => setConfirming({ request: req, decision: "reject" })}
+                        onClick={() => setConfirming({ row, decision: "reject" })}
                         disabled={busy}
                       >
-                        Keep approved leave
+                        {row.kind === "leave"
+                          ? "Keep approved leave"
+                          : "Keep approved permission"}
                       </Button>
                     </div>
                   </TableCell>
@@ -201,7 +294,7 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
 
       {confirming && (
         <ConfirmDialog
-          request={confirming.request}
+          row={confirming.row}
           decision={confirming.decision}
           busy={busy}
           onBack={() => setConfirming(null)}
@@ -212,21 +305,59 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
   );
 }
 
+// ── row builders ────────────────────────────────────────────────────────────
+
+function toLeaveRow(req: LeaveRequest): QueueRow {
+  return {
+    id: req.id,
+    kind: "leave",
+    employeeId: req.employee_id,
+    employeeName: req.employee_name,
+    // "Leave - Normal" / "Leave - Special": the classification this column has
+    // always shown, prefixed with the kind so the two halves of the queue are
+    // distinguishable at a glance.
+    typeLabel: `Leave - ${LEAVE_CLASSIFICATION_LABEL[req.classification]}`,
+    from: req.start_date,
+    to: req.end_date,
+    createdAt: req.created_at,
+    period: formatLeavePeriod(req.start_date, req.end_date),
+  };
+}
+
+function toPermissionRow(req: PermissionRequest): QueueRow {
+  return {
+    id: req.id,
+    kind: "permission",
+    employeeId: req.employee_id,
+    employeeName: req.employee_name,
+    // The selected option, e.g. "Permission - 1st Half - 1 Hour", so the Type
+    // cell carries the same "what exactly" a leave row's classification does.
+    typeLabel: `Permission - ${formatPermissionDuration(req)}`,
+    // A permission is always a single day, so From and To are that day. Stating
+    // it twice is truthful and keeps one table shape for both kinds.
+    from: req.permission_date,
+    to: req.permission_date,
+    createdAt: req.created_at,
+    period: req.permission_date,
+  };
+}
+
 function ConfirmDialog({
-  request,
+  row,
   decision,
   busy,
   onBack,
   onConfirm,
 }: {
-  request: LeaveRequest;
+  row: QueueRow;
   decision: Decision;
   busy: boolean;
   onBack: () => void;
   onConfirm: () => void;
 }) {
-  const period = formatLeavePeriod(request.start_date, request.end_date);
   const approving = decision === "approve";
+  const isLeave = row.kind === "leave";
+  const noun = isLeave ? "leave" : "permission";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -238,23 +369,32 @@ function ConfirmDialog({
       <Card className="relative z-10 w-full max-w-md shadow-xl">
         <CardContent className="space-y-4 pt-5">
           <h2 className="text-base font-semibold">
-            {approving ? "Approve leave cancellation?" : "Keep approved leave?"}
+            {approving
+              ? `Approve ${noun} cancellation?`
+              : `Keep approved ${noun}?`}
           </h2>
           {approving ? (
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>
-                This will cancel the approved leave for{" "}
-                <span className="font-medium text-foreground">{period}</span>.
+                This will cancel the approved {noun} for{" "}
+                <span className="font-medium text-foreground">{row.period}</span>.
               </p>
-              <p>
-                Attendance will not be changed automatically. Review the employee&apos;s
-                attendance after cancellation.
-              </p>
+              {isLeave ? (
+                <p>
+                  Attendance will not be changed automatically. Review the employee&apos;s
+                  attendance after cancellation.
+                </p>
+              ) : (
+                <p>
+                  The hours return to the employee&apos;s allowance for that month.
+                </p>
+              )}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              The cancellation request will be rejected and the original approved leave
-              for <span className="font-medium text-foreground">{period}</span> will
+              The cancellation request will be rejected and the original approved{" "}
+              {noun} for{" "}
+              <span className="font-medium text-foreground">{row.period}</span> will
               remain active.
             </p>
           )}
@@ -268,7 +408,9 @@ function ConfirmDialog({
               loading={busy}
               disabled={busy}
             >
-              {approving ? "Approve cancellation" : "Keep approved leave"}
+              {approving
+                ? "Approve cancellation"
+                : `Keep approved ${noun}`}
             </Button>
           </div>
         </CardContent>

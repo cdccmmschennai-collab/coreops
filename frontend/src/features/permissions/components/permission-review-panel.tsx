@@ -22,19 +22,38 @@ import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { AppError } from "@/lib/api-client";
 
 import { useApprovePermission, usePermissionList, useRejectPermission } from "../hooks";
-import { formatDuration, formatShortDate, permissionDetailPath } from "../types";
+import { formatPermissionDuration, formatShortDate, permissionDetailPath } from "../types";
 
 const COL_COUNT = 6;
 
-/** The project manager's pending-permission queue, reusing the exact shape of
- *  the pending-leave queue: same table, same inline note form, same two buttons.
+interface Props {
+  /** Passed by a Project Head's queue: their own requests are not theirs to
+   *  review, so they are dropped SERVER-side (`exclude_self`) rather than
+   *  filtered here - the list is paged, so a client-side filter would leave a
+   *  short page and a wrong total. A PM's queue passes nothing, which keeps that
+   *  queue exactly as it was. */
+  excludeSelf?: boolean;
+}
+
+/** The pending-permission queue shown to a project manager and, since Phase 4D,
+ *  to a Project Head - reusing the exact shape of the pending-leave queue: same
+ *  table, same inline note form, same two buttons.
+ *
+ *  WHICH ROWS A HEAD SEES IS NOT DECIDED HERE. `GET /permission-requests` is
+ *  already scoped to the projects the caller heads, so this component asks the
+ *  same question for both readers and the server answers it differently.
  *
  *  Neither the balance guard nor the self-approval guard is implemented here.
  *  Both live in the backend and are re-checked under a lock on every decision, so
  *  this panel simply reports whatever the server refuses. */
-export function PermissionReviewPanel() {
+export function PermissionReviewPanel({ excludeSelf = false }: Props) {
   const router = useRouter();
-  const pendingQuery = usePermissionList({ status: "pending", limit: 50, offset: 0 });
+  const pendingQuery = usePermissionList({
+    status: "pending",
+    limit: 50,
+    offset: 0,
+    exclude_self: excludeSelf,
+  });
   const approve = useApprovePermission();
   const reject = useRejectPermission();
   const { byId: empById } = useEmployeeOptions();
@@ -121,13 +140,19 @@ export function PermissionReviewPanel() {
                     onClick={() => router.push(permissionDetailPath(req.id))}
                   >
                     <TableCell className="font-medium">
-                      {empById.get(req.employee_id) ?? req.employee_id.slice(0, 8)}
+                      {/* Server-resolved name first: `GET /employees` (which
+                          `empById` comes from) returns only their own row to a
+                          Project Head, so it cannot name a colleague and the
+                          queue printed a UUID prefix instead. */}
+                      {req.employee_name ??
+                        empById.get(req.employee_id) ??
+                        req.employee_id.slice(0, 8)}
                     </TableCell>
                     <TableCell className="tabular">
                       {formatShortDate(req.permission_date)}
                     </TableCell>
                     <TableCell className="tabular">
-                      {formatDuration(req.duration_hours)}
+                      {formatPermissionDuration(req)}
                     </TableCell>
                     <TableCell className="max-w-[220px] truncate text-muted-foreground">
                       {req.reason ?? "-"}

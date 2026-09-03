@@ -72,7 +72,6 @@ def _make_leave(db, employee_id, *, routed_project_id=None, start=None, end=None
 
 def _payload(**overrides):
     base = {
-        "leave_type": "casual",
         "start_date": str(date.today() + timedelta(days=7)),
         "end_date": str(date.today() + timedelta(days=9)),
         "reason": "Family trip",
@@ -91,7 +90,8 @@ def test_employee_can_create(client, make_user, make_employee, login):
     assert res.status_code == 201, res.text
     body = res.json()
     assert body["status"] == "pending"
-    assert body["leave_type"] == "casual"
+    # Derived, not submitted: the payload carries no type at all.
+    assert body["classification"] in {"normal", "special"}
 
 
 def test_create_requires_employee_profile(client, make_user, login):
@@ -165,10 +165,9 @@ def test_employee_can_update_pending(client, make_user, make_employee, make_leav
                               end_date=date.today() + timedelta(days=7))
     h = login("e@x.com")
     res = client.patch(f"/api/v1/leave-requests/{req.id}", headers=h,
-                       json={"reason": "Updated reason", "leave_type": "sick"})
+                       json={"reason": "Updated reason"})
     assert res.status_code == 200
     assert res.json()["reason"] == "Updated reason"
-    assert res.json()["leave_type"] == "sick"
 
 
 def test_cannot_update_approved(client, make_user, make_employee, make_leave_request, login):
@@ -346,7 +345,62 @@ def test_create_routes_to_project_head_and_notifies(
 
     note = db.query(Notification).filter(Notification.user_id == hu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
+    # The request's OWN page - where the Head can actually approve or reject it -
+    # with the pending queue as the list "← Leave" returns to.
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
+
+
+def test_create_routes_off_an_older_working_day_and_notifies_that_head(
+    client, db, make_user, make_employee, make_project, make_project_member, login,
+):
+    """The resolver's backward walk reaches the API and the bell.
+
+    The working day immediately before the leave has no report at all. The
+    request still routes to the project the employee last actually worked on, and
+    the notification goes to THAT project's Head - the routed recipient and the
+    notified person stay the same person, resolved once by `leave/routing.py`.
+    (The no-activity-report case is a resolver detail and is pinned in
+    `test_leave_routing.py`.)
+    """
+    from app.modules.notifications.models import Notification
+    from app.modules.work_reports import service as wr_svc
+    from app.modules.work_reports.schemas import WorkReportCreate, WorkReportTaskIn
+
+    hu = make_user("head4@x.com", role=UserRole.employee)
+    head = make_employee(employee_code="HEAD4", user_id=hu.id)
+    project = make_project(code="RP-4", head_employee_id=head.id)
+
+    mu = make_user("mgr13@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="MGR13", user_id=mu.id)
+    eu = make_user("emp13@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E13", user_id=eu.id, reporting_pm_id=mu.id)
+    make_project_member(project_id=project.id, employee_id=emp.id)
+
+    worked_day = previous_working_day(db, date.today() + timedelta(days=1))
+    blank_day = next_working_day(db, worked_day)
+    leave_date = next_working_day(db, blank_day)
+    wr_svc.create_work_report(
+        db, eu, WorkReportCreate(
+            report_date=worked_day,
+            tasks=[WorkReportTaskIn(project_id=project.id, description="work", minutes_spent=120)],
+        ),
+    )
+
+    h = login("emp13@x.com")
+    res = client.post(
+        "/api/v1/leave-requests", headers=h,
+        json=_payload(start_date=str(leave_date), end_date=str(leave_date)),
+    )
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["routed_project_id"] == str(project.id)
+
+    note = db.query(Notification).filter(Notification.user_id == hu.id).one()
+    assert note.type == "leave_submitted"
+    assert db.query(Notification).filter(Notification.user_id == mu.id).count() == 0
 
 
 def test_create_no_head_falls_back_to_pm_notification(
@@ -387,7 +441,10 @@ def test_create_no_head_falls_back_to_pm_notification(
 
     note = db.query(Notification).filter(Notification.user_id == mu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_a_project_heads_own_leave_is_unrouted_and_goes_to_the_pm(
@@ -509,7 +566,10 @@ def test_the_pm_is_notified_of_a_cancellation_request_on_an_unrouted_leave(
                 Notification.type == "leave_cancellation_requested")
         .one()
     )
-    assert note.target_url == f"/attendance?tab=leave&queue=cancellation&id={req.id}"
+    assert note.target_url == (
+        f"/attendance/leave/{req.id}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dcancellation"
+    )
 
 
 def test_an_employee_with_no_reporting_pm_notifies_nobody_without_failing(

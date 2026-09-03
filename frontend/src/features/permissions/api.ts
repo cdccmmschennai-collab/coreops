@@ -19,6 +19,7 @@ function toQuery(p: PermissionListParams): string {
   if (p.to) sp.set("to", p.to);
   sp.set("limit", String(p.limit));
   sp.set("offset", String(p.offset));
+  if (p.exclude_self) sp.set("exclude_self", "true");
   return sp.toString();
 }
 
@@ -46,6 +47,14 @@ export const permissionApi = {
     api.post<PermissionRequest>("/permission-requests", body),
   cancel: (id: string) =>
     api.post<PermissionRequest>(`/permission-requests/${id}/cancel`, {}),
+  // Phase 4E - the three-step withdrawal of an APPROVED permission, named and
+  // shaped exactly as `leave/api.ts` names its own three.
+  requestCancellation: (id: string) =>
+    api.post<PermissionRequest>(`/permission-requests/${id}/request-cancellation`, {}),
+  approveCancellation: (id: string) =>
+    api.post<PermissionRequest>(`/permission-requests/${id}/approve-cancellation`, {}),
+  rejectCancellation: (id: string) =>
+    api.post<PermissionRequest>(`/permission-requests/${id}/reject-cancellation`, {}),
   approve: (id: string, body: PermissionReviewBody) =>
     api.post<PermissionRequest>(`/permission-requests/${id}/approve`, body),
   reject: (id: string, body: PermissionReviewBody) =>

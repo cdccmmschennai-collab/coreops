@@ -4423,6 +4423,65 @@
         }
       }
     },
+    "/api/v1/leave-requests/classification-preview": {
+      "get": {
+        "tags": [
+          "leave"
+        ],
+        "summary": "Classification Preview",
+        "description": "What the given range costs in working days, and whether that is Normal\nor Special. Reads nothing but the company calendar and writes nothing.\n\nDeclared BEFORE `GET /{req_id}` so the literal path is not swallowed by the\nuuid route. An inverted range is reported as zero days rather than an error\n- the form asks on every keystroke, and a half-typed range is not a fault.",
+        "operationId": "classification_preview_api_v1_leave_requests_classification_preview_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "Start Date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "title": "End Date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaveClassificationPreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/leave-requests/deliverable-impact": {
       "post": {
         "tags": [
@@ -16822,9 +16881,6 @@
       },
       "LeaveRequestCreate": {
         "properties": {
-          "leave_type": {
-            "$ref": "#/components/schemas/LeaveType"
-          },
           "start_date": {
             "type": "string",
             "format": "date",
@@ -16850,7 +16906,6 @@
         },
         "type": "object",
         "required": [
-          "leave_type",
           "start_date",
           "end_date"
         ],
@@ -16879,8 +16934,8 @@
             ],
             "title": "Employee Name"
           },
-          "leave_type": {
-            "$ref": "#/components/schemas/LeaveType"
+          "classification": {
+            "$ref": "#/components/schemas/LeaveClassification"
           },
           "start_date": {
             "type": "string",
@@ -16956,7 +17011,7 @@
         "required": [
           "id",
           "employee_id",
-          "leave_type",
+          "classification",
           "start_date",
           "end_date",
           "status",
@@ -16998,16 +17053,6 @@
       },
       "LeaveRequestUpdate": {
         "properties": {
-          "leave_type": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/LeaveType"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "start_date": {
             "anyOf": [
               {
@@ -17077,17 +17122,43 @@
         ],
         "title": "LeaveStatus"
       },
-      "LeaveType": {
+      "LeaveClassification": {
         "type": "string",
         "enum": [
-          "casual",
-          "sick",
-          "annual",
-          "comp_off",
-          "unpaid",
-          "other"
+          "normal",
+          "special"
         ],
-        "title": "LeaveType"
+        "title": "LeaveClassification"
+      },
+      "LeaveClassificationPreviewOut": {
+        "properties": {
+          "start_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Start Date"
+          },
+          "end_date": {
+            "type": "string",
+            "format": "date",
+            "title": "End Date"
+          },
+          "working_days": {
+            "type": "integer",
+            "title": "Working Days"
+          },
+          "classification": {
+            "$ref": "#/components/schemas/LeaveClassification"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start_date",
+          "end_date",
+          "working_days",
+          "classification"
+        ],
+        "title": "LeaveClassificationPreviewOut",
+        "description": "What a range WOULD cost and be classified as, before anything is filed."
       },
       "LedProject": {
         "properties": {

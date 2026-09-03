@@ -1,11 +1,10 @@
 """Permission Request pydantic schemas."""
 import uuid
 from datetime import date, datetime
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.permissions.models import PermissionStatus
+from app.modules.permissions.models import PermissionPeriod, PermissionStatus
 
 _REASON_MAX = 2000
 _COMMENT_MAX = 1000
@@ -13,10 +12,12 @@ _COMMENT_MAX = 1000
 
 class PermissionRequestCreate(BaseModel):
     permission_date: date
-    # `Literal[1, 2]` rather than a bounded int: it rejects 0, 3 and any decimal
-    # at the edge of the API and puts the two legal values in the OpenAPI schema,
-    # so the "no 30-minute permission" rule is documented, not just enforced.
-    duration_hours: Literal[1, 2]
+    # The one authoritative selection (Phase 4C) - one of the four options. Puts
+    # exactly the legal set in the OpenAPI schema, the same way `Literal[1, 2]`
+    # used to for the plain hour count. `duration_hours` is no longer taken from
+    # the caller at all: it is derived server-side from this value (see
+    # `service.create_permission_request`), so it cannot disagree with it.
+    period: PermissionPeriod
     reason: str | None = Field(default=None, max_length=_REASON_MAX)
 
 
@@ -29,12 +30,26 @@ class PermissionRequestOut(BaseModel):
 
     id: uuid.UUID
     employee_id: uuid.UUID
+    # Resolved SERVER-side by `service._attach_employee_names` (Phase 4E), the
+    # same non-mapped-attribute trick `leave/service.py` already uses and for the
+    # same reason: `GET /employees` returns only their own row to a plain
+    # employee-role actor, which a Project Head still is, so a reviewer's queue
+    # had nothing to resolve a name from and fell back to printing eight
+    # characters of a UUID. None on the responses a mutation returns, which
+    # carry no name and need none.
+    employee_name: str | None = None
     permission_date: date
     duration_hours: int
+    # NULL only for a request filed before Phase 4C. See `PermissionRequest.period`.
+    period: PermissionPeriod | None = None
     reason: str | None = None
     status: PermissionStatus
     manager_id: uuid.UUID | None = None
     manager_comment: str | None = None
+    # The project Phase 4B's routing resolved at creation, or None when it
+    # fell back to the reporting PM. See `permissions.models.PermissionRequest
+    # .routed_project_id`.
+    routed_project_id: uuid.UUID | None = None
     reviewed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
@@ -105,9 +120,12 @@ class PermissionRequestDetailOut(PermissionRequestOut):
     list endpoint is manager-scoped: an employee opening their OWN request has no
     way to resolve a name through it. Sending them with the request also means the
     page needs exactly one call.
+
+    `employee_name` is inherited from `PermissionRequestOut` since Phase 4E - it
+    used to be declared here, which is why only the DETAIL response carried a
+    name and every list row printed a UUID prefix instead.
     """
 
-    employee_name: str | None = None
     employee_code: str | None = None
     reviewer_name: str | None = None
     balance: PermissionRequestBalanceOut

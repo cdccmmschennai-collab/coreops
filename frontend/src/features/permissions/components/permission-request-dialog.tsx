@@ -29,21 +29,22 @@ import { AppError } from "@/lib/api-client";
 
 import { useCreatePermission, useMyPermissionBalance } from "../hooks";
 import {
-  PERMISSION_DURATIONS,
-  PERMISSION_DURATION_LABEL,
   PERMISSION_HISTORY_PATH,
+  PERMISSION_PERIOD_HOURS,
+  PERMISSION_PERIOD_LABEL,
+  PERMISSION_PERIOD_OPTIONS,
   businessToday,
   formatHours,
   isDurationAffordable,
   remainingAfter,
-  type PermissionDuration,
 } from "../types";
 
-// Duration is a string in the form because a <Select> value is a string; it is
-// parsed back to 1 or 2 on submit. The union is what keeps a hand-typed "3" out.
+// `period` is the ONE authoritative selection (Phase 4C) - there is no plain
+// "1 Hour" / "2 Hours" choice any more, and `duration_hours` is derived
+// server-side from whichever of the four options is picked here.
 const schema = z.object({
   permission_date: z.string().min(1, "Date is required"),
-  duration_hours: z.enum(["1", "2"]),
+  period: z.enum(PERMISSION_PERIOD_OPTIONS),
   reason: z.string().trim().max(2000),
 });
 
@@ -75,20 +76,21 @@ export function PermissionRequestDialog({ onClose }: Props) {
       // Defaults to today on the business calendar, matching how the rest of
       // CoreOps decides what "today" is.
       permission_date: businessToday(),
-      duration_hours: "1",
+      period: "first_half_1h",
       reason: "",
     },
   });
 
-  const selected = Number(form.watch("duration_hours"));
+  const selectedPeriod = form.watch("period");
+  const selected = PERMISSION_PERIOD_HOURS[selectedPeriod];
   const afterApproval = remainingAfter(remaining, selected);
 
-  // With 1h left, 2h stops being offered. If the user had already selected it
-  // before the balance loaded, fall back to 1h rather than leaving the form in a
-  // state the server will refuse.
+  // With 1h left, a 2h option stops being offered. If the user had already
+  // selected one before the balance loaded, fall back to a 1h option rather
+  // than leaving the form in a state the server will refuse.
   React.useEffect(() => {
     if (balanceQuery.isSuccess && !isDurationAffordable(selected, remaining) && remaining >= 1) {
-      form.setValue("duration_hours", "1");
+      form.setValue("period", "first_half_1h");
     }
   }, [balanceQuery.isSuccess, selected, remaining, form]);
 
@@ -105,7 +107,7 @@ export function PermissionRequestDialog({ onClose }: Props) {
     try {
       await create.mutateAsync({
         permission_date: values.permission_date,
-        duration_hours: Number(values.duration_hours) as PermissionDuration,
+        period: values.period,
         reason: values.reason || null,
       });
       toast.success("Permission request submitted");
@@ -134,7 +136,7 @@ export function PermissionRequestDialog({ onClose }: Props) {
           />
           <FormField
             control={form.control}
-            name="duration_hours"
+            name="period"
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Duration</FormLabel>
@@ -145,16 +147,16 @@ export function PermissionRequestDialog({ onClose }: Props) {
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {PERMISSION_DURATIONS.map((hours) => (
+                    {PERMISSION_PERIOD_OPTIONS.map((period) => (
                       <SelectItem
-                        key={hours}
-                        value={String(hours)}
+                        key={period}
+                        value={period}
                         disabled={
                           balanceQuery.isSuccess &&
-                          !isDurationAffordable(hours, remaining)
+                          !isDurationAffordable(PERMISSION_PERIOD_HOURS[period], remaining)
                         }
                       >
-                        {PERMISSION_DURATION_LABEL[hours]}
+                        {PERMISSION_PERIOD_LABEL[period]}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -60,15 +60,17 @@ test("Records is not labelled as the biometric daily review", () => {
 
 // ── everything else must be untouched ──────────────────────────────────────
 
-test("the employee tab row is Calendar, Leave, Holidays", () => {
-  assert.deepEqual(labels(EMPLOYEE), ["Calendar", "Leave", "Holidays"]);
+test("the employee tab row is Calendar, Leave Requests, Holidays", () => {
+  assert.deepEqual(labels(EMPLOYEE), ["Calendar", "Leave Requests", "Holidays"]);
 });
 
 test("a manager also sees Leave Balance, in place", () => {
+  // "Leave Requests" and "Leave Balance" stay two separate tabs - the rename
+  // is wording on the first, not a merge.
   assert.deepEqual(labels(MANAGER), [
     "Calendar",
     "Records",
-    "Leave",
+    "Leave Requests",
     "Leave Balance",
     "Holidays",
   ]);
@@ -85,7 +87,7 @@ test("Corrections appears only behind its feature flag", () => {
   assert.deepEqual(flagged.map((t) => t.label), [
     "Calendar",
     "Records",
-    "Leave",
+    "Leave Requests",
     "Leave Balance",
     "Corrections",
     "Holidays",
@@ -94,7 +96,8 @@ test("Corrections appears only behind its feature flag", () => {
 
 test("no other tab was renamed", () => {
   // Guards the "do not rename unrelated functionality" rule: every key still
-  // carries the wording it had before, `history` excepted.
+  // carries the wording it had before, `history` ("Records") and `leave`
+  // ("Leave Requests") excepted.
   const byKey = Object.fromEntries(
     attendanceTabs({ canManage: true, correctionsEnabled: true }).map((t) => [
       t.value,
@@ -102,7 +105,7 @@ test("no other tab was renamed", () => {
     ]),
   );
   assert.equal(byKey.calendar, "Calendar");
-  assert.equal(byKey.leave, "Leave");
+  assert.equal(byKey.leave, "Leave Requests");
   assert.equal(byKey["leave-balance"], "Leave Balance");
   assert.equal(byKey.corrections, "Corrections");
   assert.equal(byKey.holidays, "Holidays");

@@ -3,14 +3,18 @@
 RBAC (identical to leave, deliberately - a permission is a smaller absence, not a
 different kind of thing):
   project_manager  list all, approve/reject/cancel any - but never their own
+  Project Head     list own + the requests routed to a project they head, and
+                   approve/reject those - but never their own (Phase 4B/4D)
   employee         list own, submit own, cancel own
 
-Workflow (four states):
-  pending  -> approved   (PM, and only if the month's balance covers it)
-  pending  -> rejected   (PM, comment optional)
+Workflow (five states):
+  pending  -> approved   (reviewer, and only if the month's balance covers it)
+  pending  -> rejected   (reviewer, comment optional)
   pending  -> cancelled  (author, or a PM)
-  approved -> cancelled  (author while the date is still ahead, or a PM) - the
-                         hours come back
+  approved -> cancelled  (a PM withdrawing it outright) - the hours come back
+  approved -> cancellation_requested -> cancelled | approved   (Phase 4E: the
+             author asks to withdraw an approved permission and a reviewer
+             decides; the hours stay spent until they do)
 
 WHERE THE BALANCE LIVES
 =======================
@@ -41,9 +45,10 @@ import uuid
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
 from app.modules.calendar.working_days import (
@@ -52,8 +57,11 @@ from app.modules.calendar.working_days import (
 )
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
+from app.modules.leave.routing import resolve_routed_project
+from app.modules.permissions import email as permission_email
+from app.modules.permissions import recipients as permission_recipients
 from app.modules.permissions.balance import (
-    ALLOWED_DURATIONS,
+    CONSUMING_STATUSES,
     MONTHLY_ALLOWANCE_HOURS,
     PermissionBalance,
     balance_for,
@@ -63,7 +71,12 @@ from app.modules.permissions.balance import (
     month_bounds,
     month_has_closed,
 )
-from app.modules.permissions.models import PermissionRequest, PermissionStatus
+from app.modules.permissions.models import (
+    PERIOD_HOURS,
+    PermissionRequest,
+    PermissionStatus,
+    duration_label,
+)
 from app.modules.permissions.schemas import (
     PermissionBalanceOut,
     PermissionHistoryOut,
@@ -84,8 +97,20 @@ BUSINESS_TZ = ZoneInfo("Asia/Kolkata")
 
 # Statuses that still hold a live claim on a date, so a second request for the
 # same day must be refused. `pending` counts here even though it consumes no
-# balance - two live asks for one day are a duplicate, not two permissions.
-_ACTIVE_STATUSES = (PermissionStatus.pending, PermissionStatus.approved)
+# balance - two live asks for one day are a duplicate, not two permissions - and
+# so does `cancellation_requested` (Phase 4E): an approved permission somebody
+# has only ASKED to withdraw is still an absence on that day.
+_ACTIVE_STATUSES = (
+    PermissionStatus.pending,
+    PermissionStatus.approved,
+    PermissionStatus.cancellation_requested,
+)
+
+# What the ONE-STEP cancel accepts. Deliberately NOT `_ACTIVE_STATUSES`: a
+# request already awaiting a withdrawal decision belongs to the reviewer, who
+# settles it through `approve_permission_cancellation` rather than by cancelling
+# around the queue.
+_DIRECTLY_CANCELLABLE = (PermissionStatus.pending, PermissionStatus.approved)
 
 
 def _now() -> datetime:
@@ -169,6 +194,31 @@ def _notify_employee(db: Session, actor: User, employee_id: uuid.UUID, type_: st
           message=message, entity_id=entity_id, target_url=target_url)
 
 
+def _routed_recipient(db: Session, employee: Employee, req: PermissionRequest) -> Employee | None:
+    """Who the in-app channel notifies about this request: the routed project's
+    CURRENT Head if reachable (a linked user_id), else the requester's
+    reporting PM.
+
+    Thin wrapper around the ONE authoritative chain,
+    `permissions.recipients.resolve_in_app_recipient` (Phase 4C) - shared with
+    the submission email so the two channels can never disagree about who the
+    recipient is. Kept under this name/shape (returning the Employee, not a
+    Recipient wrapper) for `test_permission_routing.py`, which calls it
+    directly.
+    """
+    candidate = permission_recipients.resolve_in_app_recipient(db, employee, req)
+    return candidate.employee if candidate is not None else None
+
+
+def _notify_routed_approver(db: Session, actor: User, employee: Employee, req: PermissionRequest,
+                            type_: str, title: str, message: str) -> None:
+    recipient = _routed_recipient(db, employee, req)
+    if recipient is None:
+        return
+    _push(db, actor=actor, user_id=recipient.user_id, type_=type_, title=title,
+          message=message, entity_id=req.id, target_url=_detail_url(req.id))
+
+
 # ---------- audit -----------------------------------------------------------
 
 def _audit(
@@ -217,16 +267,45 @@ def _audit(
 # ---------- scope / authorisation ------------------------------------------
 
 def _apply_scope(db: Session, actor: User, stmt):
+    """What this reader may LIST - the same PM / Head / own-rows split
+    `leave/service.py::_apply_scope` already applies, and for the same reason: a
+    Project Head who may READ and REVIEW a request routed to their project (see
+    `_assert_can_read` / `_assert_can_review`) has to be able to find it in the
+    first place. Without the Head branch the routed approver's queue came back
+    empty while the decision endpoints accepted them, which is the same rule
+    disagreeing with itself.
+
+    Head-ness is per-project, never a role, so it comes from
+    `authz.reviewable_project_ids` and is matched against the request's
+    `routed_project_id` - a Head sees the requests routed to a project THEY head,
+    never another Head's. A Head with no projects falls through to own-rows only,
+    exactly as a plain employee does.
+    """
     if actor.role == UserRole.project_manager:
         return stmt, True
     me = _current_employee(db, actor)
     if me is None:
         return stmt, False
+    head_project_ids = authz.reviewable_project_ids(db, actor)
+    if head_project_ids:
+        return (
+            stmt.where(
+                or_(
+                    PermissionRequest.employee_id == me.id,
+                    PermissionRequest.routed_project_id.in_(head_project_ids),
+                )
+            ),
+            True,
+        )
     return stmt.where(PermissionRequest.employee_id == me.id), True
 
 
 def _assert_can_read(db: Session, actor: User, req: PermissionRequest) -> None:
     if actor.role == UserRole.project_manager:
+        return
+    if req.routed_project_id is not None and authz.can_review_report(
+        db, actor, {req.routed_project_id}
+    ):
         return
     me = _current_employee(db, actor)
     if me is None or req.employee_id != me.id:
@@ -237,21 +316,29 @@ def _assert_can_review(db: Session, actor: User, req: PermissionRequest) -> None
     """Who may rule on a permission request - enforced here, on every decision
     path, regardless of what the frontend chose to render.
 
-    NOBODY APPROVES THEIR OWN PERMISSION, project manager included. The role
-    check alone is not enough: project managers are employees too and file their
-    own requests, so without the second check a PM could grant themselves hours
-    out of their own allowance.
+    PM (any request) or the CURRENT Head of the request's routed project may
+    review (Phase 4B) - `authz.can_review_report` is the same PM-or-Head rule
+    Leave and Work Reports already use, so this stays a one-line delegation
+    rather than a second copy of it.
+
+    NOBODY APPROVES THEIR OWN PERMISSION, project manager or Head included: both
+    are employees too and file their own requests, so without the second check
+    either could grant themselves hours out of their own allowance.
     """
-    if actor.role != UserRole.project_manager:
+    project_ids = {req.routed_project_id} if req.routed_project_id is not None else set()
+    if not authz.can_review_report(db, actor, project_ids):
         raise AppError(
-            "forbidden", "Only project managers can review permission requests.", 403
+            "forbidden",
+            "Only a project manager or this request's assigned Project Head can "
+            "review it.",
+            403,
         )
     me = _current_employee(db, actor)
     if me is not None and req.employee_id == me.id:
         raise AppError(
             "forbidden",
-            "You can't review your own permission request - another project "
-            "manager has to decide it.",
+            "You can't review your own permission request - another reviewer "
+            "has to decide it.",
             403,
         )
 
@@ -382,6 +469,7 @@ def list_permission_requests(
     limit: int,
     offset: int,
     order_by: str = "created_at",
+    exclude_self: bool = False,
 ) -> tuple[list[PermissionRequest], int]:
     """The one scoped, filtered read every permission list is built from.
 
@@ -389,11 +477,22 @@ def list_permission_requests(
     neither should grow its own query: the review QUEUE is a work list, so oldest
     ask first is wrong and newest-submitted first is what a manager expects, while
     monthly HISTORY is a calendar, so it reads by the day the absence falls on.
+
+    `exclude_self` is what a REVIEW QUEUE passes, and it is the same flag and the
+    same reason as `leave/service.py`: nobody may review their own request, so a
+    Project Head's own requests must not sit in the queue they are working
+    through offering buttons the backend will refuse. It narrows a list, never
+    widens one.
     """
     stmt = select(PermissionRequest)
     stmt, allowed = _apply_scope(db, actor, stmt)
     if not allowed:
         return [], 0
+
+    if exclude_self:
+        me = _current_employee(db, actor)
+        if me is not None:
+            stmt = stmt.where(PermissionRequest.employee_id != me.id)
 
     if employee_id is not None:
         stmt = stmt.where(PermissionRequest.employee_id == employee_id)
@@ -412,10 +511,13 @@ def list_permission_requests(
         order = (PermissionRequest.permission_date.desc(), PermissionRequest.created_at.desc())
     else:
         order = (PermissionRequest.created_at.desc(),)
-    rows = (
+    rows = list(
         db.execute(stmt.order_by(*order).limit(limit).offset(offset)).scalars().all()
     )
-    return list(rows), total
+    # One batched name lookup for the whole page - what every queue and history
+    # table renders in its Employee column. See `_attach_employee_names`.
+    _attach_employee_names(db, rows)
+    return rows, total
 
 
 def get_permission_request(
@@ -438,18 +540,52 @@ def _employee_names(
     return {e.id: e for e in rows}
 
 
+def _attach_employee_names(db: Session, rows: list[PermissionRequest]) -> None:
+    """Set `.employee_name` on each row from one batch query.
+
+    `PermissionRequest` has no ORM relationship to `Employee` (a bare
+    `employee_id` column, by design), so the name is not a mapped attribute.
+    Setting it on the instance is still enough: Pydantic v2's `from_attributes`
+    reads it off the object at validation time, and falls back to the field's
+    `None` default on the write paths that do not call this. The identical trick,
+    for the identical reason, as `leave/service.py::_attach_employee_names`.
+
+    THIS IS WHY THE NAME BELONGS TO THE BACKEND. `GET /employees` is RBAC-scoped
+    and returns only their own row to a plain employee-role actor - which a
+    Project Head still is - so a Head's review queue could not resolve a
+    colleague's name in the browser at all and printed `employee_id.slice(0, 8)`
+    instead. One batched query here answers it for every reader.
+    """
+    if not rows:
+        return
+    names = {
+        row.id: f"{row.first_name} {row.last_name}".strip()
+        for row in db.execute(
+            select(Employee.id, Employee.first_name, Employee.last_name).where(
+                Employee.id.in_({r.employee_id for r in rows})
+            )
+        ).all()
+    }
+    for r in rows:
+        r.employee_name = names.get(r.employee_id)
+
+
 def _request_balance(
     db: Session, req: PermissionRequest
 ) -> PermissionRequestBalanceOut:
     """This request's place in its month, stated without pretending.
 
-    Only an approved request has consumed anything, so `consumed_by_request` is 0
-    for pending, rejected and cancelled - a cancelled request in particular must
-    not read as though its hours are still spent, because they are not: it has
-    stopped contributing to the month's approved total.
+    Only a request that is actually holding hours has consumed anything, so
+    `consumed_by_request` is 0 for pending, rejected and cancelled - a cancelled
+    request in particular must not read as though its hours are still spent,
+    because they are not: it has stopped contributing to the month's total.
+
+    A request awaiting a WITHDRAWAL decision (Phase 4E) still holds its hours and
+    still says so, which is the same set `balance.CONSUMING_STATUSES` sums - the
+    two must agree or the page would show a figure the balance contradicts.
     """
     balance = balance_for(db, req.employee_id, req.permission_date)
-    consumed = req.duration_hours if req.status == PermissionStatus.approved else 0
+    consumed = req.duration_hours if req.status in CONSUMING_STATUSES else 0
     return PermissionRequestBalanceOut(
         month=balance.month,
         allowance_hours=balance.allowance_hours,
@@ -484,9 +620,14 @@ def get_permission_detail(
     employee = people.get(req.employee_id)
     reviewer = people.get(req.manager_id) if req.manager_id else None
 
+    # `employee_name` now lives on the BASE schema, so it comes through the dump
+    # below rather than being passed here - passing it too would be a duplicate
+    # keyword. Attaching it explicitly keeps the detail page's name coming from
+    # the same one place every list row's does.
+    req.employee_name = employee.full_name if employee else None
+
     return PermissionRequestDetailOut(
         **PermissionRequestOut.model_validate(req).model_dump(),
-        employee_name=employee.full_name if employee else None,
         employee_code=employee.employee_code if employee else None,
         reviewer_name=reviewer.full_name if reviewer else None,
         balance=_request_balance(db, req),
@@ -605,14 +746,12 @@ def create_permission_request(
     The balance is deliberately NOT checked here. A pending request holds no
     hours, so refusing to file one when the month is spent would be inventing a
     reservation the rest of the system does not have; the approval is where the
-    allowance is enforced. The duration is validated (1h or 2h) by the schema, by
-    the guard below, and by the DB check constraint.
+    allowance is enforced. `duration_hours` is no longer chosen by the caller
+    (Phase 4C): it is derived from `data.period` via `PERIOD_HOURS`, so it can
+    never disagree with the option the employee actually picked. The result is
+    still exactly 1 or 2, which is all the DB check constraint has ever allowed.
     """
     me = _author_employee(db, actor)
-    if data.duration_hours not in ALLOWED_DURATIONS:
-        raise AppError(
-            "validation_error", "A permission must be either 1 hour or 2 hours.", 422
-        )
     # Checked before the working-day rule: "August is over" is a better answer
     # than "16 August was a Sunday" for somebody who has navigated back a month.
     _assert_month_open(data.permission_date)
@@ -622,9 +761,15 @@ def create_permission_request(
     req = PermissionRequest(
         employee_id=me.id,
         permission_date=data.permission_date,
-        duration_hours=data.duration_hours,
+        duration_hours=PERIOD_HOURS[data.period],
+        period=data.period,
         reason=data.reason,
         status=PermissionStatus.pending,
+        # Phase 4B: the same work-report-evidence resolver Leave uses, given the
+        # permission date as the boundary. NULL when no single project can be
+        # established, which falls back to the existing PM / reporting_pm_id
+        # flow below via `_notify_routed_approver`.
+        routed_project_id=resolve_routed_project(db, me.id, data.permission_date),
         created_by=actor.id,
         updated_by=actor.id,
     )
@@ -634,33 +779,43 @@ def create_permission_request(
     db.commit()
     db.refresh(req)
 
-    hours = req.duration_hours
-    _notify_manager(
-        db, actor, me, "permission_submitted",
+    label = duration_label(req.duration_hours, req.period)
+    _notify_routed_approver(
+        db, actor, me, req, "permission_submitted",
         f"{me.full_name} submitted a permission request",
-        f"{me.full_name} requested {hours} {hours_word(hours)} of permission for "
+        f"{me.full_name} requested {label} of permission for "
         f"{_short_date(req.permission_date)}.",
-        req.id,
-        # Straight to the detail page, which is where the manager's Approve and
-        # Reject live - not to the queue they would then have to search.
-        _detail_url(req.id),
     )
+    # Phase 4C: the SAME routed recipient the in-app notification above just
+    # reached, on the email channel - see `permissions/email.py`. Fired after
+    # the commit and after the bell, exactly where Leave fires its own
+    # submission email.
+    permission_email.send_submission_email(db, me, req)
     return req
 
 
 def cancel_permission_request(
     db: Session, actor: User, req_id: uuid.UUID
 ) -> PermissionRequest:
-    """pending | approved -> cancelled.
+    """pending | approved -> cancelled, in ONE step.
 
     Cancelling an APPROVED permission gives the hours back, and gives them back
-    exactly once: the balance is a sum over approved rows, so this row simply
-    stops counting. A second attempt is refused by the status guard below, which
-    is why "do not double-restore" needs no bookkeeping of its own.
+    exactly once: the balance is a sum over the holding statuses, so this row
+    simply stops counting. A second attempt is refused by the status guard below,
+    which is why "do not double-restore" needs no bookkeeping of its own.
 
-    Who may do it: the author, and a project manager. The author is additionally
-    held to a date that has not passed - a finished absence has nothing left to
-    withdraw, and correcting the record after the fact is an attendance job.
+    WHO MAY DO IT, AND ON WHAT (Phase 4E narrowed the author's half)
+      project manager   pending or approved - the existing PM authority to
+                        withdraw a permission outright, unchanged.
+      the author        `pending` ONLY. Withdrawing something nobody has granted
+                        yet has nothing to review, so it stays a single step; an
+                        APPROVED permission is a granted absence and now goes
+                        through `request_permission_cancellation` and a reviewer,
+                        exactly as approved LEAVE always has.
+
+    The author is additionally held to a date that has not passed - a finished
+    absence has nothing left to withdraw, and correcting the record after the
+    fact is an attendance job.
     """
     req = _fetch_locked(db, req_id)
     me = _current_employee(db, actor)
@@ -673,10 +828,23 @@ def cancel_permission_request(
         )
     if req.status == PermissionStatus.cancelled:
         raise AppError("conflict", "This permission request is already cancelled.", 409)
-    if req.status not in _ACTIVE_STATUSES:
+    if req.status == PermissionStatus.cancellation_requested:
+        raise AppError(
+            "conflict",
+            "This permission already has a cancellation request awaiting review.",
+            409,
+        )
+    if req.status not in _DIRECTLY_CANCELLABLE:
         raise AppError(
             "conflict",
             f"A {req.status.value} permission request can't be cancelled.",
+            409,
+        )
+    if is_author and not is_manager and req.status == PermissionStatus.approved:
+        raise AppError(
+            "conflict",
+            "An approved permission has to be withdrawn through a cancellation "
+            "request, which a reviewer decides.",
             409,
         )
     # A manager may still correct a past decision; the employee's own withdrawal
@@ -710,13 +878,13 @@ def cancel_permission_request(
     # Whoever did NOT do it is the one who needs telling, which is the same
     # convention leave cancellation follows. `_push` suppresses the actor anyway,
     # so an author who is also a project manager is never told by themselves.
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     if is_author:
         # The manager owns the queue this request has just left.
         _notify_manager(
             db, actor, me, "permission_cancelled",
             f"{me.full_name} cancelled a permission request",
-            f"{me.full_name} cancelled their {hours}-{hours_word(hours)} permission "
+            f"{me.full_name} cancelled their {label} permission "
             f"request for {_short_date(req.permission_date)}."
             + (
                 f" {format_hours(after.remaining_hours)} of permission remaining "
@@ -731,7 +899,7 @@ def cancel_permission_request(
         _notify_employee(
             db, actor, req.employee_id, "permission_cancelled",
             "Your permission request was cancelled",
-            f"Your {hours}-{hours_word(hours)} permission request for "
+            f"Your {label} permission request for "
             f"{_short_date(req.permission_date)} was cancelled."
             + (
                 f" {format_hours(after.remaining_hours)} of permission remaining "
@@ -742,6 +910,183 @@ def cancel_permission_request(
             req.id,
             _detail_url(req.id),
         )
+    return req
+
+
+# ---------- approved-permission cancellation (Phase 4E) --------------------
+#
+# The SAME three-step withdrawal Leave has had since the beginning, deliberately
+# reusing its shape rather than inventing a second one: the state lives on the
+# request row (`cancellation_requested`), the decision endpoints are guarded by
+# the module's existing `_assert_can_review`, and the rows surface in the shared
+# "Cancellation requests" queue simply by being listed with `status=
+# cancellation_requested` through the already-scoped list endpoint. There is no
+# separate table, no separate routing and no separate authority.
+
+def request_permission_cancellation(
+    db: Session, actor: User, req_id: uuid.UUID
+) -> PermissionRequest:
+    """approved -> cancellation_requested, by the employee who filed it.
+
+    The permission STANDS until a reviewer decides - this only puts it in their
+    queue. Nothing is restored here, which is what `CONSUMING_STATUSES` including
+    this state enforces: an employee cannot free their allowance by asking.
+
+    A permission whose day has already passed is out of scope, exactly as leave
+    that has already ended is: there is nothing left to withdraw, and correcting
+    the record afterwards is an attendance job.
+    """
+    me = _author_employee(db, actor)
+    req = _fetch_locked(db, req_id)
+    if req.employee_id != me.id:
+        raise AppError(
+            "forbidden",
+            "You can request cancellation only for your own permission request.",
+            403,
+        )
+    # Checked before the `approved` guard so a second attempt gets the accurate
+    # "already awaiting review" answer rather than a generic status refusal.
+    if req.status == PermissionStatus.cancellation_requested:
+        raise AppError(
+            "conflict",
+            "This permission already has a cancellation request awaiting review.",
+            409,
+        )
+    if req.status != PermissionStatus.approved:
+        raise AppError(
+            "conflict",
+            "Only approved permission requests can have cancellation requested.",
+            409,
+        )
+    if req.permission_date < _today():
+        raise AppError(
+            "validation_error",
+            "Past permission requests can't be cancelled.",
+            422,
+        )
+
+    before = balance_for(db, req.employee_id, req.permission_date)
+    req.status = PermissionStatus.cancellation_requested
+    req.updated_by = actor.id
+    db.add(req)
+    db.flush()
+    # Deliberately re-derived rather than assumed: the whole point of this state
+    # is that the figure has NOT moved, and the audit row is where that is
+    # written down.
+    _audit(
+        db,
+        actor=actor,
+        action=AuditAction.PERMISSION_CANCELLATION_REQUEST,
+        req=req,
+        before=before,
+        after=balance_for(db, req.employee_id, req.permission_date),
+    )
+    db.commit()
+    db.refresh(req)
+
+    label = duration_label(req.duration_hours, req.period)
+    # The SAME routed recipient every other permission event reaches - the routed
+    # project's current Head, else the reporting PM. No new routing (Phase 4B is
+    # the only one there is), and no email: this phase adds no email behaviour.
+    _notify_routed_approver(
+        db, actor, me, req, "permission_cancellation_requested",
+        f"{me.full_name} requested permission cancellation",
+        f"{me.employee_code} - {me.full_name} requested cancellation of an "
+        f"approved {label} permission for {_short_date(req.permission_date)}.",
+    )
+    return req
+
+
+def approve_permission_cancellation(
+    db: Session, actor: User, req_id: uuid.UUID
+) -> PermissionRequest:
+    """cancellation_requested -> cancelled. The reviewer's approval withdraws the
+    permission outright; there is no second step for the employee.
+
+    This is where the hours actually come back - the row stops being summed, so
+    the restore happens once and cannot happen twice.
+    """
+    req = _fetch_locked(db, req_id)
+    _assert_can_review(db, actor, req)
+    if req.status != PermissionStatus.cancellation_requested:
+        raise AppError(
+            "conflict", "This cancellation request has already been processed.", 409
+        )
+
+    before = balance_for(db, req.employee_id, req.permission_date)
+    req.status = PermissionStatus.cancelled
+    req.updated_by = actor.id
+    db.add(req)
+    db.flush()
+    after = balance_for(db, req.employee_id, req.permission_date)
+
+    # `manager_id` is left exactly as the original approval stamped it. That is
+    # the truth of who granted the permission, and overwriting it here would lose
+    # it - the same rule `leave` follows for a cancelled-after-approval request.
+    _audit(
+        db,
+        actor=actor,
+        action=AuditAction.PERMISSION_CANCELLATION_APPROVE,
+        req=req,
+        before=before,
+        after=after,
+    )
+    db.commit()
+    db.refresh(req)
+
+    label = duration_label(req.duration_hours, req.period)
+    _notify_employee(
+        db, actor, req.employee_id, "permission_cancellation_approved",
+        "Your permission cancellation was approved",
+        f"Your cancellation request for the {label} permission on "
+        f"{_short_date(req.permission_date)} was approved. "
+        f"{format_hours(after.remaining_hours)} of permission remaining for "
+        f"{_month_name(req.permission_date)}.",
+        req.id,
+        _detail_url(req.id),
+    )
+    return req
+
+
+def reject_permission_cancellation(
+    db: Session, actor: User, req_id: uuid.UUID
+) -> PermissionRequest:
+    """cancellation_requested -> approved. The original approval is untouched:
+    `manager_id`, `manager_comment` and `reviewed_at` still record who granted
+    the permission and when, and the hours never moved, so there is nothing to
+    re-deduct."""
+    req = _fetch_locked(db, req_id)
+    _assert_can_review(db, actor, req)
+    if req.status != PermissionStatus.cancellation_requested:
+        raise AppError(
+            "conflict", "This cancellation request has already been processed.", 409
+        )
+
+    req.status = PermissionStatus.approved
+    req.updated_by = actor.id
+    db.add(req)
+    db.flush()
+
+    _audit(
+        db,
+        actor=actor,
+        action=AuditAction.PERMISSION_CANCELLATION_REJECT,
+        req=req,
+        after=balance_for(db, req.employee_id, req.permission_date),
+    )
+    db.commit()
+    db.refresh(req)
+
+    label = duration_label(req.duration_hours, req.period)
+    _notify_employee(
+        db, actor, req.employee_id, "permission_cancellation_rejected",
+        "Your permission cancellation was rejected",
+        f"Your cancellation request for the {label} permission on "
+        f"{_short_date(req.permission_date)} was rejected. The approved "
+        "permission remains active.",
+        req.id,
+        _detail_url(req.id),
+    )
     return req
 
 
@@ -799,12 +1144,12 @@ def approve_permission_request(
     db.commit()
     db.refresh(req)
 
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     _notify_employee(
         db, actor, req.employee_id, "permission_approved",
         "Your permission request was approved",
         f"Your permission request for {_short_date(req.permission_date)} for "
-        f"{hours} {hours_word(hours)} has been approved. "
+        f"{label} has been approved. "
         f"{format_hours(after.remaining_hours)} of permission remaining for "
         f"{_month_name(req.permission_date)}."
         + (f" Note: {data.comment.strip()}" if data.comment and data.comment.strip() else ""),
@@ -846,12 +1191,12 @@ def reject_permission_request(
     db.commit()
     db.refresh(req)
 
-    hours = req.duration_hours
+    label = duration_label(req.duration_hours, req.period)
     _notify_employee(
         db, actor, req.employee_id, "permission_rejected",
         "Your permission request was rejected",
         f"Your permission request for {_short_date(req.permission_date)} for "
-        f"{hours} {hours_word(hours)} has been rejected."
+        f"{label} has been rejected."
         + (f" Note: {data.comment.strip()}" if data.comment and data.comment.strip() else ""),
         req.id,
         _detail_url(req.id),

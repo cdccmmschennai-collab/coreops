@@ -106,12 +106,11 @@ def _full_day(punch, day: date) -> None:
     punch(ist(day, 17, 54))
 
 
-def _file(client, login, start: date, end: date, leave_type="unpaid"):
+def _file(client, login, start: date, end: date):
     return client.post(
         API,
         headers=login("emp@x.com"),
         json={
-            "leave_type": leave_type,
             "start_date": start.isoformat(),
             "end_date": end.isoformat(),
             "reason": "Family function",
@@ -221,7 +220,7 @@ def test_approval_still_works_on_a_day_with_no_settled_punches(
         )
     )
     db.commit()
-    created = _file(client, login, MON, MON, leave_type="casual")
+    created = _file(client, login, MON, MON)
     assert created.status_code == 201, created.text
     # One punch only: seen, but not settled - this must NOT block.
     punch(ist(MON, 9, 10))

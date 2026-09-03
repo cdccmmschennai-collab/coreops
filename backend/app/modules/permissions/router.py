@@ -6,9 +6,15 @@
   GET  /permission-requests/balance/me           own current-month balance
   GET  /permission-requests/balance/{emp_id}     any employee's balance (PM only)
   GET  /permission-requests/{id}                 detail: names + balance context
-  POST /permission-requests/{id}/cancel          cancel (author, or a PM)
-  POST /permission-requests/{id}/approve         approve (PM, never own)
-  POST /permission-requests/{id}/reject          reject  (PM, never own)
+  POST /permission-requests/{id}/cancel          cancel pending (author, or a PM)
+  POST /permission-requests/{id}/approve         approve (reviewer, never own)
+  POST /permission-requests/{id}/reject          reject  (reviewer, never own)
+  POST /permission-requests/{id}/request-cancellation  ask to withdraw (author)
+  POST /permission-requests/{id}/approve-cancellation  withdraw it  (reviewer)
+  POST /permission-requests/{id}/reject-cancellation   keep it      (reviewer)
+
+The last three are Phase 4E and are named exactly as `leave/router.py` names its
+own three, because they are the same workflow on a different absence.
 
 `/history` and the two `/balance/...` routes are declared BEFORE `/{req_id}`, or
 FastAPI would match `history` as a request id and fail UUID parsing - the same
@@ -60,6 +66,11 @@ def list_permission_requests(
     date_to: date | None = Query(default=None, alias="to"),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    exclude_self: bool = Query(
+        default=False,
+        description="Drop the caller's own requests. What a review queue passes, "
+        "since nobody may review their own - same flag as /leave-requests.",
+    ),
     current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PermissionRequestPage:
@@ -72,6 +83,7 @@ def list_permission_requests(
         date_to=date_to,
         limit=limit,
         offset=offset,
+        exclude_self=exclude_self,
     )
     return PermissionRequestPage(
         items=[PermissionRequestOut.model_validate(r) for r in rows],
@@ -171,13 +183,66 @@ def cancel_permission_request(
     )
 
 
+@router.post("/{req_id}/request-cancellation", response_model=PermissionRequestOut)
+def request_permission_cancellation(
+    req_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PermissionRequestOut:
+    """The author asks to withdraw an APPROVED permission (Phase 4E).
+
+    The permission stays approved-and-standing; this only moves it into the
+    shared Cancellation requests queue for whoever may review it.
+    """
+    return PermissionRequestOut.model_validate(
+        service.request_permission_cancellation(db, current, req_id)
+    )
+
+
+@router.post("/{req_id}/approve-cancellation", response_model=PermissionRequestOut)
+def approve_permission_cancellation(
+    req_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PermissionRequestOut:
+    """Grant the withdrawal: the permission is cancelled and its hours return.
+
+    `get_current_user`, not `require_reviewer`, for the same reason the approve
+    endpoint below gives: a Project Head's role is still "employee", so a
+    role-gated dependency would 403 the routed Head before
+    `service._assert_can_review` - the actual authority check - ever ran.
+    """
+    return PermissionRequestOut.model_validate(
+        service.approve_permission_cancellation(db, current, req_id)
+    )
+
+
+@router.post("/{req_id}/reject-cancellation", response_model=PermissionRequestOut)
+def reject_permission_cancellation(
+    req_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PermissionRequestOut:
+    """Refuse the withdrawal: the permission goes back to approved, unchanged."""
+    return PermissionRequestOut.model_validate(
+        service.reject_permission_cancellation(db, current, req_id)
+    )
+
+
 @router.post("/{req_id}/approve", response_model=PermissionRequestOut)
 def approve_permission_request(
     req_id: uuid.UUID,
     body: PermissionReviewBody = PermissionReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PermissionRequestOut:
+    """PM (any request) or the request's routed Project Head (Phase 4B) may
+    review - the same PM-or-Head split `leave/router.py` uses, which is why
+    this depends on `get_current_user` rather than the PM-only
+    `require_reviewer`: a Head's role stays "employee", so a role-gated
+    dependency would 403 them before `service._assert_can_review` - the actual
+    authority check - ever runs.
+    """
     return PermissionRequestOut.model_validate(
         service.approve_permission_request(db, current, req_id, body)
     )
@@ -187,7 +252,7 @@ def approve_permission_request(
 def reject_permission_request(
     req_id: uuid.UUID,
     body: PermissionReviewBody = PermissionReviewBody(),
-    current: User = Depends(require_reviewer),
+    current: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PermissionRequestOut:
     return PermissionRequestOut.model_validate(

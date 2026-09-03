@@ -4,21 +4,22 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.leave.models import LeaveStatus, LeaveType
+from app.modules.leave.classification import LeaveClassification
+from app.modules.leave.models import LeaveStatus
 
 _REASON_MAX = 2000
 _COMMENT_MAX = 1000
 
 
 class LeaveRequestCreate(BaseModel):
-    leave_type: LeaveType
+    # No leave type: the classification is not something the employee chooses,
+    # it is what the dates cost. See `leave/classification.py`.
     start_date: date
     end_date: date
     reason: str | None = Field(default=None, max_length=_REASON_MAX)
 
 
 class LeaveRequestUpdate(BaseModel):
-    leave_type: LeaveType | None = None
     start_date: date | None = None
     end_date: date | None = None
     reason: str | None = Field(default=None, max_length=_REASON_MAX)
@@ -34,22 +35,58 @@ class LeaveRequestOut(BaseModel):
     id: uuid.UUID
     employee_id: uuid.UUID
     employee_name: str | None = None
-    leave_type: LeaveType
     start_date: date
     end_date: date
     # How many days of [start_date, end_date] the office is actually open for -
     # the number the employee is charged, not the calendar span. Computed by
-    # `service.attach_working_days` from `effects.leave_working_days`, so the UI
-    # can never disagree with what an approval deducts. `start_date`/`end_date`
+    # `service.attach_computed_fields` from `effects.leave_working_days`, so the
+    # UI can never disagree with what an approval deducts. `start_date`/`end_date`
     # are untouched: they remain the range the employee asked for.
     working_days: int
+    # Normal (<= 3 working days) or Special (> 3), derived from `working_days`
+    # by `leave/classification.py`. Never stored, so it cannot go stale when a
+    # request's dates change or a holiday lands inside its range.
+    classification: LeaveClassification
     reason: str | None = None
     status: LeaveStatus
     manager_id: uuid.UUID | None = None
+    # WHO RULED ON THIS REQUEST, by name. Resolved from `manager_id` - which
+    # `approve_leave_request`/`reject_leave_request` already stamp at decision
+    # time - by `service._attach_employee_names`, so no column, no migration and
+    # no second source of truth. None on a request nobody has decided yet, and on
+    # the mutation responses, which don't run that batch lookup.
+    manager_name: str | None = None
     manager_comment: str | None = None
     routed_project_id: uuid.UUID | None = None
+    # WHO A PENDING REQUEST IS WAITING ON, by name. Derived - not stored - from
+    # `routed_project_id` by `service._attach_routed_to`, which walks the very
+    # same `recipients.resolve_in_app_recipient` the submission notification
+    # walks, so the name shown to the employee is the person whose bell rang.
+    #
+    # Populated by the DETAIL endpoint only, and only while the request is
+    # pending; None everywhere else (the list, the mutation responses, and any
+    # settled request, where `manager_name` is the relevant actor instead). See
+    # `_attach_routed_to` for why.
+    routed_to_name: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class LeaveClassificationPreviewOut(BaseModel):
+    """What a range WOULD cost and be classified as, before anything is filed.
+
+    Exists so the leave form can show the employee the classification their
+    dates produce without guessing at it: the office week and the company
+    calendar live on the server, and this asks the very same
+    `leave_working_days` -> `classify_leave` pair the eventual request will be
+    read through. The form never does calendar arithmetic of its own, so the
+    frozen "Leave type" it displays cannot disagree with the saved request.
+    """
+
+    start_date: date
+    end_date: date
+    working_days: int
+    classification: LeaveClassification
 
 
 class LeaveRequestPage(BaseModel):

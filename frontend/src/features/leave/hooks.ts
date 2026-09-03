@@ -37,6 +37,21 @@ export function useDeliverableImpact(ids: string[]) {
   });
 }
 
+/** Live Normal/Special for the dates currently in the leave form.
+ *
+ *  Disabled until both dates are present and in order, so a half-filled form
+ *  asks nothing. The answer is the backend's own working-day count, which is
+ *  why the frozen "Leave type" the dialog shows cannot drift from the request
+ *  that gets saved. */
+export function useLeaveClassificationPreview(start: string, end: string) {
+  return useQuery({
+    queryKey: leaveKeys.classificationPreview(start, end),
+    queryFn: () => leaveApi.classificationPreview(start, end),
+    enabled: !!start && !!end && end >= start,
+    placeholderData: (prev) => prev,
+  });
+}
+
 export function useCreateLeave() {
   const qc = useQueryClient();
   return useMutation({

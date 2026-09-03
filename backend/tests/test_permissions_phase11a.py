@@ -21,6 +21,10 @@ from app.modules.users.models import UserRole
 
 API = "/api/v1/permission-requests"
 
+# Maps the old `hours` shorthand these tests use onto a period - history/detail/
+# notification wiring under test here doesn't care which half was picked.
+_PERIOD_FOR_HOURS = {1: "first_half_1h", 2: "first_half_2h"}
+
 # March 2027 (Mon 1st - Fri 5th) and the month either side of the 31 Mar / 1 Apr
 # boundary, all working days.
 MON = date(2027, 3, 1)
@@ -40,8 +44,11 @@ def team(make_user, make_employee):
     m2 = make_user("mgr2@x.com", role=UserRole.project_manager)
     mgr2 = make_employee(employee_code="MGR2", user_id=m2.id, manager_id=mgr.id)
     eu = make_user("emp@x.com", role=UserRole.employee)
+    # `reporting_pm_id`, not just `manager_id`: Phase 4B's routing fallback
+    # (no report evidence here, so every submission below falls back) reads
+    # `reporting_pm_id`, exactly as `leave/recipients.py` already does.
     emp = make_employee(employee_code="EMP011", user_id=eu.id, manager_id=mgr.id,
-                        first_name="Arun", last_name="Kumar")
+                        reporting_pm_id=mu.id, first_name="Arun", last_name="Kumar")
     ou = make_user("other@x.com", role=UserRole.employee)
     other = make_employee(employee_code="EMP012", user_id=ou.id, manager_id=mgr.id)
     return {
@@ -56,7 +63,7 @@ def _submit(client, login, day: date, hours: int = 1, email="emp@x.com",
             reason="Appointment"):
     res = client.post(API, headers=login(email), json={
         "permission_date": day.isoformat(),
-        "duration_hours": hours,
+        "period": _PERIOD_FOR_HOURS[hours],
         "reason": reason,
     })
     assert res.status_code == 201, res.text
@@ -252,7 +259,10 @@ def test_rejected_and_cancelled_details_report_zero_consumed(client, login, team
 
     cancelled = _submit(client, login, TUE, 2)
     _approve(client, login, cancelled["id"])
-    client.post(f"{API}/{cancelled['id']}/cancel", headers=login("emp@x.com"))
+    # Withdrawn outright by the PM. Since Phase 4E the employee's own route out
+    # of an APPROVED permission is a cancellation request a reviewer decides;
+    # either way the settled row must read as having consumed nothing.
+    client.post(f"{API}/{cancelled['id']}/cancel", headers=login("mgr@x.com"))
 
     for req_id in (rejected["id"], cancelled["id"]):
         b = client.get(f"{API}/{req_id}", headers=login("emp@x.com")).json()["balance"]
@@ -300,7 +310,7 @@ def test_submitting_notifies_the_manager_and_not_the_author(client, login, team,
     note = mgr_notes[0]
     assert "Arun Kumar" in note.message
     assert "01 Mar 2027" in note.message
-    assert "2 hours" in note.message
+    assert "1st Half - 2 Hours" in note.message
     assert note.target_url == f"/attendance/permission/{req['id']}"
     assert note.entity_type == "permission_request"
 
@@ -319,7 +329,7 @@ def test_approval_notifies_the_employee_with_date_duration_and_status(
     notes = _notifications(db, team["employee_user"].id)
     assert [n.type for n in notes] == ["permission_approved"]
     msg = notes[0].message
-    assert "Your permission request for 01 Mar 2027 for 2 hours has been approved." in msg
+    assert "Your permission request for 01 Mar 2027 for 1st Half - 2 Hours has been approved." in msg
     assert "2h of permission remaining" in msg
     assert notes[0].target_url == f"/attendance/permission/{req['id']}"
 
@@ -341,7 +351,7 @@ def test_rejection_notifies_the_employee_and_includes_the_manager_note(
     notes = _notifications(db, team["employee_user"].id)
     assert [n.type for n in notes] == ["permission_rejected"]
     msg = notes[0].message
-    assert "Your permission request for 01 Mar 2027 for 2 hours has been rejected." in msg
+    assert "Your permission request for 01 Mar 2027 for 1st Half - 2 Hours has been rejected." in msg
     assert "Note: Delivery day - please reschedule" in msg
 
 
@@ -357,9 +367,12 @@ def test_a_rejection_without_a_note_says_nothing_about_one(client, login, team, 
 def test_an_employee_cancelling_notifies_their_manager_not_themselves(
     client, login, team, db
 ):
+    """A PENDING request - the only one an employee still withdraws in one step
+    since Phase 4E. The manager owns the queue it has just left, so they are the
+    one told, and no hours are quoted because a pending request never held any.
+    """
     req = _submit(client, login, MON, 2)
-    _approve(client, login, req["id"])
-    # Clear the approval notification so the cancellation is unambiguous.
+    # Clear the submission notification so the cancellation is unambiguous.
     db.query(Notification).delete()
     db.commit()
 
@@ -371,8 +384,7 @@ def test_an_employee_cancelling_notifies_their_manager_not_themselves(
     mgr_notes = _notifications(db, team["manager_user"].id)
     assert [n.type for n in mgr_notes] == ["permission_cancelled"]
     assert "Arun Kumar" in mgr_notes[0].message
-    # The restored hours are stated, because they moved.
-    assert "4h of permission remaining" in mgr_notes[0].message
+    assert "of permission remaining" not in mgr_notes[0].message
 
 
 def test_a_manager_cancelling_notifies_the_employee(client, login, team, db):

@@ -24,6 +24,10 @@ from app.modules.users.models import UserRole
 API = "/api/v1/permission-requests"
 IST = ZoneInfo("Asia/Kolkata")
 
+# Maps the old `hours` shorthand these tests use onto a period - the month-close
+# rule under test here doesn't care which half was picked.
+_PERIOD_FOR_HOURS = {1: "first_half_1h", 2: "first_half_2h"}
+
 
 def _today() -> date:
     return datetime.now(IST).date()
@@ -71,7 +75,7 @@ def _submit(client, login, day: date, hours: int = 1):
         headers=login("emp@pmc.com"),
         json={
             "permission_date": day.isoformat(),
-            "duration_hours": hours,
+            "period": _PERIOD_FOR_HOURS[hours],
             "reason": "School run",
         },
     )

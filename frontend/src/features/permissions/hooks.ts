@@ -84,6 +84,35 @@ export function useCancelPermission() {
   });
 }
 
+// The three cancellation mutations invalidate the same permission root, which
+// covers the history table, the shared Cancellation requests queue, its badge
+// count and the balance KPI in one go - only an APPROVED decision moves hours,
+// but every one of them moves a row between queues.
+
+export function useRequestPermissionCancellation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => permissionApi.requestCancellation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: permissionKeys.all }),
+  });
+}
+
+export function useApprovePermissionCancellation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => permissionApi.approveCancellation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: permissionKeys.all }),
+  });
+}
+
+export function useRejectPermissionCancellation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => permissionApi.rejectCancellation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: permissionKeys.all }),
+  });
+}
+
 export function useApprovePermission() {
   const qc = useQueryClient();
   return useMutation({

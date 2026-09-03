@@ -1004,6 +1004,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/leave-requests/classification-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Classification Preview
+         * @description What the given range costs in working days, and whether that is Normal
+         *     or Special. Reads nothing but the company calendar and writes nothing.
+         *
+         *     Declared BEFORE `GET /{req_id}` so the literal path is not swallowed by the
+         *     uuid route. An inverted range is reported as zero days rather than an error
+         *     - the form asks on every keystroke, and a half-typed range is not a fault.
+         */
+        get: operations["classification_preview_api_v1_leave_requests_classification_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/leave-requests/deliverable-impact": {
         parameters: {
             query?: never;
@@ -4833,7 +4858,6 @@ export interface components {
         };
         /** LeaveRequestCreate */
         LeaveRequestCreate: {
-            leave_type: components["schemas"]["LeaveType"];
             /**
              * Start Date
              * Format: date
@@ -4861,7 +4885,7 @@ export interface components {
             employee_id: string;
             /** Employee Name */
             employee_name?: string | null;
-            leave_type: components["schemas"]["LeaveType"];
+            classification: components["schemas"]["LeaveClassification"];
             /**
              * Start Date
              * Format: date
@@ -4905,7 +4929,6 @@ export interface components {
         };
         /** LeaveRequestUpdate */
         LeaveRequestUpdate: {
-            leave_type?: components["schemas"]["LeaveType"] | null;
             /** Start Date */
             start_date?: string | null;
             /** End Date */
@@ -4924,10 +4947,29 @@ export interface components {
          */
         LeaveStatus: "pending" | "approved" | "rejected" | "cancelled" | "cancellation_requested";
         /**
-         * LeaveType
+         * LeaveClassification
          * @enum {string}
          */
-        LeaveType: "casual" | "sick" | "annual" | "comp_off" | "unpaid" | "other";
+        LeaveClassification: "normal" | "special";
+        /**
+         * LeaveClassificationPreviewOut
+         * @description What a range WOULD cost and be classified as, before anything is filed.
+         */
+        LeaveClassificationPreviewOut: {
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /** Working Days */
+            working_days: number;
+            classification: components["schemas"]["LeaveClassification"];
+        };
         /** LedProject */
         LedProject: {
             /**
@@ -9937,6 +9979,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LeaveRequestOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    classification_preview_api_v1_leave_requests_classification_preview_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LeaveClassificationPreviewOut"];
                 };
             };
             /** @description Validation Error */

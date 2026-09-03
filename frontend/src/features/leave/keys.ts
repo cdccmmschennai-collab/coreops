@@ -8,4 +8,6 @@ export const leaveKeys = {
     [...leaveKeys.all, "deliverable-impact", ids] as const,
   attendanceSummary: (ids: string[]) =>
     [...leaveKeys.all, "attendance-summary", ids] as const,
+  classificationPreview: (start: string, end: string) =>
+    [...leaveKeys.all, "classification-preview", start, end] as const,
 };

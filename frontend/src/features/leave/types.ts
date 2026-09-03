@@ -1,4 +1,8 @@
-export type LeaveType = "casual" | "sick" | "annual" | "comp_off" | "unpaid" | "other";
+/** Normal (<= 3 working days) or Special (> 3). Derived by the backend from
+ *  `working_days` and never chosen by the employee - see
+ *  `backend/app/modules/leave/classification.py`. The old Casual/Sick/Annual/
+ *  Comp Off/Unpaid categories no longer exist. */
+export type LeaveClassification = "normal" | "special";
 export type LeaveStatus =
   | "pending"
   | "approved"
@@ -10,7 +14,6 @@ export interface LeaveRequest {
   id: string;
   employee_id: string;
   employee_name: string | null;
-  leave_type: LeaveType;
   start_date: string;
   end_date: string;
   /** Days the office is actually open across [start_date, end_date] - the
@@ -18,11 +21,25 @@ export interface LeaveRequest {
    *  company calendar (weekends, working Saturdays, holidays and working-day
    *  overrides); never recalculated here. */
   working_days: number;
+  /** Normal or Special, derived by the backend from `working_days`. */
+  classification: LeaveClassification;
   reason: string | null;
   status: LeaveStatus;
   manager_id: string | null;
+  /** The reviewer who approved or rejected the request, by name - resolved by
+   *  the backend from the `manager_id` it stamps at decision time. Null until
+   *  somebody has ruled, and on the responses mutations return. Read through
+   *  `leaveDecisionActor`, never directly: a request approved and later
+   *  cancelled still carries its approver here. */
+  manager_name: string | null;
   manager_comment: string | null;
   routed_project_id: string | null;
+  /** Who a still-pending request is waiting on, by name - the routed project's
+   *  current Head, else the requester's reporting PM, resolved by the backend
+   *  through the same chain that delivers the submission notification. Only the
+   *  DETAIL endpoint fills this in, and only while the request is pending; it is
+   *  null on list rows and on settled requests. Read through `leaveActorRow`. */
+  routed_to_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -34,15 +51,22 @@ export interface LeaveRequestPage {
   offset: number;
 }
 
+/** `GET /leave-requests/classification-preview` - what a range costs and is
+ *  classified as, asked while the employee is still choosing dates. */
+export interface LeaveClassificationPreview {
+  start_date: string;
+  end_date: string;
+  working_days: number;
+  classification: LeaveClassification;
+}
+
 export interface LeaveRequestCreateBody {
-  leave_type: LeaveType;
   start_date: string;
   end_date: string;
   reason?: string | null;
 }
 
 export interface LeaveRequestUpdateBody {
-  leave_type?: LeaveType;
   start_date?: string;
   end_date?: string;
   reason?: string | null;
@@ -124,24 +148,12 @@ export interface LeaveListParams {
   exclude_self?: boolean;
 }
 
-// Full label map — keeps `sick`/`unpaid` so any historical requests still
-// render correctly even though they're no longer offered when filing a new one.
-export const LEAVE_TYPE_LABEL: Record<LeaveType, string> = {
-  casual: "Casual",
-  sick: "Sick",
-  annual: "Annual",
-  comp_off: "Comp Off",
-  unpaid: "Unpaid",
-  other: "Other",
+// The only two classifications there are. Nothing is selectable: the backend
+// derives the value from the request's working days, historical rows included.
+export const LEAVE_CLASSIFICATION_LABEL: Record<LeaveClassification, string> = {
+  normal: "Normal",
+  special: "Special",
 };
-
-// Selectable types when filing a leave request (Casual / Annual / Comp Off / Other).
-// `sick` and `unpaid` are intentionally excluded — display-only legacy values.
-export const SELECTABLE_LEAVE_TYPES = ["casual", "annual", "comp_off", "other"] as const;
-
-export type SelectableLeaveType = (typeof SELECTABLE_LEAVE_TYPES)[number];
-
-export const LEAVE_TYPES: LeaveType[] = [...SELECTABLE_LEAVE_TYPES];
 
 export const LEAVE_STATUS_LABEL: Record<LeaveStatus, string> = {
   pending: "Pending",
@@ -181,6 +193,25 @@ export function canCancelLeave(
   myEmployeeId: string | null | undefined,
 ): boolean {
   return req.status === "pending" && isOwn(req, myEmployeeId);
+}
+
+/** Whether to offer Approve/Reject on the leave detail page.
+ *
+ *  `isReviewer` is passed in rather than derived from a role, because leave is
+ *  reviewable by a project manager AND by a Project Head - and Head-ness is not
+ *  a role, it is per-project and comes from the report scope (see
+ *  `leave-tab.tsx`). Beyond that the rule matches the permission detail page:
+ *  still pending, and not the reviewer's own request - a PM and a Head are both
+ *  employees who file their own leave. The backend refuses each case
+ *  independently; this only decides what renders. */
+export function canReviewLeave(
+  req: Pick<LeaveRequest, "status" | "employee_id">,
+  isReviewer: boolean,
+  myEmployeeId: string | null | undefined,
+): boolean {
+  if (!isReviewer) return false;
+  if (req.status !== "pending") return false;
+  return !myEmployeeId || req.employee_id !== myEmployeeId;
 }
 
 /** Whether to offer "Request Cancellation". Approved leave stays eligible for
@@ -223,10 +254,11 @@ export type LeaveView = (typeof LEAVE_VIEWS)[number];
  *  An explicit `view` always wins, and it is what Back restores: both choices
  *  are written into the URL, so neither has to be inferred from anything else.
  *
- *  `hasQueue` only covers the links that predate that parameter - the PM/Head
- *  dashboard shortcut and the backend's leave notifications, which name a
- *  QUEUE (`?tab=leave&queue=pending&id=...`). A queue is a Team approvals
- *  queue, so those links still open on Team approvals. Nothing else infers it. */
+ *  `hasQueue` only covers the links that predate that parameter - chiefly the
+ *  PM/Head dashboard shortcut, which names a QUEUE and no view. A queue is a
+ *  Team approvals queue, so those links still open on Team approvals. Nothing
+ *  else infers it. (Leave notifications no longer rely on this: they deep-link
+ *  to the request's detail page and name `view` explicitly in their `from`.) */
 export function resolveLeaveView(
   raw: string | null | undefined,
   hasQueue: boolean,
@@ -311,6 +343,86 @@ export function leaveQueueCountParams(
  *  side of the wire any more; the backend is the only place that rule lives. */
 export function formatLeaveDuration(workingDays: number): string {
   return `${workingDays} ${workingDays === 1 ? "day" : "days"}`;
+}
+
+/**
+ * The "By" column of the All-leave table: who ruled on this request.
+ *
+ * ONLY A SETTLED DECISION HAS AN ACTOR. Approved and rejected name the reviewer
+ * who took that decision; every other status returns null and the table renders
+ * an em dash:
+ *
+ *   pending                 nobody has decided yet
+ *   cancellation_requested  the standing approval is under review again
+ *   cancelled               deliberately blank (Phase 3 section 7)
+ *
+ * `cancelled` is the case worth stating, because the underlying row is NOT
+ * blank. A leave that was approved and then withdrawn keeps its approver in
+ * `manager_id` - that is the honest record of what happened - and the
+ * cancellation itself is a DIFFERENT act by a DIFFERENT person, which nothing
+ * currently records. Showing the approver's name against "Cancelled" would
+ * therefore name the wrong actor, so this returns null rather than guessing; the
+ * cancellation actor is out of scope for this phase.
+ *
+ * Null is also what an un-named actor gives: a request decided before the id was
+ * recorded, or one whose reviewer's employee row has since gone.
+ */
+export function leaveDecisionActor(
+  req: Pick<LeaveRequest, "status" | "manager_name">,
+): string | null {
+  if (req.status !== "approved" && req.status !== "rejected") return null;
+  return req.manager_name?.trim() || null;
+}
+
+/**
+ * The ONE actor/routing row the Leave Request card shows under Status, or null
+ * for no row at all.
+ *
+ * It answers a different question per status, which is why it is one row and not
+ * three:
+ *
+ *   pending    Routed to     who is holding this request right now
+ *   approved   Approved by   who granted it
+ *   rejected   Rejected by   who refused it
+ *
+ * Everything else returns null and the card renders nothing between Status and
+ * the Note row:
+ *
+ *   cancelled               the cancellation actor is NOT recorded anywhere.
+ *                           `manager_id` on a cancelled row is its former
+ *                           APPROVER, so "Cancelled ... by <approver>" would name
+ *                           the wrong person. Unchanged from Phase 3.
+ *   cancellation_requested  the standing approval is under review again; neither
+ *                           question has a settled answer.
+ *
+ * INFORMATIONAL, NEVER PERMISSION. This is what the reader is TOLD, and it is
+ * deliberately shown to the request owner too - an employee is entitled to know
+ * who their request went to. What the reader may DO is `canReviewLeave`, which
+ * is unrelated and unchanged: a Project Head looking at their own pending
+ * request sees "Routed to ..." here and still gets no Review card.
+ *
+ * The approved/rejected half goes through `leaveDecisionActor` rather than
+ * reading `manager_name` again, so the detail page and the All-leave "By" column
+ * cannot disagree about which statuses have an actor.
+ */
+export interface LeaveActorRow {
+  label: string;
+  name: string;
+}
+
+export function leaveActorRow(
+  req: Pick<LeaveRequest, "status" | "manager_name" | "routed_to_name">,
+): LeaveActorRow | null {
+  if (req.status === "pending") {
+    const routedTo = req.routed_to_name?.trim();
+    return routedTo ? { label: "Routed to", name: routedTo } : null;
+  }
+  const actor = leaveDecisionActor(req);
+  if (!actor) return null;
+  return {
+    label: req.status === "approved" ? "Approved by" : "Rejected by",
+    name: actor,
+  };
 }
 
 /** `3 August 2026`, or `29 July 2026 - 30 July 2026` for a range. */

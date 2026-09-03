@@ -1,8 +1,10 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
 import { ErrorState } from "@/components/feedback/error-state";
@@ -18,22 +20,26 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useAuth } from "@/features/auth/auth-provider";
+import { AppError } from "@/lib/api-client";
 import { useUrlState } from "@/lib/use-url-state";
 
-import { usePermissionHistory } from "../hooks";
+import { usePermissionHistory, useRequestPermissionCancellation } from "../hooks";
 import {
   currentBusinessMonth,
   formatAvailable,
-  formatDuration,
   formatMonthLabel,
+  formatPermissionDuration,
   formatShortDate,
   monthStart,
+  permissionCancellationCell,
   permissionDetailPath,
   shiftMonth,
+  type PermissionRequest,
 } from "../types";
 import { PermissionStatusBadge } from "./permission-status-badge";
 
-const COL_COUNT = 4;
+const COL_COUNT = 5;
 
 /** The employee's own permission history, one calendar month at a time.
  *
@@ -50,11 +56,36 @@ const COL_COUNT = 4;
  *  rule. Rows are filtered by permission_date server-side, never created_at. */
 export function PermissionHistory() {
   const router = useRouter();
+  const { employeeId } = useAuth();
   // `pm_month` (permission month) - namespaced so it cannot collide with any
   // other month/filter parameter on the attendance screens.
   const [rawMonth, setMonth] = useUrlState("pm_month", currentBusinessMonth());
   const month = monthStart(rawMonth);
   const query = usePermissionHistory(month);
+  const requestCancellation = useRequestPermissionCancellation();
+  // Only the row being acted on is disabled, so one slow request does not freeze
+  // the whole month's table.
+  const [pendingId, setPendingId] = React.useState<string | null>(null);
+
+  async function onRequestCancellation(req: PermissionRequest) {
+    if (pendingId) return;
+    setPendingId(req.id);
+    try {
+      await requestCancellation.mutateAsync(req.id);
+      toast.success(
+        "Cancellation requested. It now waits for a reviewer's decision - the " +
+          "permission stays approved until then.",
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof AppError
+          ? err.message
+          : "Could not request cancellation of this permission.",
+      );
+    } finally {
+      setPendingId(null);
+    }
+  }
 
   const items = query.data?.items ?? [];
   const balance = query.data?.balance;
@@ -134,6 +165,7 @@ export function PermissionHistory() {
                   <TableHead>Duration</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Reason</TableHead>
+                  <TableHead>Cancellation</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -147,13 +179,25 @@ export function PermissionHistory() {
                       {formatShortDate(req.permission_date)}
                     </TableCell>
                     <TableCell className="tabular">
-                      {formatDuration(req.duration_hours)}
+                      {formatPermissionDuration(req)}
                     </TableCell>
                     <TableCell>
                       <PermissionStatusBadge status={req.status} />
                     </TableCell>
                     <TableCell className="max-w-[280px] truncate text-muted-foreground">
                       {req.reason?.trim() ? req.reason : "-"}
+                    </TableCell>
+                    {/* The action must not also open the detail page, so the
+                        cell swallows the row's click - the same guard the leave
+                        and permission review queues use for their buttons. */}
+                    <TableCell onClick={(e) => e.stopPropagation()}>
+                      <CancellationCell
+                        req={req}
+                        employeeId={employeeId}
+                        busy={pendingId === req.id}
+                        disabled={pendingId !== null}
+                        onRequest={() => void onRequestCancellation(req)}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -164,4 +208,47 @@ export function PermissionHistory() {
       </Card>
     </>
   );
+}
+
+/** The Cancellation column for one history row.
+ *
+ *  Three outcomes, decided by the pure `permissionCancellationCell` rule so the
+ *  table itself holds no policy: offer the action, say a withdrawal is already
+ *  awaiting review, or say nothing. The "already requested" state is what stops
+ *  a duplicate being filed from here; the backend refuses one with a 409
+ *  whatever this renders. */
+function CancellationCell({
+  req,
+  employeeId,
+  busy,
+  disabled,
+  onRequest,
+}: {
+  req: PermissionRequest;
+  employeeId: string | null | undefined;
+  busy: boolean;
+  disabled: boolean;
+  onRequest: () => void;
+}) {
+  const cell = permissionCancellationCell(req, employeeId);
+
+  if (cell === "requested") {
+    return (
+      <span className="text-xs font-medium text-warning">Cancellation requested</span>
+    );
+  }
+  if (cell === "request") {
+    return (
+      <Button
+        size="sm"
+        variant="secondary"
+        onClick={onRequest}
+        loading={busy}
+        disabled={disabled}
+      >
+        Request cancellation
+      </Button>
+    );
+  }
+  return <span className="text-muted-foreground">-</span>;
 }

@@ -93,8 +93,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.modules.employees.models import Employee
+from app.modules.leave.classification import (
+    LeaveClassification,
+    classification_label,
+    classify_leave,
+)
 from app.modules.leave.effects import leave_working_days
-from app.modules.leave.models import LeaveRequest, LeaveType
+from app.modules.leave.models import LeaveRequest
 from app.modules.leave.recipients import (
     LeaveRecipient,
     leave_request_path,
@@ -107,20 +112,6 @@ logger = logging.getLogger("coreops.leave.email")
 # Matches the daily report reminder's format, so both CoreOps emails read the
 # same way: "28 Aug 2026".
 _DATE_FMT = "%d %b %Y"
-
-# Display names for the stored enum. Mirrors the frontend's LEAVE_TYPE_LABEL
-# (frontend/src/features/leave/types.ts) and adds the word "Leave" where it
-# reads naturally: the UI shows "Casual" inside a column already headed "Type",
-# while an email sentence has no such context. `comp_off` and `other` are left
-# alone - "Comp Off Leave" and "Other Leave" read worse, not better.
-_LEAVE_TYPE_LABELS: dict[LeaveType, str] = {
-    LeaveType.casual: "Casual Leave",
-    LeaveType.sick: "Sick Leave",
-    LeaveType.annual: "Annual Leave",
-    LeaveType.comp_off: "Comp Off",
-    LeaveType.unpaid: "Unpaid Leave",
-    LeaveType.other: "Other",
-}
 
 
 @dataclass(frozen=True)
@@ -138,11 +129,6 @@ class RenderedLeaveEmail:
 
 
 # ---------- pure rendering --------------------------------------------------
-
-def leave_type_label(leave_type: LeaveType) -> str:
-    """Human label for a stored leave type, never the raw enum value."""
-    return _LEAVE_TYPE_LABELS.get(leave_type, "Leave")
-
 
 def format_leave_period(start: date, end: date, working_days: int) -> str:
     """"28 Aug 2026 - 29 Aug 2026 (2 days)", or a single date for a one-day leave.
@@ -182,7 +168,7 @@ def render_submission_email(
     *,
     recipient_name: str,
     employee_name: str,
-    leave_type: LeaveType,
+    classification: LeaveClassification,
     start_date: date,
     end_date: date,
     working_days: int,
@@ -209,7 +195,7 @@ def render_submission_email(
     clean_reason = (reason or "").strip()
 
     details = [
-        ("Leave Type", leave_type_label(leave_type)),
+        ("Leave Type", classification_label(classification)),
         ("Leave Period", format_leave_period(start_date, end_date, working_days)),
     ]
     if clean_reason:
@@ -257,7 +243,7 @@ def render_decision_email(
     approved: bool,
     employee_name: str,
     reviewer_name: str | None,
-    leave_type: LeaveType,
+    classification: LeaveClassification,
     start_date: date,
     end_date: date,
     working_days: int,
@@ -296,7 +282,7 @@ def render_decision_email(
     outcome = "approved" if approved else "rejected"
 
     details = [
-        ("Leave Type", leave_type_label(leave_type)),
+        ("Leave Type", classification_label(classification)),
         ("Leave Period", format_leave_period(start_date, end_date, working_days)),
     ]
     clean_reason = (reason or "").strip()
@@ -493,17 +479,20 @@ def send_submission_email(db: Session, employee: Employee, req: LeaveRequest) ->
             )
             return
 
+        working_days = len(leave_working_days(db, req.start_date, req.end_date))
         rendered = render_submission_email(
             recipient_name=recipient.employee.full_name,
             employee_name=employee.full_name,
-            leave_type=req.leave_type,
+            # Normal or Special, off the very count printed on the next line -
+            # the email cannot state a classification the period disagrees with.
+            classification=classify_leave(working_days),
             start_date=req.start_date,
             end_date=req.end_date,
-            working_days=len(leave_working_days(db, req.start_date, req.end_date)),
+            working_days=working_days,
             reason=req.reason,
             request_id=str(req.id),
             link=build_link(
-                leave_request_path(req, is_head=recipient.is_head)
+                leave_request_path(req, view="team", queue="pending")
             ),
         )
         result = enqueue_email(
@@ -595,21 +584,23 @@ def _send_decision_email(
             )
             return
 
+        working_days = len(leave_working_days(db, req.start_date, req.end_date))
         rendered = render_decision_email(
             approved=approved,
             employee_name=employee.full_name,
             reviewer_name=reviewer.full_name if reviewer else None,
-            leave_type=req.leave_type,
+            classification=classify_leave(working_days),
             start_date=req.start_date,
             end_date=req.end_date,
-            working_days=len(leave_working_days(db, req.start_date, req.end_date)),
+            working_days=working_days,
             reason=req.reason,
             reviewer_comment=req.manager_comment,
             request_id=str(req.id),
-            # The rung the EMPLOYEE reads their own request at - the same path
-            # the `leave_approved` / `leave_rejected` notification deep-links to,
-            # built by the same helper so the bell and the inbox cannot drift.
-            link=build_link(leave_request_path(req, is_head=False)),
+            # The request's own detail page, with My leave behind it - the same
+            # path the `leave_approved` / `leave_rejected` notification
+            # deep-links to, built by the same helper so the bell and the inbox
+            # cannot drift.
+            link=build_link(leave_request_path(req, view="my")),
         )
         result = enqueue_email(
             to=address,

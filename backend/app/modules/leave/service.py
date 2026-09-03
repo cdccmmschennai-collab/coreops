@@ -56,10 +56,14 @@ from app.modules.leave.effects import (
     plan_leave_days,
     reverse_leave_approved,
 )
-from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave.classification import (
+    classification_label,
+    classify_leave,
+)
+from app.modules.leave.models import RETIRED_LEAVE_TYPE, LeaveRequest, LeaveStatus
 from app.modules.leave import email as leave_email
 from app.modules.leave import routing
-from app.modules.leave.recipients import leave_request_path, resolve_leave_recipients
+from app.modules.leave.recipients import leave_request_path, resolve_in_app_recipient
 from app.modules.leave.schemas import (
     AttendanceSummaryRequest,
     DeliverableConflictOut,
@@ -259,19 +263,25 @@ def _notify_routed_approver(db: Session, employee: Employee, req: LeaveRequest,
     `req.routed_project_id` if one is assigned (and isn't the requester
     themself), else the employee's reporting PM.
 
-    Walks `resolve_leave_recipients` and takes the first candidate with a login
-    to deliver to, then STOPS - exactly one person is notified, never all
-    candidates. A Head with no linked user account falls through to the PM,
-    which is the rule this function has always applied; only the identity of
-    that fallback rung changed (line manager -> reporting PM), so that the
-    person notified is a person who can actually approve the request.
+    Takes the first candidate with a login to deliver to, then STOPS - exactly
+    one person is notified, never all candidates. A Head with no linked user
+    account falls through to the PM, which is the rule this function has always
+    applied; only the identity of that fallback rung changed (line manager ->
+    reporting PM), so that the person notified is a person who can actually
+    approve the request.
+
+    That selection now lives in `recipients.resolve_in_app_recipient` rather than
+    inline here, because `_attach_routed_to` has to answer the same question for
+    the detail page's "Routed to" line. Same function, same answer.
     """
-    for candidate in resolve_leave_recipients(db, employee, req):
-        if candidate.employee.user_id is None:
-            continue
-        _push(db, candidate.employee.user_id, type_, title, message, req.id,
-              leave_request_path(req, is_head=candidate.is_head, queue=queue))
+    candidate = resolve_in_app_recipient(db, employee, req)
+    if candidate is None:
         return
+    # Both rungs are approvers, so both open the request's own detail page with
+    # Team approvals behind it - the queue they were working stays the Back
+    # target, and the actions are on the page itself.
+    _push(db, candidate.employee.user_id, type_, title, message, req.id,
+          leave_request_path(req, view="team", queue=queue or "pending"))
 
 
 def _notify_employee(db: Session, employee_id: uuid.UUID, type_: str, title: str,
@@ -303,7 +313,11 @@ def _audit_decision(
     details: dict = {
         "leave_request_id": str(req.id),
         "employee_id": str(req.employee_id),
-        "leave_type": req.leave_type.value,
+        # Normal / Special, derived from the same working-day count the decision
+        # is being taken on - not the retired stored category.
+        "classification": classify_leave(
+            len(leave_working_days(db, req.start_date, req.end_date))
+        ).value,
         "start_date": req.start_date.isoformat(),
         "end_date": req.end_date.isoformat(),
         "status": req.status.value,
@@ -537,10 +551,27 @@ def list_leave_requests(
         stmt = stmt.where(LeaveRequest.employee_id == employee_id)
     if status is not None:
         stmt = stmt.where(LeaveRequest.status == status)
+    # THE DATE WINDOW IS AN OVERLAP, NOT A CONTAINMENT.
+    #
+    # A leave request matches when its LEAVE PERIOD intersects [date_from,
+    # date_to] - `start <= window_end AND end >= window_start`, the same
+    # two-sided test `_assert_no_overlap` above uses to decide two ranges clash.
+    # `created_at` is never consulted: the question the All-leave window answers
+    # is "who was away in September", and a request filed in August for
+    # September is exactly what that has to return.
+    #
+    # It used to be containment (`start >= from AND end <= to`), which silently
+    # dropped every absence straddling either edge of the window - the 30 Aug -
+    # 2 Sep leave vanished from a September filter. Nothing consumed these two
+    # parameters before this phase (no frontend call site, no test), so the
+    # correction changes no existing behaviour.
+    #
+    # Either bound may be given alone: `from` on its own means "still running on
+    # or after this date", `to` on its own "had started by this date".
     if date_from is not None:
-        stmt = stmt.where(LeaveRequest.start_date >= date_from)
+        stmt = stmt.where(LeaveRequest.end_date >= date_from)
     if date_to is not None:
-        stmt = stmt.where(LeaveRequest.end_date <= date_to)
+        stmt = stmt.where(LeaveRequest.start_date <= date_to)
 
     total = db.execute(
         select(func.count()).select_from(stmt.order_by(None).subquery())
@@ -560,11 +591,51 @@ def get_leave_request(db: Session, actor: User, req_id: uuid.UUID) -> LeaveReque
     req = _fetch(db, req_id)
     _assert_can_read(db, actor, req)
     _attach_employee_names(db, [req])
+    _attach_routed_to(db, req)
     return req
 
 
+def _attach_routed_to(db: Session, req: LeaveRequest) -> None:
+    """Set `.routed_to_name` - who a STILL-PENDING request is waiting on.
+
+    Same non-mapped-attribute trick as `_attach_employee_names`, and the same
+    reason: routing is not a column. `routed_project_id` is, but the person is
+    derived from it fresh on every read by `recipients.resolve_in_app_recipient`
+    - the routed project's CURRENT Head, else the requester's reporting PM, first
+    one with a login. That is the whole point of deriving rather than storing: a
+    Head reassigned after the request was filed is honoured here exactly as it is
+    at approval time, and no migration is needed to say who is holding a request.
+
+    IT IS THE SAME FUNCTION THE NOTIFICATION WALKS. The employee reading "Routed
+    to NAINAR B" is being told the name of the person whose bell actually rang.
+
+    DETAIL-PAGE ONLY, AND PENDING ONLY.
+      - Only the detail endpoint calls this. Resolving a Head and a PM per row
+        would add two queries to every row of a 20-row All-leave page for a
+        column that page does not have.
+      - Only `pending` gets an answer. Once a request is approved, rejected or
+        cancelled the routing is spent and the question the page asks becomes
+        "who decided this", which `manager_name` answers. A request awaiting a
+        CANCELLATION decision is left alone too: it shows no actor row at all
+        (see `leaveActorRow` in the frontend), so there is nothing to resolve.
+
+    None is a legitimate answer - an unrouted request whose requester has no
+    reporting PM, or one whose only candidate has no login - and the page simply
+    omits the row.
+    """
+    req.routed_to_name = None
+    if req.status != LeaveStatus.pending:
+        return
+    employee = db.get(Employee, req.employee_id)
+    if employee is None:
+        return
+    recipient = resolve_in_app_recipient(db, employee, req)
+    if recipient is not None:
+        req.routed_to_name = recipient.employee.full_name
+
+
 def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
-    """Set `.employee_name` on each row from one batch query.
+    """Set `.employee_name` and `.manager_name` on each row from one batch query.
 
     `LeaveRequest` has no ORM relationship to `Employee` (by design - a bare
     `employee_id` column), so the name isn't a mapped attribute. Setting it here
@@ -576,32 +647,54 @@ def _attach_employee_names(db: Session, rows: list[LeaveRequest]) -> None:
     two functions, rather than depending on `GET /employees`, which returns only
     the caller's own row for a plain-employee-role actor (which a Project Head
     still is) - the bug this exists to fix.
+
+    `manager_name` is THE DECISION ACTOR, and it is not new information: both
+    `approve_leave_request` and `reject_leave_request` already stamp
+    `req.manager_id` with the reviewing employee at decision time, precisely so
+    the ruling survives a later change of reporting line. All that was missing
+    was the human-readable name, so the two ids are resolved together in the one
+    query that was already being run rather than through a second column, a
+    second table or a migration.
+
+    Both names come out of the SAME id->name map, so the actor is rendered
+    exactly as the requester is. NULL for a request nobody has ruled on yet, and
+    for the historical rows that were decided before `manager_id` was recorded.
+    Note that a request approved and later CANCELLED keeps the approver's id -
+    that is the truth of what happened - so "which statuses show an actor" is a
+    display decision, taken once in the frontend's `leaveDecisionActor`.
     """
     if not rows:
         return
-    employee_ids = {r.employee_id for r in rows}
+    people_ids = {r.employee_id for r in rows}
+    people_ids |= {r.manager_id for r in rows if r.manager_id is not None}
     names = {
         row.id: f"{row.first_name} {row.last_name}".strip()
         for row in db.execute(
             select(Employee.id, Employee.first_name, Employee.last_name).where(
-                Employee.id.in_(employee_ids)
+                Employee.id.in_(people_ids)
             )
         ).all()
     }
     for r in rows:
         r.employee_name = names.get(r.employee_id)
+        r.manager_name = names.get(r.manager_id) if r.manager_id is not None else None
 
 
-def attach_working_days(db: Session, rows: list[LeaveRequest]) -> None:
-    """Set `.working_days` on each row: the days the range actually costs.
+def attach_computed_fields(db: Session, rows: list[LeaveRequest]) -> None:
+    """Set `.working_days` and `.classification` on each row.
 
     Same non-mapped-attribute trick as `_attach_employee_names` above, and the
-    same reason - the count is not a column, it is a question for the company
-    calendar. The answer comes from `effects.leave_working_days`, which is what
-    an approval charges against, so the number the Leave Detail page shows and
-    the number deducted from the employee's balance are the same calculation:
-    28-31 August 2026 is 3, because the 5th Saturday works and the Sunday does
-    not. Nothing here re-implements the weekend/holiday rule.
+    same reason - neither is a column. The count is a question for the company
+    calendar, and the answer comes from `effects.leave_working_days`, which is
+    what an approval charges against, so the number the Leave Detail page shows
+    and the number deducted from the employee's balance are the same
+    calculation: 28-31 August 2026 is 3, because the 5th Saturday works and the
+    Sunday does not. Nothing here re-implements the weekend/holiday rule.
+
+    `.classification` is Normal or Special, read straight off that count by
+    `classification.classify_leave`. Deriving it here rather than storing it is
+    what makes a historical request classify correctly with no backfill, and
+    what stops the answer going stale when the dates or the calendar move.
 
     Called by the router for every `LeaveRequestOut` it builds. One overrides
     query per row; the pages that use it are small and the alternative was a
@@ -609,6 +702,7 @@ def attach_working_days(db: Session, rows: list[LeaveRequest]) -> None:
     """
     for r in rows:
         r.working_days = len(leave_working_days(db, r.start_date, r.end_date))
+        r.classification = classify_leave(r.working_days)
 
 
 # ---------- employee writes -----------------------------------------------
@@ -633,7 +727,9 @@ def create_leave_request(
 
     req = LeaveRequest(
         employee_id=me.id,
-        leave_type=data.leave_type,
+        # The retired category column, which is NOT NULL. Nothing reads it back
+        # as a classification - see `models.RETIRED_LEAVE_TYPE`.
+        leave_type=RETIRED_LEAVE_TYPE,
         start_date=data.start_date,
         end_date=data.end_date,
         reason=data.reason,
@@ -645,10 +741,14 @@ def create_leave_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+    classification = classify_leave(
+        len(leave_working_days(db, req.start_date, req.end_date))
+    )
     _notify_routed_approver(
         db, me, req, "leave_submitted",
         f"{me.full_name} submitted a leave request",
-        f"{me.full_name} requested {data.leave_type.value} leave from {data.start_date} to {data.end_date}.",
+        f"{me.full_name} requested {classification_label(classification)} "
+        f"from {data.start_date} to {data.end_date}.",
     )
     # Email the same approver the notification above just reached - both walk
     # `resolve_leave_recipients`, so they cannot route differently. Placed AFTER
@@ -879,7 +979,7 @@ def approve_leave_cancellation(
         f"Your leave cancellation request for {_period(req)} was approved."
         + _restored_sentence(effect),
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     return req
 
@@ -912,7 +1012,7 @@ def reject_leave_cancellation(
         f"Your leave cancellation request for {_period(req)} was rejected. "
         "The approved leave remains active.",
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     return req
 
@@ -1077,7 +1177,7 @@ def approve_leave_request(
         f"Your leave request ({req.start_date} to {req.end_date}) has been approved."
         + _effect_sentence(effect, req),
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     # Tell the employee by email too. Placed AFTER the commit and after the bell
     # on purpose: the decision is already durable and the notification already
@@ -1120,7 +1220,7 @@ def reject_leave_request(
         f"Your leave request ({req.start_date} to {req.end_date}) was not approved."
         + (f" Note: {data.comment}" if data.comment else ""),
         req.id,
-        f"/attendance?tab=leave&id={req.id}",
+        leave_request_path(req, view="my"),
     )
     # See the note in `approve_leave_request`: after the commit, after the bell,
     # never raises, and reached from this function alone.

@@ -49,7 +49,10 @@ export function attendanceTabs({ canManage, correctionsEnabled }: TabOptions): T
     // manager-only: an employee has no business reading everyone else's day.
     // Their own attendance lives on the Calendar tab.
     ...(canManage ? ([{ value: "history", label: "Records" }] as TabItem[]) : []),
-    { value: "leave", label: "Leave" },
+    // Label only - the `leave` KEY is the URL parameter every leave deep-link,
+    // notification and dashboard shortcut names, so it never changes with the
+    // wording (the same reason `history` still reads "Records").
+    { value: "leave", label: "Leave Requests" },
     // Leave Balance is a manager/admin-only maintenance view.
     ...(canManage ? ([{ value: "leave-balance", label: "Leave Balance" }] as TabItem[]) : []),
     // Corrections is deferred until biometric / automated attendance capture

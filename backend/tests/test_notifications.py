@@ -170,7 +170,7 @@ def test_leave_submitted_notifies_manager(
     end   = str(date.today() + timedelta(days=9))
     h = login("emp@lv.com")
     res = client.post("/api/v1/leave-requests", headers=h,
-                      json={"leave_type": "casual", "start_date": start, "end_date": end})
+                      json={"start_date": start, "end_date": end})
     assert res.status_code == 201
 
     h_mgr = login("mgr@lv.com")
@@ -351,14 +351,17 @@ def test_leave_submitted_notification_has_target_url(
     end   = str(date.today() + timedelta(days=9))
     h = login("emp@tu.com")
     res = client.post("/api/v1/leave-requests", headers=h,
-                      json={"leave_type": "casual", "start_date": start, "end_date": end})
+                      json={"start_date": start, "end_date": end})
     assert res.status_code == 201
     leave_id = res.json()["id"]
 
     h_mgr = login("mgr@tu.com")
     notifs = client.get("/api/v1/notifications", headers=h_mgr).json()["items"]
     assert len(notifs) == 1
-    assert notifs[0]["target_url"] == f"/attendance?tab=leave&id={leave_id}"
+    assert notifs[0]["target_url"] == (
+        f"/attendance/leave/{leave_id}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_project_assigned_notification_has_target_url(

@@ -3,6 +3,7 @@ import { api } from "@/lib/api-client";
 import type {
   AttendanceSummaryResponse,
   DeliverableImpactResponse,
+  LeaveClassificationPreview,
   LeaveListParams,
   LeaveRequest,
   LeaveRequestCreateBody,
@@ -45,6 +46,13 @@ export const leaveApi = {
     api.post<DeliverableImpactResponse>("/leave-requests/deliverable-impact", {
       leave_request_ids: ids,
     }),
+  /** What a range would cost and be classified as, before it is filed. The
+   *  form never works this out itself - the office week and the company
+   *  calendar are the server's. */
+  classificationPreview: (start: string, end: string) =>
+    api.get<LeaveClassificationPreview>(
+      `/leave-requests/classification-preview?start_date=${start}&end_date=${end}`,
+    ),
   attendanceSummary: (ids: string[]) =>
     api.post<AttendanceSummaryResponse>("/leave-requests/attendance-summary", {
       leave_request_ids: ids,

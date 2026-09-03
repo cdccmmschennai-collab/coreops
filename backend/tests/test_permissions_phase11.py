@@ -22,6 +22,11 @@ from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.permissions.models import PermissionRequest, PermissionStatus
 from app.modules.users.models import UserRole
 
+# Maps the old `hours` shorthand these tests use onto a period - the allowance
+# rules under test here (pending/approved/rejected/cancelled arithmetic) don't
+# care which half was picked, only how many hours it costs.
+_PERIOD_FOR_HOURS = {1: "first_half_1h", 2: "first_half_2h"}
+
 API = "/api/v1/permission-requests"
 
 # March 2027: Mon 1st through Fri 5th, next Mon the 8th. Far enough out that
@@ -72,7 +77,7 @@ def _remaining(client, login, email="emp@x.com", month: date = MON) -> int:
 def _submit(client, login, day: date, hours: int, email="emp@x.com"):
     return client.post(API, headers=login(email), json={
         "permission_date": day.isoformat(),
-        "duration_hours": hours,
+        "period": _PERIOD_FOR_HOURS[hours],
         "reason": "School run",
     })
 
@@ -167,18 +172,25 @@ def test_cancelling_an_approved_permission_restores_its_hours_once(
 ):
     """Sections 7, 12H and 12I. There is no stored counter to adjust: the row
     stops being summed, so the restore is exact by construction and the second
-    attempt is refused outright."""
+    attempt is refused outright.
+
+    The actor is the PROJECT MANAGER. Since Phase 4E an approved permission is a
+    granted absence that the employee withdraws through a cancellation request a
+    reviewer decides (`test_permission_cancellation.py`); the PM's authority to
+    withdraw one outright is unchanged, and it is that path - the one that still
+    moves hours in a single step - this test is about.
+    """
     req = _submit(client, login, MON, 2).json()
     _approve(client, login, req["id"])
     assert _remaining(client, login) == 2
 
-    first = client.post(f"{API}/{req['id']}/cancel", headers=login("emp@x.com"))
+    first = client.post(f"{API}/{req['id']}/cancel", headers=login("mgr@x.com"))
     assert first.status_code == 200, first.text
     assert first.json()["status"] == "cancelled"
     assert _remaining(client, login) == 4
 
     # 12I: a second cancellation must not restore again.
-    again = client.post(f"{API}/{req['id']}/cancel", headers=login("emp@x.com"))
+    again = client.post(f"{API}/{req['id']}/cancel", headers=login("mgr@x.com"))
     assert again.status_code == 409, again.text
     assert _remaining(client, login) == 4
 
@@ -236,12 +248,20 @@ def test_approval_is_refused_when_the_month_cannot_cover_it(client, login, team,
     assert _remaining(client, login) == 0
 
 
-@pytest.mark.parametrize("hours", [0, 3, 4, -1, 0.5, 1.5])
-def test_only_one_or_two_hours_may_be_requested(client, login, team, hours):
-    """No 30 minutes, no custom duration, no decimals - refused at the edge of the
-    API, and the DB check constraint refuses it again beneath that."""
-    res = _submit(client, login, MON, hours)
-    assert res.status_code == 422, f"{hours}: {res.text}"
+@pytest.mark.parametrize(
+    "period", ["", "3h", "half_hour", "FIRST_HALF_1H", "1_hour", None]
+)
+def test_only_the_four_period_options_may_be_requested(client, login, team, period):
+    """No 30 minutes, no custom duration, no fifth option - refused at the edge
+    of the API by the `period` enum (which is what now carries the "no
+    30-minute permission" rule `duration_hours: Literal[1, 2]` used to), and the
+    DB check constraint refuses an impossible hour count again beneath that
+    (see test_the_database_itself_refuses_a_half_hour_permission)."""
+    payload = {"permission_date": MON.isoformat(), "reason": "School run"}
+    if period is not None:
+        payload["period"] = period
+    res = client.post(API, headers=login("emp@x.com"), json=payload)
+    assert res.status_code == 422, f"{period!r}: {res.text}"
 
 
 def test_the_database_itself_refuses_a_half_hour_permission(db, team):
@@ -455,7 +475,10 @@ def test_every_permission_event_lands_in_the_central_audit_log(
 
     req = _submit(client, login, MON, 2).json()
     _approve(client, login, req["id"])
-    client.post(f"{API}/{req['id']}/cancel", headers=login("emp@x.com"))
+    # The PM's outright withdrawal - the one-step path that still moves hours
+    # since Phase 4E. See `test_permission_cancellation.py` for the audit trail
+    # of the employee's three-step request.
+    client.post(f"{API}/{req['id']}/cancel", headers=login("mgr@x.com"))
 
     rejected = _submit(client, login, TUE, 1).json()
     client.post(f"{API}/{rejected['id']}/reject", headers=login("mgr@x.com"), json={})

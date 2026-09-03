@@ -19,7 +19,7 @@ import { useUrlState } from "@/lib/use-url-state";
 
 import { useLeaveList } from "../hooks";
 import {
-  LEAVE_TYPE_LABEL,
+  LEAVE_CLASSIFICATION_LABEL,
   canCancelLeave,
   canRequestLeaveCancellation,
   leaveDetailHref,
@@ -72,7 +72,7 @@ export function LeaveHistory({ employeeId }: Props) {
             <TableHead>To</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Reason</TableHead>
-            <TableHead>Manager note</TableHead>
+            <TableHead>Note</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
@@ -93,7 +93,7 @@ export function LeaveHistory({ employeeId }: Props) {
               }
             >
               <TableCell className="font-medium">
-                {LEAVE_TYPE_LABEL[req.leave_type]}
+                {LEAVE_CLASSIFICATION_LABEL[req.classification]}
               </TableCell>
               <TableCell className="tabular">{req.start_date}</TableCell>
               <TableCell className="tabular">{req.end_date}</TableCell>

@@ -32,6 +32,7 @@ import pytest
 
 from app.modules.calendar.working_days import next_working_day, previous_working_day
 from app.modules.leave import email as leave_email
+from app.modules.leave.classification import LeaveClassification, classification_label
 from app.modules.leave.models import LeaveRequest, LeaveStatus, LeaveType
 from app.modules.leave.recipients import resolve_leave_recipients
 from app.modules.users.models import UserRole
@@ -172,15 +173,20 @@ def test_every_leave_email_carries_a_minimal_html_alternative(
         work_email="emp.15@cdccmms.com",
     )
     req = _leave(db, emp.id)
-    link = leave_email.build_link(leave_email.leave_request_path(req, is_head=False))
-    escaped_href = html_module.escape(link, quote=True)
+    # All three open the request's own detail page; they differ only in the list
+    # each reader comes back to - the approver's queue, the employee's My leave.
+    approver_link = leave_email.build_link(
+        leave_email.leave_request_path(req, view="team", queue="pending")
+    )
+    employee_link = leave_email.build_link(leave_email.leave_request_path(req, view="my"))
 
     leave_email.send_submission_email(db, emp, req)
     leave_email.send_approval_email(db, req, reviewer)
     leave_email.send_rejection_email(db, req, reviewer)
 
     assert len(recorder.calls) == 3
-    for call in recorder.calls:
+    for call, link in zip(recorder.calls, [approver_link, employee_link, employee_link]):
+        escaped_href = html_module.escape(link, quote=True)
         assert not call.get("text_only")
         _assert_no_markup(call["text_body"])
         assert "View Leave Request" in call["text_body"]
@@ -481,7 +487,7 @@ def _render(**overrides):
     kwargs = {
         "recipient_name": "Giridharan",
         "employee_name": "Karthikeyan K",
-        "leave_type": LeaveType.casual,
+        "classification": LeaveClassification.normal,
         "start_date": _START,
         "end_date": _END,
         "working_days": 2,
@@ -500,7 +506,7 @@ def test_subject_names_the_employee_and_the_action():
 def test_body_carries_the_business_facts():
     body = _render().text_body
     assert "Karthikeyan K" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026" in body
     assert "Personal reasons" in body
     assert "requires your review" in body
@@ -519,7 +525,7 @@ def test_the_submission_body_matches_the_agreed_letter_shape():
         "A new leave request has been submitted by Karthikeyan K and requires "
         "your review.",
         "",
-        "Leave Type: Casual Leave",
+        "Leave Type: Normal Leave",
         "Leave Period: 28 Aug 2026 - 29 Aug 2026 (2 days)",
         "Reason: Personal reasons",
         "",
@@ -618,7 +624,7 @@ def test_the_html_body_carries_the_same_facts_as_the_text_body():
     rendered = _render()
     text = _visible_text(rendered.html_body)
     assert "Karthikeyan K" in text
-    assert "Casual Leave" in text
+    assert "Normal Leave" in text
     assert "Personal reasons" in text
     assert "Dear Giridharan," in text
 
@@ -646,9 +652,9 @@ def test_untrusted_text_is_passed_through_verbatim_not_escaped():
     assert "&lt;" not in body
 
 
-def test_leave_type_labels_cover_every_stored_value():
-    for leave_type in LeaveType:
-        label = leave_email.leave_type_label(leave_type)
+def test_classification_labels_cover_both_values():
+    for classification in LeaveClassification:
+        label = classification_label(classification)
         assert label and "_" not in label
 
 
@@ -671,7 +677,7 @@ def _decision(**overrides):
         "approved": True,
         "employee_name": "Santhosh Kumar",
         "reviewer_name": "Giridharan",
-        "leave_type": LeaveType.casual,
+        "classification": LeaveClassification.normal,
         "start_date": _START,
         "end_date": _END,
         "working_days": 2,
@@ -694,7 +700,7 @@ def test_the_approval_body_carries_the_business_facts():
     assert "Dear Santhosh Kumar," in body
     assert "approved by" in body
     assert "Giridharan" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
     assert "View Leave Request" in body
     assert "CoreOps" in body
@@ -708,7 +714,7 @@ def test_the_approval_body_matches_the_agreed_letter_shape():
         "",
         "Your leave request has been approved by Giridharan.",
         "",
-        "Leave Type: Casual Leave",
+        "Leave Type: Normal Leave",
         "Leave Period: 28 Aug 2026 (1 day)",
         "",
         "Your leave request has been successfully approved in the CoreOps system.",
@@ -731,7 +737,7 @@ def test_the_rejection_body_carries_the_business_facts():
     assert "Dear Santhosh Kumar," in body
     assert "rejected by" in body
     assert "Giridharan" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
     # The employee's own reason, and the reviewer's answer to it.
     assert "Personal reasons" in body
@@ -813,7 +819,7 @@ def test_a_decision_html_body_carries_the_same_facts_as_the_text_body():
     approved_text = _visible_text(approved.html_body)
     assert "Dear Santhosh Kumar," in approved_text
     assert "Giridharan" in approved_text
-    assert "Casual Leave" in approved_text
+    assert "Normal Leave" in approved_text
 
     rejected = _decision(
         approved=False, reviewer_comment="Leave cannot be approved for these dates."
@@ -882,7 +888,7 @@ def test_approval_emails_the_requesting_employees_work_email(
     body = recorder.calls[0]["text_body"]
     assert "Dear Santhosh Kumar," in body
     assert "Giri D" in body
-    assert "Casual Leave" in body
+    assert "Normal Leave" in body
     assert "28 Aug 2026 - 29 Aug 2026 (2 days)" in body
 
 
@@ -1071,12 +1077,11 @@ def test_a_configured_app_base_url_produces_an_absolute_decision_link(
 
     leave_email.send_approval_email(db, req, None)
 
-    expected = f"https://coreops.cdccmms.com/attendance?tab=leave&id={req.id}"
-    assert expected in recorder.calls[0]["text_body"]
-    # The same path the in-app `leave_approved` notification deep-links to.
-    assert f"/attendance?tab=leave&id={req.id}" == leave_email.leave_request_path(
-        req, is_head=False
-    )
+    # The request's own detail page, not the Leave list: the id is what the
+    # reader was notified about, so it is what the link opens.
+    path = leave_email.leave_request_path(req, view="my")
+    assert path.startswith(f"/attendance/leave/{req.id}?from=")
+    assert f"https://coreops.cdccmms.com{path}" in recorder.calls[0]["text_body"]
 
 
 # ---------- end-to-end wiring ----------------------------------------------
@@ -1093,9 +1098,8 @@ def _recent_working_day(db) -> date:
     return previous_working_day(db, date.today() + timedelta(days=1))
 
 
-def _payload(start: date, end: date, leave_type: str = "casual") -> dict:
+def _payload(start: date, end: date) -> dict:
     return {
-        "leave_type": leave_type,
         "start_date": str(start),
         "end_date": str(end),
         "reason": "Family trip",
@@ -1148,10 +1152,14 @@ def test_submitting_emails_the_head_and_still_rings_the_bell(
     assert recorder.recipients == ["head.e2e@cdccmms.com"]
     assert "Karthikeyan K" in recorder.calls[0]["subject"]
 
-    # ...and the in-app notification is exactly as it was before this phase.
+    # ...and the in-app notification opens the request's own detail page, with
+    # the pending queue as the list behind it.
     note = db.query(Notification).filter(Notification.user_id == hu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&queue=pending&id={body['id']}"
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def test_submitting_with_no_routed_project_emails_the_pm_and_rings_their_bell(
@@ -1199,11 +1207,15 @@ def test_submitting_with_no_routed_project_emails_the_pm_and_rings_their_bell(
     assert recorder.recipients == ["pm.fallback@cdccmms.com"]
     assert "Nainar B" in recorder.calls[0]["subject"]
 
-    # ...and the bell rang for the PM's login, at the fallback rung's deep link
-    # (no `queue=` - that shape belongs to the Head rung).
+    # ...and the bell rang for the PM's login, at the SAME deep link the Head
+    # rung gets: both rungs are approvers, so both open the request itself with
+    # the pending queue behind it.
     note = db.query(Notification).filter(Notification.user_id == mu.id).one()
     assert note.type == "leave_submitted"
-    assert note.target_url == f"/attendance?tab=leave&id={body['id']}"
+    assert note.target_url == (
+        f"/attendance/leave/{body['id']}"
+        "?from=%2Fattendance%3Ftab%3Dleave%26view%3Dteam%26queue%3Dpending"
+    )
 
 
 def _decision_fixture(db, make_user, make_employee):
@@ -1372,13 +1384,15 @@ def test_the_decision_bell_still_rings_alongside_the_email(
         n.type: n
         for n in db.query(Notification).filter(Notification.user_id == eu.id).all()
     }
+    # Each decision opens the request it decided, with My leave behind it - not
+    # the list, which would leave the employee to hunt for the row.
     assert "leave_approved" in notes
     assert notes["leave_approved"].target_url == (
-        f"/attendance?tab=leave&id={first['id']}"
+        f"/attendance/leave/{first['id']}?from=%2Fattendance%3Ftab%3Dleave%26view%3Dmy"
     )
     assert "leave_rejected" in notes
     assert notes["leave_rejected"].target_url == (
-        f"/attendance?tab=leave&id={second['id']}"
+        f"/attendance/leave/{second['id']}?from=%2Fattendance%3Ftab%3Dleave%26view%3Dmy"
     )
 
     # BOTH channels, for BOTH outcomes. The bell above and the email here are the

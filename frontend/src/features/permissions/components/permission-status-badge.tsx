@@ -7,6 +7,9 @@ const VARIANT: Record<PermissionStatus, "neutral" | "success" | "warning" | "dan
   approved: "success",
   rejected: "danger",
   cancelled: "neutral",
+  // "Info" is not a variant here, so a withdrawal awaiting a decision reads as
+  // the open item it is - the same warning tone a pending request gets.
+  cancellation_requested: "warning",
 };
 
 export function PermissionStatusBadge({ status }: { status: PermissionStatus }) {
