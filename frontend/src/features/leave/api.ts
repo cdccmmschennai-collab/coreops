@@ -1,5 +1,6 @@
-import { api } from "@/lib/api-client";
+﻿import { api } from "@/lib/api-client";
 
+import type { AllRequestListParams, AllRequestPage } from "./all-requests";
 import type {
   AttendanceSummaryResponse,
   DeliverableImpactResponse,
@@ -27,6 +28,11 @@ function toQuery(p: LeaveListParams): string {
 export const leaveApi = {
   list: (params: LeaveListParams) =>
     api.get<LeaveRequestPage>(`/leave-requests?${toQuery(params)}`),
+  /** The All Requests history - leave AND permission, already scoped, filtered,
+   *  sorted and paged server-side. Takes the SAME query shape `list` does, so
+   *  the tab's existing URL filters pass straight through unchanged. */
+  allRequests: (params: AllRequestListParams) =>
+    api.get<AllRequestPage>(`/all-requests?${toQuery(params)}`),
   get: (id: string) => api.get<LeaveRequest>(`/leave-requests/${id}`),
   create: (body: LeaveRequestCreateBody) => api.post<LeaveRequest>("/leave-requests", body),
   update: (id: string, body: LeaveRequestUpdateBody) =>

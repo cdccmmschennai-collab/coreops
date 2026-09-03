@@ -3,6 +3,7 @@
 import * as React from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Check, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -27,6 +28,7 @@ import {
 } from "../hooks";
 import {
   PERMISSION_HISTORY_PATH,
+  PERMISSION_RETURN_PARAM,
   canCancelPermission,
   canRequestPermissionCancellation,
   canReviewPermission,
@@ -35,6 +37,8 @@ import {
   formatPermissionDuration,
   formatMonthLabel,
   formatShortDate,
+  permissionActorRow,
+  permissionReturnHref,
   type PermissionRequestDetail as Detail,
 } from "../types";
 import { PermissionStatusBadge } from "./permission-status-badge";
@@ -362,6 +366,15 @@ export function PermissionDetail({ id }: { id: string }) {
   const cancel = useCancelPermission();
   const requestCancellation = useRequestPermissionCancellation();
 
+  // The list that opened this page, as it looked at the time - so the back link
+  // returns to the All Requests tab with its filters and page intact, or to the
+  // employee's own Permission History, or to whichever list it actually came
+  // from. A page reached cold (a notification, an email link, a bookmark)
+  // carries no `from` and falls back to Permission History, which is exactly
+  // what this link did before Phase 4F.
+  const searchParams = useSearchParams();
+  const backHref = permissionReturnHref(searchParams.get(PERMISSION_RETURN_PARAM));
+
   if (query.isLoading) {
     return (
       <>
@@ -410,6 +423,15 @@ export function PermissionDetail({ id }: { id: string }) {
     employeeId,
   );
   const reviewed = detail.reviewed_at || detail.reviewer_name || detail.manager_comment;
+  // WHO IS HOLDING IT, or WHO DECIDED IT - one row, never both, because only one
+  // of the two questions has an answer at a time. See `permissionActorRow`.
+  const actorRow = permissionActorRow(detail);
+  // The back link names where it actually goes: Permission History is the
+  // employee's own list, anything else here is the Attendance Leave tab that
+  // hosts All Requests.
+  const backLabel = backHref.startsWith(PERMISSION_HISTORY_PATH)
+    ? "← Permission History"
+    : "← Leave";
   // Whether this reader has ANY action here. Drives the closing "nothing more to
   // do" line, which must not appear beside a card offering something.
   const hasAction =
@@ -443,11 +465,8 @@ export function PermissionDetail({ id }: { id: string }) {
 
   return (
     <>
-      <Link
-        href={PERMISSION_HISTORY_PATH}
-        className="text-sm text-primary hover:underline"
-      >
-        ← Permission History
+      <Link href={backHref} className="text-sm text-primary hover:underline">
+        {backLabel}
       </Link>
       <PageHeader
         className="mt-2"
@@ -471,13 +490,31 @@ export function PermissionDetail({ id }: { id: string }) {
                 label="Status"
                 value={<PermissionStatusBadge status={detail.status} />}
               />
+              {/* TWO DIFFERENT FACTS, ONE ROW AT A TIME.
+                  "Routed to" is who is holding a still-pending request, derived
+                  fresh from the routed project on every read. "Reviewed by" is
+                  the person who actually clicked Approve or Reject, read from
+                  the `manager_id` stamped at that moment - so a Head or PM
+                  reassigned since the decision does not rewrite history, and a
+                  pending request never borrows the routed name to look decided.
+                  Neither is ever derived from the other. */}
+              {actorRow ? (
+                <InfoRow label={actorRow.label} value={actorRow.name} />
+              ) : null}
               <InfoRow label="Requested" value={fmtDateTime(detail.created_at)} />
               {/* The review fields appear only once there is something to show,
                   so a pending request does not render a column of dashes. */}
               {reviewed ? (
                 <>
                   <InfoRow label="Reviewed" value={fmtDateTime(detail.reviewed_at)} />
-                  <InfoRow label="Reviewer" value={detail.reviewer_name ?? "-"} />
+                  {/* The reviewer's NAME is the `actorRow` above for a decided
+                      request. This row remains for the statuses that carry a
+                      recorded reviewer but deliberately show no actor - a
+                      cancelled or withdrawal-pending permission - where hiding
+                      the recorded name entirely would lose what the row knows. */}
+                  {!actorRow && detail.reviewer_name ? (
+                    <InfoRow label="Approved by" value={detail.reviewer_name} />
+                  ) : null}
                   {detail.manager_comment?.trim() ? (
                     <InfoRow label="Manager note" value={detail.manager_comment} />
                   ) : null}

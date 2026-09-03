@@ -94,7 +94,12 @@ export function LeaveManagementPanel({ employeeId, excludeSelf = false }: Props)
             count: permissionCount || undefined,
             countVariant: "warning",
           },
-          { value: "all", label: "All leave" },
+          // Phase 4F: the label changed, the KEY deliberately did not. `all` is
+          // in existing bookmarks, in every `from=` address a detail page was
+          // opened with, and in the browser's history - renaming it would break
+          // Back for no gain. The tab now holds permission rows beside leave
+          // (see `AdminLeaveList`), which is what "All Requests" means.
+          { value: "all", label: "All Requests" },
         ]}
         value={queue}
         onChange={setQueue}

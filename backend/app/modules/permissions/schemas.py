@@ -127,7 +127,24 @@ class PermissionRequestDetailOut(PermissionRequestOut):
     """
 
     employee_code: str | None = None
+    # WHO ACTUALLY RULED ON THIS REQUEST, by name - resolved from `manager_id`,
+    # which `approve_permission_request`/`reject_permission_request` stamp with
+    # the DECIDING employee at decision time (Phase 4F pinned this down; it was
+    # already true). It is deliberately NOT derived from the routed project's
+    # current Head, the requester's reporting PM or `manager_id` on the employee
+    # row: all three can change after the decision, and the page must name the
+    # person who clicked, not whoever holds the post today. Rendered as
+    # "Reviewed by". None while nobody has decided.
     reviewer_name: str | None = None
+    # WHO A STILL-PENDING REQUEST IS WAITING ON, by name (Phase 4F). Derived -
+    # not stored - by `service._attach_routed_to` from `routed_project_id`
+    # through the same `recipients.resolve_in_app_recipient` the submission
+    # notification walks, so the name shown is the person whose bell rang.
+    # DETAIL-ONLY and PENDING-ONLY, exactly as `LeaveRequestOut.routed_to_name`
+    # is: once a request is settled the question becomes "who decided this",
+    # which `reviewer_name` answers. The two are separate fields because they
+    # are separate facts - routing is current, the reviewer is historical.
+    routed_to_name: str | None = None
     balance: PermissionRequestBalanceOut
 
 

@@ -144,7 +144,18 @@ export interface PermissionRequestBalance {
 export interface PermissionRequestDetail extends PermissionRequest {
   employee_name: string | null;
   employee_code: string | null;
+  /** WHO ACTUALLY DECIDED, by name - resolved by the backend from the
+   *  `manager_id` the approve/reject endpoints stamp with the DECIDING employee.
+   *  Never the routed project's current Head and never the reporting PM: both
+   *  can change after the decision, and "Reviewed by" must name who clicked.
+   *  Null until somebody has ruled. Read through `permissionActorRow`. */
   reviewer_name: string | null;
+  /** WHO A STILL-PENDING REQUEST IS WAITING ON, by name - the routed project's
+   *  current Head, else the requester's reporting PM, derived per read by the
+   *  backend through the same chain that delivers the notification. Detail-only
+   *  and pending-only, exactly as Leave's `routed_to_name` is; null on a settled
+   *  request, where `reviewer_name` is the relevant actor instead. */
+  routed_to_name: string | null;
   balance: PermissionRequestBalance;
 }
 
@@ -269,6 +280,61 @@ export function permissionDetailPath(id: string): string {
   return `${PERMISSION_HISTORY_PATH}/${id}`;
 }
 
+// ---------- a list -> the detail page -> back to the SAME list ---------------
+//
+// The same round trip Leave has had since Phase 2, added here in Phase 4F for
+// the same reason: a permission row can now be clicked from the shared All
+// Requests table as well as from the employee's own Permission History, and
+// "back" has to mean whichever of those the reader actually came from. The
+// three pieces are deliberately named and shaped exactly as `leave/types.ts`
+// names its own, so the two round trips read alike.
+
+/** The detail page's "which list did I come from" parameter. */
+export const PERMISSION_RETURN_PARAM = "from";
+
+/**
+ * The detail URL for one request, carrying the list it is being opened FROM.
+ *
+ * `from` is the caller's own current URL, so it already encodes whatever that
+ * list was showing - the queue, the status filter, the date window, the page.
+ * This function does not know or care which: it round-trips the address rather
+ * than rebuilding it, so a filter added later needs no change here.
+ *
+ * Omitted when there is nothing to return to, which leaves the URL exactly as
+ * short as it is today for the callers that have no list behind them.
+ */
+export function permissionDetailHref(
+  requestId: string,
+  from?: string | null,
+): string {
+  const base = permissionDetailPath(requestId);
+  const target = (from ?? "").trim();
+  return target
+    ? `${base}?${PERMISSION_RETURN_PARAM}=${encodeURIComponent(target)}`
+    : base;
+}
+
+/**
+ * Resolve the `from` parameter back into the href the back link points at.
+ *
+ * Accepted only for the two pages a permission list can actually live on - the
+ * employee's own Permission History, and Attendance, which hosts the All
+ * Requests tab. A `from` is a convenience the app writes for itself, never a
+ * destination a hand-edited or forwarded URL gets to choose, so anything else
+ * (another route, an absolute URL, a protocol-relative `//host`, a look-alike
+ * such as `/attendance-x`) falls back to Permission History rather than being
+ * followed. A deep link that carries no `from` at all - an email, a bookmark, a
+ * notification - takes that same fallback, which is exactly what this link did
+ * before the parameter existed.
+ */
+export function permissionReturnHref(raw: string | null | undefined): string {
+  const target = (raw ?? "").trim();
+  const [path] = target.split("?");
+  return path === "/attendance" || path === PERMISSION_HISTORY_PATH
+    ? target
+    : PERMISSION_HISTORY_PATH;
+}
+
 // ---------- month navigation (pure string arithmetic) ------------------------
 //
 // Months are carried as `YYYY-MM-DD` on the first of the month, which is exactly
@@ -333,6 +399,86 @@ export function formatShortDate(value: string | null | undefined): string {
 /** `2h / 4h` - consumed against the month's allowance, shown above the table. */
 export function formatAvailable(remainingHours: number, allowanceHours: number): string {
   return `${formatHours(remainingHours)} / ${formatHours(allowanceHours)}`;
+}
+
+// ---------- who decided, and who is holding it ------------------------------
+
+/**
+ * The "By" column of the All Requests table: who ruled on this permission.
+ *
+ * ONLY A SETTLED DECISION HAS AN ACTOR. Approved and rejected name the reviewer
+ * who took that decision - the person the backend stamped in `manager_id` when
+ * they clicked, never the routed recipient. Every other status returns null and
+ * the table renders a dash:
+ *
+ *   pending                 nobody has decided yet
+ *   cancellation_requested  the standing approval is under review again
+ *   cancelled               deliberately blank
+ *
+ * `cancelled` is the case worth stating, because the underlying row is NOT
+ * blank. A permission that was approved and then withdrawn keeps its APPROVER in
+ * `manager_id` - that is the honest record of what happened, and the backend is
+ * not asked to forget it - but the cancellation itself is a different act by a
+ * possibly different person, which nothing currently stores. Naming the approver
+ * against "Cancelled" would name the wrong actor, so this returns null rather
+ * than guessing.
+ *
+ * Character for character the rule `leave/types.ts::leaveDecisionActor` applies,
+ * because the two kinds sit in one table and a reader must not have to know
+ * which kind a row is to read its "By" cell.
+ */
+export function permissionDecisionActor(
+  req: { status: PermissionStatus; manager_name?: string | null },
+): string | null {
+  if (req.status !== "approved" && req.status !== "rejected") return null;
+  return req.manager_name?.trim() || null;
+}
+
+/**
+ * The ONE actor/routing row Permission Detail shows under Status, or null for no
+ * row at all.
+ *
+ * It answers a different question per status, which is why it is one row and not
+ * two:
+ *
+ *   pending    Routed to     who is holding this request right now
+ *   approved   Reviewed by   who granted it
+ *   rejected   Reviewed by   who refused it
+ *
+ * Everything else returns null and the card renders nothing there:
+ *
+ *   cancelled               no cancellation actor is recorded anywhere;
+ *                           `manager_id` on a cancelled row is its former
+ *                           APPROVER, so naming them would be wrong.
+ *   cancellation_requested  the standing approval is under review again;
+ *                           neither question has a settled answer.
+ *
+ * INFORMATIONAL, NEVER PERMISSION. This is what the reader is TOLD, and it is
+ * deliberately shown to the request's own author too - an employee is entitled
+ * to know who their request went to. What the reader may DO is
+ * `canReviewPermission`, which is unrelated and unchanged.
+ *
+ * The decided half goes through `permissionDecisionActor` rather than reading
+ * `reviewer_name` again, so the detail page and the All Requests "By" column
+ * cannot disagree about which statuses have an actor.
+ */
+export interface PermissionActorRow {
+  label: string;
+  name: string;
+}
+
+export function permissionActorRow(
+  req: Pick<PermissionRequestDetail, "status" | "reviewer_name" | "routed_to_name">,
+): PermissionActorRow | null {
+  if (req.status === "pending") {
+    const routedTo = req.routed_to_name?.trim();
+    return routedTo ? { label: "Routed to", name: routedTo } : null;
+  }
+  const actor = permissionDecisionActor({
+    status: req.status,
+    manager_name: req.reviewer_name,
+  });
+  return actor ? { label: "Reviewed by", name: actor } : null;
 }
 
 // ---------- detail-page action visibility -----------------------------------

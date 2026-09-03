@@ -1,4 +1,4 @@
-"""FastAPI application factory.
+﻿"""FastAPI application factory.
 
 V0 wires configuration, CORS, the uniform error envelope, and the health
 router. Domain routers are registered in later phases.
@@ -28,6 +28,7 @@ from app.modules.attendance.router import (
 )
 from app.modules.auth.router import router as auth_router
 from app.modules.employees.router import router as employees_router
+from app.modules.leave.all_requests import router as all_requests_router
 from app.modules.leave.router import router as leave_router
 from app.modules.leave_balances.router import router as leave_balances_router
 from app.modules.offices.router import router as offices_router
@@ -100,6 +101,10 @@ def create_app() -> FastAPI:
     app.include_router(report_compliance_router, prefix=settings.API_V1_PREFIX)
     app.include_router(offices_router, prefix=settings.API_V1_PREFIX)
     app.include_router(leave_router, prefix=settings.API_V1_PREFIX)
+    # Phase 4F: the All Requests history (leave + permission), read-only. Its
+    # own router rather than a route on `leave_router`, so neither module's path
+    # table changes and `/leave-requests/{req_id}` keeps its existing ordering.
+    app.include_router(all_requests_router, prefix=settings.API_V1_PREFIX)
     app.include_router(leave_balances_router, prefix=settings.API_V1_PREFIX)
     # Permission (Phase 11) = 1h/2h of sanctioned absence inside a working day,
     # against a 4h monthly allowance. Not RBAC.
@@ -127,7 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(biometric_ingestion_router, prefix=settings.API_V1_PREFIX)
     app.include_router(biometric_admin_router, prefix=settings.API_V1_PREFIX)
 
-    # Temporary notification debug endpoints — mounted only when explicitly
+    # Temporary notification debug endpoints â€” mounted only when explicitly
     # enabled (and each route still requires the project_manager role).
     if settings.ENABLE_DEBUG_ENDPOINTS:
         from app.modules.debug.router import router as debug_router

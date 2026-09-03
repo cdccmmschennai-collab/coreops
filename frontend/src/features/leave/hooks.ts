@@ -2,12 +2,35 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { leaveApi } from "./api";
 import { leaveKeys } from "./keys";
+import type { AllRequestListParams } from "./all-requests";
 import type {
   LeaveListParams,
   LeaveRequestCreateBody,
   LeaveRequestUpdateBody,
   LeaveReviewBody,
 } from "./types";
+
+/** The All Requests history - leave AND permission rows, one paged list.
+ *
+ *  `staleTime: 0` rather than the app's 30s default, because this one query is
+ *  fed by TWO features' mutations: a leave decision invalidates `leaveKeys.all`
+ *  and reaches it, but a permission decision invalidates the permission root and
+ *  does not. The reader always arrives here by navigating - opening the tab, or
+ *  coming back from a detail page after deciding - so refetching on mount closes
+ *  that gap without polling, and `placeholderData` keeps the old rows on screen
+ *  meanwhile so there is no skeleton flash. */
+export function useAllRequests(
+  params: AllRequestListParams,
+  options?: { enabled?: boolean },
+) {
+  return useQuery({
+    queryKey: leaveKeys.allRequests(params),
+    queryFn: () => leaveApi.allRequests(params),
+    placeholderData: (prev) => prev,
+    staleTime: 0,
+    enabled: options?.enabled ?? true,
+  });
+}
 
 export function useLeaveList(params: LeaveListParams, options?: { enabled?: boolean }) {
   return useQuery({

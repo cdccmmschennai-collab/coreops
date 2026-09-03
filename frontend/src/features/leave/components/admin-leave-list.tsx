@@ -22,21 +22,23 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
+import { PermissionStatusBadge } from "@/features/permissions/components/permission-status-badge";
 import { useUrlState } from "@/lib/use-url-state";
 
-import { useLeaveList } from "../hooks";
 import {
-  LEAVE_CLASSIFICATION_LABEL,
-  leaveDecisionActor,
-  leaveDetailHref,
-} from "../types";
-import type { LeaveStatus } from "../types";
+  allRequestActor,
+  allRequestDetailHref,
+  allRequestTypeLabel,
+  type AllRequestStatus,
+} from "../all-requests";
+import { useAllRequests } from "../hooks";
 import { LeaveStatusBadge } from "./leave-status-badge";
 
 const LIMIT = 20;
 const ALL = "__all__";
 
-const STATUS_OPTIONS: { value: LeaveStatus | ""; label: string }[] = [
+/** The five statuses both kinds share, so one filter serves the whole table. */
+const STATUS_OPTIONS: { value: AllRequestStatus | ""; label: string }[] = [
   { value: "", label: "All statuses" },
   { value: "pending", label: "Pending" },
   { value: "approved", label: "Approved" },
@@ -47,30 +49,45 @@ const STATUS_OPTIONS: { value: LeaveStatus | ""; label: string }[] = [
 
 interface Props {
   /** True only when this panel is reused inside a Project Head's "Team
-   *  approvals" tab — excludes the Head's own requests from the "All leave"
-   *  queue, same as the other two queues. */
+   *  approvals" tab — excludes the Head's own requests from All Requests, same
+   *  as the other three queues. */
   excludeSelf?: boolean;
 }
 
-/** Admin-level full leave list with filters — the "All leave" queue.
+/** The "All Requests" tab: leave AND permission history, one filtered table.
+ *
+ *  IT WAS "ALL LEAVE" UNTIL PHASE 4F, and everything about how it is addressed
+ *  is deliberately unchanged — the tab is still `queue=all`, the filters are
+ *  still `ls` / `lf` / `lt` / `lo`, and the row still hands the detail page this
+ *  list's own live address. Only the label and the rows changed, so an existing
+ *  bookmark, a Back navigation and the round trip through a detail page all keep
+ *  working exactly as they did.
+ *
+ *  ONE CALL, NOT TWO MERGED HERE. `GET /all-requests` returns both kinds already
+ *  scoped, filtered, sorted and paged (see `backend/app/modules/leave/
+ *  all_requests.py`). Two independently paged lists cannot be merged into one
+ *  correctly paged list in the browser, and the way that fails is by silently
+ *  dropping rows — which is the one thing a history view must not do.
+ *
+ *  WHICH ROWS EACH READER SEES IS NOT DECIDED HERE. Each kind keeps its own
+ *  server-side authorisation: a project manager sees everything, a Project Head
+ *  sees their own rows plus those routed to a project THEY head, and nobody
+ *  else's. Nothing is filtered client-side.
  *
  *  Filters live in the URL through `useUrlState`, the SAME mechanism the queue
- *  tab strip above this panel already uses. That is not a preference: this list
- *  used to write the URL with `router.replace` built from Next's
- *  `useSearchParams`, which never sees the `history.replaceState` `useUrlState`
- *  performs - so picking a status here rebuilt the address from a snapshot that
- *  no longer had `queue=all` in it and threw the reader back to the Pending
- *  queue. One mechanism, and the two cannot disagree.
- *
- *  Every row opens the shared Leave Detail page, carrying this list's own live
- *  address so "← Leave" returns to All leave with these filters intact. */
+ *  tab strip above this panel uses. That is not a preference: this list used to
+ *  write the URL with `router.replace` built from Next's `useSearchParams`,
+ *  which never sees the `history.replaceState` `useUrlState` performs - so
+ *  picking a status here rebuilt the address from a snapshot that no longer had
+ *  `queue=all` in it and threw the reader back to the Pending queue. One
+ *  mechanism, and the two cannot disagree. */
 export function AdminLeaveList({ excludeSelf = false }: Props) {
   const router = useRouter();
   const { byId: empById } = useEmployeeOptions();
 
   const [status, setStatus] = useUrlState("ls", "");
   const [employeeId] = useUrlState("le", "");
-  // The leave-period window. Either end may stand alone.
+  // The absence window. Either end may stand alone.
   const [fromDate, setFromDate] = useUrlState("lf", "");
   const [toDate, setToDate] = useUrlState("lt", "");
   const [rawOffset, setOffset] = useUrlState("lo", "0");
@@ -83,13 +100,14 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
     setOffset("0");
   }
 
-  const query = useLeaveList({
-    status: status as LeaveStatus | "",
+  const query = useAllRequests({
+    status: status as AllRequestStatus | "",
     employee_id: employeeId || undefined,
     // Sent to the API, not applied here: the list is paged, so a window filtered
     // in the browser would only ever filter the 20 rows this page happens to
-    // hold. `from`/`to` are matched against the LEAVE PERIOD as an overlap by
-    // `leave/service.list_leave_requests`.
+    // hold. A leave matches the window by OVERLAP, a permission by its single
+    // date — each kind keeps the meaning its own list has always given these
+    // two parameters.
     from: fromDate || undefined,
     to: toDate || undefined,
     limit: LIMIT,
@@ -137,7 +155,7 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
       {query.isLoading ? (
         <TableSkeleton rows={5} cols={7} />
       ) : items.length === 0 ? (
-        <EmptyState title="No leave requests" description="No requests match the current filters." />
+        <EmptyState title="No requests" description="No requests match the current filters." />
       ) : (
         <>
           <Table>
@@ -150,25 +168,29 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
                 <TableHead>Status</TableHead>
                 <TableHead>Reason</TableHead>
                 {/* "By", not "Approved by": this table also holds rejected,
-                    cancelled and pending rows. */}
+                    cancelled and pending rows, of both kinds. */}
                 <TableHead>By</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((req) => (
                 <TableRow
-                  key={req.id}
+                  key={`${req.kind}-${req.id}`}
                   className="cursor-pointer hover:bg-muted/40"
-                  // Carries THIS list's own live address - queue, status, date
-                  // window, page - so "← Leave" on the detail page comes back to
-                  // All leave exactly as it was left. Read from
+                  // A leave row opens Leave Detail, a permission row opens
+                  // Permission Detail - the same two pages their own queues
+                  // open, so no third layout exists to keep in step.
+                  //
+                  // Both carry THIS list's own live address - queue, status,
+                  // date window, page - so the detail page's back link comes
+                  // back to All Requests exactly as it was left. Read from
                   // `window.location` rather than `useSearchParams` because the
                   // filters above are written with `history.replaceState`, which
                   // Next's snapshot does not see.
                   onClick={() =>
                     router.push(
-                      leaveDetailHref(
-                        req.id,
+                      allRequestDetailHref(
+                        req,
                         `${window.location.pathname}${window.location.search}`,
                       ),
                     )
@@ -179,15 +201,24 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
                       empById.get(req.employee_id) ??
                       req.employee_id.slice(0, 8)}
                   </TableCell>
-                  <TableCell>{LEAVE_CLASSIFICATION_LABEL[req.classification]}</TableCell>
-                  <TableCell className="tabular">{req.start_date}</TableCell>
-                  <TableCell className="tabular">{req.end_date}</TableCell>
-                  <TableCell><LeaveStatusBadge status={req.status} /></TableCell>
+                  <TableCell>{allRequestTypeLabel(req)}</TableCell>
+                  {/* A permission is a single day, so its two cells hold the
+                      same date - the shape the table already had, filled
+                      honestly rather than left blank. */}
+                  <TableCell className="tabular">{req.from_date}</TableCell>
+                  <TableCell className="tabular">{req.to_date}</TableCell>
+                  <TableCell>
+                    {req.kind === "leave" ? (
+                      <LeaveStatusBadge status={req.status} />
+                    ) : (
+                      <PermissionStatusBadge status={req.status} />
+                    )}
+                  </TableCell>
                   <TableCell className="max-w-[160px] truncate text-muted-foreground">
                     {req.reason ?? "—"}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {leaveDecisionActor(req) ?? "—"}
+                    {allRequestActor(req) ?? "—"}
                   </TableCell>
                 </TableRow>
               ))}

@@ -570,6 +570,38 @@ def _attach_employee_names(db: Session, rows: list[PermissionRequest]) -> None:
         r.employee_name = names.get(r.employee_id)
 
 
+def _routed_to_name(db: Session, req: PermissionRequest) -> str | None:
+    """Who a STILL-PENDING request is waiting on, by name (Phase 4F).
+
+    Routing is not a column. `routed_project_id` is, but the PERSON is derived
+    from it fresh on every read by `recipients.resolve_in_app_recipient` - the
+    routed project's CURRENT Head, else the requester's reporting PM, first one
+    with a login. Deriving rather than storing is the point: a Head reassigned
+    after the request was filed is honoured here exactly as it is at approval
+    time, and no migration is needed to say who is holding a request.
+
+    IT IS THE SAME FUNCTION THE NOTIFICATION WALKS, so an employee reading
+    "Routed to ..." is being told the name of the person whose bell actually rang.
+
+    PENDING ONLY. Once a request is approved, rejected or cancelled the routing
+    is spent and the question the page asks becomes "who decided this", which
+    `reviewer_name` - the actual actor stamped in `manager_id` - answers. A
+    request awaiting a CANCELLATION decision is left alone too: its standing
+    approval already names its approver.
+
+    None is a legitimate answer - an unrouted request whose requester has no
+    reporting PM, or one whose only candidate has no login - and the page simply
+    omits the row. Same rule, same reason, as `leave/service.py::_attach_routed_to`.
+    """
+    if req.status != PermissionStatus.pending:
+        return None
+    employee = db.get(Employee, req.employee_id)
+    if employee is None:
+        return None
+    recipient = permission_recipients.resolve_in_app_recipient(db, employee, req)
+    return recipient.employee.full_name if recipient is not None else None
+
+
 def _request_balance(
     db: Session, req: PermissionRequest
 ) -> PermissionRequestBalanceOut:
@@ -629,7 +661,13 @@ def get_permission_detail(
     return PermissionRequestDetailOut(
         **PermissionRequestOut.model_validate(req).model_dump(),
         employee_code=employee.employee_code if employee else None,
+        # THE ACTUAL DECISION ACTOR, from `manager_id` - the employee the
+        # approve/reject endpoints stamp at decision time. Never the routed
+        # project's current Head and never the reporting PM: both can change
+        # after the decision, and "Reviewed by" must name who clicked.
         reviewer_name=reviewer.full_name if reviewer else None,
+        # A DIFFERENT FACT: who the request is routed to right now, pending only.
+        routed_to_name=_routed_to_name(db, req),
         balance=_request_balance(db, req),
     )
 
