@@ -162,13 +162,15 @@ export function LeaveCancellationReviewPanel({ excludeSelf = false }: Props) {
       if (row.kind === "leave") {
         if (decision === "approve") {
           await approveLeave.mutateAsync(row.id);
-          toast.success("Leave cancellation approved. Attendance was not changed.", {
-            action: {
-              label: "Review attendance",
-              onClick: () =>
-                router.push(`/attendance?tab=history&employee=${row.employeeId}`),
-            },
-          });
+          // NO toast here, deliberately. It said "Attendance was not changed"
+          // and offered a "Review attendance" shortcut, which stopped being true
+          // when the approval started reversing the day itself: the half-day or
+          // leave row is removed and the balance credited back by
+          // `effects.reverse_leave_approved`. Telling a reviewer to go and fix an
+          // attendance record the system had already put right was worse than
+          // saying nothing, so it says nothing - the row leaving the queue is the
+          // confirmation. The rejection branch below keeps its message, which is
+          // still accurate.
         } else {
           await rejectLeave.mutateAsync(row.id);
           toast.success("Cancellation request rejected. The approved leave remains active.");

@@ -106,6 +106,26 @@ test("the Cancellation requests queue still offers both reviewer actions", () =>
   assert.ok(queue.includes("useRejectLeaveCancellation"));
 });
 
+test("approving a leave cancellation announces nothing about attendance", () => {
+  const queue = code(QUEUE);
+  // The toast claimed "Attendance was not changed" and offered a shortcut to go
+  // and change it. Both stopped being true once the approval began reversing the
+  // day: `reverse_leave_approved` removes the `half_day` / `leave` row and
+  // credits the balance back. It is gone rather than reworded - the row leaving
+  // the queue is the confirmation.
+  for (const gone of [
+    "Attendance was not changed",
+    "Review attendance",
+    "tab=history&employee=",
+  ]) {
+    assert.ok(!queue.includes(gone), `the queue must not carry "${gone}"`);
+  }
+  // The other three decisions keep the messages they had, which are accurate.
+  assert.ok(queue.includes("The approved leave remains active."));
+  assert.ok(queue.includes("Permission cancellation approved."));
+  assert.ok(queue.includes("The approved permission remains active."));
+});
+
 // ---------- 2. the detail page no longer duplicates it ----------------------
 
 test("the detail page carries no cancellation-request card at all", () => {
