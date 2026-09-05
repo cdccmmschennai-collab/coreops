@@ -10,8 +10,11 @@ from app.modules.leave.models import LeaveHalfDayPeriod, LeaveStatus
 _REASON_MAX = 2000
 _COMMENT_MAX = 1000
 
+# Worded with the two labels the Leave Request dropdown actually offers, so a
+# reader is told to pick something they can see on screen.
 _HALF_DAY_NEEDS_A_HALF = (
-    "Choose which half of the day the leave covers - 1st Half or 2nd Half."
+    "Choose which half of the day the leave covers - Half Day (First) or "
+    "Half Day (Second)."
 )
 
 _HALF_DAY_IS_ONE_DAY = (

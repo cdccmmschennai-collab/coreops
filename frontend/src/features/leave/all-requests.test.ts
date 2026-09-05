@@ -51,6 +51,7 @@ function leaveRow(over: Partial<AllRequest> = {}): AllRequest {
     created_at: "2027-02-01T10:00:00Z",
     classification: "normal",
     working_days: 2,
+    half_day_period: null,
     period: null,
     duration_hours: null,
     ...over,
@@ -72,6 +73,7 @@ function permissionRow(over: Partial<AllRequest> = {}): AllRequest {
     created_at: "2027-02-01T11:00:00Z",
     classification: null,
     working_days: null,
+    half_day_period: null,
     period: "first_half_2h",
     duration_hours: 2,
     ...over,
@@ -83,6 +85,24 @@ function permissionRow(over: Partial<AllRequest> = {}): AllRequest {
 test("a leave row's Type is unchanged from the old All-leave table", () => {
   assert.equal(allRequestTypeLabel(leaveRow()), "Normal");
   assert.equal(allRequestTypeLabel(leaveRow({ classification: "special" })), "Special");
+});
+
+test("a half-day leave row names the half, not the classification it derives", () => {
+  // A half day costs one working day, so the backend classifies it Normal - and
+  // the row carries that classification. The half is the more specific fact and
+  // must win here, or this table reports a half-day request as ordinary leave.
+  assert.equal(
+    allRequestTypeLabel(
+      leaveRow({ classification: "normal", half_day_period: "first_half" }),
+    ),
+    "Half Day (First)",
+  );
+  assert.equal(
+    allRequestTypeLabel(
+      leaveRow({ classification: "normal", half_day_period: "second_half" }),
+    ),
+    "Half Day (Second)",
+  );
 });
 
 test("a permission row names its kind and its selected option, compactly", () => {

@@ -26,6 +26,14 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+# Pure and dependency-free (it imports `enum` and nothing else), so composing the
+# Type a reader sees out of BOTH facts can live beside the half-day wording it
+# needs rather than being re-derived at each display site. One-directional:
+# `classification.py` knows nothing about this module.
+from app.modules.leave.classification import (
+    LeaveClassification,
+    classification_label,
+)
 from app.shared.base import TimestampMixin, UUIDMixin
 
 
@@ -92,14 +100,17 @@ HALF_DAY_LEAVE_FRACTION = Decimal("0.5")
 # variant is ever shown as. The technical member names (`first_half`,
 # `second_half`) and the word HALF_DAY never reach a screen or an email.
 #
-# The separator is a MIDDLE DOT (U+00B7), matching the compact Type labels the
-# All Requests table already uses for permissions. It is deliberately not an em
-# or en dash: the house rule across CoreOps is a plain ASCII hyphen or a dot,
-# never a dash - mirror this map in `frontend/src/features/leave/types.ts::
-# LEAVE_HALF_DAY_LABEL` if either is ever touched.
+# PRODUCT-FIXED WORDING. These two strings are the ones the Leave Request
+# dropdown offers, character for character; they are not a house style this
+# module gets to restyle. Phase 1 shipped "Half Day · 1st Half" / "· 2nd Half"
+# and Phase 2 replaced both - so no dot separator, no "1st"/"2nd", and (as
+# always across CoreOps) no em or en dash. Mirror this map in
+# `frontend/src/features/leave/types.ts::LEAVE_HALF_DAY_LABEL` if either is ever
+# touched: the form and the backend must not be able to disagree about what the
+# employee picked.
 HALF_DAY_PERIOD_LABELS: dict[LeaveHalfDayPeriod, str] = {
-    LeaveHalfDayPeriod.first_half: "Half Day · 1st Half",
-    LeaveHalfDayPeriod.second_half: "Half Day · 2nd Half",
+    LeaveHalfDayPeriod.first_half: "Half Day (First)",
+    LeaveHalfDayPeriod.second_half: "Half Day (Second)",
 }
 
 
@@ -111,6 +122,61 @@ def half_day_period_label(period: LeaveHalfDayPeriod | None) -> str | None:
     already has. See `classification.classification_label`.
     """
     return HALF_DAY_PERIOD_LABELS.get(period) if period is not None else None
+
+
+# What a half-day leave's DURATION reads as, everywhere a duration is shown.
+# One string, because both variants cost `HALF_DAY_LEAVE_FRACTION` exactly - the
+# same reason there is one fraction and not a per-variant table. Singular "day"
+# on purpose: half of one day is not "0.5 days".
+HALF_DAY_DURATION_LABEL = "0.5 day"
+
+
+def leave_type_label(
+    classification: LeaveClassification,
+    period: LeaveHalfDayPeriod | None,
+) -> str:
+    """THE TYPE A READER SEES, composed from both facts in one place.
+
+    THE DISPLAY PRECEDENCE, and the whole of it::
+
+        half_day_period == first_half   ->  "Half Day (First)"
+        half_day_period == second_half  ->  "Half Day (Second)"
+        otherwise                       ->  the Normal/Special label, unchanged
+
+    A half-day request has a `classification` too - one working day is <= 3, so
+    it classifies Normal - and that is precisely the bug this composer exists to
+    stop: every Type surface read `classification` alone, so a half day was
+    displayed, listed and emailed as "Normal". The half is the more specific
+    fact, so it wins; nothing about Normal/Special changes for the requests that
+    do not have one.
+
+    The half's wording comes from `HALF_DAY_PERIOD_LABELS` and the full-day
+    wording from `classification.CLASSIFICATION_LABELS`, so neither is respelled
+    here and neither can drift from the form the employee chose in.
+    """
+    half = half_day_period_label(period)
+    return half if half is not None else classification_label(classification)
+
+
+def leave_duration_label(
+    working_days: int, period: LeaveHalfDayPeriod | None
+) -> str:
+    """`0.5 day` for a half-day leave, otherwise the working-day count.
+
+    The count comes from `effects.leave_working_days` for every full-day
+    request, exactly as before - this only intercepts the one case where that
+    count is misleading. A half-day request covers one working day, so the
+    honest count is 1 and the honest DURATION is half of it; showing "1 day"
+    against a request the employee filed as half a day is what the reader
+    reported as wrong.
+
+    Phase 3 is what makes the leave pool agree with this line
+    (`HALF_DAY_LEAVE_FRACTION` on the attendance record); nothing here prices
+    anything.
+    """
+    if period is not None:
+        return HALF_DAY_DURATION_LABEL
+    return f"{working_days} {'day' if working_days == 1 else 'days'}"
 
 
 class LeaveStatus(str, enum.Enum):

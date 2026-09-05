@@ -772,6 +772,21 @@ def create_leave_request(
         leave_type=RETIRED_LEAVE_TYPE,
         start_date=data.start_date,
         end_date=data.end_date,
+        # PHASE 2: the employee's choice of half, carried straight through.
+        #
+        # This is the ONLY line half-day leave adds to creation. Everything
+        # below and after it is deliberately untouched: the same overlap rule
+        # refuses it, `routing.resolve_routed_project` resolves the same project
+        # from the same start date, the same Project Head is notified and
+        # emailed, and the same audit trail records it. A half-day leave is a
+        # leave request that happens to say which half of its one day it covers
+        # - not a second kind of request with a path of its own.
+        #
+        # None for every full-day request, which is every request that does not
+        # choose a half, so nothing about the existing flow changes shape.
+        # `LeaveRequestCreate` has already refused a half that spans a range, so
+        # a value here always arrives with `start_date == end_date`.
+        half_day_period=data.half_day_period,
         reason=data.reason,
         status=LeaveStatus.pending,
         routed_project_id=routing.resolve_routed_project(db, me.id, data.start_date),

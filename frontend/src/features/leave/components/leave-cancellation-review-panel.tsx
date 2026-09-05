@@ -37,10 +37,10 @@ import {
   useRejectLeaveCancellation,
 } from "../hooks";
 import {
-  LEAVE_CLASSIFICATION_LABEL,
   attendanceSummaryLabel,
   formatLeavePeriod,
   leaveDetailHref,
+  leaveTypeLabel,
   type LeaveRequest,
 } from "../types";
 
@@ -314,10 +314,11 @@ function toLeaveRow(req: LeaveRequest): QueueRow {
     kind: "leave",
     employeeId: req.employee_id,
     employeeName: req.employee_name,
-    // "Leave - Normal" / "Leave - Special": the classification this column has
-    // always shown, prefixed with the kind so the two halves of the queue are
-    // distinguishable at a glance.
-    typeLabel: `Leave - ${LEAVE_CLASSIFICATION_LABEL[req.classification]}`,
+    // "Leave - Normal" / "Leave - Special", prefixed with the kind so the two
+    // halves of the queue are distinguishable at a glance - and "Leave - Half
+    // Day (First)" for a half-day request, through the same precedence every
+    // other Type cell applies.
+    typeLabel: `Leave - ${leaveTypeLabel(req)}`,
     from: req.start_date,
     to: req.end_date,
     createdAt: req.created_at,

@@ -19,10 +19,10 @@ import { useUrlState } from "@/lib/use-url-state";
 
 import { useLeaveList } from "../hooks";
 import {
-  LEAVE_CLASSIFICATION_LABEL,
   canCancelLeave,
   canRequestLeaveCancellation,
   leaveDetailHref,
+  leaveTypeLabel,
   type LeaveRequest,
 } from "../types";
 import { LeaveCancelDialog, type CancelDialogMode } from "./leave-cancel-dialog";
@@ -92,9 +92,10 @@ export function LeaveHistory({ employeeId }: Props) {
                 )
               }
             >
-              <TableCell className="font-medium">
-                {LEAVE_CLASSIFICATION_LABEL[req.classification]}
-              </TableCell>
+              {/* Half Day (First)/(Second) when the employee filed one, and
+                  the Normal/Special classification for every other request -
+                  the same precedence every other Type cell applies. */}
+              <TableCell className="font-medium">{leaveTypeLabel(req)}</TableCell>
               <TableCell className="tabular">{req.start_date}</TableCell>
               <TableCell className="tabular">{req.end_date}</TableCell>
               <TableCell>

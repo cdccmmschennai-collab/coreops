@@ -3,11 +3,12 @@
 WHAT THIS PHASE ADDS, AND WHAT IT DELIBERATELY DOES NOT
 =======================================================
 Migration 0084 puts `half_day_period` on `leave_requests` and
-`LeaveRequestCreate` validates it. That is all. Nothing downstream is wired up
-yet - `create_leave_request` does not store the value, no approval writes a
-`half_day` attendance row, no ledger figure moves and no screen shows the
-variant. Those are later phases, and the test at the very bottom of this file
-pins the boundary explicitly so it is a decision rather than an oversight.
+`LeaveRequestCreate` validates it. Phase 2 has since wired creation up, so the
+value now survives a POST (see the flipped test at the very bottom, and
+`test_leave_half_day_request_creation.py` for the whole creation flow). What is
+still NOT wired up: no approval writes a `half_day` attendance row, no ledger
+figure moves and no balance changes. Those are Phase 3, and the boundary is
+pinned explicitly so it stays a decision rather than an oversight.
 
 So every assertion here is about the DATA MODEL and the SCHEMA:
 
@@ -112,7 +113,7 @@ def test_a_half_day_request_that_names_no_half_is_rejected():
     recording one, and neither half may be chosen on the requester's behalf."""
     with pytest.raises(ValidationError) as err:
         LeaveRequestCreate(**_body(half_day=True))
-    assert "1st Half or 2nd Half" in str(err.value)
+    assert "Half Day (First) or Half Day (Second)" in str(err.value)
 
 
 def test_an_explicit_null_half_is_still_incomplete():
@@ -278,9 +279,12 @@ def test_the_response_schema_serialises_a_stored_half(db, team):
 # ======================================================================
 
 def test_each_variant_has_the_exact_user_facing_label():
+    """PRODUCT-FIXED WORDING, pinned character for character. Phase 1's
+    "Half Day · 1st Half" / "· 2nd Half" were replaced in Phase 2; these two are
+    what the Leave Request dropdown offers and what a reader is ever shown."""
     assert HALF_DAY_PERIOD_LABELS == {
-        LeaveHalfDayPeriod.first_half: "Half Day · 1st Half",
-        LeaveHalfDayPeriod.second_half: "Half Day · 2nd Half",
+        LeaveHalfDayPeriod.first_half: "Half Day (First)",
+        LeaveHalfDayPeriod.second_half: "Half Day (Second)",
     }
 
 
@@ -292,23 +296,23 @@ def test_no_technical_name_ever_reaches_a_label():
         assert "_" not in label
 
 
-def test_the_separator_is_a_middle_dot_not_a_dash():
-    """The house rule across CoreOps: a plain hyphen or a dot, never an em or en
-    dash. Pinned so a copy-paste from a document that autocorrects punctuation
-    fails here rather than reaching a screen."""
+def test_no_label_carries_a_dash_or_the_old_separator():
+    """The house rule across CoreOps: never an em or en dash. Pinned so a
+    copy-paste from a document that autocorrects punctuation fails here rather
+    than reaching a screen. The middle dot Phase 1 used is refused too - the
+    parenthesised form replaced it and neither spelling may drift back."""
     for label in HALF_DAY_PERIOD_LABELS.values():
-        assert " · " in label, label
         assert "—" not in label and "–" not in label, label
+        assert "·" not in label, label
+        assert "1st" not in label and "2nd" not in label, label
 
 
 def test_a_full_day_leave_has_no_variant_label():
     """None, not a placeholder: a request with no half is not a half-day leave,
     and its Type is the Normal/Special classification the caller already has."""
     assert half_day_period_label(None) is None
-    assert half_day_period_label(LeaveHalfDayPeriod.first_half) == "Half Day · 1st Half"
-    assert (
-        half_day_period_label(LeaveHalfDayPeriod.second_half) == "Half Day · 2nd Half"
-    )
+    assert half_day_period_label(LeaveHalfDayPeriod.first_half) == "Half Day (First)"
+    assert half_day_period_label(LeaveHalfDayPeriod.second_half) == "Half Day (Second)"
 
 
 def test_both_variants_are_worth_exactly_one_half_day():
@@ -318,16 +322,16 @@ def test_both_variants_are_worth_exactly_one_half_day():
 
 
 # ======================================================================
-# The Phase 1 boundary, stated out loud
+# The phase boundary, stated out loud
 # ======================================================================
 
-def test_phase_1_does_not_yet_carry_the_half_through_creation(client, login, team):
-    """DELIBERATE, AND TEMPORARY. The data model accepts a half; the service does
-    not store one yet, and no approval writes a `half_day` attendance row.
+def test_creation_now_carries_the_half_through(client, login, team):
+    """THE PHASE 2 FLIP. Phase 1 pinned this expectation at `is None` because
+    `create_leave_request` dropped the value on the floor; Phase 2 stores it, so
+    the same request now comes back saying which half it is.
 
-    Pinned so the boundary is a decision rather than a silent gap - Phase 2
-    wires `create_leave_request` up and this expectation flips to
-    `== "first_half"`.
+    The rest of the boundary still stands: no approval writes a `half_day`
+    attendance row and no ledger figure moves. Those are Phase 3.
     """
     res = client.post(
         API,
@@ -341,7 +345,7 @@ def test_phase_1_does_not_yet_carry_the_half_through_creation(client, login, tea
         },
     )
     assert res.status_code == 201, res.text
-    assert res.json()["half_day_period"] is None
+    assert res.json()["half_day_period"] == "first_half"
 
 
 def test_an_incomplete_half_day_request_is_refused_at_the_api(client, login, team):

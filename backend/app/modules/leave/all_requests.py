@@ -79,7 +79,7 @@ from app.modules.employees.service import _current_employee
 from app.modules.leave import service as leave_service
 from app.modules.leave.classification import LeaveClassification, classify_leave
 from app.modules.leave.effects import leave_working_days
-from app.modules.leave.models import LeaveRequest, LeaveStatus
+from app.modules.leave.models import LeaveHalfDayPeriod, LeaveRequest, LeaveStatus
 from app.modules.permissions import service as permission_service
 from app.modules.permissions.models import (
     PermissionPeriod,
@@ -122,6 +122,12 @@ class AllRequestOut(BaseModel):
     # `leave/service.attach_computed_fields` derives it for the Leave list.
     classification: LeaveClassification | None = None
     working_days: int | None = None
+    # Leave only: which half of the day, when the request is half a day. Carried
+    # because the Type cell is composed from BOTH this and `classification` - a
+    # half-day request classifies Normal (one working day is <= 3), so without it
+    # this table would keep labelling one "Normal" exactly as every other Type
+    # surface did.
+    half_day_period: LeaveHalfDayPeriod | None = None
     # Permission only: the selected half, and what it costs.
     period: PermissionPeriod | None = None
     duration_hours: int | None = None
@@ -146,6 +152,9 @@ def _leave_select(db: Session, actor: User):
         LeaveRequest.reason.label("reason"),
         LeaveRequest.manager_id.label("manager_id"),
         LeaveRequest.created_at.label("created_at"),
+        # Cast to text like `status` above, so the two halves of the union carry
+        # the same column type on both sides; re-typed on the way out.
+        cast(LeaveRequest.half_day_period, String).label("half_day_period"),
         cast(null(), String).label("period"),
         cast(null(), String).label("duration_hours"),
     )
@@ -164,6 +173,9 @@ def _permission_select(db: Session, actor: User):
         PermissionRequest.reason.label("reason"),
         PermissionRequest.manager_id.label("manager_id"),
         PermissionRequest.created_at.label("created_at"),
+        # A permission is never half a DAY - its own `period` says which half of
+        # the day it covers, in hours. Null keeps the union's shape.
+        cast(null(), String).label("half_day_period"),
         cast(PermissionRequest.period, String).label("period"),
         cast(PermissionRequest.duration_hours, String).label("duration_hours"),
     )
@@ -284,6 +296,11 @@ def list_all_requests(
                 created_at=r.created_at,
                 classification=classify_leave(working_days) if is_leave else None,
                 working_days=working_days,
+                half_day_period=(
+                    LeaveHalfDayPeriod(r.half_day_period)
+                    if is_leave and r.half_day_period
+                    else None
+                ),
                 period=PermissionPeriod(r.period) if r.period else None,
                 duration_hours=int(r.duration_hours) if r.duration_hours else None,
             )

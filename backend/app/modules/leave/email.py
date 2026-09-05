@@ -95,11 +95,15 @@ from app.core.config import settings
 from app.modules.employees.models import Employee
 from app.modules.leave.classification import (
     LeaveClassification,
-    classification_label,
     classify_leave,
 )
 from app.modules.leave.effects import leave_working_days
-from app.modules.leave.models import LeaveRequest
+from app.modules.leave.models import (
+    HALF_DAY_DURATION_LABEL,
+    LeaveHalfDayPeriod,
+    LeaveRequest,
+    leave_type_label,
+)
 from app.modules.leave.recipients import (
     LeaveRecipient,
     leave_detail_path,
@@ -130,7 +134,9 @@ class RenderedLeaveEmail:
 
 # ---------- pure rendering --------------------------------------------------
 
-def format_leave_period(start: date, end: date, working_days: int) -> str:
+def format_leave_period(
+    start: date, end: date, working_days: int, *, half_day: bool = False
+) -> str:
     """"28 Aug 2026 - 29 Aug 2026 (2 days)", or a single date for a one-day leave.
 
     `working_days` is the authoritative count - the same figure
@@ -140,7 +146,15 @@ def format_leave_period(start: date, end: date, working_days: int) -> str:
 
     A one-day leave rendered as a range reads like a mistake, so it is not, and
     the count is singular there: "28 Aug 2026 (1 day)".
+
+    `half_day` is the ONE case where the working-day count is not the duration:
+    a half-day leave covers one working day and costs half of it, so it reads
+    "04 Sep 2026 (0.5 day)". It is always a single date - the schema and the
+    `leave_half_day_is_one_day` check constraint both guarantee that - so the
+    range branch is unreachable for it and is deliberately left alone.
     """
+    if half_day:
+        return f"{start.strftime(_DATE_FMT)} ({HALF_DAY_DURATION_LABEL})"
     unit = "day" if working_days == 1 else "days"
     if start == end:
         return f"{start.strftime(_DATE_FMT)} ({working_days} {unit})"
@@ -148,6 +162,21 @@ def format_leave_period(start: date, end: date, working_days: int) -> str:
         f"{start.strftime(_DATE_FMT)} - {end.strftime(_DATE_FMT)} "
         f"({working_days} {unit})"
     )
+
+
+# What the subject line says INSTEAD OF "Leave Request" when the request is half
+# a day. The reader must be able to tell a half-day request from a full-day one
+# in a list of subject lines, without opening either.
+#
+# It names the KIND, not the variant: both halves are the same kind of absence
+# and the same amount of it, and the variant is the first fact in the body. A
+# full-day request's subject keeps the exact wording it has always had.
+_SUBJECT_KIND = "Leave Request"
+_HALF_DAY_SUBJECT_KIND = "Half Day Leave Request"
+
+
+def _subject_kind(half_day_period: LeaveHalfDayPeriod | None) -> str:
+    return _HALF_DAY_SUBJECT_KIND if half_day_period is not None else _SUBJECT_KIND
 
 
 def build_link(path: str) -> str | None:
@@ -175,6 +204,7 @@ def render_submission_email(
     reason: str | None,
     request_id: str,
     link: str | None,
+    half_day_period: LeaveHalfDayPeriod | None = None,
 ) -> RenderedLeaveEmail:
     """Turn one submitted leave request into a subject and a plain-text body.
 
@@ -193,10 +223,20 @@ def render_submission_email(
     """
     product = settings.PRODUCT_NAME
     clean_reason = (reason or "").strip()
+    half_day = half_day_period is not None
 
     details = [
-        ("Leave Type", classification_label(classification)),
-        ("Leave Period", format_leave_period(start_date, end_date, working_days)),
+        # BOTH facts, resolved once by `models.leave_type_label`: the half wins
+        # when there is one, otherwise the Normal/Special label exactly as
+        # before. Never `classification_label` alone - that is what made a
+        # half-day request arrive in the approver's inbox as "Normal Leave".
+        ("Leave Type", leave_type_label(classification, half_day_period)),
+        (
+            "Leave Period",
+            format_leave_period(
+                start_date, end_date, working_days, half_day=half_day
+            ),
+        ),
     ]
     if clean_reason:
         details.append(("Reason", clean_reason))
@@ -214,7 +254,9 @@ def render_submission_email(
         f"the {product} system."
     )
     return RenderedLeaveEmail(
-        subject=f"Leave Request - {employee_name} - Action Required",
+        subject=(
+            f"{_subject_kind(half_day_period)} - {employee_name} - Action Required"
+        ),
         text_body=_text_document(
             product=product,
             greeting=recipient_name,
@@ -251,6 +293,7 @@ def render_decision_email(
     reviewer_comment: str | None,
     request_id: str,
     link: str | None,
+    half_day_period: LeaveHalfDayPeriod | None = None,
 ) -> RenderedLeaveEmail:
     """Turn one decided leave request into a subject and a plain-text body.
 
@@ -280,10 +323,19 @@ def render_decision_email(
     """
     product = settings.PRODUCT_NAME
     outcome = "approved" if approved else "rejected"
+    half_day = half_day_period is not None
 
     details = [
-        ("Leave Type", classification_label(classification)),
-        ("Leave Period", format_leave_period(start_date, end_date, working_days)),
+        # Same composition as the submission email above, for the same reason -
+        # the employee is being told the outcome of the request they filed, so
+        # it has to be described as the request they filed.
+        ("Leave Type", leave_type_label(classification, half_day_period)),
+        (
+            "Leave Period",
+            format_leave_period(
+                start_date, end_date, working_days, half_day=half_day
+            ),
+        ),
     ]
     clean_reason = (reason or "").strip()
     if not approved and clean_reason:
@@ -315,7 +367,10 @@ def render_decision_email(
         )
 
     return RenderedLeaveEmail(
-        subject=f"Leave Request - {'Approved' if approved else 'Rejected'}",
+        subject=(
+            f"{_subject_kind(half_day_period)} - "
+            f"{'Approved' if approved else 'Rejected'}"
+        ),
         text_body=_text_document(
             product=product,
             greeting=employee_name,
@@ -495,6 +550,10 @@ def send_submission_email(db: Session, employee: Employee, req: LeaveRequest) ->
             # has no originating queue, so it names none - see
             # `recipients.leave_detail_path`.
             link=build_link(leave_detail_path(req)),
+            # Straight off the stored row - the employee's own choice of half,
+            # not re-derived from anything. None for every full-day request,
+            # which renders byte for byte the email it always did.
+            half_day_period=req.half_day_period,
         )
         result = enqueue_email(
             to=recipient.employee.work_email,
@@ -602,6 +661,8 @@ def _send_decision_email(
             # helper so the bell and the inbox cannot drift about WHICH page.
             # The bell adds My leave as its `from`; an email carries none.
             link=build_link(leave_detail_path(req)),
+            # See `send_submission_email`: the stored half, verbatim.
+            half_day_period=req.half_day_period,
         )
         result = enqueue_email(
             to=address,

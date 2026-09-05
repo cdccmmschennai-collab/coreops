@@ -26,10 +26,11 @@
  *     npm run test:unit
  */
 import {
-  LEAVE_CLASSIFICATION_LABEL,
   leaveDecisionActor,
   leaveDetailHref,
+  leaveTypeLabel,
   type LeaveClassification,
+  type LeaveHalfDayPeriod,
   type LeaveStatus,
 } from "./types.ts";
 import {
@@ -90,6 +91,10 @@ export interface AllRequest {
    *  count the approval actually charges. */
   classification: LeaveClassification | null;
   working_days: number | null;
+  /** Leave only: which half of the day, when the request is half a day. Null on
+   *  a full-day leave and on every permission row. The Type cell needs it
+   *  because a half-day request classifies Normal - see `allRequestTypeLabel`. */
+  half_day_period: LeaveHalfDayPeriod | null;
   /** Permission only. `period` is null for a request filed before Phase 4C. */
   period: PermissionPeriod | null;
   duration_hours: number | null;
@@ -148,10 +153,14 @@ const COMPACT_PERMISSION_PERIOD_LABEL: Record<PermissionPeriod, string> = {
  * The Type cell.
  *
  *   leave       "Normal" / "Special"     - unchanged from All leave
+ *               "Half Day (First)"       - when the request carries a half
  *   permission  "P · 1st Half · 2 hrs"   - the compact form above
  *
- * The leave half is exactly what the tab rendered before, so no existing leave
- * row changes. The permission half still prefixes the kind - "P" - because in a
+ * The leave branch defers to `leaveTypeLabel`, so this table applies exactly the
+ * precedence the Leave tables and the emails do: the half when there is one, the
+ * Normal/Special classification otherwise. No FULL-DAY leave row changes; a
+ * half-day one stops being labelled "Normal", which is what it classified as.
+ * The permission half still prefixes the kind - "P" - because in a
  * mixed table the status badge does not tell a reader which sort of absence
  * they are looking at, and still names the SELECTED OPTION rather than a bare
  * hour count. A request filed before that option existed has no half on record
@@ -160,7 +169,12 @@ const COMPACT_PERMISSION_PERIOD_LABEL: Record<PermissionPeriod, string> = {
  */
 export function allRequestTypeLabel(row: AllRequest): string {
   if (row.kind === "leave") {
-    return row.classification ? LEAVE_CLASSIFICATION_LABEL[row.classification] : "Leave";
+    return row.classification
+      ? leaveTypeLabel({
+          classification: row.classification,
+          half_day_period: row.half_day_period,
+        })
+      : "Leave";
   }
   if (row.period) return COMPACT_PERMISSION_PERIOD_LABEL[row.period];
   const hours = row.duration_hours ?? 0;

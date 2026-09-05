@@ -28,11 +28,11 @@ import {
 } from "../hooks";
 import {
   canReviewLeave,
-  formatLeaveDuration,
   LEAVE_RETURN_PARAM,
-  LEAVE_CLASSIFICATION_LABEL,
   leaveActorRows,
+  leaveRequestDuration,
   leaveReturnHref,
+  leaveTypeLabel,
   type DeliverableConflict,
 } from "../types";
 import { LeaveStatusBadge } from "./leave-status-badge";
@@ -314,7 +314,7 @@ export function LeaveDetail({ id }: { id: string }) {
       <PageHeader
         className="mt-2"
         title={empName}
-        subtitle={`${LEAVE_CLASSIFICATION_LABEL[leave.classification]} leave`}
+        subtitle={`${leaveTypeLabel(leave)} leave`}
       />
 
       <div className="space-y-4">
@@ -330,14 +330,17 @@ export function LeaveDetail({ id }: { id: string }) {
             </CardHeader>
             <CardContent className="divide-y divide-border">
               <InfoRow label="Employee" value={empName} />
-              <InfoRow
-                label="Leave Type"
-                value={LEAVE_CLASSIFICATION_LABEL[leave.classification]}
-              />
+              {/* Half Day (First)/(Second) when the request carries a half,
+                  otherwise the Normal/Special classification - one precedence,
+                  shared with every list and with the emails. */}
+              <InfoRow label="Leave Type" value={leaveTypeLabel(leave)} />
               <InfoRow label="Requested On" value={fmtDateTime(leave.created_at)} />
               <InfoRow label="From" value={fmtDate(leave.start_date)} />
               <InfoRow label="To" value={fmtDate(leave.end_date)} />
-              <InfoRow label="Duration" value={formatLeaveDuration(leave.working_days)} />
+              {/* `0.5 day` for a half day. A half-day request covers one
+                  working day, so the raw count reads "1 day" and understates
+                  nothing but the half the employee actually took. */}
+              <InfoRow label="Duration" value={leaveRequestDuration(leave)} />
               <InfoRow label="Status" value={<LeaveStatusBadge status={leave.status} />} />
               {/* Routed to, then Approved by / Rejected by - a settled request
                   shows both, because who it went to and who ruled on it are

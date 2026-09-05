@@ -3,6 +3,13 @@
  *  `backend/app/modules/leave/classification.py`. The old Casual/Sick/Annual/
  *  Comp Off/Unpaid categories no longer exist. */
 export type LeaveClassification = "normal" | "special";
+
+/** Which half of a single working day a half-day leave covers, or `null` for
+ *  the ordinary full-day leave every request was before migration 0084. Mirrors
+ *  `backend/app/modules/leave/models.py::LeaveHalfDayPeriod`. The member names
+ *  are storage and are never rendered - `LEAVE_HALF_DAY_LABEL` is. */
+export type LeaveHalfDayPeriod = "first_half" | "second_half";
+
 export type LeaveStatus =
   | "pending"
   | "approved"
@@ -23,6 +30,10 @@ export interface LeaveRequest {
   working_days: number;
   /** Normal or Special, derived by the backend from `working_days`. */
   classification: LeaveClassification;
+  /** Which half of the day this leave covers, or null for a full-day leave.
+   *  Chosen by the employee in the Leave Request dialog and stored on the row -
+   *  unlike `classification`, which is derived and never chosen. */
+  half_day_period: LeaveHalfDayPeriod | null;
   reason: string | null;
   status: LeaveStatus;
   manager_id: string | null;
@@ -65,6 +76,10 @@ export interface LeaveClassificationPreview {
 export interface LeaveRequestCreateBody {
   start_date: string;
   end_date: string;
+  /** Present ONLY on a half-day request, where `start_date === end_date`. Its
+   *  absence is what makes a request a full-day one, so every existing caller
+   *  keeps working by saying nothing. Built by `leaveCreateBody`. */
+  half_day_period?: LeaveHalfDayPeriod;
   reason?: string | null;
 }
 
@@ -150,12 +165,164 @@ export interface LeaveListParams {
   exclude_self?: boolean;
 }
 
-// The only two classifications there are. Nothing is selectable: the backend
+// The only two classifications there are. Still not selectable: the backend
 // derives the value from the request's working days, historical rows included.
 export const LEAVE_CLASSIFICATION_LABEL: Record<LeaveClassification, string> = {
   normal: "Normal",
   special: "Special",
 };
+
+/** The exact wording each half is shown as, and the ONLY wording either is ever
+ *  shown as. Character-for-character identical to
+ *  `backend/app/modules/leave/models.py::HALF_DAY_PERIOD_LABELS`, so the form
+ *  and the backend cannot disagree about what the employee picked. */
+export const LEAVE_HALF_DAY_LABEL: Record<LeaveHalfDayPeriod, string> = {
+  first_half: "Half Day (First)",
+  second_half: "Half Day (Second)",
+};
+
+/** What a half-day leave's duration reads as. Singular "day" on purpose - half
+ *  of one day is not "0.5 days". Mirrors
+ *  `backend/app/modules/leave/models.py::HALF_DAY_DURATION_LABEL`. */
+export const LEAVE_HALF_DAY_DURATION = "0.5 day";
+
+/**
+ * THE TYPE A READER SEES, composed from both facts, in one place.
+ *
+ * THE DISPLAY PRECEDENCE, and the whole of it:
+ *
+ *   half_day_period === "first_half"   ->  "Half Day (First)"
+ *   half_day_period === "second_half"  ->  "Half Day (Second)"
+ *   otherwise                          ->  Normal / Special, exactly as today
+ *
+ * A half-day request HAS a classification - one working day is <= 3, so the
+ * backend classifies it Normal - and that is precisely the bug this exists to
+ * stop. Every Type cell on this side read `LEAVE_CLASSIFICATION_LABEL[
+ * req.classification]` directly, so a request the employee filed as Half Day
+ * (First) was listed, opened and reviewed as "Normal". The half is the more
+ * specific fact and wins; the Normal/Special system is untouched underneath and
+ * still decides every request that has no half.
+ *
+ * Both label maps are the ones their owners already export, so no wording is
+ * respelled here. Mirrors `models.py::leave_type_label` on the backend, which
+ * composes the same two facts for the emails.
+ */
+export function leaveTypeLabel(
+  req: Pick<LeaveRequest, "classification" | "half_day_period">,
+): string {
+  if (req.half_day_period) return LEAVE_HALF_DAY_LABEL[req.half_day_period];
+  return LEAVE_CLASSIFICATION_LABEL[req.classification];
+}
+
+// ---------- the Leave Request dialog's "Leave type" dropdown ----------------
+
+/**
+ * The four entries of the Leave type dropdown, in the order they are offered.
+ *
+ * WHAT THIS SELECTION ACTUALLY IS. It picks the SHAPE OF THE REQUEST, not a
+ * label the backend is told to apply:
+ *
+ *   normal / special       a full-day leave. From + To, multi-day allowed, and
+ *                          the backend classifies it from the working days the
+ *                          dates cost - exactly as it always has. Picking
+ *                          "Normal" for a fortnight files a Special leave, and
+ *                          `leaveClassificationNote` says so on screen while the
+ *                          form is still open, so the choice never becomes a
+ *                          promise the saved request breaks.
+ *   first_half /           a half-day leave. ONE date, sent as
+ *   second_half            `start_date === end_date` with `half_day_period` set.
+ *
+ * The half entries are the only ones that add anything to the payload; the two
+ * full-day entries send precisely the body the dialog has always sent.
+ */
+export const LEAVE_TYPE_CHOICES = [
+  "normal",
+  "special",
+  "first_half",
+  "second_half",
+] as const;
+
+export type LeaveTypeChoice = (typeof LEAVE_TYPE_CHOICES)[number];
+
+export const LEAVE_TYPE_CHOICE_LABEL: Record<LeaveTypeChoice, string> = {
+  normal: LEAVE_CLASSIFICATION_LABEL.normal,
+  special: LEAVE_CLASSIFICATION_LABEL.special,
+  first_half: LEAVE_HALF_DAY_LABEL.first_half,
+  second_half: LEAVE_HALF_DAY_LABEL.second_half,
+};
+
+/** Whether this choice asks for ONE date rather than a From/To pair. Also the
+ *  type guard that turns the choice into the `half_day_period` it is - the two
+ *  half choices are deliberately named for the enum values they send, so no
+ *  lookup table can drift out of step with them. */
+export function isHalfDayChoice(
+  choice: LeaveTypeChoice,
+): choice is LeaveHalfDayPeriod {
+  return choice === "first_half" || choice === "second_half";
+}
+
+/** The dialog's raw fields. Both date shapes are kept side by side rather than
+ *  sharing one input, so switching the dropdown back and forth does not destroy
+ *  what the employee already typed into the other. */
+export interface LeaveFormValues {
+  leave_type: LeaveTypeChoice;
+  start_date: string;
+  end_date: string;
+  half_day_date: string;
+  reason: string;
+}
+
+/**
+ * The request body for the current form state - the one place the dropdown
+ * turns into a payload.
+ *
+ * A half-day choice collapses to its single date on BOTH ends, which is the
+ * rule the schema and the `leave_half_day_is_one_day` check constraint both
+ * enforce; the From/To pair is ignored entirely, so a range typed before the
+ * dropdown was switched cannot leak into a half-day request. A full-day choice
+ * sends no half-day key at all - byte for byte the body this dialog has always
+ * sent.
+ */
+export function leaveCreateBody(values: LeaveFormValues): LeaveRequestCreateBody {
+  const reason = values.reason.trim() || null;
+  if (isHalfDayChoice(values.leave_type)) {
+    return {
+      start_date: values.half_day_date,
+      end_date: values.half_day_date,
+      half_day_period: values.leave_type,
+      reason,
+    };
+  }
+  return {
+    start_date: values.start_date,
+    end_date: values.end_date,
+    reason,
+  };
+}
+
+/**
+ * The line under the dropdown telling the employee what a full-day request will
+ * actually be filed as.
+ *
+ * THIS IS WHY PICKING "Normal" IS NOT A LIE. Normal/Special remains the
+ * backend's decision, derived from what the dates cost against the company
+ * calendar - so the dropdown cannot be allowed to imply otherwise. The note
+ * reports the server's own live answer for the dates currently in the form,
+ * which is the same number and the same rule the saved request will get.
+ *
+ * Null when there is nothing truthful to say: no dates chosen yet (the preview
+ * is disabled until both are present and in order), or a half-day choice, which
+ * is one date and carries its own label already.
+ */
+export function leaveClassificationNote(
+  choice: LeaveTypeChoice,
+  preview: Pick<LeaveClassificationPreview, "working_days" | "classification"> | undefined,
+): string | null {
+  if (isHalfDayChoice(choice) || !preview) return null;
+  const days = `${preview.working_days} working ${preview.working_days === 1 ? "day" : "days"}`;
+  const label = LEAVE_CLASSIFICATION_LABEL[preview.classification];
+  return `These dates cost ${days} - this will be filed as ${label} Leave.`;
+}
 
 export const LEAVE_STATUS_LABEL: Record<LeaveStatus, string> = {
   pending: "Pending",
@@ -345,6 +512,24 @@ export function leaveQueueCountParams(
  *  side of the wire any more; the backend is the only place that rule lives. */
 export function formatLeaveDuration(workingDays: number): string {
   return `${workingDays} ${workingDays === 1 ? "day" : "days"}`;
+}
+
+/**
+ * The Duration line for ONE request: `0.5 day` for a half day, otherwise the
+ * working-day count exactly as `formatLeaveDuration` has always rendered it.
+ *
+ * A half-day request covers one working day, so `working_days` is honestly 1 -
+ * and "1 day" against a request filed as half a day is what the reader reported
+ * as wrong. This is the only place the two disagree, and the request's own
+ * stored half is what settles it; the count is still never computed here.
+ *
+ * Mirrors `models.py::leave_duration_label`.
+ */
+export function leaveRequestDuration(
+  req: Pick<LeaveRequest, "working_days" | "half_day_period">,
+): string {
+  if (req.half_day_period) return LEAVE_HALF_DAY_DURATION;
+  return formatLeaveDuration(req.working_days);
 }
 
 /**

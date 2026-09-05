@@ -25,8 +25,8 @@ import { AppError } from "@/lib/api-client";
 
 import { useApproveLeave, useDeliverableImpact, useLeaveList, useRejectLeave } from "../hooks";
 import {
-  LEAVE_CLASSIFICATION_LABEL,
   leaveDetailHref,
+  leaveTypeLabel,
   type DeliverableConflict,
 } from "../types";
 
@@ -168,7 +168,9 @@ export function LeaveReviewPanel({ employeeId: _eid, excludeSelf = false }: Prop
                       }
                     >
                       <TableCell className="font-medium">{empName}</TableCell>
-                      <TableCell>{LEAVE_CLASSIFICATION_LABEL[req.classification]}</TableCell>
+                      {/* Half Day (First)/(Second) for a half-day request, the
+                          Normal/Special classification for every other one. */}
+                      <TableCell>{leaveTypeLabel(req)}</TableCell>
                       <TableCell className="tabular">{req.start_date}</TableCell>
                       <TableCell className="tabular">{req.end_date}</TableCell>
                       <TableCell className="max-w-[180px] truncate text-muted-foreground">
