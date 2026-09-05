@@ -50,6 +50,7 @@ from app.modules.leave import email as leave_email
 from app.modules.leave.effects import reverse_leave_approved
 from app.modules.leave.models import LeaveHalfDayPeriod, LeaveStatus
 from app.modules.leave_balances import ledger
+from app.modules.notifications.models import Notification
 from app.modules.users.models import UserRole
 from app.notifications.email_dispatch import EnqueueResult
 from app.shared.leave_units import is_half_step
@@ -493,3 +494,126 @@ def test_a_cancellation_cannot_delete_a_company_half_day(
     assert untouched.leave_day_fraction is None
     # And it never cost anything, so nothing was credited back either.
     assert _balance(db, funded.id) == OPENING
+
+
+# ======================================================================
+# PART D (Phase 3C) - the figure the KPI card actually reads
+# ======================================================================
+#
+# Everything above asks the ledger directly. These ask the endpoint the
+# "Available Leave" tile calls, because a correct ledger behind a KPI that reads
+# something else is the exact bug this phase was opened for.
+
+BALANCES = "/api/v1/leave-balances/me"
+
+
+def _my_balance(client, login) -> dict:
+    """March's balance AS THE KPI CARD RECEIVES IT."""
+    res = client.get(
+        f"{BALANCES}?month={MAR.isoformat()}", headers=login("h3b-emp@x.com")
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_the_kpi_endpoint_charges_an_employee_half_day_as_half(
+    client, login, db, funded, mailer,
+):
+    """The reported defect, at the surface that reported it.
+
+    One full day and one half day in the same month is 1.5 consumed, so 3.0
+    opening leaves 1.5 available. The card showed the half as costing nothing -
+    1 consumed and half a day too much still available. `consumed` is the
+    server's own figure and the tile does no arithmetic on it.
+    """
+    _take(client, login, start=D1)                      # full day
+    _take(client, login, start=D2, period="first_half")  # employee half day
+
+    body = _my_balance(client, login)
+    assert body["consumed"] == 1.5, "the half must be priced, not counted"
+    assert body["available_leave"] == 1.5
+
+
+def test_the_kpi_endpoint_does_not_charge_a_manual_half_day(
+    client, login, db, funded, mailer, make_attendance,
+):
+    """THE REGRESSION THIS PHASE MUST NOT CAUSE.
+
+    A PM's manually entered half day is `half_day` with NO fraction. Anything
+    that priced the STATUS - `if status == half_day: charge 0.5` - would bill the
+    employee for a day the PM entered exactly as they always have. The fraction
+    is the domain fact, and this row states none.
+    """
+    make_attendance(
+        employee_id=funded.id, attendance_date=COMPANY_HALF,
+        status=AttendanceStatus.half_day, leave_day_fraction=None,
+    )
+
+    body = _my_balance(client, login)
+    assert body["consumed"] == 0.0
+    assert body["available_leave"] == 3.0
+
+    # And it stays uncharged beside an employee half day of the employee's own:
+    # same status on both rows, one priced and one free.
+    _take(client, login, start=D1, period="second_half")
+
+    after = _my_balance(client, login)
+    assert after["consumed"] == 0.5
+    assert after["available_leave"] == 2.5
+
+
+# ---------- what the withdrawal notice says ----------------------------------
+
+def _cancellation_notice(db, user_id) -> str:
+    rows = [
+        n
+        for n in db.query(Notification).filter(Notification.user_id == user_id).all()
+        if n.type == "leave_cancellation_approved"
+    ]
+    assert len(rows) == 1, f"expected one withdrawal notice, got {len(rows)}"
+    return rows[0].message
+
+
+@pytest.mark.parametrize("period", ["first_half", "second_half"])
+def test_the_withdrawal_notice_states_the_half_that_came_back(
+    client, login, db, funded, team, mailer, period,
+):
+    """"0.5 day restored", not "1 day restored".
+
+    The accounting was already right - 2.5 back to 3.0, in the brackets - while
+    the sentence in front of it counted ROWS and so announced a whole day. The
+    quantity now comes from the ledger's own movement.
+    """
+    req_id = _take(client, login, start=D1, period=period)
+    _ask_to_withdraw(client, login, req_id)
+    _decide_withdrawal(client, login, req_id, "approve-cancellation")
+
+    message = _cancellation_notice(db, team["employee_user"].id)
+    assert "0.5 day restored to your leave balance (2.50 to 3.00)." in message
+    assert "1 day restored" not in message
+
+
+def test_a_full_day_withdrawal_notice_is_unchanged(
+    client, login, db, funded, team, mailer,
+):
+    """The whole-day sentence is the one that was already right, word for word."""
+    req_id = _take(client, login, start=D1)
+    _ask_to_withdraw(client, login, req_id)
+    _decide_withdrawal(client, login, req_id, "approve-cancellation")
+
+    message = _cancellation_notice(db, team["employee_user"].id)
+    assert "1 day restored to your leave balance (2.00 to 3.00)." in message
+
+
+def test_a_multi_day_withdrawal_notice_is_unchanged(
+    client, login, db, funded, team, mailer,
+):
+    """And so is the plural: two working days back is still "2 days restored"."""
+    req_id = _take(client, login, start=D1, end=date(2027, 3, 4))
+    assert _balance(db, funded.id) == Decimal("1.00")
+
+    _ask_to_withdraw(client, login, req_id)
+    _decide_withdrawal(client, login, req_id, "approve-cancellation")
+
+    message = _cancellation_notice(db, team["employee_user"].id)
+    assert "2 days restored to your leave balance (1.00 to 3.00)." in message

@@ -84,6 +84,14 @@ test("present and company half days are not leave", () => {
   assert.equal(leaveDaysTaken([PRESENT, COMPANY_HALF, LEAVE]), 1);
 });
 
+test("a PM's manual half day is not turned into half a day of leave", () => {
+  // THE REGRESSION THE FRACTION EXISTS TO PREVENT. Both `half_day` rows are the
+  // same status; only one of them states a quantity. A tile that priced the
+  // status - `if status === "half_day") return 0.5` - would read 2 here and bill
+  // the employee for a day their PM entered exactly as they always have.
+  assert.equal(leaveDaysTaken([LEAVE, HALF_LEAVE, COMPANY_HALF]), 1.5);
+});
+
 test("an empty month is 0, not NaN", () => {
   assert.equal(leaveDaysTaken([]), 0);
 });

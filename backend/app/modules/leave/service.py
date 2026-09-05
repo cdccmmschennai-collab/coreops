@@ -60,7 +60,13 @@ from app.modules.leave.classification import (
     classification_label,
     classify_leave,
 )
-from app.modules.leave.models import RETIRED_LEAVE_TYPE, LeaveRequest, LeaveStatus
+from app.modules.leave.models import (
+    HALF_DAY_DURATION_LABEL,
+    HALF_DAY_LEAVE_FRACTION,
+    RETIRED_LEAVE_TYPE,
+    LeaveRequest,
+    LeaveStatus,
+)
 from app.modules.leave import email as leave_email
 from app.modules.leave import routing
 from app.modules.leave.recipients import leave_request_path, resolve_in_app_recipient
@@ -363,13 +369,41 @@ def _effect_sentence(effect, req: LeaveRequest) -> str:
     )
 
 
-def _restored_sentence(effect) -> str:
-    if effect.balance_before is None or not effect.day_count:
-        return ""
+def _restored_quantity(effect) -> str:
+    """How much leave a withdrawal gave back, in the wording durations use.
+
+    READ OFF THE LEDGER'S OWN MOVEMENT, never off a status. `effect.deducted` is
+    the difference between the two balances `leave_balances/ledger.py` reported
+    either side of the reversal, and the ledger priced those from the row's
+    `leave_day_fraction` - so half a day is named here because the pool moved
+    0.5, not because some row reads `half_day`. No second pricing rule is
+    introduced, and a PM's company-wide half day - which states no fraction,
+    costs the pool nothing and is not even reachable by a cancellation
+    (`effects.is_approval_row`) - cannot be described as leave by this function.
+
+    `HALF_DAY_DURATION_LABEL` is the project's existing wording for the quantity,
+    the same "0.5 day" the request's own Duration line shows, so the withdrawal
+    notice names exactly what the employee filed.
+    """
+    if effect.deducted == HALF_DAY_LEAVE_FRACTION:
+        return HALF_DAY_DURATION_LABEL
     days = effect.day_count
     word = "day" if days == 1 else "days"
+    return f"{days} {word}"
+
+
+def _restored_sentence(effect) -> str:
+    """The balance movement, appended to the cancellation-approved notification.
+
+    A whole-day withdrawal reads exactly as it always did ("1 day restored ...",
+    "2 days restored ..."): `_restored_quantity` falls back to the day count for
+    every movement that is not a half, so nothing about the full-day wording -
+    or about the arithmetic in the brackets - changed with the half.
+    """
+    if effect.balance_before is None or not effect.day_count:
+        return ""
     return (
-        f" {days} {word} restored to your leave balance "
+        f" {_restored_quantity(effect)} restored to your leave balance "
         f"({effect.balance_before:g} to {effect.balance_after:g})."
     )
 
