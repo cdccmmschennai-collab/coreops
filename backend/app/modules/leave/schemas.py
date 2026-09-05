@@ -2,13 +2,22 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.leave.classification import LeaveClassification
-from app.modules.leave.models import LeaveStatus
+from app.modules.leave.models import LeaveHalfDayPeriod, LeaveStatus
 
 _REASON_MAX = 2000
 _COMMENT_MAX = 1000
+
+_HALF_DAY_NEEDS_A_HALF = (
+    "Choose which half of the day the leave covers - 1st Half or 2nd Half."
+)
+
+_HALF_DAY_IS_ONE_DAY = (
+    "A half-day leave covers one day - set From and To to the same date, or "
+    "file a full-day leave for the range."
+)
 
 
 class LeaveRequestCreate(BaseModel):
@@ -17,6 +26,39 @@ class LeaveRequestCreate(BaseModel):
     start_date: date
     end_date: date
     reason: str | None = Field(default=None, max_length=_REASON_MAX)
+    # HALF-DAY LEAVE (migration 0084). `half_day_period` is the stored fact: a
+    # value means half a day, its absence means the whole of it - so a request
+    # that says nothing about halves is exactly the full-day request it has
+    # always been, and every existing caller keeps working unchanged.
+    #
+    # `half_day` exists ONLY to make an INCOMPLETE request refusable. A caller
+    # that declares the leave is half a day without naming which half has not
+    # made a valid request - the two halves are not interchangeable and picking
+    # one for the requester would invent a decision they did not make. Naming a
+    # half IS declaring a half day, so a caller that has already chosen never
+    # has to send this flag; it only ever adds a refusal.
+    half_day: bool = False
+    half_day_period: LeaveHalfDayPeriod | None = None
+
+    @model_validator(mode="after")
+    def _half_day_is_complete_and_one_day(self) -> "LeaveRequestCreate":
+        """The two rules a half-day request must satisfy, both pure.
+
+        Checked here rather than in the service because neither needs a database
+        or an employee: they are properties of the submitted body alone, and
+        keeping them in the schema means the API answers 422 with a readable
+        message before any row is read.
+
+        The single-day rule is the API's half of the `leave_half_day_is_one_day`
+        check constraint. Half a day is half of ONE day; a "half day" spanning a
+        range would owe half a day to each of its working days, and both
+        variants are defined to consume exactly one half day.
+        """
+        if self.half_day and self.half_day_period is None:
+            raise ValueError(_HALF_DAY_NEEDS_A_HALF)
+        if self.half_day_period is not None and self.start_date != self.end_date:
+            raise ValueError(_HALF_DAY_IS_ONE_DAY)
+        return self
 
 
 class LeaveRequestUpdate(BaseModel):
@@ -47,6 +89,11 @@ class LeaveRequestOut(BaseModel):
     # by `leave/classification.py`. Never stored, so it cannot go stale when a
     # request's dates change or a holiday lands inside its range.
     classification: LeaveClassification
+    # Which half of the day this leave covers, or None for a full-day leave
+    # (migration 0084). The Type a reader sees is composed from this and
+    # `classification` together - a half-day request shows its variant's label,
+    # every other request shows Normal or Special exactly as before.
+    half_day_period: LeaveHalfDayPeriod | None = None
     reason: str | None = None
     status: LeaveStatus
     manager_id: uuid.UUID | None = None

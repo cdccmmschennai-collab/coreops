@@ -10,6 +10,7 @@ requesting employee's manager may change after approval).
 import enum
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
@@ -58,6 +59,60 @@ class LeaveType(str, enum.Enum):
 RETIRED_LEAVE_TYPE = LeaveType.other
 
 
+class LeaveHalfDayPeriod(str, enum.Enum):
+    """WHICH HALF of a single working day a half-day leave covers.
+
+    Two variants of ONE action, not two actions: both are a half-day leave, both
+    cost exactly `HALF_DAY_LEAVE_FRACTION`, and both travel the identical
+    request -> routing -> Head -> approval -> notification -> attendance path a
+    full-day leave travels. The half exists so the record says WHICH portion of
+    the day was leave; nothing downstream branches on it.
+
+    NULL on the row - the enum's absence - is the ordinary full-day leave every
+    request in this table was before migration 0084, so the default reading of
+    an existing row is unchanged.
+
+    The member NAMES are never shown to anybody. `HALF_DAY_PERIOD_LABELS` below
+    is the only wording a person sees.
+    """
+
+    first_half = "first_half"
+    second_half = "second_half"
+
+
+# What one half-day leave costs the leave pool, written onto the attendance
+# record as `leave_day_fraction` (migration 0083) by `effects.apply_leave_approved`.
+#
+# BOTH VARIANTS, EXACTLY. A half day is half a day whichever half of it was
+# taken, so there is one constant and no per-variant table: an arbitrary
+# fraction cannot be introduced by choosing a different half.
+HALF_DAY_LEAVE_FRACTION = Decimal("0.5")
+
+# The exact user-facing wording for each variant, and the ONLY wording either
+# variant is ever shown as. The technical member names (`first_half`,
+# `second_half`) and the word HALF_DAY never reach a screen or an email.
+#
+# The separator is a MIDDLE DOT (U+00B7), matching the compact Type labels the
+# All Requests table already uses for permissions. It is deliberately not an em
+# or en dash: the house rule across CoreOps is a plain ASCII hyphen or a dot,
+# never a dash - mirror this map in `frontend/src/features/leave/types.ts::
+# LEAVE_HALF_DAY_LABEL` if either is ever touched.
+HALF_DAY_PERIOD_LABELS: dict[LeaveHalfDayPeriod, str] = {
+    LeaveHalfDayPeriod.first_half: "Half Day · 1st Half",
+    LeaveHalfDayPeriod.second_half: "Half Day · 2nd Half",
+}
+
+
+def half_day_period_label(period: LeaveHalfDayPeriod | None) -> str | None:
+    """The user-facing name of a half-day variant, or None for a full-day leave.
+
+    None rather than a placeholder: a request with no half is not a half-day
+    leave at all, and its Type is the Normal/Special classification the caller
+    already has. See `classification.classification_label`.
+    """
+    return HALF_DAY_PERIOD_LABELS.get(period) if period is not None else None
+
+
 class LeaveStatus(str, enum.Enum):
     pending = "pending"
     approved = "approved"
@@ -80,6 +135,27 @@ class LeaveRequest(UUIDMixin, TimestampMixin, Base):
     )
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # WHICH HALF of the day this leave covers, when it covers only half of one
+    # (migration 0084). NULL is an ordinary full-day leave, which is what every
+    # request filed before that migration is and what every request that does
+    # not choose a half still is.
+    #
+    # This is the one field that distinguishes a half-day leave, and it is the
+    # only thing this feature adds to the request: routing, the Project Head,
+    # the approval, the notifications and the audit trail all read exactly what
+    # they read for a full-day leave. `effects.apply_leave_approved` is the
+    # single place it changes anything - it writes `half_day` +
+    # `HALF_DAY_LEAVE_FRACTION` instead of `leave` on the attendance record, and
+    # `leave_balances.ledger.leave_days_for` then prices that row at 0.5 with no
+    # rule of its own for half-day leave.
+    half_day_period: Mapped["LeaveHalfDayPeriod | None"] = mapped_column(
+        SAEnum(
+            LeaveHalfDayPeriod,
+            name="leave_half_day_period",
+            values_callable=lambda e: [m.value for m in e],
+        ),
+        nullable=True,
+    )
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[LeaveStatus] = mapped_column(
         SAEnum(LeaveStatus, name="leave_status", values_callable=lambda e: [m.value for m in e]),
@@ -106,6 +182,14 @@ class LeaveRequest(UUIDMixin, TimestampMixin, Base):
 
     __table_args__ = (
         CheckConstraint("end_date >= start_date", name="leave_dates_order"),
+        # A half day is half of ONE day. The floor under the API validation, so
+        # nothing outside the API can create a "half day" spanning a range -
+        # which would owe 0.5 to each of its working days and break the rule
+        # that both variants consume exactly one half day.
+        CheckConstraint(
+            "half_day_period IS NULL OR start_date = end_date",
+            name="leave_half_day_is_one_day",
+        ),
         Index("leave_employee_idx", "employee_id", "start_date"),
         Index("leave_manager_idx", "manager_id", "status"),
         Index("leave_status_idx", "status"),
