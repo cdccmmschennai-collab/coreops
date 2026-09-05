@@ -19,6 +19,7 @@ import { useUrlState } from "@/lib/use-url-state";
 
 import { useLeaveList } from "../hooks";
 import {
+  LEAVE_CANCELLATION_AWAITING_LABEL,
   canCancelLeave,
   canRequestLeaveCancellation,
   leaveDetailHref,
@@ -128,7 +129,7 @@ export function LeaveHistory({ employeeId }: Props) {
                   </Button>
                 ) : req.status === "cancellation_requested" ? (
                   <span className="text-xs text-muted-foreground">
-                    Awaiting PM review
+                    {LEAVE_CANCELLATION_AWAITING_LABEL}
                   </span>
                 ) : null}
               </TableCell>

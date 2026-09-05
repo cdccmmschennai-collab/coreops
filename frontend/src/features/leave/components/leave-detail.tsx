@@ -22,18 +22,14 @@ import { AppError } from "@/lib/api-client";
 
 import {
   useApproveLeave,
-  useApproveLeaveCancellation,
   useDeliverableImpact,
   useLeaveRequest,
   useRejectLeave,
-  useRejectLeaveCancellation,
 } from "../hooks";
 import {
   canRequestLeaveCancellation,
   canReviewLeave,
-  canReviewLeaveCancellation,
   LEAVE_RETURN_PARAM,
-  formatLeavePeriod,
   leaveActorRows,
   leaveRequestDuration,
   leaveReturnHref,
@@ -230,110 +226,18 @@ function ReviewPanel({ id, onDone }: { id: string; onDone: () => void }) {
   );
 }
 
-// ── cancellation review ──────────────────────────────────────────────────────
-
-/**
- * Approve / reject a withdrawal the employee has asked for, from the request's
- * own page rather than only from the queue's table row.
- *
- * WHY THIS EXISTS. The Cancellation requests queue could always decide a row in
- * place, and clicking that row has always opened this page - but the page then
- * offered nothing to do, so a reviewer who opened a withdrawal to read it had to
- * go back to the table to act on it. A leave cancellation is now decidable
- * wherever it is being read, which is exactly what the permission half already
- * did.
- *
- * NOTHING NEW IS BUILT HERE. The mutations are the queue's own
- * `useApproveLeaveCancellation` / `useRejectLeaveCancellation`, hitting the same
- * two endpoints under the same server-side `_assert_can_review`; the layout and
- * the two button variants are `permission-detail.tsx::CancellationReviewActions`,
- * so the two kinds of withdrawal read and behave alike. No comment box, for the
- * reason that panel gives: neither endpoint accepts one, and offering a field the
- * API discards would be a lie.
- *
- * `onDone` is what returns the reviewer to the list they came from - the page
- * passes the href it already resolved from `?from`, so a decision taken out of
- * Cancellation requests lands back on Cancellation requests. This panel names no
- * destination.
- */
-function CancellationReviewActions({
-  leave,
-  employeeName,
-  onDone,
-}: {
-  leave: LeaveRequest;
-  employeeName: string;
-  onDone: () => void;
-}) {
-  const approve = useApproveLeaveCancellation();
-  const reject = useRejectLeaveCancellation();
-  const busy = approve.isPending || reject.isPending;
-
-  async function decide(decision: "approve" | "reject") {
-    try {
-      if (decision === "approve") {
-        await approve.mutateAsync(leave.id);
-        toast.success("Leave cancellation approved. Attendance was not changed.");
-      } else {
-        await reject.mutateAsync(leave.id);
-        toast.success(
-          "Cancellation request rejected. The approved leave remains active.",
-        );
-      }
-      onDone();
-    } catch (err) {
-      toast.error(
-        err instanceof AppError
-          ? err.message
-          : "Could not update the cancellation request.",
-      );
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Cancellation request</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {/* Names the request as the employee filed it - "Half Day (First)" for a
-            half day, Normal/Special otherwise - through the one composer every
-            other Type surface uses. A withdrawal of half a day must not be
-            described here as a withdrawal of a Normal leave. */}
-        <p className="text-sm text-muted-foreground">
-          {employeeName} has asked to withdraw this approved{" "}
-          {leaveTypeLabel(leave)} leave for{" "}
-          {formatLeavePeriod(leave.start_date, leave.end_date)}. It stays approved
-          until you decide.
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Attendance is not changed automatically. Review the employee&apos;s
-          attendance after approving a cancellation.
-        </p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="danger"
-            onClick={() => void decide("approve")}
-            loading={approve.isPending}
-            disabled={busy}
-          >
-            <Check className="h-4 w-4" />
-            Approve cancellation
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void decide("reject")}
-            loading={reject.isPending}
-            disabled={busy}
-          >
-            <X className="h-4 w-4" />
-            Keep approved leave
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+// NO cancellation-request card on this page, of any kind.
+//
+// It carried Approve cancellation / Keep approved leave, which duplicated the
+// Cancellation requests queue's own Actions column; the card is now gone
+// entirely, explanatory text included. The queue is the single place a
+// withdrawal is both described and decided. Everything else about a withdrawn
+// request still shows here through the ordinary Leave Request card: the
+// Cancellation Requested status badge, the dates, the Type, the routing rows.
+//
+// Nothing about the workflow changed. The endpoints, `canReviewLeaveCancellation`
+// (still read by the queue) and the server's own `_assert_can_review` are all
+// untouched - a card was never authorisation.
 
 // ── page ─────────────────────────────────────────────────────────────────────
 
@@ -419,16 +323,11 @@ export function LeaveDetail({ id }: { id: string }) {
   const showImpact = isManager && conflicts.length > 0;
   const isReviewer = isManager || isProjectHead;
   const canReview = canReviewLeave(leave, isReviewer, employeeId);
-  // The two halves of the cancellation workflow, each behind the rule the
-  // backend enforces independently: the owner may ASK to withdraw approved
-  // leave, and a reviewer who is not the owner may DECIDE a withdrawal that is
-  // waiting. Neither consults `half_day_period` - a half day is withdrawn
-  // exactly as a full day is.
-  const showCancellationReview = canReviewLeaveCancellation(
-    leave,
-    isReviewer,
-    employeeId,
-  );
+  // The owner's half of the cancellation workflow, and the only half this page
+  // carries: asking to withdraw approved leave, offered here exactly as it
+  // always was. It does not consult `half_day_period` - a half day is withdrawn
+  // exactly as a full day is - and the backend enforces the rule independently.
+  // The reviewer's half lives in the Cancellation requests queue.
   const showRequestCancellation = canRequestLeaveCancellation(leave, employeeId);
   // What the card SAYS about the request's routing and its actor - two separate
   // facts, both shown on a settled request. Independent of `canReview`, which
@@ -522,23 +421,6 @@ export function LeaveDetail({ id }: { id: string }) {
               </div>
             </CardContent>
           </Card>
-        )}
-
-        {/* The reviewer's decision on a withdrawal, taken here rather than only
-            from the queue's table row. Full width, below the split, because it
-            is an action on the whole request rather than a column of facts. */}
-        {showCancellationReview && (
-          <CancellationReviewActions
-            leave={leave}
-            employeeName={empName}
-            // Back to the list this page was opened from - the same href the
-            // back link above uses, resolved from the same `?from`. Deciding out
-            // of Cancellation requests therefore lands back on Cancellation
-            // requests, never on an unrelated Leave Requests tab; a page opened
-            // cold (a notification, a bookmark) falls back to the Leave tab
-            // exactly as every other action on this page does.
-            onDone={() => router.push(backHref)}
-          />
         )}
 
         {/* The owner's own side of the same workflow: approved leave is a granted

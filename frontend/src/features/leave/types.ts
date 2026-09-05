@@ -324,6 +324,21 @@ export function leaveClassificationNote(
   return `These dates cost ${days} - this will be filed as ${label} Leave.`;
 }
 
+/**
+ * What the Leave Requests table's Action column says about a withdrawal that is
+ * already waiting for a decision.
+ *
+ * DELIBERATELY NAMES NOBODY. It read "Awaiting PM review", which is wrong as
+ * often as it is right: a cancellation is decided by the authorised Project
+ * Manager OR by the routed/assigned Project Head, and which of the two it will
+ * be is not knowable from the row. Naming a role there told the employee to wait
+ * on a person who may never see the request.
+ *
+ * Wording only. `canReviewLeaveCancellation` and the backend's own
+ * `_assert_can_review` still decide who may rule, and neither changed.
+ */
+export const LEAVE_CANCELLATION_AWAITING_LABEL = "Awaiting for a review";
+
 export const LEAVE_STATUS_LABEL: Record<LeaveStatus, string> = {
   pending: "Pending",
   approved: "Approved",
