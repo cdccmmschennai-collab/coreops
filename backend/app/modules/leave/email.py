@@ -99,7 +99,6 @@ from app.modules.leave.classification import (
 )
 from app.modules.leave.effects import leave_working_days
 from app.modules.leave.models import (
-    HALF_DAY_DURATION_LABEL,
     LeaveHalfDayPeriod,
     LeaveRequest,
     leave_type_label,
@@ -116,6 +115,19 @@ logger = logging.getLogger("coreops.leave.email")
 # Matches the daily report reminder's format, so both CoreOps emails read the
 # same way: "28 Aug 2026".
 _DATE_FMT = "%d %b %Y"
+
+# What the Leave Period line says in place of a day count when the request is
+# half a day: "04 Sep 2026 (Half day)".
+#
+# EMAIL WORDING, AND ONLY EMAIL WORDING. Deliberately NOT
+# `models.HALF_DAY_DURATION_LABEL` ("0.5 day"), which the in-app Duration row and
+# its frontend mirror still read: a letter NAMES the absence a colleague is being
+# told about, while a table column STATES ITS SIZE next to other sizes. Reusing
+# the shared constant here is what put an arithmetic fraction into a sentence, and
+# changing that constant instead would have restyled the Leave Detail page too.
+# Both halves say the same thing, for the same reason there is one fraction and
+# not a per-variant table.
+_HALF_DAY_PERIOD_DURATION = "Half day"
 
 
 @dataclass(frozen=True)
@@ -149,12 +161,17 @@ def format_leave_period(
 
     `half_day` is the ONE case where the working-day count is not the duration:
     a half-day leave covers one working day and costs half of it, so it reads
-    "04 Sep 2026 (0.5 day)". It is always a single date - the schema and the
+    "04 Sep 2026 (Half day)" - the letter names the absence rather than pricing
+    it, which is why this is `_HALF_DAY_PERIOD_DURATION` and not the "0.5 day"
+    the Duration row shows. It is always a single date - the schema and the
     `leave_half_day_is_one_day` check constraint both guarantee that - so the
     range branch is unreachable for it and is deliberately left alone.
+
+    Nothing about the FULL-DAY wording moves: `working_days`, the singular/plural
+    rule and the range form are byte for byte what they were.
     """
     if half_day:
-        return f"{start.strftime(_DATE_FMT)} ({HALF_DAY_DURATION_LABEL})"
+        return f"{start.strftime(_DATE_FMT)} ({_HALF_DAY_PERIOD_DURATION})"
     unit = "day" if working_days == 1 else "days"
     if start == end:
         return f"{start.strftime(_DATE_FMT)} ({working_days} {unit})"

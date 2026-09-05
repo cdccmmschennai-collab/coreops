@@ -281,7 +281,14 @@ def test_7d_a_full_day_duration_is_the_working_day_count(client, login, team, ma
 def test_8_9_the_submission_email_names_the_half(
     client, login, team, mailer, period, label,
 ):
-    """Subject, Leave Type and Duration, through the real send path."""
+    """Subject, Leave Type and Leave Period, through the real send path.
+
+    The period NAMES the absence - "(Half day)" - rather than pricing it. That
+    wording is `email._HALF_DAY_PERIOD_DURATION` and is deliberately not the
+    "0.5 day" of `HALF_DAY_DURATION_LABEL`, which the in-app Duration row still
+    reads; see `test_7_a_half_day_duration_is_half_a_day` above, which pins that
+    one down and is unchanged.
+    """
     res = _post(client, login("hdd-emp@x.com"), half_day_period=period)
     assert res.status_code == 201, res.text
 
@@ -292,7 +299,10 @@ def test_8_9_the_submission_email_names_the_half(
     )
     lines = _detail_lines(call)
     assert f"Leave Type: {label}" in lines
-    assert f"Leave Period: 03 Mar 2027 ({HALF_DAY_DURATION_LABEL})" in lines
+    assert "Leave Period: 03 Mar 2027 (Half day)" in lines
+    # The letter never states the fraction, in either part of the message.
+    assert HALF_DAY_DURATION_LABEL not in call["text_body"]
+    assert HALF_DAY_DURATION_LABEL not in call["html_body"]
 
 
 @pytest.mark.parametrize("period", ["first_half", "second_half"])
@@ -333,7 +343,10 @@ def test_8_9c_the_decision_email_names_the_half(
     call = mailer.calls[1]
     assert call["to"] == "sowrish.s@cdccmms.com"
     assert call["subject"] == "Half Day Leave Request - Rejected"
-    assert f"Leave Type: {label}" in _detail_lines(call)
+    lines = _detail_lines(call)
+    assert f"Leave Type: {label}" in lines
+    # Same period wording as the submission email - one renderer, one rule.
+    assert "Leave Period: 03 Mar 2027 (Half day)" in lines
 
 
 def test_8_9d_the_subject_distinguishes_a_half_day_at_a_glance(

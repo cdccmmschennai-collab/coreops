@@ -11,6 +11,21 @@ It writes one `attendance_records` row per WORKING day of the range, with
 
 That is the whole of it, and the deduction comes free with it.
 
+PHASE 3A: HALF A DAY IS THE SAME APPROVAL, WRITTEN SMALLER
+==========================================================
+A request carrying a `half_day_period` writes `status = half_day` with
+`leave_day_fraction = 0.5` on its one working day, and nothing else about the
+approval differs - same planning, same skip rule, same audit row, same
+notification. `attendance_marking` is the entire branch; see it for why the
+fraction, and not the status, is what makes this employee leave rather than a
+company-wide half day.
+
+The pool follows without a rule of its own: `ledger.leave_days_for` already
+prices a stated fraction, so half a day costs half a day because the row SAYS
+half a day. Existing rows are untouched and unre-read - a `half_day` row that
+states no fraction still costs nothing, which is exactly what a company half day
+has always been.
+
 PHASE 3: THE DEDUCTION IS THE DAY
 =================================
 This module used to do a second thing - subtract the day count from
@@ -54,6 +69,24 @@ writes: status `leave`, both boundary times NULL, on a working day of the range.
 The moment a PM edits that day - adds a time, changes the status - it stops
 matching and is left alone. CoreOps never deletes a human decision here.
 
+PHASE 3B: THE REVERSAL LOOKS FOR THE ROW THE APPROVAL WROTE
+===========================================================
+That match used to be spelled `leave` ONLY, which left a cancelled half-day leave
+with its `half_day` row - and therefore its 0.5 - standing. It now asks
+`attendance_marking(req)` for the shape THAT request's approval produced and
+removes that, so apply and reverse read the same rule and neither can drift:
+
+    full day   looks for `leave`, by status alone       unchanged
+    half day   looks for `half_day` AND fraction 0.5
+
+Requiring the fraction is what keeps a company-wide half day - the same status
+stating NO quantity - out of reach of any cancellation. See `is_approval_row`.
+
+No restoring arithmetic came with it. Deleting the row is the restore, because
+the ledger prices what is there; a cancelled half day gives back exactly the 0.5
+its row was costing, and a cancellation the reviewer REJECTS deletes nothing and
+so restores nothing.
+
 BIOMETRIC EVIDENCE IS NOT TOUCHED
 =================================
 Nothing in this module reads or writes `biometric_punches`, and no punch is
@@ -81,8 +114,13 @@ from app.modules.calendar.working_days import (
     is_working_day,
     load_calendar_overrides,
 )
-from app.modules.leave.classification import classification_label, classify_leave
-from app.modules.leave.models import LeaveRequest, LeaveType
+from app.modules.leave.classification import classify_leave
+from app.modules.leave.models import (
+    HALF_DAY_LEAVE_FRACTION,
+    LeaveRequest,
+    LeaveType,
+    leave_type_label,
+)
 from app.modules.leave_balances import ledger
 from app.modules.users.models import User
 
@@ -116,6 +154,33 @@ MAX_LEAVE_RANGE_DAYS = 366
 def deducts_balance(leave_type: LeaveType) -> bool:
     """Whether this leave type is drawn from `available_leave`."""
     return leave_type in BALANCE_DEDUCTING_TYPES
+
+
+def attendance_marking(
+    req: LeaveRequest,
+) -> tuple[AttendanceStatus, Decimal | None]:
+    """The `(status, leave_day_fraction)` an approval of `req` writes per day.
+
+    THE ONE PLACE the half branches (Phase 3A), and the whole of the branch::
+
+        half_day_period is not NULL  ->  (half_day, 0.5)
+        half_day_period is NULL      ->  (leave,    None)   unchanged
+
+    A full-day leave keeps writing exactly the row it always wrote - status
+    `leave` with NO fraction stated - so `ledger.leave_days_for` reads it by the
+    pre-0083 rule and every existing day is priced at 1 as before.
+
+    A half-day leave writes `half_day` because that IS the day's attendance: the
+    employee worked the other half. The fraction is what separates it from the
+    company-wide half day, which states nothing (NULL) and therefore costs the
+    pool nothing - the two are the same status on purpose, and the quantity is
+    the only thing that distinguishes employee leave from an office that closed
+    at noon. Nothing else is introduced: no new status, no second column, and no
+    rule of its own in the ledger.
+    """
+    if req.half_day_period is not None:
+        return AttendanceStatus.half_day, HALF_DAY_LEAVE_FRACTION
+    return AttendanceStatus.leave, None
 
 
 @dataclass
@@ -176,6 +241,42 @@ def leave_working_days(db: Session, start_date: date, end_date: date) -> list[da
         for d in days
         if is_working_day(d, non_working=non_working, working_overrides=working_overrides)
     ]
+
+
+def is_approval_row(
+    record: AttendanceRecord,
+    status: AttendanceStatus,
+    fraction: Decimal | None,
+) -> bool:
+    """Whether `record` still looks exactly like the row THIS request's approval
+    wrote - the whole of the cancellation match rule (Phase 3B).
+
+    `status` and `fraction` come from `attendance_marking(req)`, so the reversal
+    looks for the shape the approval produced instead of assuming one:
+
+        full day   (leave, None)      status `leave`, no times      as before
+        half day   (half_day, 0.5)    status `half_day` AND the fraction
+
+    The fraction is only ever REQUIRED, never matched against NULL. A full-day
+    reversal therefore keeps identifying its rows by status alone, exactly as it
+    did before this phase, and no historical `leave` row changes eligibility.
+
+    For a half day it is the fraction that does the work: a company-wide half day
+    is the same status stating NO quantity, so matching `half_day` alone would let
+    one employee's cancelled half-day leave delete the office's own half day. The
+    quantity is the only thing that tells the two apart (see the module header),
+    and it is what the reversal requires.
+
+    Times are checked first and for both: a day a PM has since put a check-in on
+    is a human decision and is never removed.
+    """
+    if record.check_in_at is not None or record.check_out_at is not None:
+        return False
+    if record.status != status:
+        return False
+    if fraction is None:
+        return True
+    return record.leave_day_fraction == fraction
 
 
 def _existing_records(
@@ -258,6 +359,10 @@ def apply_leave_approved(
     # Every working day of the range, marked or already decided - the count the
     # classification is defined on, not just the days this approval writes.
     classification = classify_leave(len(to_mark) + len(skipped))
+    # Phase 3A: the ONLY thing a half-day request changes about its approval.
+    # Everything below - the day loop, the skip rule, the audit row, the
+    # recorded movement - is the full-day path, unbranched.
+    status, fraction = attendance_marking(req)
 
     # Read before the days are written, so the pair recorded below is the real
     # movement. Only for types that draw on the pool - an unpaid approval moves
@@ -274,15 +379,19 @@ def apply_leave_approved(
         record = AttendanceRecord(
             employee_id=req.employee_id,
             attendance_date=day,
-            status=AttendanceStatus.leave,
+            status=status,
+            leave_day_fraction=fraction,
             # Never a fabricated time. An approved leave day has no IN and no
             # OUT, which is exactly what the calendar popover renders as "-".
             check_in_at=None,
             check_out_at=None,
             total_minutes=0,
             overtime_minutes=0,
+            # Named by the composer every other Type surface uses, so the day
+            # says what the employee actually filed ("Half Day (First)") rather
+            # than the Normal/Special a one-day range would classify as.
             note=(
-                f"Approved {classification_label(classification)} "
+                f"Approved {leave_type_label(classification, req.half_day_period)} "
                 f"({_period(req)})."
             ),
             created_by=actor.id,
@@ -303,7 +412,7 @@ def apply_leave_approved(
             details={
                 "employee_id": str(req.employee_id),
                 "attendance_date": day.isoformat(),
-                "status": AttendanceStatus.leave.value,
+                "status": status.value,
                 "source": "leave_approval",
                 "leave_request_id": str(req.id),
             },
@@ -334,6 +443,10 @@ def reverse_leave_approved(
     """
     working = leave_working_days(db, req.start_date, req.end_date)
     existing = _existing_records(db, req.employee_id, working)
+    # The shape THIS request's approval wrote, from the same function that wrote
+    # it - so apply and reverse can never disagree about what an approval's row
+    # looks like, and a half day is withdrawn by the rule that granted it.
+    status, fraction = attendance_marking(req)
 
     deducting = deducts_balance(req.leave_type)
     # Read against the same month the approval charged - the last working day of
@@ -351,11 +464,7 @@ def reverse_leave_approved(
         record = existing.get(day)
         if record is None:
             continue
-        if (
-            record.status == AttendanceStatus.leave
-            and record.check_in_at is None
-            and record.check_out_at is None
-        ):
+        if is_approval_row(record, status, fraction):
             record_audit(
                 db,
                 action=AuditAction.ATTENDANCE_RECORD_DELETE,
@@ -365,7 +474,10 @@ def reverse_leave_approved(
                 details={
                     "employee_id": str(req.employee_id),
                     "attendance_date": day.isoformat(),
-                    "status": AttendanceStatus.leave.value,
+                    # The status actually removed, read off the row rather than
+                    # named, so the audit trail of a withdrawn half day says
+                    # `half_day` instead of claiming a `leave` day was deleted.
+                    "status": record.status.value,
                     "source": "leave_cancellation",
                     "leave_request_id": str(req.id),
                 },

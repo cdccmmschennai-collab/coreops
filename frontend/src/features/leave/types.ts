@@ -394,6 +394,37 @@ export function canRequestLeaveCancellation(
   return req.status === "approved" && isOwn(req, myEmployeeId) && req.end_date >= today;
 }
 
+/**
+ * Whether to offer Approve cancellation / Keep approved leave on the detail page.
+ *
+ * The exact shape of `canReviewPermissionCancellation`, deliberately: the two
+ * withdrawals are the same question asked about two sizes of absence, and the
+ * backend answers them with the same rule. `isReviewer` is passed in rather than
+ * derived from a role for the same reason `canReviewLeave` takes it - leave is
+ * reviewable by a project manager AND by the routed Project Head, and Head-ness
+ * is not a role but a per-project fact off the report scope.
+ *
+ * Beyond that: a withdrawal that is actually awaiting a decision, and never the
+ * reviewer's own request - a PM and a Head both file their own leave, half-day
+ * included. `half_day_period` is not consulted at all: a half day is withdrawn
+ * by the same person under the same rule as a full day, and adding a case for it
+ * would be inventing a second cancellation system.
+ *
+ * NOT AUTHORISATION. `service.py::_assert_can_review` is what actually refuses a
+ * decision, on every one of the four cancellation paths; this only decides what
+ * renders, so hiding the card never becomes the only thing standing between an
+ * unauthorised reader and the mutation.
+ */
+export function canReviewLeaveCancellation(
+  req: Pick<LeaveRequest, "status" | "employee_id">,
+  isReviewer: boolean,
+  myEmployeeId: string | null | undefined,
+): boolean {
+  if (!isReviewer) return false;
+  if (req.status !== "cancellation_requested") return false;
+  return !myEmployeeId || req.employee_id !== myEmployeeId;
+}
+
 // ---------- PM leave queues (inner tabs of the Leave tab) -------------------
 
 // `permission` is the 1h/2h permission queue (Phase 11). It lives here rather
@@ -483,6 +514,30 @@ export function leaveReturnHref(raw: string | null | undefined): string {
   const target = (raw ?? "").trim();
   const [path] = target.split("?");
   return path === "/attendance" ? target : LEAVE_LIST_HREF;
+}
+
+/**
+ * What the back link on Leave Detail CALLS the place it goes.
+ *
+ * The href has always been right - `leaveReturnHref` round-trips whichever queue
+ * opened the page - but the label was the constant "← Leave Requests", so a
+ * reviewer who opened a withdrawal from Cancellation requests was told the link
+ * led somewhere it did not. That is the one thing the brief rules out: a
+ * cancellation reviewer must not be pointed at an unrelated Leave Requests tab,
+ * and after Approve / Keep they land back here by the same href.
+ *
+ * Read off the RESOLVED href, never the raw parameter, so a `from` that was
+ * rejected as a destination cannot still name one. Only the cancellation queue
+ * gets its own wording; every other queue is a leave-request queue and keeps the
+ * label it has always had, so no existing back link changes.
+ *
+ * Mirrors how `permission-detail.tsx` picks between its two labels - off the href
+ * it is actually going to use.
+ */
+export function leaveReturnLabel(raw: string | null | undefined): string {
+  const [, query = ""] = leaveReturnHref(raw).split("?");
+  const queue = new URLSearchParams(query).get("queue");
+  return queue === "cancellation" ? "← Cancellation Requests" : "← Leave Requests";
 }
 
 /** The list params a queue's TAB BADGE counts with.
