@@ -830,14 +830,14 @@ export function ActivityMasterManager() {
 
   return (
     <div className="space-y-4">
-      {/* The search input (w-full) takes every column the button leaves; the
-          button keeps its intrinsic size (shrink-0) and stays right-aligned. */}
-      <div ref={topRef} className="flex items-center gap-3">
+      {/* Search input takes the left 60% of the row; the button keeps its
+          intrinsic size (shrink-0) and stays right-aligned, gap in between. */}
+      <div ref={topRef} className="flex items-center justify-between gap-3">
         <Input
           placeholder="Search activities and sub-activities…"
           value={search}
           onChange={(e) => handleSearchChange(e.target.value)}
-          className="min-w-0 flex-1"
+          className="w-[60%] min-w-0"
           aria-label="Search activities and sub-activities"
         />
         {!showForm && (
