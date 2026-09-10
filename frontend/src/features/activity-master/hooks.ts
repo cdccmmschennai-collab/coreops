@@ -39,6 +39,19 @@ export function useSubActivityOptions() {
   return { items, byId, isLoading: query.isLoading };
 }
 
+/** Every sub-activity across every Activity (active + inactive, restricted
+ * included) - the Activity Master's search index. Fetched only while the PM
+ * is actually searching (`enabled`), and a descendant of `all` so any master
+ * mutation refreshes it. */
+export function useActivityMasterSearchIndex(enabled: boolean) {
+  return useQuery({
+    queryKey: activityMasterKeys.searchIndex(),
+    queryFn: () => activityMasterApi.listAllSubActivitiesForManagement(),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 function useInvalidateActivityMaster() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: activityMasterKeys.all });

@@ -11,6 +11,8 @@
   PATCH  /activity-master/sub-activities/{id}                 update (PM)
   DELETE /activity-master/sub-activities/{id}                 soft-deactivate (PM)
   GET    /activity-master/sub-activities                      flat list-all, for dropdowns (auth)
+                                                              ?include_restricted=true bypasses the
+                                                              per-employee access filter (PM only)
 """
 import uuid
 
@@ -34,7 +36,8 @@ from app.modules.activity_master.schemas import (
     SubActivityFlatOut,
 )
 from app.modules.employees.service import _current_employee
-from app.modules.users.models import User
+from app.modules.users.models import User, UserRole
+from app.shared.errors import AppError
 
 router = APIRouter(prefix="/activity-master", tags=["activity-master"])
 
@@ -93,6 +96,7 @@ def create_sub_activity(
 @router.get("/sub-activities", response_model=list[SubActivityFlatOut])
 def list_all_sub_activities_flat(
     active_only: bool = Query(default=True),
+    include_restricted: bool = Query(default=False),
     user: User = AuthUser,
     db: Session = Depends(get_db),
 ) -> list[SubActivityFlatOut]:
@@ -100,6 +104,15 @@ def list_all_sub_activities_flat(
     # report) only sees COMMON sub-activities plus RESTRICTED ones they've been
     # granted. The employee is derived from the authenticated identity — never
     # client-supplied. A user with no employee profile sees only COMMON.
+    #
+    # include_restricted=true is the Activity Master's management view: the PM
+    # searches every sub-activity regardless of their own grants. PM-only; the
+    # default (report dropdown) path is unchanged.
+    if include_restricted:
+        if user.role != UserRole.project_manager:
+            raise AppError("forbidden", "Insufficient role for this action.", 403)
+        rows = service.list_all_sub_activities_flat(db, active_only=active_only, employee_id=None)
+        return [SubActivityFlatOut.model_validate(r) for r in rows]
     employee = _current_employee(db, user)
     rows = service.list_all_sub_activities_flat(
         db, active_only=active_only, employee_id=employee.id if employee else None

@@ -38,11 +38,13 @@ import { Tabs } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
 import { formatInt } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { ActivityAccessBadge } from "@/features/activity-access/components/activity-access-badge";
 import { ActivityAccessTab } from "@/features/activity-access/components/activity-access-tab";
 
 import {
   useActivities,
+  useActivityMasterSearchIndex,
   useCreateActivity,
   useCreateSubActivity,
   useDeactivateActivity,
@@ -62,6 +64,7 @@ import {
   isQuantityBenchmark,
   isTaskBenchmark,
 } from "../types";
+import { searchActivityMaster } from "../search";
 import type { ActivityMaster, BenchmarkType, RelevantCountField } from "../types";
 
 const NONE = "__none__";
@@ -499,7 +502,23 @@ function SubActivityForm({
 
 // ── Sub-Activities panel (shown when an Activity is expanded) ───────────────
 
-function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
+/** The search's primary hit inside this panel: which row to scroll to and
+ *  flash. `key` changes with every search term so the same row flashes again
+ *  when the PM retypes a term that lands on it. */
+export interface SearchFocus {
+  subActivityId: string;
+  key: string;
+}
+
+export const SEARCH_FLASH_MS = 2000;
+
+function SubActivitiesPanel({
+  activity,
+  searchFocus = null,
+}: {
+  activity: ActivityMaster;
+  searchFocus?: SearchFocus | null;
+}) {
   const [showForm, setShowForm] = React.useState(false);
   const [editing, setEditing] = React.useState<ActivityMaster | null>(null);
 
@@ -508,6 +527,27 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
   const reactivateMutation = useReactivateSubActivity();
 
   const items = query.data ?? [];
+
+  // Temporary "the search found this row" flash. Derived from searchFocus, not
+  // a selected state: it appears once the rows are rendered, scrolls the row
+  // into view (only if needed - `nearest` never jumps the page), and clears
+  // itself after SEARCH_FLASH_MS. The effect cleanup cancels the timer, so a
+  // rapid DATABASE -> BACKEND -> MTL retype never leaves a stale flash behind.
+  const [flashId, setFlashId] = React.useState<string | null>(null);
+  const rowRefs = React.useRef(new Map<string, HTMLTableRowElement>());
+  const focusId = searchFocus?.subActivityId ?? null;
+  const focusKey = searchFocus?.key ?? null;
+  const rowsReady = !query.isLoading;
+  React.useEffect(() => {
+    if (!focusId || !rowsReady) {
+      setFlashId(null);
+      return;
+    }
+    rowRefs.current.get(focusId)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setFlashId(focusId);
+    const timer = window.setTimeout(() => setFlashId(null), SEARCH_FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusId, focusKey, rowsReady]);
 
   function closeForm() {
     setEditing(null);
@@ -576,7 +616,22 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
               </TableRow>
             )}
             {items.map((sub) => (
-              <TableRow key={sub.id} className={!sub.is_active ? "opacity-50" : ""}>
+              <TableRow
+                key={sub.id}
+                ref={(el) => {
+                  if (el) rowRefs.current.set(sub.id, el);
+                  else rowRefs.current.delete(sub.id);
+                }}
+                data-sub-activity-id={sub.id}
+                data-search-flash={flashId === sub.id ? "true" : undefined}
+                className={cn(
+                  !sub.is_active && "opacity-50",
+                  // Slow the row's own transition-colors while a search focus
+                  // is live so the flash fades out rather than snapping off.
+                  focusId && "duration-700",
+                  flashId === sub.id && "bg-accent",
+                )}
+              >
                 <TableCell className="font-medium">{sub.name}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {/* Quantity modes show target/period/unit; a status-only task
@@ -648,7 +703,13 @@ function SubActivitiesPanel({ activity }: { activity: ActivityMaster }) {
 
 // ── Expanded activity row: Sub-Activities / Access tabs ─────────────────────
 
-function ExpandedActivityPanel({ activity }: { activity: ActivityMaster }) {
+function ExpandedActivityPanel({
+  activity,
+  searchFocus = null,
+}: {
+  activity: ActivityMaster;
+  searchFocus?: SearchFocus | null;
+}) {
   // Sub-Activities stays the default so existing behaviour is preserved; the
   // Access tab (and its network request) only mounts when the PM opens it.
   const [tab, setTab] = React.useState<"sub" | "access">("sub");
@@ -665,7 +726,7 @@ function ExpandedActivityPanel({ activity }: { activity: ActivityMaster }) {
         />
       </div>
       {tab === "sub" ? (
-        <SubActivitiesPanel activity={activity} />
+        <SubActivitiesPanel activity={activity} searchFocus={searchFocus} />
       ) : (
         <ActivityAccessTab activity={activity} />
       )}
@@ -678,15 +739,61 @@ function ExpandedActivityPanel({ activity }: { activity: ActivityMaster }) {
 export function ActivityMasterManager() {
   const [showForm, setShowForm] = React.useState(false);
   const [editing, setEditing] = React.useState<ActivityMaster | null>(null);
+  // The PM's own expansion (one activity at a time, as before). Search never
+  // writes to it: search-driven expansion is a derived overlay (below) that
+  // disappears with the term, so clearing the search restores exactly this.
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [search, setSearch] = React.useState("");
+  // Rows the PM toggled by hand WHILE a search was active (e.g. collapsing an
+  // auto-expanded parent). Scoped to the current term: retyping resets it.
+  const [searchToggles, setSearchToggles] = React.useState<Record<string, boolean>>({});
 
   const query = useActivities(false);
+  const searchIndex = useActivityMasterSearchIndex(search.trim().length > 0);
   const deactivateMutation = useDeactivateActivity();
   const reactivateMutation = useReactivateActivity();
 
-  const items = query.data ?? [];
-  const filtered = items.filter((a) => a.name.toLowerCase().includes(search.toLowerCase()));
+  const items = React.useMemo(() => query.data ?? [], [query.data]);
+  const subIndex = React.useMemo(() => searchIndex.data ?? [], [searchIndex.data]);
+  // Derived search state: which activities to show (ranked), which parents to
+  // auto-expand, and the single sub-activity row to scroll to + flash.
+  const result = React.useMemo(
+    () => searchActivityMaster(items, subIndex, search),
+    [items, subIndex, search],
+  );
+  const autoExpanded = React.useMemo(
+    () => new Set(result.expandActivityIds),
+    [result.expandActivityIds],
+  );
+  const searchFocus: SearchFocus | null = result.primary
+    ? { subActivityId: result.primary.subActivityId, key: search }
+    : null;
+  // Still fetching the sub-activity index for a fresh term: hold the empty
+  // state back so it doesn't flash before the hierarchy can be searched.
+  const indexPending = result.active && searchIndex.isLoading;
+
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    setSearchToggles({});
+  }
+
+  function isRowExpanded(activityId: string): boolean {
+    if (!result.active) return expanded === activityId;
+    const manual = searchToggles[activityId];
+    if (manual !== undefined) return manual;
+    return expanded === activityId || autoExpanded.has(activityId);
+  }
+
+  function toggleRow(activityId: string) {
+    if (!result.active) {
+      setExpanded(expanded === activityId ? null : activityId);
+      return;
+    }
+    // While searching, a click only adjusts the search overlay - the PM's
+    // pre-search expansion is untouched and comes back when the term clears.
+    const next = !isRowExpanded(activityId);
+    setSearchToggles((prev) => ({ ...prev, [activityId]: next }));
+  }
 
   // The activity form always renders at the top of this panel. Editing a row far
   // down the table would otherwise open the form off-screen; bring it into view
@@ -723,15 +830,22 @@ export function ActivityMasterManager() {
 
   return (
     <div className="space-y-4">
-      <div ref={topRef} className="flex items-center justify-between gap-3">
+      {/* The search input (w-full) takes every column the button leaves; the
+          button keeps its intrinsic size (shrink-0) and stays right-aligned. */}
+      <div ref={topRef} className="flex items-center gap-3">
         <Input
-          placeholder="Search activities…"
+          placeholder="Search activities and sub-activities…"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="max-w-xs"
+          onChange={(e) => handleSearchChange(e.target.value)}
+          className="min-w-0 flex-1"
+          aria-label="Search activities and sub-activities"
         />
         {!showForm && (
-          <Button size="sm" onClick={() => { setEditing(null); setShowForm(true); }}>
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={() => { setEditing(null); setShowForm(true); }}
+          >
             <PlusCircle className="h-4 w-4" />
             New Activity
           </Button>
@@ -760,15 +874,19 @@ export function ActivityMasterManager() {
                 </TableCell>
               </TableRow>
             )}
-            {!query.isLoading && filtered.length === 0 && (
+            {!query.isLoading && result.activities.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="text-center text-muted-foreground">
-                  No activities found.
+                  {indexPending
+                    ? "Searching…"
+                    : result.active
+                      ? "No activities or sub-activities found."
+                      : "No activities found."}
                 </TableCell>
               </TableRow>
             )}
-            {filtered.map((a) => {
-              const isExpanded = expanded === a.id;
+            {result.activities.map(({ activity: a }) => {
+              const isExpanded = isRowExpanded(a.id);
               return (
                 <React.Fragment key={a.id}>
                   <TableRow className={!a.is_active ? "opacity-50" : ""}>
@@ -777,7 +895,7 @@ export function ActivityMasterManager() {
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6"
-                        onClick={() => setExpanded(isExpanded ? null : a.id)}
+                        onClick={() => toggleRow(a.id)}
                         aria-label={isExpanded ? "Collapse" : "Expand"}
                       >
                         {isExpanded ? (
@@ -837,7 +955,12 @@ export function ActivityMasterManager() {
                   {isExpanded && (
                     <TableRow>
                       <TableCell colSpan={6} className="p-0">
-                        <ExpandedActivityPanel activity={a} />
+                        <ExpandedActivityPanel
+                          activity={a}
+                          searchFocus={
+                            searchFocus && result.primary?.activityId === a.id ? searchFocus : null
+                          }
+                        />
                       </TableCell>
                     </TableRow>
                   )}

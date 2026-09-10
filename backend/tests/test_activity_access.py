@@ -122,6 +122,59 @@ def test_inactive_activity_hidden_regardless_of_access(client, pm, make_worker):
     assert sub["id"] not in _dropdown_ids(client, w["header"])
 
 
+# ── include_restricted: the Activity Master's management view ───────────────
+
+@pytest.fixture()
+def pm_with_profile(make_user, make_employee, login):
+    """A PM who ALSO has an employee profile - the case the per-employee dropdown
+    filter applies to (a PM filing their own report)."""
+    u = make_user("pm.profile@x.com", role=UserRole.project_manager)
+    make_employee(employee_code="PM1", user_id=u.id, first_name="PM", last_name="One")
+    return login("pm.profile@x.com")
+
+
+def test_pm_dropdown_still_filtered_by_own_grants(client, pm_with_profile, make_worker):
+    a = _activity(client, pm_with_profile, name="Secret")
+    sub = _sub(client, pm_with_profile, a["id"])
+    w = make_worker("emp@x.com", "E1")
+    _restrict(client, pm_with_profile, a["id"], [w["emp"].id])
+    # Default path unchanged: the PM's own report dropdown hides ungranted rows.
+    assert sub["id"] not in _dropdown_ids(client, pm_with_profile)
+
+
+def test_pm_include_restricted_returns_ungranted_rows(client, pm_with_profile, make_worker):
+    a = _activity(client, pm_with_profile, name="Secret")
+    sub = _sub(client, pm_with_profile, a["id"])
+    w = make_worker("emp@x.com", "E1")
+    _restrict(client, pm_with_profile, a["id"], [w["emp"].id])
+    res = client.get(f"{AM}/sub-activities?include_restricted=true", headers=pm_with_profile)
+    assert res.status_code == 200, res.text
+    rows = {r["id"]: r for r in res.json()}
+    assert sub["id"] in rows
+    assert rows[sub["id"]]["activity_id"] == a["id"]
+
+
+def test_include_restricted_with_inactive_rows(client, pm_with_profile):
+    a = _activity(client, pm_with_profile, name="Secret")
+    sub = _sub(client, pm_with_profile, a["id"])
+    client.delete(f"{AM}/sub-activities/{sub['id']}", headers=pm_with_profile)
+    active = client.get(f"{AM}/sub-activities?include_restricted=true", headers=pm_with_profile)
+    assert sub["id"] not in {r["id"] for r in active.json()}
+    everything = client.get(
+        f"{AM}/sub-activities?include_restricted=true&active_only=false", headers=pm_with_profile
+    )
+    rows = {r["id"]: r for r in everything.json()}
+    assert sub["id"] in rows and rows[sub["id"]]["is_active"] is False
+
+
+def test_employee_cannot_include_restricted(client, pm, make_worker):
+    a = _activity(client, pm, name="Secret")
+    _sub(client, pm, a["id"])
+    w = make_worker("emp@x.com", "E1")
+    res = client.get(f"{AM}/sub-activities?include_restricted=true", headers=w["header"])
+    assert res.status_code == 403
+
+
 # ── RBAC on management ───────────────────────────────────────────────────────
 
 def test_employee_cannot_change_access_type(client, pm, make_worker):

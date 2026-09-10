@@ -5,6 +5,10 @@ export const activityMasterKeys = {
     [...activityMasterKeys.all, "sub-activities", activityId, activeOnly] as const,
   flatSubActivities: (activeOnly?: boolean) =>
     [...activityMasterKeys.all, "sub-activities-flat", activeOnly] as const,
+  // Activity Master search index: every sub-activity (active + inactive,
+  // restricted included). Its own key so it never serves the access-filtered
+  // report dropdown, and vice versa.
+  searchIndex: () => [...activityMasterKeys.all, "search-index"] as const,
   // Benchmark Guide read-only view. Deliberately a descendant of `all` so every
   // Activity Master mutation (which invalidates `all`) also refreshes the guide.
   // `scope` is a permission discriminator (role + employee) so one browser

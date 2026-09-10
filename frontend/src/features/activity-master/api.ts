@@ -47,4 +47,10 @@ export const activityMasterApi = {
 
   listAllSubActivitiesFlat: (activeOnly?: boolean) =>
     api.get<SubActivityFlat[]>(`/activity-master/sub-activities${q(activeOnly)}`),
+  // PM-only management view: bypasses the per-employee restricted-activity
+  // filter so the Activity Master can search every sub-activity.
+  listAllSubActivitiesForManagement: () =>
+    api.get<SubActivityFlat[]>(
+      "/activity-master/sub-activities?active_only=false&include_restricted=true",
+    ),
 };
