@@ -766,6 +766,41 @@ def test_leave_for_one_employee_does_not_suppress_another(db):
     assert _missing_codes(_collect(db)) == {"EMP004"}
 
 
+def _make_attendance(db, *, employee_id, day, status):
+    from app.modules.attendance.models import AttendanceRecord
+
+    record = AttendanceRecord(
+        employee_id=employee_id, attendance_date=day, status=status,
+        total_minutes=0, overtime_minutes=0,
+    )
+    db.add(record)
+    db.commit()
+    return record
+
+
+def test_manual_leave_record_suppresses_missing(db):
+    """A PM marking the day Leave in Records, with no request, is the same
+    absence to the reminder as an approved request."""
+    from app.modules.attendance.models import AttendanceStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_attendance(db, employee_id=emp.id, day=_WED, status=AttendanceStatus.leave)
+
+    assert _collect(db) == []
+
+
+def test_manual_non_leave_record_does_not_suppress_missing(db):
+    from app.modules.attendance.models import AttendanceStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_attendance(db, employee_id=emp.id, day=_WED, status=AttendanceStatus.half_day)
+    _make_attendance(db, employee_id=emp.id, day=_TUE, status=AttendanceStatus.leave)
+
+    assert _missing_codes(_collect(db)) == {"EMP001"}
+
+
 # --- Celery task ------------------------------------------------------------
 
 

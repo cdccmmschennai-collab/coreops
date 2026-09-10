@@ -838,6 +838,43 @@ def approved_leave_days(db: Session, dates: list[date]) -> dict[date, set[uuid.U
     return by_date
 
 
+def recorded_leave_days(db: Session, dates: list[date]) -> dict[date, set[uuid.UUID]]:
+    """`{date: employees whose attendance row says leave}`, over `dates` only.
+
+    The second source of an absence. A PM can mark a day Leave straight in
+    Records, with no request behind it - it costs the employee the day from the
+    same ledger an approval does, so it owes the same automatic report. Read
+    from `attendance_records` because that is the only place such a day exists.
+
+    No calendar walk is needed: the row names its own date, and
+    `_generate_leave_for_date` still refuses a non-working one. An approval's
+    own rows land here too and merge harmlessly with `approved_leave_days` -
+    the sweep is idempotent per (employee, date) either way.
+    """
+    if not dates:
+        return {}
+    rows = db.execute(
+        select(AttendanceRecord.employee_id, AttendanceRecord.attendance_date).where(
+            AttendanceRecord.attendance_date.in_(dates),
+            AttendanceRecord.status == AttendanceStatus.leave,
+        )
+    ).all()
+    by_date: dict[date, set[uuid.UUID]] = {}
+    for emp_id, day in rows:
+        by_date.setdefault(day, set()).add(emp_id)
+    return by_date
+
+
+def _merge_by_date(
+    *sources: dict[date, set[uuid.UUID]],
+) -> dict[date, set[uuid.UUID]]:
+    merged: dict[date, set[uuid.UUID]] = {}
+    for source in sources:
+        for day, emp_ids in source.items():
+            merged.setdefault(day, set()).update(emp_ids)
+    return merged
+
+
 def generate_auto_leave_reports(
     db: Session | None = None,
     *,
@@ -883,8 +920,13 @@ def generate_auto_leave_reports(
             non_working, working_overrides = load_calendar_overrides(
                 db, min(result.dates), max(result.dates)
             )
-            # One leave query for the whole window, not one per date.
-            on_leave = approved_leave_days(db, result.dates)
+            # One query per source for the whole window, not one per date. An
+            # approved request and a PM's manual Leave record are the same
+            # absence to this sweep.
+            on_leave = _merge_by_date(
+                approved_leave_days(db, result.dates),
+                recorded_leave_days(db, result.dates),
+            )
             for target in result.dates:
                 _generate_leave_for_date(
                     db,
@@ -1411,21 +1453,50 @@ def _live_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
     }
 
 
+def _recorded_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
+    """The pairs whose `attendance_records` row says `leave`.
+
+    The mirror of `_attendance_denies_leave`: the same table, the other verdict.
+    A PM marking a day Leave in Records is an absence with no request behind it,
+    and it stands for exactly as long as that row does - a later change to
+    present lands in the denial set instead, and a deleted row is neither.
+    """
+    if not pairs:
+        return set()
+    employee_ids, dates = _split_pairs(pairs)
+    rows = db.execute(
+        select(AttendanceRecord.employee_id, AttendanceRecord.attendance_date).where(
+            AttendanceRecord.employee_id.in_(employee_ids),
+            AttendanceRecord.attendance_date.in_(dates),
+            AttendanceRecord.status == AttendanceStatus.leave,
+        )
+    ).all()
+    return {(emp, day) for emp, day in rows} & pairs
+
+
 def active_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
     """Which of `pairs` are days the employee's absence is still IN FORCE on.
 
-    The whole of Phase 3F's central question, in one place, over a batch. Two
-    reads of two tables that already own their half of the answer:
+    The whole of Phase 3F's central question, in one place, over a batch. Reads
+    of the two tables that already own their half of the answer:
 
         a live leave request covers the day          -> in force
         MINUS an attendance row that is not `leave`  -> a PM ruled otherwise
+        PLUS an attendance row that IS `leave`       -> a PM ruled it an absence
+
+    The last line is what makes a manual Leave record in Records behave like an
+    approval: it generates a report at 01:00 and keeps it locked until the PM
+    changes or deletes the row. A pair has at most one attendance row, so the
+    PLUS and MINUS sets can never overlap.
 
     Nothing is written and no decision is made here; the callers decide what an
     inactive day means for a report (reconciliation) or for generation.
     """
     if not pairs:
         return set()
-    return _live_leave_pairs(db, pairs) - _attendance_denies_leave(db, pairs)
+    return (
+        _live_leave_pairs(db, pairs) - _attendance_denies_leave(db, pairs)
+    ) | _recorded_leave_pairs(db, pairs)
 
 
 def leave_is_active_on(

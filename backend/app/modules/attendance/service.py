@@ -521,6 +521,14 @@ def delete_attendance(db: Session, actor: User, record_id: uuid.UUID) -> None:
         leave_day_fraction=record.leave_day_fraction,
     )
     db.delete(record)
+    db.flush()
+    # A manual Leave row was the whole of the absence (no request behind it), so
+    # its automatic leave report has nothing left to stand on. Same transaction;
+    # a day a live request still covers is left alone by the reconciliation.
+    if gone.status == AttendanceStatus.leave:
+        reconcile_auto_leave_reports(
+            db, [(gone.employee_id, gone.attendance_date)], commit=False
+        )
     db.commit()
     _notify_rulings(db, actor, [(gone, gone.status)], deleted=True)
 

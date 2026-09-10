@@ -781,3 +781,135 @@ def test_an_empty_target_set_is_a_no_op(db, employee, approved_week):
     assert result.dates == []
     assert result.examined == 0
     assert _dates_of(db, employee.id) == _WEEK
+
+
+# ===========================================================================
+# K. a PM's MANUAL Leave record - an absence with no request behind it
+# ===========================================================================
+
+
+def test_a_manual_leave_record_gets_the_same_auto_report(db, pm, employee):
+    """No leave request at all: the PM marked the day Leave in Records."""
+    from app.modules.attendance import service as attendance_service
+
+    attendance_service.create_attendance(
+        db,
+        pm,
+        AttendanceCreate(
+            employee_id=employee.id, attendance_date=_WED, status=AttendanceStatus.leave
+        ),
+    )
+
+    result = _generate(db)
+
+    assert result.created == 1
+    report = _report(db, employee.id, _WED)
+    assert report is not None
+    assert report.origin == ReportOrigin.auto
+    assert report.day_status == AUTO_LEAVE_DAY_STATUS
+    assert auto_report_author_editable(report) is False
+    assert _dates_of(db, employee.id) == [_WED]
+    assert leave_is_active_on(db, employee.id, _WED) is True
+
+
+def test_a_manual_leave_record_on_a_closed_day_is_the_week_off_sweeps(
+    db, employee
+):
+    _attendance(db, employee.id, _SAT_OFF)
+
+    result = _generate(db, dates=[_SAT_OFF])
+
+    assert result.created == 0
+    assert result.non_working_dates == 1
+
+
+def test_a_manual_leave_record_yields_to_the_employees_own_report(db, employee):
+    _attendance(db, employee.id, _WED)
+    db.add(
+        DailyWorkReport(
+            employee_id=employee.id,
+            report_date=_WED,
+            status=WorkReportStatus.submitted,
+            origin=ReportOrigin.employee,
+            report_mode=ReportMode.full_day.value,
+            day_status=DayStatus.leave,
+            total_minutes=0,
+        )
+    )
+    db.commit()
+
+    result = _generate(db)
+
+    assert result.created == 0
+    assert result.skipped_existing == 1
+    assert _report(db, employee.id, _WED).origin == ReportOrigin.employee
+
+
+def test_a_manual_half_day_record_generates_nothing(db, employee):
+    """Half a day worked is half a day to report on - the employee files it."""
+    _attendance(db, employee.id, _WED, status=AttendanceStatus.half_day)
+
+    assert _generate(db).created == 0
+    assert _report(db, employee.id, _WED) is None
+
+
+def test_the_sweep_files_once_when_request_and_record_agree(
+    db, employee, approved_week
+):
+    """An approval's own rows are also Leave rows; the two sources merge."""
+    for day in _WEEK:
+        _attendance(db, employee.id, day)
+
+    result = _generate(db)
+
+    assert result.created == 5
+    assert _dates_of(db, employee.id) == _WEEK
+    assert _generate(db).created == 0
+
+
+def test_pm_changing_a_manual_leave_record_releases_its_report(db, pm, employee):
+    from app.modules.attendance import service as attendance_service
+
+    record = _attendance(db, employee.id, _WED)
+    _generate(db)
+    assert _report(db, employee.id, _WED) is not None
+
+    attendance_service.update_attendance(
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present)
+    )
+
+    assert _report(db, employee.id, _WED) is None
+    assert leave_is_active_on(db, employee.id, _WED) is False
+    # And 01:00 does not bring it back.
+    assert _generate(db).created == 0
+
+
+def test_pm_deleting_a_manual_leave_record_releases_its_report(db, pm, employee):
+    from app.modules.attendance import service as attendance_service
+
+    record = _attendance(db, employee.id, _WED)
+    _generate(db)
+    assert _report(db, employee.id, _WED) is not None
+
+    attendance_service.delete_attendance(db, pm, record.id)
+
+    assert _report(db, employee.id, _WED) is None
+    assert leave_is_active_on(db, employee.id, _WED) is False
+    assert _generate(db).created == 0
+
+
+def test_deleting_an_approvals_row_keeps_the_report_while_the_request_stands(
+    db, pm, employee, approved_week
+):
+    """The request is still approved, so the absence still stands: deleting the
+    attendance row alone must not free the slot (the formal route is the
+    cancellation, which reverses the rows AND ends the request)."""
+    from app.modules.attendance import service as attendance_service
+
+    record = _attendance(db, employee.id, _WED)
+    _generate(db)
+
+    attendance_service.delete_attendance(db, pm, record.id)
+
+    assert _report(db, employee.id, _WED) is not None
+    assert leave_is_active_on(db, employee.id, _WED) is True

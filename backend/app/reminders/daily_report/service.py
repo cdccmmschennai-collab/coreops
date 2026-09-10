@@ -37,6 +37,7 @@ from datetime import date
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.calendar.working_days import (
     DEFAULT_MAX_LOOKBACK_DAYS,
     previous_working_day,
@@ -214,8 +215,13 @@ class DailyReportReminderService:
         or ``cancellation_requested`` (the absence stands until the cancellation
         is actually decided). ``pending``, ``rejected`` and ``cancelled`` never
         suppress.
+
+        A day a PM marked Leave directly in Records - no request behind it - is
+        the same absence, and is read from ``attendance_records``; it is the
+        same second source ``work_reports.auto_reports`` files a leave report
+        from.
         """
-        rows = db.execute(
+        requested = db.execute(
             select(LeaveRequest.employee_id).where(
                 LeaveRequest.employee_id.in_(employee_ids),
                 LeaveRequest.status.in_(_ACTIVE_LEAVE_STATUSES),
@@ -223,7 +229,14 @@ class DailyReportReminderService:
                 LeaveRequest.end_date >= target,
             )
         ).scalars()
-        return set(rows)
+        recorded = db.execute(
+            select(AttendanceRecord.employee_id).where(
+                AttendanceRecord.employee_id.in_(employee_ids),
+                AttendanceRecord.attendance_date == target,
+                AttendanceRecord.status == AttendanceStatus.leave,
+            )
+        ).scalars()
+        return set(requested) | set(recorded)
 
     def _pm_display_names(
         self, db: Session, pms: list[User]
