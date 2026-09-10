@@ -30,6 +30,7 @@ import {
   CONTINUATION_PENDING_DETAIL,
   CONTINUATION_PENDING_TITLE,
   continuationRowStatus,
+  isContinuationRow,
 } from "./open-task-state.ts";
 import * as openTaskState from "./open-task-state.ts";
 import type { OpenTask } from "./types.ts";
@@ -146,4 +147,31 @@ test("the pending copy claims nothing is blocked", () => {
   for (const claim of ["complete", "submit", "recorded work", "removed", "cannot"]) {
     assert.equal(copy.includes(claim), false, `pending copy still says "${claim}"`);
   }
+});
+
+// --------------------------------------------------------------------------
+// which rows lock Project / Activity / Sub-Activity: only a real continuation
+// --------------------------------------------------------------------------
+test("a benchmark row (no work item) is never a continuation", () => {
+  assert.equal(isContinuationRow({ work_item_id: "" }, "2026-09-10"), false);
+  assert.equal(isContinuationRow({ work_item_id: null }, "2026-09-10"), false);
+});
+
+test("the originating row of a task (started on this report's date) is not a continuation", () => {
+  // Task-Based and Task-Based Count rows re-opened for edit both look like this.
+  assert.equal(
+    isContinuationRow({ work_item_id: "wi-1", started_date: "2026-09-10" }, "2026-09-10"),
+    false,
+  );
+});
+
+test("a row continuing a task started on an earlier report is a continuation", () => {
+  assert.equal(
+    isContinuationRow({ work_item_id: "wi-1", started_date: "2026-09-08" }, "2026-09-10"),
+    true,
+  );
+});
+
+test("a linked row whose start is unknown stays locked", () => {
+  assert.equal(isContinuationRow({ work_item_id: "wi-1" }, "2026-09-10"), true);
 });

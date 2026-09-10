@@ -57,6 +57,7 @@ import {
 import { scaledTarget } from "../benchmark-target";
 import {
   continuationRowStatus,
+  isContinuationRow,
   openTaskInlineSummary,
 } from "../open-task-state";
 import {
@@ -446,7 +447,16 @@ export function PeriodActivityEditor({
         const rowWorkItemId = watchedTasks?.[index]?.work_item_id;
         const rowLifecycle = watchedTasks?.[index]?.work_item_lifecycle;
         const rowStarted = watchedTasks?.[index]?.started_date;
-        const isContinuation = continuationEnabled && !!rowWorkItemId;
+        // Only a row continuing an item STARTED ON AN EARLIER REPORT is a
+        // continuation; the originating row of a task (every task-mode row
+        // re-opened for edit links its own item) keeps Project / Activity /
+        // Sub-Activity editable exactly like a benchmark row.
+        const isContinuation =
+          continuationEnabled &&
+          isContinuationRow(
+            { work_item_id: rowWorkItemId, started_date: rowStarted },
+            reportDate,
+          );
         // A manual sub-activity pick that matches an open work item ->
         // offer an explicit Continue existing / Start a new task choice
         // (unless already linked or the user chose Start-new for this row).
@@ -769,6 +779,11 @@ export function PeriodActivityEditor({
                             if (prev !== v) {
                               form.setValue(`tasks.${index}.count_field`, "");
                               form.setValue(`tasks.${index}.count_value`, "");
+                              // A saved due date belongs to the OLD
+                              // sub-activity's task; drop it so the Task
+                              // benchmark card previews the new period from
+                              // the report date (the server recomputes on save).
+                              form.setValue(`tasks.${index}.due_date`, undefined);
                             }
                             // Clear the OLD sub-activity's benchmarked count
                             // when the selection actually changes (see the

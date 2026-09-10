@@ -5,6 +5,7 @@ The feature is behind settings.TASK_CONTINUATION_ENABLED (default OFF). The
 `flag_on` fixture flips the singleton for the duration of a test; tests that omit
 it exercise the legacy path, proving disabled == old behaviour.
 """
+import uuid
 from datetime import date, timedelta
 
 import pytest
@@ -628,6 +629,174 @@ def test_resave_preserves_link_and_no_duplicate_item(flag_on, client, author, pm
     assert res.status_code == 200, res.text
     assert res.json()["tasks"][0]["work_item_id"] == wid
     assert db.query(WorkItem).count() == 1
+
+
+# --------------------------------------------------------------------------
+# editing the ORIGINATING row — Project (and sub-activity) stay editable on a
+# task-mode row exactly as on a benchmark row. Only a real continuation (a row
+# dated after the item's start) is pinned to its item's project.
+# --------------------------------------------------------------------------
+def _second_project(a, make_project, make_project_member, *, code="P-2"):
+    p2 = make_project(code=code, status=ProjectStatus.active)
+    make_project_member(project_id=p2.id, employee_id=a["emp"].id)
+    return p2
+
+
+def _patch_project(client, header, report, *, project_id, sub_id, work_item_id,
+                   description="work", extra=None):
+    task = {"project_id": str(project_id), "description": description,
+            "sub_activity_id": sub_id, "work_item_id": str(work_item_id),
+            "count_field": "tags", "count_value": 1}
+    if extra:
+        task.update(extra)
+    return client.patch(f"{BASE}/{report['id']}", headers=header,
+                        json={"tasks": [task]})
+
+
+@pytest.mark.parametrize("mode", ["TASK_STATUS_ONLY", "TASK_WITH_QUANTITY"])
+def test_originating_row_project_change_persists(
+    flag_on, client, author, pm_header, db, make_project, make_project_member, mode
+):
+    """Task-Based and Task-Based Count: the author changes Project on the row
+    that started the task; the API accepts it and the new project persists (on
+    the row AND its work item), with the old item cleaned up, not orphaned."""
+    a = author()
+    p2 = _second_project(a, make_project, make_project_member)
+    kw = {"count_field": "tags", "value": 10} if mode == "TASK_WITH_QUANTITY" else {}
+    _, sub = _task_sub(client, pm_header, period=2, **kw)
+    res = client.patch(f"/api/v1/activity-master/sub-activities/{sub['id']}",
+                       json={"benchmark_type": mode}, headers=pm_header)
+    assert res.status_code == 200 and res.json()["benchmark_type"] == mode, res.text
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=TODAY).json()
+    old_wid = r1["tasks"][0]["work_item_id"]
+    assert old_wid is not None
+
+    res = _patch_project(client, a["header"], r1, project_id=p2.id,
+                         sub_id=sub["id"], work_item_id=old_wid,
+                         description="re-pointed",
+                         extra={"tags_count": 3, "remarks": "moved"})
+    assert res.status_code == 200, res.text
+    row = res.json()["tasks"][0]
+    assert row["project_id"] == str(p2.id)
+    assert row["description"] == "re-pointed"
+    assert row["work_item_id"] is not None and row["work_item_id"] != old_wid
+    # Persisted, not just echoed.
+    saved = _get_report(client, a["header"], r1["id"])
+    assert saved["tasks"][0]["project_id"] == str(p2.id)
+    assert saved["report_date"] == TODAY.isoformat()
+    db.expire_all()
+    items = db.query(WorkItem).all()
+    assert len(items) == 1 and items[0].project_id == p2.id
+    assert items[0].started_on == TODAY
+
+
+def test_benchmark_row_project_change_still_works(
+    flag_on, client, author, pm_header, db, make_project, make_project_member
+):
+    a = author()
+    p2 = _second_project(a, make_project, make_project_member)
+    aa = client.post("/api/v1/activity-master/activities",
+                     json={"name": "Numeric A"}, headers=pm_header).json()
+    sub = client.post(
+        f"/api/v1/activity-master/activities/{aa['id']}/sub-activities",
+        json={"name": "Nums", "benchmark_type": "NUMERIC_DAILY",
+              "benchmark_value": 100, "relevant_count_field": "tags"},
+        headers=pm_header,
+    ).json()
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=TODAY, tags=40).json()
+    res = client.patch(f"{BASE}/{r1['id']}", headers=a["header"], json={
+        "tasks": [{"project_id": str(p2.id), "description": "work",
+                   "sub_activity_id": sub["id"], "tags_count": 40}],
+    })
+    assert res.status_code == 200, res.text
+    assert _get_report(client, a["header"], r1["id"])["tasks"][0]["project_id"] == str(p2.id)
+    assert db.query(WorkItem).count() == 0
+
+
+def test_true_continuation_still_pinned_to_project(
+    flag_on, client, author, pm_header, make_project, make_project_member
+):
+    """A row dated AFTER the item's start is a continuation: re-pointing it is
+    still refused, as before."""
+    a = author()
+    p2 = _second_project(a, make_project, make_project_member)
+    _, sub = _task_sub(client, pm_header, period=3)
+    start = TODAY - timedelta(days=2)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=start).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    r2 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=TODAY, work_item_id=wid).json()
+    res = _patch_project(client, a["header"], r2, project_id=p2.id,
+                         sub_id=sub["id"], work_item_id=wid)
+    assert res.status_code == 422, res.text
+    assert "same project" in res.json()["error"]["message"]
+
+
+def test_originating_row_project_change_blocked_when_continued(
+    flag_on, client, author, pm_header, db, make_project, make_project_member
+):
+    """Re-pointing the origin would behead the later continuations of that
+    task, so it is refused and nothing is touched."""
+    a = author()
+    p2 = _second_project(a, make_project, make_project_member)
+    _, sub = _task_sub(client, pm_header, period=3)
+    start = TODAY - timedelta(days=2)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=start).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    _post_report(client, a["header"], project_id=a["project"].id,
+                 sub_id=sub["id"], on_date=TODAY, work_item_id=wid)
+    res = _patch_project(client, a["header"], r1, project_id=p2.id,
+                         sub_id=sub["id"], work_item_id=wid)
+    assert res.status_code == 422, res.text
+    db.expire_all()
+    item = db.get(WorkItem, uuid.UUID(wid))
+    assert item is not None and item.project_id == a["project"].id
+    assert _get_report(client, a["header"], r1["id"])["tasks"][0]["project_id"] == str(a["project"].id)
+
+
+def test_project_change_ignores_report_date_and_keeps_authz(
+    flag_on, client, author, pm_header, auth_header, make_project, make_project_member
+):
+    """Security around the widened edit: Date is not an updatable field, a
+    non-author is refused, an unassigned project is refused, and a submitted
+    report is still locked."""
+    a = author()
+    p2 = _second_project(a, make_project, make_project_member)
+    _, sub = _task_sub(client, pm_header, period=2)
+    r1 = _post_report(client, a["header"], project_id=a["project"].id,
+                      sub_id=sub["id"], on_date=TODAY).json()
+    wid = r1["tasks"][0]["work_item_id"]
+    task = {"project_id": str(p2.id), "description": "work",
+            "sub_activity_id": sub["id"], "work_item_id": str(wid),
+            "count_field": "tags", "count_value": 1}
+
+    # Date: silently not part of the update.
+    res = client.patch(f"{BASE}/{r1['id']}", headers=a["header"], json={
+        "report_date": (TODAY - timedelta(days=1)).isoformat(), "tasks": [task],
+    })
+    assert res.status_code == 200, res.text
+    assert res.json()["report_date"] == TODAY.isoformat()
+
+    # Another employee cannot edit it at all.
+    other = auth_header(email="other@x.com", role=UserRole.employee)
+    assert client.patch(f"{BASE}/{r1['id']}", headers=other,
+                        json={"tasks": [task]}).status_code == 403
+
+    # A project the author is not assigned to is still refused.
+    unassigned = make_project(code="P-3", status=ProjectStatus.active)
+    bad = dict(task, project_id=str(unassigned.id))
+    assert client.patch(f"{BASE}/{r1['id']}", headers=a["header"],
+                        json={"tasks": [bad]}).status_code == 422
+
+    # Submitted -> locked, project change included.
+    assert client.post(f"{BASE}/{r1['id']}/submit", headers=a["header"]).status_code == 200
+    back = dict(task, project_id=str(a["project"].id))
+    assert client.patch(f"{BASE}/{r1['id']}", headers=a["header"],
+                        json={"tasks": [back]}).status_code == 403
 
 
 def test_cannot_behead_started_item_with_continuations(flag_on, client, author, pm_header):

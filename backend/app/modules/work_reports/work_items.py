@@ -331,6 +331,34 @@ def _fetch_item(db: Session, work_item_id: uuid.UUID) -> WorkItem:
     return item
 
 
+def _start_item(db: Session, *, report: DailyWorkReport, task_in, snap: dict) -> dict:
+    """START — a new lifecycle. target_days snapshotted (>= 1); the benchmark
+    master changing later must not move this deadline."""
+    target_days = max(1, int(snap.get("benchmark_period_days") or 1))
+    started_on = report.report_date
+    item = WorkItem(
+        employee_id=report.employee_id,
+        project_id=task_in.project_id,
+        sub_activity_id=task_in.sub_activity_id,
+        started_on=started_on,
+        target_days=target_days,
+        due_date=compute_due_date(db, started_on, target_days),
+        completed_on=started_on if bool(getattr(task_in, "is_completed", False)) else None,
+        activity_name=snap.get("activity_name"),
+        sub_activity_name=snap.get("sub_activity_name"),
+        project_code=snap.get("project_code"),
+        project_name=snap.get("project_name"),
+    )
+    db.add(item)
+    db.flush()  # assign item.id for the row FK
+    # A fresh item is on day 1 of its allowance — nothing to approve.
+    return {
+        "work_item_id": item.id,
+        "continuation_request_id": None,
+        **mirror_fields(item, report.report_date),
+    }
+
+
 def resolve_task_work_item(
     db: Session,
     *,
@@ -351,7 +379,10 @@ def resolve_task_work_item(
                (started_on = report date, target_days snapshot, due frozen).
       LINK   — task_in.work_item_id set: validate ownership/project/sub/date,
                attach a new daily entry to the SAME work item, never resetting
-               its started_on / due_date.
+               its started_on / due_date. One exception: the ORIGINATING row
+               (a re-save dated the item's own start) re-pointed at another
+               project / sub-activity takes the START path instead - see the
+               comment there.
 
     `existing_links` are the work items this report ALREADY linked before this
     save (empty on create). A LINK whose id is in that set is a re-save of an
@@ -375,31 +406,7 @@ def resolve_task_work_item(
     is_completed = bool(getattr(task_in, "is_completed", False))
 
     if work_item_id is None:
-        # START — a new lifecycle. target_days snapshotted (>= 1); the benchmark
-        # master changing later must not move this deadline.
-        target_days = max(1, int(snap.get("benchmark_period_days") or 1))
-        started_on = report.report_date
-        item = WorkItem(
-            employee_id=report.employee_id,
-            project_id=task_in.project_id,
-            sub_activity_id=task_in.sub_activity_id,
-            started_on=started_on,
-            target_days=target_days,
-            due_date=compute_due_date(db, started_on, target_days),
-            completed_on=started_on if is_completed else None,
-            activity_name=snap.get("activity_name"),
-            sub_activity_name=snap.get("sub_activity_name"),
-            project_code=snap.get("project_code"),
-            project_name=snap.get("project_name"),
-        )
-        db.add(item)
-        db.flush()  # assign item.id for the row FK
-        # A fresh item is on day 1 of its allowance — nothing to approve.
-        return {
-            "work_item_id": item.id,
-            "continuation_request_id": None,
-            **mirror_fields(item, report.report_date),
-        }
+        return _start_item(db, report=report, task_in=task_in, snap=snap)
 
     # LINK — continue an existing work item.
     if work_item_id in seen:
@@ -413,6 +420,22 @@ def resolve_task_work_item(
     item = _fetch_item(db, work_item_id)
     if item.employee_id != report.employee_id:
         raise AppError("forbidden", "You can only continue your own tasks.", 403)
+    is_resave = work_item_id in existing_links
+    # The row that STARTED this item (a re-save of the originating entry, dated
+    # the item's own start) being re-pointed at another project / sub-activity
+    # is not a continuation being bent - it is the task itself being corrected,
+    # exactly as any benchmark row's project is. Restart it as a fresh item; the
+    # caller's reconcile_removed_links then drops the old one when nothing else
+    # references it, or refuses the edit when later reports continue it.
+    if (
+        is_resave
+        and item.started_on == report.report_date
+        and (
+            item.project_id != task_in.project_id
+            or item.sub_activity_id != task_in.sub_activity_id
+        )
+    ):
+        return _start_item(db, report=report, task_in=task_in, snap=snap)
     if item.project_id != task_in.project_id:
         raise AppError(
             "validation_error", "A continued task must keep the same project.", 422
@@ -431,7 +454,6 @@ def resolve_task_work_item(
     # A re-save of an entry this report already had (id in existing_links) is
     # exempt — editing the originating/owning draft must still work, and it may
     # correct its own draft completion via _apply_completion below.
-    is_resave = work_item_id in existing_links
     if item.completed_on is not None and not is_resave:
         raise AppError(
             "validation_error",

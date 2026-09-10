@@ -235,6 +235,29 @@ export function continuationRowStatus(
 }
 
 /**
+ * Whether an editor row CONTINUES a work item that some earlier report started
+ * - the only case in which its Project / Activity / Sub-Activity are locked
+ * (the backend refuses to re-point a continuation, work_items LINK path).
+ *
+ * A saved task-mode row always carries its work_item_id back into the editor,
+ * so "has a work item" is not the question: the row that STARTED the item
+ * (started_date == the report's own date) is that item's identity, not a
+ * continuation of it, and stays as editable as any benchmark row. Re-pointing
+ * it simply starts a different task - the backend restarts the item and
+ * reconciles the old one.
+ */
+export function isContinuationRow(
+  row: { work_item_id?: string | null; started_date?: string | null },
+  reportDate: string | null | undefined,
+): boolean {
+  if (!row.work_item_id) return false;
+  // No start date on a linked row means the item's origin is unknown here;
+  // keep it locked rather than guess.
+  if (!row.started_date) return true;
+  return row.started_date !== reportDate;
+}
+
+/**
  * The whole of what a PENDING continuation says on a row - two short lines and
  * no more. Kept here rather than inline in ContinuationRowStatus so the copy is
  * a pure value the unit tests can pin, and so the compact (editor) and full
