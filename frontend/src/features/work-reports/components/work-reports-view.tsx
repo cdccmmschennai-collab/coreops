@@ -11,6 +11,7 @@ import { BenchmarkGuideButton } from "@/features/benchmark-guide/components/benc
 import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { useAuth } from "@/features/auth/auth-provider";
 import { can, isManagerial } from "@/lib/rbac";
+import { useUrlState } from "@/lib/use-url-state";
 
 import {
   WorkReportsFilters,
@@ -23,6 +24,30 @@ import { WORK_REPORT_STATUSES } from "../schemas";
 import type { WorkReportListParams, WorkReportStatusFilter } from "../types";
 
 const LIMIT = 20;
+
+/* ------------------------------------------------------------------------ *
+ * TEMPORARY pagination-scroll diagnostics. Delete this block, the two
+ * `pagerDebug(...)` calls in onPageChange and the useEffect below once the
+ * root cause is confirmed. Nothing here affects rendering.
+ *
+ * The decisive numbers are `scrollY` vs `maxScroll`:
+ *   scrollY drops to ~0 after the change  -> a navigation/scroll reset
+ *   scrollY unchanged but maxScroll grew  -> content got taller (bottom-clamp)
+ * ------------------------------------------------------------------------ */
+function pagerDebug(label: string) {
+  if (typeof window === "undefined") return;
+  const doc = document.documentElement;
+  const active = document.activeElement as HTMLElement | null;
+  // eslint-disable-next-line no-console
+  console.log(`[pager] ${label}`, {
+    scrollY: Math.round(window.scrollY),
+    maxScroll: Math.round(doc.scrollHeight - window.innerHeight),
+    scrollHeight: doc.scrollHeight,
+    rows: document.querySelectorAll("tbody tr").length,
+    search: window.location.search || "(none)",
+    activeEl: active ? active.outerHTML.slice(0, 120) : null,
+  });
+}
 
 function parseStatus(value: string | null): WorkReportStatusFilter | "" {
   return value && (WORK_REPORT_STATUSES as readonly string[]).includes(value)
@@ -46,6 +71,12 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
   const isActivityLead = !isManager && scope?.is_activity_lead === true;
   const showEmployeeFilter = isManager || isProjectHead || isActivityLead;
   const canCreate = can(role, "report.submit");
+  // The page offset is held in local state and mirrored to the URL with
+  // `history.replaceState` (the shared useUrlState pattern, same as the
+  // Settings audit log) rather than a router navigation: the pagination
+  // controls sit below the table, and a `router.replace` moves the viewport
+  // even with `scroll: false`, forcing the user to scroll back down.
+  const [offsetStr, setOffsetStr] = useUrlState("offset", "0");
 
   const { items: orgEmployees } = useEmployeeOptions();
   const employeeOptions: EmployeeFilterOption[] = React.useMemo(() => {
@@ -96,10 +127,20 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
     from: searchParams.get("from") ?? "",
     to: searchParams.get("to") ?? "",
     limit: LIMIT,
-    offset: Math.max(0, Number(searchParams.get("offset") ?? "0") || 0),
+    offset: Math.max(0, Number(offsetStr) || 0),
   };
 
   const query = useWorkReportList(params);
+
+  // TEMPORARY (see pagerDebug above): fires when the rows for the new offset
+  // have actually been painted, which is the last point the viewport can move.
+  const renderedOffset = query.data?.offset;
+  React.useEffect(() => {
+    if (renderedOffset === undefined) return;
+    requestAnimationFrame(() =>
+      pagerDebug(`4/4 rows for offset=${renderedOffset} painted`),
+    );
+  }, [renderedOffset]);
 
   function commit(next: URLSearchParams) {
     const qs = next.toString();
@@ -113,14 +154,19 @@ export function WorkReportsView({ title = "Reports" }: { title?: string }) {
       else next.delete(key);
     }
     next.delete("offset");
+    setOffsetStr("0"); // back to first page when filters change
     commit(next);
   }
 
   function onPageChange(offset: number) {
-    const next = new URLSearchParams(searchParams.toString());
-    if (offset > 0) next.set("offset", String(offset));
-    else next.delete("offset");
-    commit(next);
+    const from = params.offset;
+    const dir = offset > from ? "NEXT" : "PREV";
+    pagerDebug(`${dir} 1/4 before setOffsetStr (${from} -> ${offset})`);
+    setOffsetStr(String(offset));
+    pagerDebug(`${dir} 2/4 immediately after setOffsetStr (URL rewritten)`);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => pagerDebug(`${dir} 3/4 after next paint`)),
+    );
   }
 
   const items = query.data?.items ?? [];
