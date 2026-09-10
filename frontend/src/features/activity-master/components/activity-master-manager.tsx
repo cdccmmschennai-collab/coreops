@@ -834,7 +834,7 @@ export function ActivityMasterManager() {
           intrinsic size (shrink-0) and stays right-aligned, gap in between. */}
       <div ref={topRef} className="flex items-center justify-between gap-3">
         <Input
-          placeholder="Search activities and sub-activities…"
+          placeholder="Search Activities and Sub-Activities…"
           value={search}
           onChange={(e) => handleSearchChange(e.target.value)}
           className="w-[60%] min-w-0"
