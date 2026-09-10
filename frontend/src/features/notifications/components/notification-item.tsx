@@ -48,6 +48,9 @@ const TYPE_CONFIG: Record<
   leave_approved:        { Icon: CheckCircle,   color: "green" },
   leave_rejected:        { Icon: XCircle,       color: "red" },
   leave_cancelled:       { Icon: X,             color: "amber" },
+  // Manual attendance ruling by a PM (Leave / Half day / Comp-off / Absent).
+  attendance_recorded:   { Icon: CalendarDays,  color: "amber" },
+  attendance_changed:    { Icon: CalendarClock, color: "blue" },
   // Lump-sum activity continuation approval. Hourglass matches the dashboard
   // shortcut's icon so the two read as the same feature.
   continuation_requested:{ Icon: Hourglass,     color: "amber" },

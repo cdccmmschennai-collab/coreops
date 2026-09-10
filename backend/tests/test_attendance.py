@@ -329,3 +329,95 @@ def test_bulk_requires_project_manager(client, auth_header, make_employee):
         json=_bulk([{"employee_id": str(e.id), "status": "present"}]),
     )
     assert res.status_code == 403
+
+
+# ---------- employee notification on manual rulings ----------
+def _notifications(db, user_id, type_=None):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    stmt = select(Notification).where(Notification.user_id == user_id)
+    if type_ is not None:
+        stmt = stmt.where(Notification.type == type_)
+    return db.execute(stmt.order_by(Notification.created_at)).scalars().all()
+
+
+def test_manual_leave_record_notifies_employee(client, auth_header, make_user, make_employee, db):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    u = make_user("emp-n1@x.com", role=UserRole.employee)
+    e = make_employee(employee_code="N-1", user_id=u.id)
+    res = client.post("/api/v1/attendance", headers=h, json=_payload(e.id, status="leave"))
+    assert res.status_code == 201, res.text
+
+    notifs = _notifications(db, u.id, "attendance_recorded")
+    assert len(notifs) == 1
+    assert "1 May 2026" in notifs[0].message
+    assert "Leave" in notifs[0].message
+    assert notifs[0].target_url == "/attendance?att_month=2026-05"
+    assert str(notifs[0].entity_id) == res.json()["id"]
+
+
+def test_present_record_is_silent(client, auth_header, make_user, make_employee, db):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    u = make_user("emp-n2@x.com", role=UserRole.employee)
+    e = make_employee(employee_code="N-2", user_id=u.id)
+    assert client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).status_code == 201
+    assert _notifications(db, u.id) == []
+
+
+def test_status_change_away_from_leave_notifies(
+    client, auth_header, make_user, make_employee, make_attendance, db
+):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    u = make_user("emp-n3@x.com", role=UserRole.employee)
+    e = make_employee(employee_code="N-3", user_id=u.id)
+    rec = make_attendance(
+        employee_id=e.id, attendance_date=date(2026, 5, 1), status=AttendanceStatus.leave
+    )
+    res = client.patch(f"/api/v1/attendance/{rec.id}", headers=h, json={"status": "present"})
+    assert res.status_code == 200, res.text
+    notifs = _notifications(db, u.id, "attendance_changed")
+    assert len(notifs) == 1
+    assert "from Leave to Present" in notifs[0].message
+
+    # Touching a field other than the status says nothing.
+    res = client.patch(f"/api/v1/attendance/{rec.id}", headers=h, json={"note": "late"})
+    assert res.status_code == 200, res.text
+    assert len(_notifications(db, u.id)) == 1
+
+
+def test_bulk_sheet_notifies_only_rulings(
+    client, auth_header, make_user, make_employee, db
+):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    u1 = make_user("emp-n4@x.com", role=UserRole.employee)
+    e1 = make_employee(employee_code="N-4", user_id=u1.id)
+    u2 = make_user("emp-n5@x.com", role=UserRole.employee)
+    e2 = make_employee(employee_code="N-5", user_id=u2.id)
+    body = _bulk(
+        [
+            {"employee_id": str(e1.id), "status": "present"},
+            {"employee_id": str(e2.id), "status": "half_day"},
+        ]
+    )
+    assert client.post("/api/v1/attendance/bulk", headers=h, json=body).status_code == 200
+    assert _notifications(db, u1.id) == []
+    half = _notifications(db, u2.id, "attendance_recorded")
+    assert len(half) == 1
+    assert "Half day" in half[0].message
+
+
+def test_deleting_leave_record_notifies(
+    client, auth_header, make_user, make_employee, make_attendance, db
+):
+    h = auth_header("admin@example.com", role=UserRole.project_manager)
+    u = make_user("emp-n6@x.com", role=UserRole.employee)
+    e = make_employee(employee_code="N-6", user_id=u.id)
+    rec = make_attendance(
+        employee_id=e.id, attendance_date=date(2026, 5, 1), status=AttendanceStatus.leave
+    )
+    assert client.delete(f"/api/v1/attendance/{rec.id}", headers=h).status_code == 204
+    notifs = _notifications(db, u.id, "attendance_changed")
+    assert len(notifs) == 1
+    assert "removed" in notifs[0].message

@@ -123,22 +123,67 @@ def _period(req: LeaveRequest) -> str:
     return f"{start} - {_long_date(req.end_date)}"
 
 
-def _worked_attendance_dates(
-    db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
+def _attendance_dates_with_status(
+    db: Session,
+    employee_id: uuid.UUID,
+    start_date: date,
+    end_date: date,
+    statuses: tuple[AttendanceStatus, ...],
 ) -> list[date]:
-    """Dates in [start_date, end_date] where the employee is marked present /
-    working â€” the days a leave request must not cover."""
+    """Dates in [start_date, end_date] whose official attendance record carries
+    one of `statuses`, in date order."""
     return list(
         db.execute(
             select(AttendanceRecord.attendance_date)
             .where(
                 AttendanceRecord.employee_id == employee_id,
-                AttendanceRecord.status.in_(_WORKED_ATTENDANCE),
+                AttendanceRecord.status.in_(statuses),
                 AttendanceRecord.attendance_date >= start_date,
                 AttendanceRecord.attendance_date <= end_date,
             )
             .order_by(AttendanceRecord.attendance_date)
         ).scalars()
+    )
+
+
+def _worked_attendance_dates(
+    db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
+) -> list[date]:
+    """Dates in [start_date, end_date] where the employee is marked present /
+    working - the days a leave request must not cover."""
+    return _attendance_dates_with_status(
+        db, employee_id, start_date, end_date, _WORKED_ATTENDANCE
+    )
+
+
+def _recorded_leave_dates(
+    db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
+) -> list[date]:
+    """Dates in [start_date, end_date] already recorded as Leave in attendance.
+
+    A PM can mark leave directly in Records, without any request - the ledger
+    already charges that day. The overlap rule below only sees other REQUESTS,
+    so without this a second request could be filed over a day that is already
+    decided; approval would then skip the day and mark nothing, leaving an
+    "approved" request that granted nothing. A recorded leave day is refused at
+    submission, exactly as a recorded present day is.
+    """
+    return _attendance_dates_with_status(
+        db, employee_id, start_date, end_date, (AttendanceStatus.leave,)
+    )
+
+
+def _assert_not_already_on_leave(
+    db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
+) -> None:
+    recorded = _recorded_leave_dates(db, employee_id, start_date, end_date)
+    if not recorded:
+        return
+    raise AppError(
+        "validation_error",
+        f"Leave is already recorded on {_format_dates(recorded)} - you can't "
+        "request leave for a day that's already marked as leave.",
+        422,
     )
 
 
@@ -797,6 +842,7 @@ def create_leave_request(
             422,
         )
     _assert_not_biometrically_present(db, me.id, data.start_date, data.end_date)
+    _assert_not_already_on_leave(db, me.id, data.start_date, data.end_date)
     _assert_no_overlap(db, me.id, data.start_date, data.end_date)
 
     req = LeaveRequest(
@@ -877,6 +923,7 @@ def update_leave_request(
             422,
         )
     _assert_not_biometrically_present(db, me.id, new_start, new_end)
+    _assert_not_already_on_leave(db, me.id, new_start, new_end)
     _assert_no_overlap(db, me.id, new_start, new_end, exclude_id=req.id)
 
     for key, value in fields.items():

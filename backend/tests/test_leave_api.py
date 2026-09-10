@@ -114,6 +114,47 @@ def test_end_before_start_422(client, make_user, make_employee, login):
     assert res.status_code == 422
 
 
+def test_create_refused_when_leave_already_recorded(
+    client, make_user, make_employee, make_attendance, login
+):
+    """A PM marking Leave directly in Records decides the day just as an
+    approved request does - the employee can't file a request over it."""
+    from app.modules.attendance.models import AttendanceStatus
+
+    u = make_user("emp@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E1", user_id=u.id)
+    day = date.today() + timedelta(days=8)
+    make_attendance(employee_id=emp.id, attendance_date=day, status=AttendanceStatus.leave)
+    h = login("emp@x.com")
+    res = client.post("/api/v1/leave-requests", headers=h, json=_payload())
+    assert res.status_code == 422, res.text
+    assert day.isoformat() in res.json()["error"]["message"]
+    assert "already recorded" in res.json()["error"]["message"]
+
+
+def test_edit_refused_onto_recorded_leave_day(
+    client, make_user, make_employee, make_attendance, make_leave_request, login
+):
+    from app.modules.attendance.models import AttendanceStatus
+
+    u = make_user("emp@x.com", role=UserRole.employee)
+    emp = make_employee(employee_code="E1", user_id=u.id)
+    day = date.today() + timedelta(days=12)
+    make_attendance(employee_id=emp.id, attendance_date=day, status=AttendanceStatus.leave)
+    req = make_leave_request(
+        employee_id=emp.id,
+        start_date=date.today() + timedelta(days=7),
+        end_date=date.today() + timedelta(days=7),
+    )
+    h = login("emp@x.com")
+    res = client.patch(
+        f"/api/v1/leave-requests/{req.id}", headers=h,
+        json={"start_date": str(day), "end_date": str(day)},
+    )
+    assert res.status_code == 422, res.text
+    assert "already recorded" in res.json()["error"]["message"]
+
+
 # ---------- list / scope ----------
 
 def test_employee_sees_only_own(client, make_user, make_employee, make_leave_request, login):

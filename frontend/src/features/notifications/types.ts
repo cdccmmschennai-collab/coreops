@@ -3,6 +3,10 @@ export type NotificationType =
   | "leave_approved"
   | "leave_rejected"
   | "leave_cancelled"
+  // A PM recorded / changed the employee's day by hand (Leave, Half day,
+  // Comp-off, Absent) in Records, outside any leave request.
+  | "attendance_recorded"
+  | "attendance_changed"
   // Lump-sum activity continuation approval.
   | "continuation_requested"
   | "continuation_approved"

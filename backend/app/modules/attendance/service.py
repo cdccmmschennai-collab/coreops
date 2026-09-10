@@ -27,6 +27,121 @@ from app.shared.errors import AppError
 
 STANDARD_WORKDAY_MINUTES = 480  # 8 hours; anything beyond counts as overtime
 
+# Statuses that are a RULING about the employee's day rather than the default
+# of having turned up: each one costs them something (leave balance, a half
+# day, an absence on record) or grants them something (comp-off), so the person
+# it is about is told. `present` stays silent - a PM marking the whole team
+# present from the sheet every morning is not news to anybody.
+_NOTIFIED_STATUSES = frozenset(
+    {
+        AttendanceStatus.leave,
+        AttendanceStatus.half_day,
+        AttendanceStatus.comp_off,
+        AttendanceStatus.absent,
+    }
+)
+
+_STATUS_LABELS = {
+    AttendanceStatus.present: "Present",
+    AttendanceStatus.absent: "Absent",
+    AttendanceStatus.half_day: "Half day",
+    AttendanceStatus.leave: "Leave",
+    AttendanceStatus.holiday: "Holiday",
+    AttendanceStatus.weekend: "Weekend",
+    AttendanceStatus.comp_off: "Comp-off",
+}
+
+
+def _long_date(value: date) -> str:
+    return f"{value.day} {value:%B %Y}"
+
+
+def _notify_rulings(
+    db: Session,
+    actor: User,
+    touched: list[tuple[AttendanceRecord, AttendanceStatus | None]],
+    *,
+    deleted: bool = False,
+) -> None:
+    """Tell each employee that somebody decided what their day means.
+
+    `touched` is `(record, previous_status)`; `previous_status` is None for a
+    row that was just created. A notification goes out when the status was set
+    or changed INTO one of `_NOTIFIED_STATUSES`, or changed AWAY from one - a
+    Leave day corrected to Present gives balance back and reopens the report,
+    which the employee needs to know just as much as the charge.
+
+    Called AFTER the commit, like the leave module's `_push`: the record is
+    already durable, and nothing here - including a failed insert - may undo it.
+    Each notification commits on its own and swallows its own failure.
+
+    Approved leave never arrives here: `leave/effects.py` writes its rows
+    directly and the leave decision has its own notification, so the employee
+    is not told twice. Self-edits (an admin marking their own day) are skipped.
+    """
+    from app.modules.notifications.service import create_notification
+
+    actor_employee = _current_employee(db, actor)
+    actor_employee_id = actor_employee.id if actor_employee is not None else None
+    by = actor_employee.full_name if actor_employee is not None else "your manager"
+
+    for record, previous_status in touched:
+        if record.employee_id == actor_employee_id:
+            continue
+        status = record.status
+        if not deleted and previous_status == status:
+            continue
+        into = status in _NOTIFIED_STATUSES
+        out_of = previous_status in _NOTIFIED_STATUSES
+        if deleted:
+            if not into:
+                continue
+            type_ = "attendance_changed"
+            title = f"{_STATUS_LABELS[status]} record removed"
+            message = (
+                f"The {_STATUS_LABELS[status]} recorded for "
+                f"{_long_date(record.attendance_date)} was removed by {by}."
+            )
+        elif into:
+            type_ = "attendance_recorded"
+            title = f"Attendance recorded: {_STATUS_LABELS[status]}"
+            message = (
+                f"Your attendance for {_long_date(record.attendance_date)} was "
+                f"recorded as {_STATUS_LABELS[status]} by {by}."
+            )
+            if status == AttendanceStatus.half_day and record.leave_day_fraction:
+                message += " Half a day is charged to your leave balance."
+        elif out_of:
+            type_ = "attendance_changed"
+            title = f"Attendance updated: {_STATUS_LABELS[status]}"
+            message = (
+                f"Your attendance for {_long_date(record.attendance_date)} was "
+                f"changed from {_STATUS_LABELS[previous_status]} to "
+                f"{_STATUS_LABELS[status]} by {by}."
+            )
+        else:
+            continue
+
+        employee = db.get(Employee, record.employee_id)
+        if employee is None or employee.user_id is None:
+            continue
+        try:
+            create_notification(
+                db,
+                user_id=employee.user_id,
+                type_=type_,
+                title=title,
+                message=message,
+                entity_type="attendance_record",
+                entity_id=None if deleted else record.id,
+                # The employee's own calendar, opened on that month - the day
+                # is painted there and its popover names the status.
+                target_url=f"/attendance?att_month={record.attendance_date:%Y-%m}",
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+
 
 def _reconcile_auto_leave_reports(db: Session, touched: list[AttendanceRecord]) -> None:
     """PHASE 3F: unlock the automatic leave report for any day just ruled NOT
@@ -331,6 +446,7 @@ def create_attendance(db: Session, actor: User, data: AttendanceCreate) -> Atten
         db.rollback()
         raise AppError("conflict", "Attendance violates a uniqueness constraint.", 409)
     db.refresh(record)
+    _notify_rulings(db, actor, [(record, None)])
     return record
 
 
@@ -382,6 +498,7 @@ def update_attendance(
     _reconcile_auto_leave_reports(db, [record])
     db.commit()
     db.refresh(record)
+    _notify_rulings(db, actor, [(record, previous_status)])
     return record
 
 
@@ -395,8 +512,17 @@ def delete_attendance(db: Session, actor: User, record_id: uuid.UUID) -> None:
         note=None,
         previous_status=record.status,
     )
+    # Captured before the delete: the row is expired once the commit lands.
+    gone = AttendanceRecord(
+        id=record.id,
+        employee_id=record.employee_id,
+        attendance_date=record.attendance_date,
+        status=record.status,
+        leave_day_fraction=record.leave_day_fraction,
+    )
     db.delete(record)
     db.commit()
+    _notify_rulings(db, actor, [(gone, gone.status)], deleted=True)
 
 
 # ---------- bulk / sheet (admin) -------------------------------------------
@@ -536,3 +662,6 @@ def bulk_save_attendance(
     except IntegrityError:
         db.rollback()
         raise AppError("conflict", "Attendance violates a uniqueness constraint.", 409)
+    _notify_rulings(
+        db, actor, [(record, previous_status) for record, _, previous_status in touched]
+    )
