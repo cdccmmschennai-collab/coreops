@@ -11,11 +11,11 @@ activity shares with its sibling (Employee, Date, Day, Day Status, Day Remarks)
 are merged VERTICALLY across the day's rows for readability; the activity columns
 themselves are never merged, so every row stays independently filterable.
 
-Structure (16 columns, matching the company's SAMPLE workbook plus an explicit
+Structure (17 columns, matching the company's SAMPLE workbook plus an explicit
 DAY / HALF split):
 
     EMPLOYEE ID & NAME | DATE | DAY | DAY STATUS | HALF | PROJECT CODE |
-    ACTIVITY TYPE | SUB ACTIVITY TYPE | NO. OF TAGS … NO. OF RECORDS |
+    MAINTENANCE PLANT | ACTIVITY TYPE | SUB ACTIVITY TYPE | NO. OF TAGS … NO. OF RECORDS |
     BENCHMARK | DAY REMARKS
 
 Exactly one header row sits at the top — no per-employee banner or repeated
@@ -64,6 +64,7 @@ _COLUMNS: list[tuple[str, float, bool]] = [
     ("DAY STATUS", 16.0, False),
     ("HALF", 13.0, False),
     ("PROJECT CODE", 18.0, False),
+    ("MAINTENANCE PLANT", 20.0, False),
     ("ACTIVITY TYPE", 22.7, False),
     ("SUB ACTIVITY TYPE", 40.0, False),
     ("NO. OF TAGS", 11.0, True),
@@ -926,6 +927,9 @@ def build_workbook(rows: list[dict], max_activities: int = 1) -> BytesIO:
                 r, _COL["HALF"], half_label(activity.get("day_part"), index, total)
             )
             ws.cell(r, _COL["PROJECT CODE"], _upper(activity.get("project_code")))
+            ws.cell(
+                r, _COL["MAINTENANCE PLANT"], _upper(activity.get("maintenance_plant_code"))
+            )
             ws.cell(r, _COL["ACTIVITY TYPE"], _upper(activity.get("activity_type")))
             ws.cell(r, _COL["SUB ACTIVITY TYPE"], _upper(activity.get("sub_activity_type")))
             for header, key in _COUNT_COLUMNS:

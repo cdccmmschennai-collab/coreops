@@ -1223,6 +1223,9 @@ def build_activity_rows(
                 else None
             ),
             "project_code": task.project_code,
+            # The plant as snapshotted on the task when it was recorded. Export
+            # only - ActivityCell does not declare it, so the preview drops it.
+            "maintenance_plant_code": task.maintenance_plant_code,
             "activity_type": task.activity_name,
             "sub_activity_type": task.sub_activity_name,
             "tags": task.tags_count,
@@ -1416,6 +1419,7 @@ def build_activity_groups(
                 "day_part": r["day_part"],
                 "period_status": r["period_status"],
                 "project_code": r["project_code"],
+                "maintenance_plant_code": r.get("maintenance_plant_code"),
                 "activity_type": r["activity_type"],
                 "sub_activity_type": r["sub_activity_type"],
                 "tags": r["tags"],

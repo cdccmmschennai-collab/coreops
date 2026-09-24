@@ -237,7 +237,7 @@ def test_full_day_activities_are_numbered_never_halved():
 def test_single_header_row_with_autofilter_and_frozen_panes():
     ws = _sheet([_day(_activity())])
     assert ws.freeze_panes == "A2"
-    assert ws.auto_filter.ref == "A1:P2"
+    assert ws.auto_filter.ref == "A1:Q2"
     # Exactly one header row: no employee banner, no repeat further down.
     assert ws.cell(1, 1).value == "EMPLOYEE ID & NAME"
     assert ws.cell(2, 1).value != "EMPLOYEE ID & NAME"
@@ -328,7 +328,7 @@ def test_day_identity_is_merged_but_every_cell_keeps_its_value():
         _activity(day_part="first_half"), _activity(day_part="second_half")
     )])
     merged = {str(r) for r in ws.merged_cells.ranges}
-    assert {"A2:A3", "B2:B3", "C2:C3", "D2:D3", "P2:P3"} <= merged
+    assert {"A2:A3", "B2:B3", "C2:C3", "D2:D3", "Q2:Q3"} <= merged
     # The activity columns are NEVER merged — they must stay individually
     # filterable and sortable.
     assert not [m for m in merged if m[0] in "EFGHIJKLMNO"]
@@ -400,7 +400,7 @@ def test_multiple_employees_share_one_continuous_table():
     ]
     ws = _sheet(rows)
     assert ws.max_row == 3
-    assert ws.auto_filter.ref == "A1:P3"
+    assert ws.auto_filter.ref == "A1:Q3"
     assert [ws.cell(r, 1).value for r in (2, 3)] == [
         "CDC019 - ARTHI S", "CDC021 - YUVA SHREE",
     ]
@@ -409,4 +409,4 @@ def test_multiple_employees_share_one_continuous_table():
 def test_empty_report_still_produces_a_usable_header():
     ws = _sheet([])
     assert ws.max_row == 1
-    assert ws.auto_filter.ref == "A1:P1"
+    assert ws.auto_filter.ref == "A1:Q1"

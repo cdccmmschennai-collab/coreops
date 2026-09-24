@@ -139,11 +139,11 @@ def test_export_header_order_places_pages_records_after_spares():
     ws = wb.active
     headers = [c.value for c in ws[1]]
     # One row per activity: identity columns, then the activity's own columns.
-    assert headers[:8] == [
+    assert headers[:9] == [
         "EMPLOYEE ID & NAME", "DATE", "DAY", "DAY STATUS", "HALF",
-        "PROJECT CODE", "ACTIVITY TYPE", "SUB ACTIVITY TYPE",
+        "PROJECT CODE", "MAINTENANCE PLANT", "ACTIVITY TYPE", "SUB ACTIVITY TYPE",
     ]
-    assert headers[8:14] == [
+    assert headers[9:15] == [
         "NO. OF TAGS", "NO. OF DOCS", "NO. OF BOM HEADER", "NO. OF SPARES",
         "NO. OF PAGES", "NO. OF RECORDS",
     ]
