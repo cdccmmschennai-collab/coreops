@@ -548,16 +548,19 @@ export function permissionActorRows(
  * Whether a project manager recorded this permission from Daily Attendance
  * Review rather than the employee requesting it.
  *
- * `recorded` says so while it stands. Once cancelled the status no longer can,
- * so the server-derived `recorded_by_manager` carries the origin - read ONLY for
- * a cancelled row, so nothing else about an approved or pending request's
- * display can change because of it.
+ * `recorded` says so while it stands. While a withdrawal is pending, or once
+ * cancelled, the status no longer can, so the server-derived
+ * `recorded_by_manager` carries the origin - read ONLY for those two statuses,
+ * so nothing about an approved or pending request's display can change.
  */
 export function isManagerRecorded(
   req: Pick<PermissionRequest, "status" | "recorded_by_manager">,
 ): boolean {
   if (req.status === "recorded") return true;
-  return req.status === "cancelled" && req.recorded_by_manager === true;
+  return (
+    (req.status === "cancelled" || req.status === "cancellation_requested") &&
+    req.recorded_by_manager === true
+  );
 }
 
 /** The detail page's request-vs-record vocabulary. A manager's record must not
@@ -654,7 +657,11 @@ export function canRequestPermissionCancellation(
   today: string = businessToday(),
 ): boolean {
   if (!myEmployeeId || req.employee_id !== myEmployeeId) return false;
-  return req.status === "approved" && req.permission_date >= today;
+  // A PM-recorded permission is withdrawn exactly as an approved one is.
+  return (
+    (req.status === "approved" || req.status === "recorded") &&
+    req.permission_date >= today
+  );
 }
 
 /** What the Permission History "Cancellation" cell shows for one row.

@@ -34,6 +34,7 @@ import {
   canReviewPermission,
   canReviewPermissionCancellation,
   formatHours,
+  isManagerRecorded,
   formatPermissionDuration,
   formatMonthLabel,
   formatShortDate,
@@ -291,6 +292,7 @@ function CancellationReviewActions({
   const approve = useApprovePermissionCancellation();
   const reject = useRejectPermissionCancellation();
   const busy = approve.isPending || reject.isPending;
+  const standing = isManagerRecorded(detail) ? "recorded" : "approved";
 
   async function decide(decision: "approve" | "reject") {
     try {
@@ -301,7 +303,7 @@ function CancellationReviewActions({
         );
       } else {
         await reject.mutateAsync(detail.id);
-        toast.success("Cancellation rejected. The approved permission remains active.");
+        toast.success(`Cancellation rejected. The ${standing} permission remains active.`);
       }
       onDone();
     } catch (err) {
@@ -320,8 +322,8 @@ function CancellationReviewActions({
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          {detail.employee_name ?? "This employee"} has asked to withdraw this
-          approved permission. It stays approved - and keeps using{" "}
+          {detail.employee_name ?? "This employee"} has asked to withdraw this{" "}
+          {standing} permission. It stays {standing} - and keeps using{" "}
           {formatHours(detail.balance.consumed_by_request)} of{" "}
           {formatMonthLabel(detail.balance.month)} - until you decide.
         </p>
@@ -342,7 +344,7 @@ function CancellationReviewActions({
             disabled={busy}
           >
             <X className="h-4 w-4" />
-            Keep approved permission
+            Keep {standing} permission
           </Button>
         </div>
       </CardContent>
@@ -435,6 +437,8 @@ export function PermissionDetail({ id }: { id: string }) {
   // Request vs manager record: a PM-recorded permission gets no request/review
   // vocabulary at all. See `permissionDetailWording`.
   const wording = permissionDetailWording(detail);
+  // What the permission stands as while a withdrawal is decided.
+  const standing = isManagerRecorded(detail) ? "recorded" : "approved";
   const reviewed =
     wording.showReviewFields &&
     (detail.reviewed_at || detail.reviewer_name || detail.manager_comment);
@@ -609,9 +613,9 @@ export function PermissionDetail({ id }: { id: string }) {
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                This permission is approved, so withdrawing it needs a reviewer&apos;s
-                decision. It stays approved - and keeps using its hours - until
-                they rule on your request.
+                This permission is {standing}, so withdrawing it needs a
+                reviewer&apos;s decision. It stays {standing} - and keeps using its
+                hours - until they rule on your request.
               </p>
               <Button
                 variant="secondary"

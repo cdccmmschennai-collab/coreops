@@ -475,16 +475,86 @@ def test_pm_cancels_a_recorded_permission_and_it_keeps_its_origin(client, login,
     assert _remaining(client, login) == 4
 
 
-def test_the_employee_cannot_withdraw_a_recorded_permission(client, login, team, db):
-    """It was the manager's record, so the manager removes it - neither the
-    one-step cancel nor a cancellation request is open to the employee."""
-    _record(client, login, team, MON, "first_half_1h")
+def _recorded_row(client, login, team, db, period="first_half_1h"):
+    assert _record(client, login, team, MON, period).status_code == 201
     [row] = _live(db, team["employee"].id, MON)
+    assert row.status == PermissionStatus.recorded
+    return row
 
-    for path in ("cancel", "request-cancellation"):
-        res = client.post(f"{API}/{row.id}/{path}", headers=login("emp@x.com"))
-        assert res.status_code == 409, (path, res.text)
-        assert "recorded by your manager" in res.json()["error"]["message"]
+
+def test_the_employee_cannot_directly_cancel_a_recorded_permission(client, login, team, db):
+    """Same rule as an approved one: withdrawal goes through a reviewer."""
+    row = _recorded_row(client, login, team, db)
+    res = client.post(f"{API}/{row.id}/cancel", headers=login("emp@x.com"))
+    assert res.status_code == 409, res.text
+    assert "cancellation request" in res.json()["error"]["message"]
     db.expire_all()
     assert db.get(PermissionRequest, row.id).status == PermissionStatus.recorded
+    assert _remaining(client, login) == 3
+
+
+def test_employee_requests_cancellation_of_a_recorded_permission_and_it_is_approved(
+    client, login, team, db
+):
+    row = _recorded_row(client, login, team, db, "first_half_2h")
+    assert _remaining(client, login) == 2
+
+    res = client.post(f"{API}/{row.id}/request-cancellation", headers=login("emp@x.com"))
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "cancellation_requested"
+    # The hours stay spent until a reviewer rules.
+    assert _remaining(client, login) == 2
+
+    # The PM sees it in the cancellation queue.
+    queue = client.get(f"{API}?status=cancellation_requested", headers=login("mgr@x.com")).json()
+    assert [i["id"] for i in queue["items"]] == [str(row.id)]
+    assert queue["items"][0]["recorded_by_manager"] is True
+
+    # A duplicate request is refused as before.
+    dup = client.post(f"{API}/{row.id}/request-cancellation", headers=login("emp@x.com"))
+    assert dup.status_code == 409
+
+    ok = client.post(f"{API}/{row.id}/approve-cancellation", headers=login("mgr@x.com"))
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "cancelled"
+    assert _remaining(client, login) == 4
+
+    detail = client.get(f"{API}/{row.id}", headers=login("emp@x.com")).json()
+    assert detail["status"] == "cancelled"
+    assert detail["recorded_by_manager"] is True
+
+    # Already cancelled: no further cancellation request.
+    again = client.post(f"{API}/{row.id}/request-cancellation", headers=login("emp@x.com"))
+    assert again.status_code == 409
+    assert _remaining(client, login) == 4
+
+
+def test_a_rejected_withdrawal_returns_a_recorded_permission_to_recorded(
+    client, login, team, db
+):
+    row = _recorded_row(client, login, team, db)
+    assert client.post(
+        f"{API}/{row.id}/request-cancellation", headers=login("emp@x.com")
+    ).status_code == 200
+
+    res = client.post(f"{API}/{row.id}/reject-cancellation", headers=login("mgr@x.com"))
+    assert res.status_code == 200, res.text
+    # Never turned into an approval.
+    assert res.json()["status"] == "recorded"
+    db.expire_all()
+    assert db.get(PermissionRequest, row.id).status == PermissionStatus.recorded
+    assert db.get(PermissionRequest, row.id).reviewed_at is None
+    assert _remaining(client, login) == 3
+    [note] = _notifications(db, team["employee_user"].id, "permission_cancellation_rejected")
+    assert "The recorded permission remains active." in note.message
+
+
+def test_a_rejected_withdrawal_of_an_approved_request_is_unchanged(client, login, team, db):
+    approved = _request_and_approve(client, login, MON)
+    assert client.post(
+        f"{API}/{approved['id']}/request-cancellation", headers=login("emp@x.com")
+    ).status_code == 200
+    res = client.post(f"{API}/{approved['id']}/reject-cancellation", headers=login("mgr@x.com"))
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "approved"
     assert _remaining(client, login) == 3

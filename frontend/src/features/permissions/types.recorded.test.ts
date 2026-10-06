@@ -14,6 +14,7 @@ import {
   PERMISSION_STATUS_LABEL,
   PERMISSION_STATUS_VARIANT,
   canCancelPermission,
+  canRequestPermissionCancellation,
   isManagerRecorded,
   permissionActorRows,
   permissionCancellationCell,
@@ -55,6 +56,14 @@ test("Recorded has its own label and the blue info badge, distinct from Approved
 test("a recorded permission is manager-recorded, and stays so once cancelled", () => {
   assert.equal(isManagerRecorded(detail("recorded", true)), true);
   assert.equal(isManagerRecorded(detail("cancelled", true)), true);
+});
+
+test("the employee's closing line is replaced by the action, so it never says 'No further action'", () => {
+  // The page renders `permissionClosingMessage` only when the reader has no
+  // action; for the owning employee a recorded permission now has one.
+  const d = detail("recorded", true);
+  const hasAction = canRequestPermissionCancellation(d, ME, TODAY);
+  assert.equal(hasAction, true);
 });
 
 test("an employee request is never manager-recorded, in any status", () => {
@@ -103,10 +112,33 @@ test("a cancelled recorded permission keeps its manager-recorded vocabulary", ()
   );
 });
 
-test("the employee is offered no withdrawal of a recorded permission", () => {
+test("the employee may request cancellation of a recorded permission, as of an approved one", () => {
   const d = detail("recorded", true);
+  // The existing request-cancellation action, never the one-step cancel.
+  assert.equal(canRequestPermissionCancellation(d, ME, TODAY), true);
   assert.equal(canCancelPermission(d, ME), false);
-  assert.equal(permissionCancellationCell(d, ME, TODAY), "none");
+  assert.equal(permissionCancellationCell(d, ME, TODAY), "request");
+  // Same rules as approved: own permission only, not once its day has passed.
+  assert.equal(canRequestPermissionCancellation(d, "emp-2", TODAY), false);
+  assert.equal(
+    canRequestPermissionCancellation({ ...d, permission_date: "2026-10-05" }, ME, TODAY),
+    false,
+  );
+  // Unchanged for an approved request.
+  assert.equal(canRequestPermissionCancellation(detail("approved", false), ME, TODAY), true);
+});
+
+test("a withdrawal pending on a recorded permission keeps its manager-recorded vocabulary", () => {
+  const d = detail("cancellation_requested", true);
+  assert.equal(isManagerRecorded(d), true);
+  assert.equal(permissionDetailWording(d).createdLabel, "Recorded");
+  assert.deepEqual(permissionActorRows(d), [{ label: "Recorded by", name: PM }]);
+  assert.equal(permissionCancellationCell(d, ME, TODAY), "requested");
+  // An approved request awaiting withdrawal reads exactly as before.
+  const a = detail("cancellation_requested", false);
+  assert.equal(isManagerRecorded(a), false);
+  assert.equal(permissionDetailWording(a).title, "Permission Request");
+  assert.deepEqual(permissionActorRows(a), []);
 });
 
 // ── detail page: employee-requested is unchanged ────────────────────────────

@@ -975,13 +975,9 @@ def cancel_permission_request(
             f"A {req.status.value} permission request can't be cancelled.",
             409,
         )
-    if is_author and not is_manager and req.status == PermissionStatus.recorded:
-        raise AppError(
-            "conflict",
-            "This permission was recorded by your manager. Ask them to remove it.",
-            409,
-        )
-    if is_author and not is_manager and req.status == PermissionStatus.approved:
+    if is_author and not is_manager and req.status in (
+        PermissionStatus.approved, PermissionStatus.recorded
+    ):
         raise AppError(
             "conflict",
             "An approved permission has to be withdrawn through a cancellation "
@@ -1096,13 +1092,9 @@ def request_permission_cancellation(
             "This permission already has a cancellation request awaiting review.",
             409,
         )
-    if req.status == PermissionStatus.recorded:
-        raise AppError(
-            "conflict",
-            "This permission was recorded by your manager. Ask them to remove it.",
-            409,
-        )
-    if req.status != PermissionStatus.approved:
+    # A PM-recorded permission is withdrawn exactly as an approved one is; it
+    # returns to `recorded` if the withdrawal is rejected.
+    if req.status not in (PermissionStatus.approved, PermissionStatus.recorded):
         raise AppError(
             "conflict",
             "Only approved permission requests can have cancellation requested.",
@@ -1116,6 +1108,7 @@ def request_permission_cancellation(
         )
 
     before = balance_for(db, req.employee_id, req.permission_date)
+    standing = "recorded" if req.status == PermissionStatus.recorded else "approved"
     req.status = PermissionStatus.cancellation_requested
     req.updated_by = actor.id
     db.add(req)
@@ -1141,8 +1134,8 @@ def request_permission_cancellation(
     _notify_routed_approver(
         db, actor, me, req, "permission_cancellation_requested",
         f"{me.full_name} requested permission cancellation",
-        f"{me.employee_code} - {me.full_name} requested cancellation of an "
-        f"approved {label} permission for {_short_date(req.permission_date)}.",
+        f"{me.employee_code} - {me.full_name} requested cancellation of a "
+        f"{standing} {label} permission for {_short_date(req.permission_date)}.",
     )
     return req
 
@@ -1201,10 +1194,11 @@ def approve_permission_cancellation(
 def reject_permission_cancellation(
     db: Session, actor: User, req_id: uuid.UUID
 ) -> PermissionRequest:
-    """cancellation_requested -> approved. The original approval is untouched:
-    `manager_id`, `manager_comment` and `reviewed_at` still record who granted
-    the permission and when, and the hours never moved, so there is nothing to
-    re-deduct."""
+    """cancellation_requested -> approved, or -> recorded for a permission a PM
+    recorded (its origin is never rewritten into an approval). The original
+    stamps are untouched: `manager_id`, `manager_comment` and `reviewed_at` still
+    record who granted or recorded the permission, and the hours never moved, so
+    there is nothing to re-deduct."""
     req = _fetch_locked(db, req_id)
     _assert_can_review(db, actor, req)
     if req.status != PermissionStatus.cancellation_requested:
@@ -1212,7 +1206,11 @@ def reject_permission_cancellation(
             "conflict", "This cancellation request has already been processed.", 409
         )
 
-    req.status = PermissionStatus.approved
+    employee = db.get(Employee, req.employee_id)
+    was_recorded = _recorded_by_manager(req, employee.user_id if employee else None)
+    req.status = (
+        PermissionStatus.recorded if was_recorded else PermissionStatus.approved
+    )
     req.updated_by = actor.id
     db.add(req)
     db.flush()
@@ -1232,8 +1230,8 @@ def reject_permission_cancellation(
         db, actor, req.employee_id, "permission_cancellation_rejected",
         "Your permission cancellation was rejected",
         f"Your cancellation request for the {label} permission on "
-        f"{_short_date(req.permission_date)} was rejected. The approved "
-        "permission remains active.",
+        f"{_short_date(req.permission_date)} was rejected. The "
+        f"{'recorded' if was_recorded else 'approved'} permission remains active.",
         req.id,
         _detail_url(req.id),
     )
