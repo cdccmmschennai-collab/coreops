@@ -3228,6 +3228,8 @@ export interface components {
             note?: string | null;
             /** Leave Day Fraction */
             leave_day_fraction?: number | null;
+            /** Permission Period - omitted leaves the day's permission untouched; null = No Permission. */
+            permission_period?: "first_half_1h" | "second_half_1h" | "first_half_2h" | "second_half_2h" | null;
         };
         /** AttendanceOut */
         AttendanceOut: {
@@ -3349,6 +3351,8 @@ export interface components {
             note?: string | null;
             /** Leave Day Fraction */
             leave_day_fraction?: number | null;
+            /** Permission Period - omitted leaves the day's permission untouched; null = No Permission. */
+            permission_period?: "first_half_1h" | "second_half_1h" | "first_half_2h" | "second_half_2h" | null;
         };
         /** AuditLogOut */
         AuditLogOut: {

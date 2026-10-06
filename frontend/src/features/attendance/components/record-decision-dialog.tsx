@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,17 @@ import {
 } from "@/features/biometric/mapping-format";
 import { formatWorked } from "@/features/biometric/review";
 import type { DailyReviewRow } from "@/features/biometric/types";
+import { usePermissionBalance } from "@/features/permissions/hooks";
+import { permissionKeys } from "@/features/permissions/keys";
+import {
+  PERMISSION_PERIOD_HOURS,
+  PERMISSION_PERIOD_LABEL,
+  PERMISSION_PERIOD_OPTIONS,
+  formatDuration,
+  formatHours,
+  isDurationAffordable,
+  type PermissionPeriod,
+} from "@/features/permissions/types";
 
 import { useCreateAttendance, useUpdateAttendance } from "../hooks";
 import { ATTENDANCE_STATUSES, ATTENDANCE_STATUS_LABEL } from "../schemas";
@@ -68,6 +80,18 @@ export function RecordDecisionDialog({
   // `half_day` can be ambiguous - a `leave` row is a whole day and a worked day
   // is none - so this is the only status that asks.
   const [chargesLeave, setChargesLeave] = React.useState(false);
+  // The day's permission. `NO_PERMISSION` is the default for everyone;
+  // `LEGACY_PERMISSION` stands for a permission filed before the four options
+  // existed, which cannot be shown as one of them.
+  const [permission, setPermission] = React.useState<PermissionChoice>(NO_PERMISSION);
+  const [seededPermission, setSeededPermission] =
+    React.useState<PermissionChoice>(NO_PERMISSION);
+
+  const queryClient = useQueryClient();
+  // The employee's allowance for the month of this day - what the selector
+  // greys options out against. A convenience only: the save is re-checked
+  // server-side under a lock, by the same rule a request approval uses.
+  const balanceQuery = usePermissionBalance(row?.employee_id, date, { enabled: open });
 
   // Seed the form when a row is opened. Existing decision first; otherwise the
   // biometric boundary, so the common case is "confirm what the device saw"
@@ -85,9 +109,18 @@ export function RecordDecisionDialog({
     // company-wide half day) opens as "no leave", which is exactly what it has
     // always been worth - re-saving one cannot silently start billing it.
     setChargesLeave((row.attendance_leave_day_fraction ?? 0) > 0);
+    const seeded = seedPermission(row);
+    setPermission(seeded);
+    setSeededPermission(seeded);
   }, [row]);
 
   const pending = create.isPending || update.isPending;
+
+  // The hours this day already holds are given back if the PM picks another
+  // option, so they count as available for the choice.
+  const heldHours = row?.permission_hours ?? 0;
+  const available = balanceQuery.data ? balanceQuery.data.remaining_hours + heldHours : null;
+  const exhausted = available !== null && available < 1;
 
   async function onSave() {
     if (!row) return;
@@ -100,6 +133,12 @@ export function RecordDecisionDialog({
       // leaving the previous fraction behind. `null` on a non-half day means
       // "priced by status alone", which is what a Leave or a Present day is.
       leave_day_fraction: status === "half_day" ? (chargesLeave ? 0.5 : 0) : null,
+      // Sent ONLY when the PM changed the selector. Omitted, the day's
+      // permission is left exactly as it is - so re-saving a status, or a day
+      // with a pending request, never touches the permission ledger.
+      ...(permission !== seededPermission && permission !== LEGACY_PERMISSION
+        ? { permission_period: permission === NO_PERMISSION ? null : permission }
+        : {}),
     };
     try {
       if (row.attendance_record_id) {
@@ -111,6 +150,8 @@ export function RecordDecisionDialog({
           ...body,
         });
       }
+      // The ledger, balance KPI and history all read the permission root.
+      void queryClient.invalidateQueries({ queryKey: permissionKeys.all });
       toast.success(`${row.employee_name ?? "Record"} saved`);
       onClose();
     } catch (err) {
@@ -163,6 +204,55 @@ export function RecordDecisionDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* An ATTRIBUTE beside the status, never a status of its own. The
+                four options are the request flow's own, and a choice is saved
+                into the same permission ledger an approved request is. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="decision-permission">Permission</Label>
+              <Select
+                value={permission}
+                onValueChange={(v) => setPermission(v as PermissionChoice)}
+              >
+                <SelectTrigger id="decision-permission">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_PERMISSION}>No Permission</SelectItem>
+                  {seededPermission === LEGACY_PERMISSION && (
+                    <SelectItem value={LEGACY_PERMISSION} disabled>
+                      {formatDuration(heldHours)} (recorded earlier)
+                    </SelectItem>
+                  )}
+                  {PERMISSION_PERIOD_OPTIONS.map((p) => (
+                    <SelectItem
+                      key={p}
+                      value={p}
+                      disabled={
+                        available !== null &&
+                        p !== seededPermission &&
+                        !isDurationAffordable(PERMISSION_PERIOD_HOURS[p], available)
+                      }
+                    >
+                      {PERMISSION_PERIOD_LABEL[p]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {balanceQuery.data && (
+                <p
+                  className={`text-xs ${exhausted ? "text-warning" : "text-muted-foreground"}`}
+                >
+                  {exhausted
+                    ? `Monthly permission allowance exhausted - all ${formatHours(
+                        balanceQuery.data.allowance_hours,
+                      )} used.`
+                    : `${formatHours(balanceQuery.data.remaining_hours)} of ${formatHours(
+                        balanceQuery.data.allowance_hours,
+                      )} available this month.`}
+                </p>
+              )}
             </div>
 
             {/* The half a day a half day does not account for. `half_day` says
@@ -276,6 +366,20 @@ function Evidence({
       </p>
     </div>
   );
+}
+
+const NO_PERMISSION = "none";
+const LEGACY_PERMISSION = "legacy";
+type PermissionChoice = PermissionPeriod | typeof NO_PERMISSION | typeof LEGACY_PERMISSION;
+
+/** What the selector opens on: the option this day already holds, else
+ *  "No Permission". */
+function seedPermission(row: DailyReviewRow): PermissionChoice {
+  const period = row.permission_period;
+  if (period && (PERMISSION_PERIOD_OPTIONS as readonly string[]).includes(period)) {
+    return period as PermissionPeriod;
+  }
+  return row.permission_hours != null ? LEGACY_PERMISSION : NO_PERMISSION;
 }
 
 function timeOrDash(iso: string | null): string {

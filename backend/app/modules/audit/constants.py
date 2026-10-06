@@ -120,6 +120,10 @@ class AuditAction:
     PERMISSION_CANCELLATION_REQUEST = "permission.cancellation.request"
     PERMISSION_CANCELLATION_APPROVE = "permission.cancellation.approve"
     PERMISSION_CANCELLATION_REJECT = "permission.cancellation.reject"
+    # A project manager recording a permission directly from Daily Attendance
+    # Review (migration 0086). Not a request and not an approval, so it is not
+    # logged as either.
+    PERMISSION_RECORD = "permission.record"
 
     # --- production status (Tier B, migration 0070) ---
     # The status table is itself append-only, so this row is not the history -

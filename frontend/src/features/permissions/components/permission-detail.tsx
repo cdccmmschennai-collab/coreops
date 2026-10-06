@@ -38,6 +38,8 @@ import {
   formatMonthLabel,
   formatShortDate,
   permissionActorRows,
+  permissionClosingMessage,
+  permissionDetailWording,
   permissionReturnHref,
   type PermissionRequestDetail as Detail,
 } from "../types";
@@ -100,10 +102,11 @@ function BalanceCard({ detail }: { detail: Detail }) {
             request` comes back non-zero for both, from the same server-side
             rule. Saying anything else here would contradict the balance. */}
         {(detail.status === "approved" ||
-          detail.status === "cancellation_requested") && (
+          detail.status === "cancellation_requested" ||
+          detail.status === "recorded") && (
           <>
             <InfoRow
-              label="Before approval"
+              label={permissionDetailWording(detail).beforeLabel}
               value={formatHours(b.remaining_before_request)}
             />
             <InfoRow
@@ -429,7 +432,12 @@ export function PermissionDetail({ id }: { id: string }) {
     isReviewer,
     employeeId,
   );
-  const reviewed = detail.reviewed_at || detail.reviewer_name || detail.manager_comment;
+  // Request vs manager record: a PM-recorded permission gets no request/review
+  // vocabulary at all. See `permissionDetailWording`.
+  const wording = permissionDetailWording(detail);
+  const reviewed =
+    wording.showReviewFields &&
+    (detail.reviewed_at || detail.reviewer_name || detail.manager_comment);
   // WHO IT WENT TO, and WHO DECIDED IT - two separate facts, and a settled
   // request shows both, because the routed recipient and the person who ruled
   // are frequently not the same person. See `permissionActorRows`.
@@ -487,7 +495,7 @@ export function PermissionDetail({ id }: { id: string }) {
         <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
           <Card>
             <CardHeader>
-              <CardTitle>Permission Request</CardTitle>
+              <CardTitle>{wording.title}</CardTitle>
             </CardHeader>
             <CardContent className="divide-y divide-border">
               <InfoRow label="Employee" value={empName} />
@@ -508,7 +516,10 @@ export function PermissionDetail({ id }: { id: string }) {
               {actorRows.map((row) => (
                 <InfoRow key={row.label} label={row.label} value={row.name} />
               ))}
-              <InfoRow label="Requested" value={fmtDateTime(detail.created_at)} />
+              <InfoRow
+                label={wording.createdLabel}
+                value={fmtDateTime(detail.created_at)}
+              />
               {/* The review fields appear only once there is something to show,
                   so a pending request does not render a column of dashes. */}
               {reviewed ? (
@@ -629,7 +640,7 @@ export function PermissionDetail({ id }: { id: string }) {
           detail.status !== "pending" &&
           detail.status !== "cancellation_requested" && (
             <p className="text-sm text-muted-foreground">
-              This request is {detail.status} and no further action is available.
+              {permissionClosingMessage(detail)}
             </p>
           )}
       </div>

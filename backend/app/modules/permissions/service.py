@@ -15,6 +15,8 @@ Workflow (five states):
   approved -> cancellation_requested -> cancelled | approved   (Phase 4E: the
              author asks to withdraw an approved permission and a reviewer
              decides; the hours stay spent until they do)
+  (none)   -> recorded -> cancelled   (a PM recording it from Daily Attendance
+             Review - `apply_manual_permission`; not a request, same ledger)
 
 WHERE THE BALANCE LIVES
 =======================
@@ -42,6 +44,7 @@ join is what Phase 12 will render as "Present | 1hr - 7h 06m". Phase 11 only
 guarantees the fact exists and is correct.
 """
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -77,6 +80,7 @@ from app.modules.permissions.balance import (
 )
 from app.modules.permissions.models import (
     PERIOD_HOURS,
+    PermissionPeriod,
     PermissionRequest,
     PermissionStatus,
     duration_label,
@@ -108,13 +112,19 @@ _ACTIVE_STATUSES = (
     PermissionStatus.pending,
     PermissionStatus.approved,
     PermissionStatus.cancellation_requested,
+    PermissionStatus.recorded,
 )
 
 # What the ONE-STEP cancel accepts. Deliberately NOT `_ACTIVE_STATUSES`: a
 # request already awaiting a withdrawal decision belongs to the reviewer, who
 # settles it through `approve_permission_cancellation` rather than by cancelling
-# around the queue.
-_DIRECTLY_CANCELLABLE = (PermissionStatus.pending, PermissionStatus.approved)
+# around the queue. `recorded` is here for the project manager only - see
+# `cancel_permission_request`.
+_DIRECTLY_CANCELLABLE = (
+    PermissionStatus.pending,
+    PermissionStatus.approved,
+    PermissionStatus.recorded,
+)
 
 
 def _now() -> datetime:
@@ -234,6 +244,7 @@ def _audit(
     comment: str | None = None,
     before: PermissionBalance | None = None,
     after: PermissionBalance | None = None,
+    source: str | None = None,
 ) -> None:
     """Record one permission event through the SAME `record_audit` every other
     CoreOps module uses. FLUSHES, never commits.
@@ -241,6 +252,9 @@ def _audit(
     The balance is derived, so these rows are the only written record of the
     movement: `remaining_before` / `remaining_after` are what makes "who spent
     this employee's August hours" answerable after the fact.
+
+    `source` names a path other than the request workflow - today only
+    `MANUAL_SOURCE`, a PM recording the permission from attendance review.
     """
     details: dict = {
         "permission_request_id": str(req.id),
@@ -250,6 +264,9 @@ def _audit(
         "status": req.status.value,
         "month": req.permission_date.strftime("%Y-%m"),
     }
+    if source is not None:
+        details["source"] = source
+        details["period"] = req.period.value if req.period is not None else None
     if comment and comment.strip():
         details["comment"] = comment.strip()
     if before is not None:
@@ -409,6 +426,27 @@ def _assert_month_open(value: date) -> None:
     )
 
 
+def _assert_balance_covers(
+    balance: PermissionBalance, hours: int, on_date: date, advice: str
+) -> None:
+    """THE monthly-allowance guard - one rule, one message, for every path that
+    can spend or ask to spend hours: the employee's submission, the reviewer's
+    approval and the PM's manual recording. `balance` is the month's derived
+    standing (see `balance.py`); on a path that consumes, the caller must have
+    taken `lock_month` before deriving it.
+    """
+    if hours <= balance.remaining_hours:
+        return
+    raise AppError(
+        "validation_error",
+        f"Insufficient permission balance: {hours} {hours_word(hours)} requested, "
+        f"{format_hours(balance.remaining_hours)} remaining of the "
+        f"{format_hours(MONTHLY_ALLOWANCE_HOURS)} allowance for "
+        f"{_month_name(on_date)}. {advice}",
+        422,
+    )
+
+
 def _assert_no_active_request(
     db: Session,
     employee_id: uuid.UUID,
@@ -562,16 +600,36 @@ def _attach_employee_names(db: Session, rows: list[PermissionRequest]) -> None:
     """
     if not rows:
         return
-    names = {
-        row.id: f"{row.first_name} {row.last_name}".strip()
+    people = {
+        row.id: row
         for row in db.execute(
-            select(Employee.id, Employee.first_name, Employee.last_name).where(
-                Employee.id.in_({r.employee_id for r in rows})
-            )
+            select(
+                Employee.id, Employee.first_name, Employee.last_name, Employee.user_id
+            ).where(Employee.id.in_({r.employee_id for r in rows}))
         ).all()
     }
     for r in rows:
-        r.employee_name = names.get(r.employee_id)
+        person = people.get(r.employee_id)
+        r.employee_name = (
+            f"{person.first_name} {person.last_name}".strip() if person else None
+        )
+        # Same batch, same trick: see `_recorded_by_manager`.
+        r.recorded_by_manager = _recorded_by_manager(
+            r, person.user_id if person else None
+        )
+
+
+def _recorded_by_manager(req: PermissionRequest, employee_user_id: uuid.UUID | None) -> bool:
+    """Whether a project manager recorded this permission directly from attendance
+    review rather than the employee requesting it.
+
+    Derived, not stored: the request workflow only ever creates a row as the
+    employee themselves (`create_permission_request` stamps `created_by` with the
+    author's user), so a row created by ANY other user is a PM-manual one - see
+    `apply_manual_permission`. No migration, and no second column that could
+    disagree with who actually wrote the row.
+    """
+    return req.created_by is not None and req.created_by != employee_user_id
 
 
 def _routed_to_name(db: Session, req: PermissionRequest) -> str | None:
@@ -684,6 +742,9 @@ def get_permission_detail(
     # keyword. Attaching it explicitly keeps the detail page's name coming from
     # the same one place every list row's does.
     req.employee_name = employee.full_name if employee else None
+    req.recorded_by_manager = _recorded_by_manager(
+        req, employee.user_id if employee else None
+    )
 
     return PermissionRequestDetailOut(
         **PermissionRequestOut.model_validate(req).model_dump(),
@@ -808,10 +869,13 @@ def create_permission_request(
 ) -> PermissionRequest:
     """Submit a request. Status is `pending` and NOTHING is consumed.
 
-    The balance is deliberately NOT checked here. A pending request holds no
-    hours, so refusing to file one when the month is spent would be inventing a
-    reservation the rest of the system does not have; the approval is where the
-    allowance is enforced. `duration_hours` is no longer chosen by the caller
+    A request the month can no longer cover is refused at submission: once the
+    month's approved hours leave too little for the chosen option, there is
+    nothing a reviewer could approve, so the ask is turned away here rather than
+    queued to fail. Only APPROVED hours count (the same derivation the approval
+    re-checks under its lock) - a pending request still reserves nothing, so two
+    pendings that each fit today are both accepted and the approval decides
+    between them. `duration_hours` is no longer chosen by the caller
     (Phase 4C): it is derived from `data.period` via `PERIOD_HOURS`, so it can
     never disagree with the option the employee actually picked. The result is
     still exactly 1 or 2, which is all the DB check constraint has ever allowed.
@@ -822,6 +886,12 @@ def create_permission_request(
     _assert_month_open(data.permission_date)
     _assert_working_day(db, data.permission_date)
     _assert_no_active_request(db, me.id, data.permission_date)
+    _assert_balance_covers(
+        balance_for(db, me.id, data.permission_date),
+        PERIOD_HOURS[data.period],
+        data.permission_date,
+        "The allowance resets on the 1st of next month.",
+    )
 
     req = PermissionRequest(
         employee_id=me.id,
@@ -905,6 +975,12 @@ def cancel_permission_request(
             f"A {req.status.value} permission request can't be cancelled.",
             409,
         )
+    if is_author and not is_manager and req.status == PermissionStatus.recorded:
+        raise AppError(
+            "conflict",
+            "This permission was recorded by your manager. Ask them to remove it.",
+            409,
+        )
     if is_author and not is_manager and req.status == PermissionStatus.approved:
         raise AppError(
             "conflict",
@@ -922,7 +998,8 @@ def cancel_permission_request(
         )
 
     before = balance_for(db, req.employee_id, req.permission_date)
-    restored = req.status == PermissionStatus.approved
+    restored = req.status in CONSUMING_STATUSES
+    was_recorded = req.status == PermissionStatus.recorded
     req.status = PermissionStatus.cancelled
     req.updated_by = actor.id
     db.add(req)
@@ -961,10 +1038,12 @@ def cancel_permission_request(
             _detail_url(req.id),
         )
     else:
+        # A recorded permission was never requested, so it is not called one.
+        noun = "permission" if was_recorded else "permission request"
         _notify_employee(
             db, actor, req.employee_id, "permission_cancelled",
-            "Your permission request was cancelled",
-            f"Your {label} permission request for "
+            f"Your {noun} was cancelled",
+            f"Your {label} {noun} for "
             f"{_short_date(req.permission_date)} was cancelled."
             + (
                 f" {format_hours(after.remaining_hours)} of permission remaining "
@@ -1015,6 +1094,12 @@ def request_permission_cancellation(
         raise AppError(
             "conflict",
             "This permission already has a cancellation request awaiting review.",
+            409,
+        )
+    if req.status == PermissionStatus.recorded:
+        raise AppError(
+            "conflict",
+            "This permission was recorded by your manager. Ask them to remove it.",
             409,
         )
     if req.status != PermissionStatus.approved:
@@ -1176,16 +1261,9 @@ def approve_permission_request(
         )
 
     before = balance_for(db, req.employee_id, req.permission_date)
-    if req.duration_hours > before.remaining_hours:
-        raise AppError(
-            "validation_error",
-            f"Insufficient permission balance: {req.duration_hours} "
-            f"{hours_word(req.duration_hours)} requested, "
-            f"{format_hours(before.remaining_hours)} remaining of the "
-            f"{format_hours(MONTHLY_ALLOWANCE_HOURS)} allowance for "
-            f"{_month_name(req.permission_date)}. Reject the request instead.",
-            422,
-        )
+    _assert_balance_covers(
+        before, req.duration_hours, req.permission_date, "Reject the request instead."
+    )
 
     reviewer = _current_employee(db, actor)
     req.status = PermissionStatus.approved
@@ -1267,3 +1345,211 @@ def reject_permission_request(
         _detail_url(req.id),
     )
     return req
+
+
+# ---------- PM-manual permission (Daily Attendance Review) -----------------
+#
+# A project manager recording a permission straight from the attendance edit
+# dialog. It is NOT a second ledger and NOT a request: the result is a
+# `permission_requests` row - that table IS the ledger - in its own `recorded`
+# state (migration 0086), so `balance.py` sums it, `attendance_link.py` shows it
+# beside the day and the history page lists it as Recorded, never as an approved
+# request. It is never pending, routed, queued or listed in All Requests.
+# Removing or replacing one is the PM's existing outright cancel
+# (recorded -> cancelled), which is what gives the hours back. Nothing here touches attendance status, leave or work reports.
+
+# The audit `source` of every row this path writes.
+MANUAL_SOURCE = "attendance_review"
+
+
+@dataclass(frozen=True)
+class ManualPermissionChange:
+    """What `apply_manual_permission` changed, for the post-commit notification.
+
+    `removed` is the approved permission that was withdrawn (None if there was
+    none); `recorded` is the new one (None for "No Permission"). Both set means
+    the PM swapped one option for another.
+    """
+
+    employee_id: uuid.UUID
+    on_date: date
+    removed: PermissionRequest | None
+    recorded: PermissionRequest | None
+    remaining_hours: int
+
+
+def apply_manual_permission(
+    db: Session,
+    actor: User,
+    *,
+    employee_id: uuid.UUID,
+    on_date: date,
+    period: PermissionPeriod | None,
+) -> ManualPermissionChange | None:
+    """Make the employee's permission for `on_date` be `period` (None = none).
+
+    FLUSHES, NEVER COMMITS: the attendance write that carries it owns the
+    transaction, so the day's status and its permission land together or not at
+    all. Notify with `notify_manual_permission` AFTER that commit.
+
+    IDEMPOTENT. Saving the option that is already recorded returns None and
+    writes nothing, so re-saving the dialog can never spend the hours twice.
+
+    The rules are the request workflow's, not a copy of them: the working-day
+    rule (`_assert_working_day`), the one-live-permission-per-day rule (the
+    existing live row is found and replaced, never duplicated), nobody granting
+    themselves hours (`_assert_can_review`'s self rule) and the monthly allowance
+    (`_assert_balance_covers`, under the same `lock_month`). A closed month is
+    NOT refused, the same latitude a reviewer has to approve a past-month
+    request: the PM is settling the record of a day that already happened.
+
+    A live request the PM has not ruled on is left to the request workflow - a
+    `pending` one is reviewed from the queue and one awaiting a withdrawal
+    decision from the cancellation queue - rather than overwritten from here.
+    """
+    if actor.role != UserRole.project_manager:
+        raise AppError(
+            "forbidden", "Only a project manager can record a permission.", 403
+        )
+    me = _current_employee(db, actor)
+    if me is not None and me.id == employee_id:
+        raise AppError(
+            "forbidden",
+            "You can't record a permission for yourself - another project "
+            "manager has to.",
+            403,
+        )
+
+    # Lock first, read second - the same discipline as every approval.
+    lock_month(db, employee_id, on_date)
+    live = db.execute(
+        select(PermissionRequest)
+        .where(
+            PermissionRequest.employee_id == employee_id,
+            PermissionRequest.permission_date == on_date,
+            PermissionRequest.status.in_(_ACTIVE_STATUSES),
+        )
+        .order_by(PermissionRequest.created_at)
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if (
+        live is not None
+        and live.status in (PermissionStatus.approved, PermissionStatus.recorded)
+        and period is not None
+        and live.period == period
+    ):
+        return None
+    if live is None and period is None:
+        return None
+    if live is not None and live.status == PermissionStatus.pending:
+        raise AppError(
+            "conflict",
+            f"There is a pending permission request for {_long_date(on_date)}. "
+            "Approve or reject it from Permission requests instead.",
+            409,
+        )
+    if live is not None and live.status == PermissionStatus.cancellation_requested:
+        raise AppError(
+            "conflict",
+            f"The permission for {_long_date(on_date)} has a cancellation request "
+            "awaiting review. Decide it from Cancellation requests first.",
+            409,
+        )
+
+    removed = None
+    if live is not None:
+        # The PM's existing outright withdrawal - approved -> cancelled - which
+        # is what returns the hours. Flushed before the new option is priced, so
+        # swapping 1h for 2h is checked against what is left WITHOUT the 1h.
+        before = balance_for(db, employee_id, on_date)
+        live.status = PermissionStatus.cancelled
+        live.updated_by = actor.id
+        db.add(live)
+        db.flush()
+        _audit(
+            db, actor=actor, action=AuditAction.PERMISSION_REQUEST_CANCEL, req=live,
+            before=before, after=balance_for(db, employee_id, on_date),
+            source=MANUAL_SOURCE,
+        )
+        removed = live
+
+    recorded = None
+    if period is not None:
+        _assert_working_day(db, on_date)
+        hours = PERIOD_HOURS[period]
+        before = balance_for(db, employee_id, on_date)
+        _assert_balance_covers(
+            before, hours, on_date, "No more permission can be recorded this month."
+        )
+        recorded = PermissionRequest(
+            employee_id=employee_id,
+            permission_date=on_date,
+            duration_hours=hours,
+            period=period,
+            # Recorded, not approved: nobody requested it and nobody reviewed it.
+            status=PermissionStatus.recorded,
+            # The recording PM - what the detail page shows as "Recorded by".
+            # `reviewed_at` stays NULL; `created_at` is the recorded timestamp.
+            manager_id=me.id if me else None,
+            # Not routed: nobody else is being asked.
+            routed_project_id=None,
+            created_by=actor.id,
+            updated_by=actor.id,
+        )
+        db.add(recorded)
+        db.flush()
+        _audit(
+            db, actor=actor, action=AuditAction.PERMISSION_RECORD, req=recorded,
+            before=before, after=balance_for(db, employee_id, on_date),
+            source=MANUAL_SOURCE,
+        )
+
+    return ManualPermissionChange(
+        employee_id=employee_id,
+        on_date=on_date,
+        removed=removed,
+        recorded=recorded,
+        remaining_hours=balance_for(db, employee_id, on_date).remaining_hours,
+    )
+
+
+def notify_manual_permission(
+    db: Session, actor: User, change: ManualPermissionChange | None
+) -> None:
+    """Tell the employee, through the SAME `_notify_employee` channel and the same
+    notification types an approval and a PM cancellation use. Call AFTER the
+    commit; best-effort, exactly like every other permission notification.
+    """
+    if change is None:
+        return
+    me = _current_employee(db, actor)
+    by = me.full_name if me is not None else "Your manager"
+    day = _short_date(change.on_date)
+    remaining = (
+        f"{format_hours(change.remaining_hours)} of permission remaining for "
+        f"{_month_name(change.on_date)}."
+    )
+    removed, recorded = change.removed, change.recorded
+
+    if recorded is not None:
+        label = duration_label(recorded.duration_hours, recorded.period)
+        if removed is not None:
+            old = duration_label(removed.duration_hours, removed.period)
+            title = "Your permission was updated"
+            message = f"{by} changed your permission for {day} from {old} to {label}. "
+        else:
+            title = "Permission recorded"
+            message = f"{by} recorded {label} of permission for you on {day}. "
+        _notify_employee(
+            db, actor, change.employee_id, "permission_approved", title,
+            message + remaining, recorded.id, _detail_url(recorded.id),
+        )
+    elif removed is not None:
+        label = duration_label(removed.duration_hours, removed.period)
+        _notify_employee(
+            db, actor, change.employee_id, "permission_cancelled",
+            "Your permission was removed",
+            f"{by} removed the {label} permission for {day}. " + remaining,
+            removed.id, _detail_url(removed.id),
+        )

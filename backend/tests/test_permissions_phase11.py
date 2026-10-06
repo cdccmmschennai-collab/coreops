@@ -218,17 +218,28 @@ def test_a_rejected_request_cannot_then_be_cancelled(client, login, team):
 # Guards
 # ======================================================================
 
-def test_approval_is_refused_when_the_month_cannot_cover_it(client, login, team, db):
+def test_approval_is_refused_when_the_month_cannot_cover_it(
+    client, login, team, db, make_permission_request
+):
     """Sections 12C and 12D, and the request survives intact so it can be
-    refiled as 1h or rejected."""
+    refiled as 1h or rejected.
+
+    The over-budget requests are SEEDED as pending rather than submitted: since
+    PM-manual Permission the API refuses to file a request the month cannot
+    cover (see `test_permission_manual.py`), so a pending request only meets an
+    exhausted month when it was filed before the hours ran out. The approval
+    guard under test here is unchanged."""
     spent = _submit(client, login, MON, 1)
     _approve(client, login, spent.json()["id"])
     spent2 = _submit(client, login, TUE, 2)
     _approve(client, login, spent2.json()["id"])
     assert _remaining(client, login) == 1
 
-    # 12C: 2h against 1h remaining.
-    too_big = _submit(client, login, WED, 2).json()
+    # 12C: 2h against 1h remaining - and the submission itself is refused too.
+    assert _submit(client, login, WED, 2).status_code == 422
+    too_big = {"id": str(make_permission_request(
+        employee_id=team["employee"].id, permission_date=WED, duration_hours=2,
+    ).id)}
     res = _approve(client, login, too_big["id"])
     assert res.status_code == 422, res.text
     assert "Insufficient permission balance" in res.json()["error"]["message"]
@@ -243,8 +254,9 @@ def test_approval_is_refused_when_the_month_cannot_cover_it(client, login, team,
     assert _remaining(client, login) == 0
 
     # ...and 12D: 1h against 0h remaining.
-    starved = _submit(client, login, THU, 1).json()
-    assert _approve(client, login, starved["id"]).status_code == 422
+    assert _submit(client, login, THU, 1).status_code == 422
+    starved = make_permission_request(employee_id=team["employee"].id, permission_date=THU)
+    assert _approve(client, login, starved.id).status_code == 422
     assert _remaining(client, login) == 0
 
 
@@ -410,19 +422,22 @@ def test_an_approval_locks_the_whole_month_not_just_its_own_row(
         holder.close()
 
 
-def test_a_refused_approval_leaves_nothing_behind(client, login, team, db):
+def test_a_refused_approval_leaves_nothing_behind(
+    client, login, team, db, make_permission_request
+):
     """The insufficient-balance path raises before anything is written, so the
-    request stays pending, the balance is unmoved and no reviewer is recorded."""
+    request stays pending, the balance is unmoved and no reviewer is recorded.
+    (Seeded pending for the reason given in the test above.)"""
     spent = _submit(client, login, MON, 2).json()
     _approve(client, login, spent["id"])
     spent2 = _submit(client, login, TUE, 2).json()
     _approve(client, login, spent2["id"])
 
-    starved = _submit(client, login, WED, 1).json()
-    assert _approve(client, login, starved["id"]).status_code == 422
+    starved = make_permission_request(employee_id=team["employee"].id, permission_date=WED)
+    assert _approve(client, login, starved.id).status_code == 422
 
     db.expire_all()
-    row = db.get(PermissionRequest, starved["id"])
+    row = db.get(PermissionRequest, starved.id)
     assert (row.status, row.manager_id, row.reviewed_at) == (
         PermissionStatus.pending, None, None,
     )

@@ -178,6 +178,11 @@ def _permission_select(db: Session, actor: User):
         cast(null(), String).label("half_day_period"),
         cast(PermissionRequest.period, String).label("period"),
         cast(PermissionRequest.duration_hours, String).label("duration_hours"),
+    ).where(
+        # A permission a PM recorded from attendance review was never a request,
+        # so it has no place in a requests view (and `recorded` is not one of the
+        # statuses both kinds share).
+        PermissionRequest.status != PermissionStatus.recorded
     )
     return permission_service._apply_scope(db, actor, stmt)
 

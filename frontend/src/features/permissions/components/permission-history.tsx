@@ -153,8 +153,8 @@ export function PermissionHistory() {
           ) : items.length === 0 ? (
             <div className="px-5 py-8">
               <EmptyState
-                title="No permission requests for this month."
-                description={`Nothing was requested in ${formatMonthLabel(month)}.`}
+                title="No permission for this month."
+                description={`No permission was requested or recorded in ${formatMonthLabel(month)}.`}
               />
             </div>
           ) : (
@@ -184,8 +184,14 @@ export function PermissionHistory() {
                     <TableCell>
                       <PermissionStatusBadge status={req.status} />
                     </TableCell>
+                    {/* A PM-recorded permission has no request reason; say where
+                        it came from instead of showing a dash. */}
                     <TableCell className="max-w-[280px] truncate text-muted-foreground">
-                      {req.reason?.trim() ? req.reason : "-"}
+                      {req.reason?.trim()
+                        ? req.reason
+                        : req.recorded_by_manager
+                          ? "Recorded by manager"
+                          : "-"}
                     </TableCell>
                     {/* The action must not also open the detail page, so the
                         cell swallows the row's click - the same guard the leave

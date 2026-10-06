@@ -16,7 +16,11 @@ export type PermissionStatus =
    *  permission still STANDS and its hours are still spent until an authorised
    *  reviewer decides - the same state, with the same meaning, as
    *  `LeaveStatus.cancellation_requested`. */
-  | "cancellation_requested";
+  | "cancellation_requested"
+  /** Recorded directly by a project manager from Daily Attendance Review -
+   *  never requested and never approved. Holds its hours exactly as `approved`
+   *  does; only the PM can cancel it. Never appears in All Requests. */
+  | "recorded";
 
 /** The only legal durations. No 30 minutes, no custom value, no decimals. */
 export const PERMISSION_DURATIONS = [1, 2] as const;
@@ -86,6 +90,10 @@ export interface PermissionRequest {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+  /** True when a project manager recorded this permission from Daily Attendance
+   *  Review rather than the employee requesting it. Derived server-side; absent
+   *  (false) on mutation responses. Same ledger either way. */
+  recorded_by_manager?: boolean;
 }
 
 export interface PermissionRequestPage {
@@ -190,6 +198,25 @@ export const PERMISSION_STATUS_LABEL: Record<PermissionStatus, string> = {
   rejected: "Rejected",
   cancelled: "Cancelled",
   cancellation_requested: "Cancellation requested",
+  recorded: "Recorded",
+};
+
+/** The existing `Badge` variant each status renders with. Lives here, not in the
+ *  badge component, so the host-Node unit test can pin it. */
+export const PERMISSION_STATUS_VARIANT: Record<
+  PermissionStatus,
+  "neutral" | "info" | "success" | "warning" | "danger"
+> = {
+  pending: "warning",
+  approved: "success",
+  rejected: "danger",
+  cancelled: "neutral",
+  // A withdrawal awaiting a decision reads as the open item it is - the same
+  // warning tone a pending request gets.
+  cancellation_requested: "warning",
+  // The design system's blue info tone, so a manager's record never reads as
+  // the green of an approval.
+  recorded: "info",
 };
 
 export const PERMISSION_DURATION_LABEL: Record<number, string> = {
@@ -480,8 +507,18 @@ export interface PermissionActorRow {
 }
 
 export function permissionActorRows(
-  req: Pick<PermissionRequestDetail, "status" | "reviewer_name" | "routed_to_name">,
+  req: Pick<
+    PermissionRequestDetail,
+    "status" | "reviewer_name" | "routed_to_name" | "recorded_by_manager"
+  >,
 ): PermissionActorRow[] {
+  // A manager's record was never routed and never decided: the one actor it has
+  // is the PM who recorded it, stamped in `manager_id` at that moment. That stays
+  // true after a cancellation, so it is still named then.
+  if (isManagerRecorded(req)) {
+    const by = req.reviewer_name?.trim();
+    return by ? [{ label: "Recorded by", name: by }] : [];
+  }
   if (
     req.status !== "pending" &&
     req.status !== "approved" &&
@@ -503,6 +540,67 @@ export function permissionActorRows(
     });
   }
   return rows;
+}
+
+// ---------- manager-recorded permission --------------------------------------
+
+/**
+ * Whether a project manager recorded this permission from Daily Attendance
+ * Review rather than the employee requesting it.
+ *
+ * `recorded` says so while it stands. Once cancelled the status no longer can,
+ * so the server-derived `recorded_by_manager` carries the origin - read ONLY for
+ * a cancelled row, so nothing else about an approved or pending request's
+ * display can change because of it.
+ */
+export function isManagerRecorded(
+  req: Pick<PermissionRequest, "status" | "recorded_by_manager">,
+): boolean {
+  if (req.status === "recorded") return true;
+  return req.status === "cancelled" && req.recorded_by_manager === true;
+}
+
+/** The detail page's request-vs-record vocabulary. A manager's record must not
+ *  read as though the employee asked for it: no "Permission Request" title, no
+ *  "Requested" timestamp and no "Reviewed" fields. */
+export interface PermissionDetailWording {
+  title: string;
+  createdLabel: string;
+  showReviewFields: boolean;
+  /** The balance card's "what the month had before this" row, while it holds hours. */
+  beforeLabel: string;
+}
+
+export function permissionDetailWording(
+  req: Pick<PermissionRequest, "status" | "recorded_by_manager">,
+): PermissionDetailWording {
+  if (isManagerRecorded(req)) {
+    return {
+      title: "Manager Recorded Permission",
+      createdLabel: "Recorded",
+      showReviewFields: false,
+      beforeLabel: "Before recording",
+    };
+  }
+  return {
+    title: "Permission Request",
+    createdLabel: "Requested",
+    showReviewFields: true,
+    beforeLabel: "Before approval",
+  };
+}
+
+/** The closing line on a settled permission the reader can do nothing with. */
+export function permissionClosingMessage(
+  req: Pick<PermissionRequest, "status" | "recorded_by_manager">,
+): string {
+  if (req.status === "recorded") {
+    return "This permission was directly recorded by the manager. No further action is available.";
+  }
+  if (isManagerRecorded(req)) {
+    return `This permission was recorded by the manager and is ${req.status}. No further action is available.`;
+  }
+  return `This request is ${req.status} and no further action is available.`;
 }
 
 // ---------- detail-page action visibility -----------------------------------

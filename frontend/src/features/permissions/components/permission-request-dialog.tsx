@@ -94,7 +94,12 @@ export function PermissionRequestDialog({ onClose }: Props) {
     }
   }, [balanceQuery.isSuccess, selected, remaining, form]);
 
-  const exhausted = balanceQuery.isSuccess && remaining < 1;
+  // The balance shown is the CURRENT month's, so it only speaks for a date in
+  // that month; a later month has its own allowance. The server refuses an
+  // unaffordable request either way.
+  const inCurrentMonth =
+    form.watch("permission_date").slice(0, 7) === businessToday().slice(0, 7);
+  const exhausted = balanceQuery.isSuccess && remaining < 1 && inCurrentMonth;
 
   /** Leave the form for this month's history. Closes the dialog FIRST so the
    *  modal is not left mounted over the page it navigated to. */
@@ -198,9 +203,9 @@ export function PermissionRequestDialog({ onClose }: Props) {
 
           {exhausted && (
             <p className="text-sm text-warning">
-              You have used all {formatHours(allowance)} of this month&apos;s permission
-              allowance. A new request can be submitted, but it can&apos;t be approved
-              until next month.
+              Monthly permission allowance exhausted - you have used all{" "}
+              {formatHours(allowance)} for this month. A new request can be submitted
+              from the 1st of next month.
             </p>
           )}
 
@@ -223,7 +228,7 @@ export function PermissionRequestDialog({ onClose }: Props) {
               <Button type="button" variant="ghost" onClick={onClose} disabled={create.isPending}>
                 Cancel
               </Button>
-              <Button type="submit" loading={create.isPending}>
+              <Button type="submit" loading={create.isPending} disabled={exhausted}>
                 Submit
               </Button>
             </div>

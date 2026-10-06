@@ -307,13 +307,14 @@ test("a permission whose IST day has passed is not reopened by a stale UTC date"
 
 // ── status labels ───────────────────────────────────────────────────────────
 
-test("every status has a user-friendly label and there is no sixth one", () => {
+test("every status has a user-friendly label and there is no seventh one", () => {
   assert.deepEqual(PERMISSION_STATUS_LABEL, {
     pending: "Pending",
     approved: "Approved",
     rejected: "Rejected",
     cancelled: "Cancelled",
     cancellation_requested: "Cancellation requested",
+    recorded: "Recorded",
   });
 });
 

@@ -116,6 +116,7 @@ from app.modules.permissions.attendance_link import (
     approved_hours_by_employee_date,
     approved_hours_for_employee,
     approved_hours_on_date,
+    approved_periods_on_date,
 )
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
@@ -1341,6 +1342,10 @@ def _merge_boundary(
     return None, None
 
 
+def _period_value(period) -> str | None:
+    return period.value if period is not None else None
+
+
 def _review_row(
     *,
     employee_id: uuid.UUID,
@@ -1349,6 +1354,7 @@ def _review_row(
     verdict: DayClassification,
     record: AttendanceRecord | None,
     permission_hours: int | None = None,
+    permission_period: str | None = None,
 ) -> dict:
     """One employee-day, as both the roster view and the detail view need it.
 
@@ -1413,6 +1419,9 @@ def _review_row(
         # Phase 12. Joined, never derived - and deliberately the last key here,
         # after every value that was computed from evidence.
         "permission_hours": permission_hours,
+        # Which of the four options that is, so the PM edit dialog can seed its
+        # Permission selector. Null for none, or for a pre-Phase-4C permission.
+        "permission_period": permission_period,
     }
 
 
@@ -1470,6 +1479,7 @@ def list_daily_review(
     # roster. It is attached to each row and affects no calculation - see
     # `_review_row`. Employees with none are simply absent from the dict.
     permissions = approved_hours_on_date(db, employee_ids=employee_ids, on_date=on_date)
+    periods = approved_periods_on_date(db, employee_ids=employee_ids, on_date=on_date)
     default_shift = Shift.default(timezone_name=settings.ATTENDANCE_TIMEZONE)
 
     items: list[dict] = []
@@ -1496,6 +1506,7 @@ def list_daily_review(
             verdict=verdict,
             record=record,
             permission_hours=permissions.get(employee_id),
+            permission_period=_period_value(periods.get(employee_id)),
         )
 
         if row["review_required"]:
@@ -1559,6 +1570,9 @@ def get_daily_review_detail(
     permission_hours = approved_hours_on_date(
         db, employee_ids={employee_id}, on_date=on_date
     ).get(employee_id)
+    permission_period = approved_periods_on_date(
+        db, employee_ids={employee_id}, on_date=on_date
+    ).get(employee_id)
 
     row = _review_row(
         employee_id=employee.id,
@@ -1567,6 +1581,7 @@ def get_daily_review_detail(
         verdict=verdict,
         record=record,
         permission_hours=permission_hours,
+        permission_period=_period_value(permission_period),
     )
 
     kept = day_summary.kept

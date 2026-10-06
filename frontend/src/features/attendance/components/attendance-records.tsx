@@ -62,9 +62,8 @@ const PAGE_SIZE = 15;
  * or writes anything: every value is read from `GET /biometric/daily-review` and
  * only formatted. `attendance_records` is untouched, and no punch is modified.
  *
- * The screen is built around one question - "what do I need to look at?" - which
- * is why it opens on Needs review rather than on all 29 employees. A day where
- * everything is settled correctly opens empty.
+ * It opens on All (`DEFAULT_REVIEW_FILTER`) so the whole roster can be set from
+ * here; Needs review is one click away.
  *
  * What it deliberately does NOT say: that a no-record employee was absent, or
  * that a short day was a half day. Those need the approved leave / permission /

@@ -215,6 +215,10 @@ export interface DailyReviewRow {
    *  attendance ATTRIBUTE shown beside `attendance_status` - it never replaces
    *  it, and it is never rendered as leave. */
   permission_hours: number | null;
+  /** Which permission option those hours are (`first_half_1h` ...), so the PM
+   *  edit dialog can seed its Permission selector. Null for none, and for a
+   *  permission filed before options existed (hours set, period null). */
+  permission_period?: string | null;
 }
 
 /** Counts for the WHOLE day, before any filter. No leave/permission/half-day:

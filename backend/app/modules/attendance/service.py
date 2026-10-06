@@ -21,6 +21,8 @@ from app.modules.audit.service import record_audit
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
 from app.modules.leave_balances import ledger
+from app.modules.permissions import service as permission_service
+from app.modules.permissions.models import PermissionPeriod
 from app.modules.users.models import User, UserRole
 from app.modules.work_reports.auto_reports import reconcile_auto_leave_reports
 from app.shared.errors import AppError
@@ -171,6 +173,36 @@ def _reconcile_auto_leave_reports(db: Session, touched: list[AttendanceRecord]) 
     pairs = [(record.employee_id, record.attendance_date) for record in touched]
     if pairs:
         reconcile_auto_leave_reports(db, pairs, commit=False)
+
+
+def _apply_manual_permission(
+    db: Session,
+    actor: User,
+    record: AttendanceRecord,
+    period: PermissionPeriod | None,
+    *,
+    sent: bool,
+) -> "permission_service.ManualPermissionChange | None":
+    """The PM's Permission selector, applied in THIS write's transaction.
+
+    Only when the field was actually sent: an attendance save that does not
+    mention permission - the sheet, a status-only PATCH, the dialog with the
+    selector untouched - leaves the day's permission exactly as it was.
+
+    Everything else belongs to the permission module (`apply_manual_permission`):
+    its rules, its ledger, its audit. The day's `status` is never read or
+    changed here - a permission is an attribute beside the status, not one of
+    them - and no work report or leave charge follows from it.
+    """
+    if not sent:
+        return None
+    return permission_service.apply_manual_permission(
+        db,
+        actor,
+        employee_id=record.employee_id,
+        on_date=record.attendance_date,
+        period=period,
+    )
 
 
 def _validated_leave_fraction(
@@ -468,12 +500,17 @@ def create_attendance(db: Session, actor: User, data: AttendanceCreate) -> Atten
             previous_status=None,
         )
         _reconcile_auto_leave_reports(db, [record])
+        permission_change = _apply_manual_permission(
+            db, actor, record, data.permission_period,
+            sent="permission_period" in data.model_fields_set,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
         raise AppError("conflict", "Attendance violates a uniqueness constraint.", 409)
     db.refresh(record)
     _notify_rulings(db, actor, [(record, None)])
+    permission_service.notify_manual_permission(db, actor, permission_change)
     return record
 
 
@@ -528,9 +565,14 @@ def update_attendance(
         previous_status=previous_status,
     )
     _reconcile_auto_leave_reports(db, [record])
+    permission_change = _apply_manual_permission(
+        db, actor, record, fields.get("permission_period"),
+        sent="permission_period" in fields,
+    )
     db.commit()
     db.refresh(record)
     _notify_rulings(db, actor, [(record, previous_status)])
+    permission_service.notify_manual_permission(db, actor, permission_change)
     return record
 
 

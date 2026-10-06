@@ -46,7 +46,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.permissions.balance import CONSUMING_STATUSES
-from app.modules.permissions.models import PermissionRequest
+from app.modules.permissions.models import PermissionPeriod, PermissionRequest
 
 
 def approved_hours_by_employee_date(
@@ -101,6 +101,28 @@ def approved_hours_on_date(
         db, employee_ids=employee_ids, date_from=on_date, date_to=on_date
     )
     return {employee_id: hours for (employee_id, _day), hours in by_pair.items()}
+
+
+def approved_periods_on_date(
+    db: Session, *, employee_ids: Iterable[uuid.UUID], on_date: date
+) -> dict[uuid.UUID, PermissionPeriod | None]:
+    """WHICH option each employee holds for one date - the PM edit dialog seeds
+    its Permission selector from this. Same filter as the hours above.
+
+    An employee present with `None` holds a permission filed before periods
+    existed (Phase 4C); one absent from the result holds none at all.
+    """
+    ids = list(employee_ids)
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(PermissionRequest.employee_id, PermissionRequest.period).where(
+            PermissionRequest.employee_id.in_(ids),
+            PermissionRequest.status.in_(CONSUMING_STATUSES),
+            PermissionRequest.permission_date == on_date,
+        )
+    ).all()
+    return {employee_id: period for employee_id, period in rows}
 
 
 def approved_hours_for_employee(

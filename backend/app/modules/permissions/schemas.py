@@ -53,6 +53,11 @@ class PermissionRequestOut(BaseModel):
     reviewed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # True when a project manager recorded this permission directly from Daily
+    # Attendance Review instead of the employee requesting it. Derived server-side
+    # (`service._recorded_by_manager`); False on mutation responses, which carry
+    # no derived fields.
+    recorded_by_manager: bool = False
 
 
 class PermissionRequestPage(BaseModel):

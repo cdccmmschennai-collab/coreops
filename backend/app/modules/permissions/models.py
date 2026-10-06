@@ -65,6 +65,11 @@ class PermissionStatus(str, enum.Enum):
     # `balance.CONSUMING_STATUSES` and `service._ACTIVE_STATUSES` both include
     # it. Same state, same meaning, as `LeaveStatus.cancellation_requested`.
     cancellation_requested = "cancellation_requested"
+    # Recorded directly by a project manager from Daily Attendance Review
+    # (migration 0086) - never requested, never approved. Holds its hours exactly
+    # as `approved` does (`balance.CONSUMING_STATUSES`), and the PM's outright
+    # cancel is the only way out of it: recorded -> cancelled.
+    recorded = "recorded"
 
 
 class PermissionPeriod(str, enum.Enum):

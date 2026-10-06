@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.attendance.models import AttendanceStatus
+from app.modules.permissions.models import PermissionPeriod
 from app.shared.leave_units import validate_half_step
 
 # A reviewer's note is a sentence, not an essay. Bounded so the audit `details`
@@ -63,6 +64,12 @@ class AttendanceCreate(BaseModel):
     # which is the case `status` alone cannot express. Omitted leaves the day
     # priced by status, exactly as before migration 0083.
     leave_day_fraction: float | None = None
+    # The PM's manual permission for this day - one of the request workflow's own
+    # four options, or null for "No Permission". OMITTED leaves the day's
+    # permission exactly as it is; only a field that was actually sent is acted
+    # on (see `permissions.service.apply_manual_permission`). Never a status:
+    # the day keeps `status` whatever this says.
+    permission_period: PermissionPeriod | None = None
 
     @field_validator("leave_day_fraction")
     @classmethod
@@ -76,6 +83,8 @@ class AttendanceUpdate(BaseModel):
     check_out_at: datetime | None = None
     note: str | None = Field(default=None, max_length=MAX_NOTE_LEN)
     leave_day_fraction: float | None = None
+    # Same contract as `AttendanceCreate.permission_period`.
+    permission_period: PermissionPeriod | None = None
 
     @field_validator("leave_day_fraction")
     @classmethod

@@ -76,9 +76,13 @@ ALLOWED_DURATIONS = (1, 2)
 # their allowance by requesting a cancellation nobody has approved, and would
 # make a rejected withdrawal silently re-spend hours the month had already given
 # back - the same reason `leave` keeps the state in its active set.
+#
+# `recorded` (a PM recording the permission from attendance review) consumes
+# exactly as `approved` does - same ledger, different origin.
 CONSUMING_STATUSES = (
     PermissionStatus.approved,
     PermissionStatus.cancellation_requested,
+    PermissionStatus.recorded,
 )
 
 

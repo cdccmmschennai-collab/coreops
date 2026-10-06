@@ -456,8 +456,14 @@ def test_the_self_notification_backstop_drops_a_push_aimed_at_the_actor(
     assert [n.title for n in _notifications(db, other_user_id)] == ["Delivered"]
 
 
-def test_a_failed_decision_notifies_nobody(client, login, team, db):
-    """A refused approval must not tell the employee anything happened."""
+def test_a_failed_decision_notifies_nobody(
+    client, login, team, db, make_permission_request
+):
+    """A refused approval must not tell the employee anything happened.
+
+    The starved request is seeded directly: since PM-manual Permission the API
+    refuses to FILE a request the month cannot cover, so the only way a pending
+    request meets an exhausted month is one filed before the hours ran out."""
     spent = _submit(client, login, MON, 2)
     _approve(client, login, spent["id"])
     spent2 = _submit(client, login, TUE, 2)
@@ -465,10 +471,8 @@ def test_a_failed_decision_notifies_nobody(client, login, team, db):
     db.query(Notification).delete()
     db.commit()
 
-    starved = _submit(client, login, WED, 1)
-    db.query(Notification).delete()   # drop the submission notification
-    db.commit()
-    assert _approve(client, login, starved["id"]).status_code == 422
+    starved = make_permission_request(employee_id=team["employee"].id, permission_date=WED)
+    assert _approve(client, login, starved.id).status_code == 422
 
     db.expire_all()
     assert _notifications(db, team["employee_user"].id) == []

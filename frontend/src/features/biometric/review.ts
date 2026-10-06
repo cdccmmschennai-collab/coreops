@@ -27,13 +27,11 @@ export const REVIEW_FILTERS = [
 export type ReviewFilter = (typeof REVIEW_FILTERS)[number]["value"];
 
 /**
- * "Needs review" is the landing view on purpose.
- *
- * The screen exists to answer "show me what I need to fix", not "make me read
- * 100 normal rows". A day where everything is settled should therefore open
- * empty, which is the correct and useful answer.
+ * "All" is the landing view: the PM sets every employee's day from this screen
+ * (attendance status, and since PM-manual Permission the day's permission too),
+ * so it opens on the whole roster. "Needs review" stays one click away.
  */
-export const DEFAULT_REVIEW_FILTER: ReviewFilter = "needs_review";
+export const DEFAULT_REVIEW_FILTER: ReviewFilter = "all";
 
 export function isReviewFilter(value: string): value is ReviewFilter {
   return REVIEW_FILTERS.some((f) => f.value === value);

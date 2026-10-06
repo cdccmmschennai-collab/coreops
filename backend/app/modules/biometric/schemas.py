@@ -442,6 +442,10 @@ class DailyReviewRowOut(BaseModel):
     # and a permission is never presented as leave. Pending, rejected and
     # cancelled requests are not reported here at all.
     permission_hours: int | None = None
+    # Which permission option those hours are (`first_half_1h` ...), so the PM
+    # edit dialog can seed its Permission selector. Null when there is none, and
+    # for a permission filed before options existed (hours set, period null).
+    permission_period: str | None = None
 
 
 class DailyReviewCounts(BaseModel):
