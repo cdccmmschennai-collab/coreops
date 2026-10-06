@@ -27,6 +27,9 @@ from app.shared.errors import AppError
 
 STANDARD_WORKDAY_MINUTES = 480  # 8 hours; anything beyond counts as overtime
 
+# What a PM's Absent ruling costs the leave pool. See `_validated_leave_fraction`.
+ABSENT_LEAVE_DAYS = Decimal("1.00")
+
 # Statuses that are a RULING about the employee's day rather than the default
 # of having turned up: each one costs them something (leave balance, a half
 # day, an absence on record) or grants them something (comp-off), so the person
@@ -154,21 +157,18 @@ def _reconcile_auto_leave_reports(db: Session, touched: list[AttendanceRecord]) 
     somebody has typed on it, reclassified and reopened); see
     `work_reports/auto_reports.py`, "LEAVE RECONCILIATION - PHASE 3F".
 
-    Offered for every written row whose resulting status is not `leave`, which is
-    exactly the condition under which the absence can have ended. That is a wider
-    net than "was leave, is now present" on purpose: a day whose leave attendance
-    row was deleted and then re-entered as present has no previous status to
-    compare against, and would slip through the narrower test.
+    Offered for EVERY written row: an automatic report is either `leave` or
+    `absent`, and a write of either status can end the other one's backing
+    (Absent -> Leave, Leave -> Absent), as can any other status. The
+    reconciliation re-reads what still backs each report, so offering a day
+    whose report still stands is a no-op. That also covers a row deleted and
+    re-entered, which has no previous status to compare against.
 
     One batched call, no commit: the attendance write and the reports it unlocks
     belong to the caller's single transaction. A day still on leave, a day with
     no automatic report, and an employee-authored report are all no-ops.
     """
-    pairs = [
-        (record.employee_id, record.attendance_date)
-        for record in touched
-        if record.status != AttendanceStatus.leave
-    ]
+    pairs = [(record.employee_id, record.attendance_date) for record in touched]
     if pairs:
         reconcile_auto_leave_reports(db, pairs, commit=False)
 
@@ -185,15 +185,42 @@ def _validated_leave_fraction(
     `leave_days_for` would ignore it. A row nobody can explain is worse than an
     error message.
     """
+    if status == AttendanceStatus.absent:
+        # Absent costs one full leave day, always - stated on the row so the
+        # ledger charges it, and so Absent rows written before this rule (which
+        # state nothing) keep costing 0. Whatever the client sent is ignored:
+        # the PM dialog sends null for every status but half_day.
+        return ABSENT_LEAVE_DAYS
     if fraction is None:
         return None
-    if status not in ledger.LEAVE_BEARING_STATUSES:
+    if status not in (AttendanceStatus.leave, AttendanceStatus.half_day):
         raise AppError(
             "validation_error",
             "Only a Leave or Half day can be charged to the leave balance.",
             422,
         )
     return Decimal(str(fraction))
+
+
+def _settle_leave_fraction(
+    record: AttendanceRecord, previous_status: AttendanceStatus | None
+) -> None:
+    """Keep the stored charge true to a status written WITHOUT a fraction.
+
+    A day moved off a leave-bearing status keeps no charge. A day moved INTO or
+    OUT OF Absent gets the charge its new status implies - 1.00 for Absent,
+    none for anything else - so a half day's 0.5 never lingers on an Absent row
+    and an Absent's 1.00 never lingers on a Leave or Half day. A row whose
+    status did not change keeps whatever it states, which is what leaves
+    historical Absent rows (stating nothing) uncharged.
+    """
+    if record.status not in ledger.LEAVE_BEARING_STATUSES:
+        record.leave_day_fraction = None
+    elif record.status != previous_status and AttendanceStatus.absent in (
+        record.status,
+        previous_status,
+    ):
+        record.leave_day_fraction = _validated_leave_fraction(None, record.status)
 
 
 def _clean_note(value: str | None) -> str | None:
@@ -476,12 +503,17 @@ def update_attendance(
     # leave-bearing status keeps no charge behind it. Without that, changing a
     # half-day leave to Present would leave 0.5 stored on a `present` row, which
     # `_validated_leave_fraction` would never have accepted in the first place.
-    if "leave_day_fraction" in fields:
+    if record.status == previous_status == AttendanceStatus.absent:
+        # An Absent re-saved as Absent (a note edit, a time correction) keeps
+        # the charge it was written with - so an Absent from before the rule is
+        # not newly charged just because the dialog was saved again.
+        pass
+    elif "leave_day_fraction" in fields:
         record.leave_day_fraction = _validated_leave_fraction(
             fields["leave_day_fraction"], record.status
         )
-    elif record.status not in ledger.LEAVE_BEARING_STATUSES:
-        record.leave_day_fraction = None
+    else:
+        _settle_leave_fraction(record, previous_status)
 
     record.total_minutes, record.overtime_minutes = _compute_minutes(new_in, new_out)
     record.updated_by = actor.id
@@ -522,10 +554,11 @@ def delete_attendance(db: Session, actor: User, record_id: uuid.UUID) -> None:
     )
     db.delete(record)
     db.flush()
-    # A manual Leave row was the whole of the absence (no request behind it), so
-    # its automatic leave report has nothing left to stand on. Same transaction;
-    # a day a live request still covers is left alone by the reconciliation.
-    if gone.status == AttendanceStatus.leave:
+    # A manual Leave or Absent row was the whole of the absence (no request
+    # behind it), so its automatic report has nothing left to stand on. Same
+    # transaction; a day a live request still covers is left alone by the
+    # reconciliation.
+    if gone.status in (AttendanceStatus.leave, AttendanceStatus.absent):
         reconcile_auto_leave_reports(
             db, [(gone.employee_id, gone.attendance_date)], commit=False
         )
@@ -640,6 +673,10 @@ def bulk_save_attendance(
             )
             db.add(record)
         record.status = item.status
+        # The sheet sends no fraction. Only a CHANGED status is settled, so a
+        # morning re-save of unchanged rows leaves every stored charge alone.
+        if record.status != previous_status:
+            _settle_leave_fraction(record, previous_status)
         record.check_in_at = item.check_in_at
         record.check_out_at = item.check_out_at
         record.total_minutes = total

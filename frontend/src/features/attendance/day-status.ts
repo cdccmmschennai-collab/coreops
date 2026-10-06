@@ -137,6 +137,8 @@ export function resolveAttendanceDay(
  *   present   1.0   - whether the record says so or the device settled it
  *   half_day  0.5   - only ever from an official record; see the file header
  *   anything  0     - leave, holiday, weekend, absent, comp_off, unresolved
+ *                     (absent may cost LEAVE - see `leaveDayCredit` - but it
+ *                     is never a present day)
  *
  * `absent` and `comp_off` are worth nothing on a PRESENT card by definition,
  * and an unresolved day (`null`: one punch, no punch, needs review) is worth
@@ -161,6 +163,10 @@ export function presentDayCredit(
  *   fraction stated   that fraction        1 / 0.5 / 0
  *   fraction null     `leave` -> 1, anything else -> 0
  *
+ * Only `leave`, `half_day` and `absent` can carry a charge. A PM's Absent
+ * ruling states 1 (the backend writes it) and stays displayed as Absent; an
+ * Absent from before that rule states nothing and costs 0.
+ *
  * WHY THIS IS NOT A ROW COUNT
  * ===========================
  * "Leave taken" used to be `records.filter(r => r.status === "leave").length`.
@@ -178,7 +184,13 @@ export function leaveDayCredit(record: {
   status: AttendanceStatus;
   leave_day_fraction?: number | null;
 }): number {
-  if (record.status !== "leave" && record.status !== "half_day") return 0;
+  if (
+    record.status !== "leave" &&
+    record.status !== "half_day" &&
+    record.status !== "absent"
+  ) {
+    return 0;
+  }
   if (record.leave_day_fraction != null) return record.leave_day_fraction;
   return record.status === "leave" ? 1 : 0;
 }

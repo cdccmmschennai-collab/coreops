@@ -260,7 +260,6 @@ def test_a_stated_zero_is_not_the_same_as_saying_nothing():
     "status",
     [
         AttendanceStatus.present,
-        AttendanceStatus.absent,
         AttendanceStatus.holiday,
         AttendanceStatus.weekend,
         AttendanceStatus.comp_off,
@@ -268,6 +267,13 @@ def test_a_stated_zero_is_not_the_same_as_saying_nothing():
 )
 def test_days_that_are_not_absence_never_cost_leave(status):
     assert ledger.leave_days_for(status, Decimal("1")) == Decimal("0")
+
+
+def test_absent_costs_its_stated_charge_and_nothing_when_it_states_none():
+    """Absent costs leave since Absent became leave-consuming (1.00 stated on
+    the row); an Absent from before that states nothing and costs 0."""
+    assert ledger.leave_days_for(AttendanceStatus.absent, Decimal("1")) == Decimal("1")
+    assert ledger.leave_days_for(AttendanceStatus.absent, None) == Decimal("0")
 
 
 # ======================================================================

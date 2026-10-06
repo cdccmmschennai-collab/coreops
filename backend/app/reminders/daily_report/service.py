@@ -233,7 +233,11 @@ class DailyReportReminderService:
             select(AttendanceRecord.employee_id).where(
                 AttendanceRecord.employee_id.in_(employee_ids),
                 AttendanceRecord.attendance_date == target,
-                AttendanceRecord.status == AttendanceStatus.leave,
+                # A PM's Absent ruling is the same: the day is accounted for by
+                # an automatic ABSENT report, so it owes no missing-report nudge.
+                AttendanceRecord.status.in_(
+                    (AttendanceStatus.leave, AttendanceStatus.absent)
+                ),
             )
         ).scalars()
         return set(requested) | set(recorded)

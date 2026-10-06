@@ -1044,6 +1044,7 @@ DAY_STATUS_LABELS: dict[str, str] = {
     DayStatus.permission_second_half_1hr.value: "P / Permission-Second Half 1HR",
     DayStatus.permission_first_half_2hr.value: "P / Permission-First Half 2HR",
     DayStatus.permission_second_half_2hr.value: "P / Permission-Second Half 2HR",
+    DayStatus.absent.value: "Absent",
 }
 
 
@@ -1698,6 +1699,16 @@ def _normalize_periods(
         location;
       - split, both halves working: the first half's status/location.
     """
+    # Absent is a PM's Attendance ruling, carried onto the automatic report by
+    # `auto_reports`; nobody declares it on a report they write themselves.
+    sent = [day_status] + [p.period_status for p in periods or []]
+    if DayStatus.absent in sent:
+        raise AppError(
+            "validation_error",
+            "Absent is recorded by your manager in Attendance and can't be "
+            "chosen on a report.",
+            422,
+        )
     if periods is None:
         # Legacy full-day payload. Leave-type day statuses drop any task lines
         # (existing leniency, unchanged).
@@ -2158,6 +2169,13 @@ def update_work_report(
 
     fields = data.model_dump(exclude_unset=True)
     periods_update = "periods" in fields and data.periods is not None
+    if fields.get("day_status") == DayStatus.absent:
+        raise AppError(
+            "validation_error",
+            "Absent is recorded by your manager in Attendance and can't be "
+            "chosen on a report.",
+            422,
+        )
 
     # Scalar header fields: update if explicitly provided. Applied BEFORE the
     # task/period rewrite so the synced period reads the new values; a periods

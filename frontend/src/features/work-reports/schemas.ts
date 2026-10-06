@@ -63,6 +63,7 @@ export const DAY_STATUSES = [
   "permission_second_half_1hr",
   "permission_first_half_2hr",
   "permission_second_half_2hr",
+  "absent",
 ] as const;
 
 export type DayStatus = (typeof DAY_STATUSES)[number];
@@ -82,7 +83,15 @@ export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
   permission_second_half_1hr: "P / Permission-Second Half 1HR",
   permission_first_half_2hr: "P / Permission-First Half 2HR",
   permission_second_half_2hr: "P / Permission-Second Half 2HR",
+  absent: "Absent",
 };
+
+// What an employee may choose on their own report. `absent` is a PM's
+// Attendance ruling that only the automatic report carries (the backend
+// refuses it on a written report), so it is displayed but never offered.
+export const SELECTABLE_DAY_STATUSES = DAY_STATUSES.filter(
+  (s) => s !== "absent",
+) as DayStatus[];
 
 // Day statuses where the employee did no project work: the report needs no
 // activities and is exempt from benchmark / overdue / pending tracking. Only
@@ -92,6 +101,7 @@ export const NO_ACTIVITY_DAY_STATUSES = new Set<DayStatus>([
   "leave",
   "company_holiday",
   "comp_off",
+  "absent",
 ]);
 
 export const isNoActivityDayStatus = (s: DayStatus | undefined): boolean =>
@@ -111,9 +121,9 @@ export const DAY_PART_LABEL: Record<DayPart, string> = {
 // Statuses offered by a split-day period card. Everything except `half_day` —
 // a half period states its own working/leave status precisely, so the legacy
 // ambiguous "Half Day" value is never valid inside a split report.
-export const PERIOD_STATUSES = DAY_STATUSES.filter(
+export const PERIOD_STATUSES = SELECTABLE_DAY_STATUSES.filter(
   (s) => s !== "half_day",
-) as DayStatus[];
+);
 
 /** Server-mirrored fraction per day part — display only, never sent. */
 export const DAY_PART_FRACTION: Record<DayPart, number> = {

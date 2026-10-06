@@ -14540,7 +14540,8 @@
           "permission_first_half_1hr",
           "permission_second_half_1hr",
           "permission_first_half_2hr",
-          "permission_second_half_2hr"
+          "permission_second_half_2hr",
+          "absent"
         ],
         "title": "DayStatus"
       },

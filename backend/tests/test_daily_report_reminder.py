@@ -790,6 +790,18 @@ def test_manual_leave_record_suppresses_missing(db):
     assert _collect(db) == []
 
 
+def test_manual_absent_record_suppresses_missing(db):
+    """A PM's Absent ruling accounts for the day (automatic ABSENT report), so
+    the employee is not nagged for a report they do not owe."""
+    from app.modules.attendance.models import AttendanceStatus
+
+    pm = _make_pm_user(db, "alex@example.com")
+    emp = _make_reporting_employee(db, code="EMP001", first_name="David", pm_id=pm.id)
+    _make_attendance(db, employee_id=emp.id, day=_WED, status=AttendanceStatus.absent)
+
+    assert _collect(db) == []
+
+
 def test_manual_non_leave_record_does_not_suppress_missing(db):
     from app.modules.attendance.models import AttendanceStatus
 

@@ -75,6 +75,10 @@ class DayStatus(str, enum.Enum):
     permission_second_half_1hr = "permission_second_half_1hr"
     permission_first_half_2hr = "permission_first_half_2hr"
     permission_second_half_2hr = "permission_second_half_2hr"
+    # A PM ruled the employee Absent in Attendance (migration 0085). Never
+    # employee-selectable: only the automatic report carries it, mirroring the
+    # attendance row. Distinct from `leave`, though it costs one leave day.
+    absent = "absent"
 
 
 # Day statuses where the employee did no project work: the report needs no task
@@ -85,6 +89,7 @@ NO_ACTIVITY_DAY_STATUSES = frozenset(
         DayStatus.company_holiday,
         DayStatus.week_off,
         DayStatus.comp_off,
+        DayStatus.absent,
     }
 )
 

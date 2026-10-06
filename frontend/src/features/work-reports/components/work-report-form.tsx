@@ -72,7 +72,7 @@ import {
   DAY_PART_FRACTION,
   DAY_PART_LABEL,
   DAY_STATUS_LABEL,
-  DAY_STATUSES,
+  SELECTABLE_DAY_STATUSES,
   EMPTY_HALF_PERIOD,
   EMPTY_TASK_ROW,
   WORK_LOCATION_LABEL,
@@ -1024,7 +1024,7 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          {DAY_STATUSES.map((s) => (
+                          {SELECTABLE_DAY_STATUSES.map((s) => (
                             <SelectItem key={s} value={s}>
                               {DAY_STATUS_LABEL[s]}
                             </SelectItem>

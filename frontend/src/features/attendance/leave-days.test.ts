@@ -55,11 +55,44 @@ test("a stated fraction overrides a leave row", () => {
   assert.equal(leaveDayCredit({ status: "leave", leave_day_fraction: 0.5 }), 0.5);
 });
 
-for (const status of ["present", "absent", "holiday", "weekend", "comp_off"] as const) {
+for (const status of ["present", "holiday", "weekend", "comp_off"] as const) {
   test(`${status} never costs leave, even with a fraction on it`, () => {
     assert.equal(leaveDayCredit({ status, leave_day_fraction: 1 }), 0);
   });
 }
+
+// ---------- absent ------------------------------------------------------------
+
+// What the backend writes for every Absent ruling since the rule: 1.00 stated.
+const ABSENT = { status: "absent" as const, leave_day_fraction: 1 };
+// An Absent from before the rule states nothing.
+const OLD_ABSENT = { status: "absent" as const, leave_day_fraction: null };
+
+test("an absent day costs one leave day", () => {
+  assert.equal(leaveDayCredit(ABSENT), 1);
+});
+
+test("two absent days cost two", () => {
+  assert.equal(leaveDaysTaken([ABSENT, ABSENT]), 2);
+});
+
+test("an absent from before the rule states nothing and costs nothing", () => {
+  assert.equal(leaveDayCredit(OLD_ABSENT), 0);
+  assert.equal(leaveDayCredit({ status: "absent" }), 0);
+});
+
+test("absent and leave add up, week off and holiday add nothing", () => {
+  assert.equal(
+    leaveDaysTaken([
+      ABSENT,
+      LEAVE,
+      { status: "weekend" as const },
+      { status: "holiday" as const },
+      OLD_ABSENT,
+    ]),
+    2,
+  );
+});
 
 // ---------- the month roll-up ------------------------------------------------
 

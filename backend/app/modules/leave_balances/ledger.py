@@ -183,7 +183,17 @@ def _q(value: Decimal) -> Decimal:
 # The statuses that can carry funded leave. `half_day` is here because half of
 # one may be leave - not because all of them are; `leave_days_for` decides, and
 # answers 0 for a `half_day` row that never stated a fraction.
-LEAVE_BEARING_STATUSES = (AttendanceStatus.leave, AttendanceStatus.half_day)
+#
+# `absent` is here because a PM's Absent ruling costs one leave day. It stays
+# ABSENT (it is not converted to leave); the charge is the 1.00 fraction that
+# `attendance.service` states on every Absent row it writes. An Absent row from
+# before that rule states nothing and therefore still costs 0, which is what
+# keeps historical balances where they were.
+LEAVE_BEARING_STATUSES = (
+    AttendanceStatus.leave,
+    AttendanceStatus.half_day,
+    AttendanceStatus.absent,
+)
 
 
 def leave_days_for(
@@ -201,9 +211,11 @@ def leave_days_for(
     nothing. NULL falls back to the pre-0083 rule, which is what keeps every
     historical row contributing exactly what it always did.
 
-    Returns 0 for `present`, `absent`, `holiday`, `weekend` and `comp_off`: none
-    of them is funded absence, and a stray fraction on one would be a data fault
-    rather than a licence to charge the pool.
+    Returns 0 for `present`, `holiday`, `weekend` and `comp_off`: none of them is
+    funded absence, and a stray fraction on one would be a data fault rather
+    than a licence to charge the pool. `absent` costs its stated fraction (1.00
+    on every row written since Absent became leave-consuming) and 0 when it
+    states none (rows from before).
     """
     if status not in LEAVE_BEARING_STATUSES:
         return ZERO

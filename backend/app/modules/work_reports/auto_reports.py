@@ -8,7 +8,7 @@ created for them:
 
     origin        = auto
     status        = submitted
-    day_status    = week_off
+    day_status    = week_off, or company_holiday on a declared holiday
     report_mode   = full_day
     total_minutes = 0
 
@@ -71,14 +71,23 @@ The consequence that matters most:
 A declared `working_day` beats the weekend rule inside `is_working_day`, so the
 override needs no special case here; it simply never reaches the create branch.
 
-WHY 'week_off' AND NOT 'company_holiday'
-========================================
-Phase 3C generates for CALENDAR-CLOSED days and labels them all `week_off`. It
-does not yet distinguish a plain weekend from a declared holiday or a natural
-hazard - those get their own day_status in a later phase. A declared holiday on a
-weekday therefore also produces a `week_off` report today; that is a known,
-deliberate Phase 3C simplification, not an accident, and it is the one thing a
-later phase must refine rather than rebuild.
+'week_off' OR 'company_holiday'
+==============================
+Phase 3C labelled every calendar-closed day `week_off`. That simplification is
+now refined, in the one writer (`ensure_auto_report`), by the calendar data this
+module already loads:
+
+    closed because a calendar entry closes it  -> company_holiday
+    (holiday / cdc_holiday / natural_hazard)
+    closed only by the weekly rule             -> week_off
+    (Sunday, 2nd/4th Saturday)
+
+A declared holiday that falls on a weekly off is a HOLIDAY: the declared entry
+outranks the weekly rule, the same precedence `is_working_day` applies and the
+attendance calendar (`frontend/.../attendance/day-status.ts`) paints. All three
+closing entry types resolve to the one holiday status there too, so this adds no
+rule of its own. Reports generated before this refinement keep the `week_off`
+label they were born with - an existing report always wins (below).
 
 AN EMPLOYEE'S OWN REPORT ALWAYS WINS
 ====================================
@@ -124,11 +133,13 @@ The stale row is findable because the two facts that identify it are both stored
 and never mutated afterwards:
 
     daily_work_reports.origin     = 'auto'      (who created it)
-    daily_work_reports.day_status = 'week_off'  (what it was created for)
+    daily_work_reports.day_status = 'week_off' / 'company_holiday'
+                                                (what it was created for)
 
 so the query is exactly
 
-    origin = auto AND day_status = week_off AND report_date IN (<changed dates>)
+    origin = auto AND day_status IN (week_off, company_holiday)
+                  AND report_date IN (<changed dates>)
 
 with no risk of touching an employee's own week_off report - that one carries
 origin = 'employee'.
@@ -287,6 +298,19 @@ days it claims, so nothing changes for them.
 NOT DONE HERE. No badge, no UI, no notification, no email, and nothing written
 to `leave_requests`, `attendance_records` or any balance - reconciliation only
 ever takes back a claim this module itself made.
+
+AUTOMATIC ABSENT REPORTS
+========================
+A PM marking a working day Absent in Attendance is the third absence source.
+The leave sweep files it as `day_status = absent` - NOT leave: the report mirrors
+the attendance ruling. It is locked like a leave report, and reconciled away
+(same delete-or-reclassify rule) once the Absent row is changed or deleted.
+
+Absent costs one leave day, but NOTHING here charges it. The ledger
+(`leave_balances.ledger`) prices the attendance row itself, from the 1.00
+fraction `attendance.service` states on it; generating, re-generating or
+reconciling a report can never move a balance, so re-running this job any
+number of times leaves the charge at exactly one day.
 """
 from __future__ import annotations
 
@@ -325,10 +349,25 @@ logger = logging.getLogger("coreops.work_reports.auto_reports")
 # copied into a second place.
 AUTO_WEEKEND_DAY_STATUS = DayStatus.week_off
 
+# The day_status of an automatic report on a day a calendar entry (holiday /
+# cdc_holiday / natural_hazard) closed. Same side of the calendar as week_off -
+# both are filed by the closed-day sweep - but a holiday is not a weekly off.
+AUTO_HOLIDAY_DAY_STATUS = DayStatus.company_holiday
+
+# Every label the closed-day sweep can write, and therefore every label Phase
+# 3D's calendar reconciliation must be able to find again.
+AUTO_CLOSED_DAY_STATUSES = (AUTO_WEEKEND_DAY_STATUS, AUTO_HOLIDAY_DAY_STATUS)
+
 # The day_status every Phase 3E automatic LEAVE report carries. Separate constant
 # from the week-off one above even though both are one enum member, because they
 # answer different questions and a later phase may split either.
 AUTO_LEAVE_DAY_STATUS = DayStatus.leave
+
+# The day_status of an automatic report on a working day a PM marked Absent in
+# Attendance. ABSENT, not LEAVE: the report mirrors the attendance ruling. The
+# day still costs one leave day, but that is the ledger's reading of the
+# attendance row (leave_balances.ledger) - nothing here charges anything.
+AUTO_ABSENT_DAY_STATUS = DayStatus.absent
 
 # The leave states that get an automatic report. Exactly `approved`.
 #
@@ -368,13 +407,30 @@ ACTIVE_LEAVE_STATUSES = (
 # editable despite being submitted. Written in Phase 3C as the default-deny half
 # of the rule, when nothing generated a leave report; Phase 3E's leave sweep is
 # what makes it reachable. The predicate itself is unchanged.
-AUTO_LOCKED_DAY_STATUSES = frozenset({DayStatus.leave})
+#
+# `absent` joins it on the same reasoning: the report stands for a PM's ruling,
+# and stays locked for exactly as long as the Absent attendance row does.
+AUTO_LOCKED_DAY_STATUSES = frozenset({DayStatus.leave, DayStatus.absent})
+
+# The automatic reports that stand for an ABSENCE on a working day, and so are
+# the ones attendance / leave changes reconcile.
+AUTO_ABSENCE_DAY_STATUSES = (AUTO_LEAVE_DAY_STATUS, AUTO_ABSENT_DAY_STATUS)
 
 # How many days back the scheduled sweep re-checks, ending at `today`. Not a
 # lookback "window" in the reminder sense: because the generator is idempotent,
 # re-covering an already covered date writes nothing, so this is purely the
 # self-healing margin for a worker that was down, ran late, or died mid-run.
 DEFAULT_LOOKBACK_DAYS = 7
+
+
+def closed_day_status(report_date: date, non_working: set[date]) -> DayStatus:
+    """The label for a CLOSED day: holiday if a calendar entry closed it, else
+    week_off. `non_working` is :func:`load_calendar_overrides`' closing set, so
+    the holiday data is the calendar's own, read once per sweep. Only meaningful
+    for a date `is_working_day` already called closed."""
+    if report_date in non_working:
+        return AUTO_HOLIDAY_DAY_STATUS
+    return AUTO_WEEKEND_DAY_STATUS
 
 
 def auto_report_author_editable(report: DailyWorkReport) -> bool:
@@ -509,7 +565,7 @@ def ensure_auto_report(
     employee: Employee,
     report_date: date,
     *,
-    day_status: DayStatus = AUTO_WEEKEND_DAY_STATUS,
+    day_status: DayStatus | None = None,
     on_working_day: bool = False,
     non_working: set[date] | None = None,
     working_overrides: set[date] | None = None,
@@ -519,8 +575,10 @@ def ensure_auto_report(
     calendar agrees with what this report is for and the slot is free.
 
     The single writer for every automatic report there is. `day_status` is the
-    only thing that differs between the kinds - `week_off` (Phase 3C) and
-    `leave` (Phase 3E) - so neither has a generation path of its own to drift.
+    only thing that differs between the kinds - `week_off` / `company_holiday`
+    (closed days) and `leave` (Phase 3E) - so none has a generation path of its
+    own to drift. Omitted on a closed day, it is derived from the calendar by
+    :func:`closed_day_status`.
 
     `on_working_day` states which side of the calendar this kind belongs to, and
     is the ONLY calendar question asked here:
@@ -561,6 +619,12 @@ def ensure_auto_report(
             employee_id=employee.id,
             report_date=report_date,
             reason="working_day" if working else "non_working_day",
+        )
+    if day_status is None:
+        day_status = (
+            AUTO_LEAVE_DAY_STATUS
+            if on_working_day
+            else closed_day_status(report_date, non_working)
         )
 
     existing = db.execute(
@@ -851,12 +915,27 @@ def recorded_leave_days(db: Session, dates: list[date]) -> dict[date, set[uuid.U
     own rows land here too and merge harmlessly with `approved_leave_days` -
     the sweep is idempotent per (employee, date) either way.
     """
+    return _recorded_days(db, dates, AttendanceStatus.leave)
+
+
+def recorded_absent_days(db: Session, dates: list[date]) -> dict[date, set[uuid.UUID]]:
+    """`{date: employees whose attendance row says absent}`, over `dates` only.
+
+    A PM's Absent ruling. It files an ABSENT report (not a leave one) on a
+    working day; the leave it costs is the ledger's business, never this one's.
+    """
+    return _recorded_days(db, dates, AttendanceStatus.absent)
+
+
+def _recorded_days(
+    db: Session, dates: list[date], status: AttendanceStatus
+) -> dict[date, set[uuid.UUID]]:
     if not dates:
         return {}
     rows = db.execute(
         select(AttendanceRecord.employee_id, AttendanceRecord.attendance_date).where(
             AttendanceRecord.attendance_date.in_(dates),
-            AttendanceRecord.status == AttendanceStatus.leave,
+            AttendanceRecord.status == status,
         )
     ).all()
     by_date: dict[date, set[uuid.UUID]] = {}
@@ -927,6 +1006,10 @@ def generate_auto_leave_reports(
                 approved_leave_days(db, result.dates),
                 recorded_leave_days(db, result.dates),
             )
+            # A PM's Absent ruling is its own source and its own label. It never
+            # overlaps the leave set on a date: an Absent row is a non-leave
+            # attendance ruling, which `_generate_leave_for_date` drops.
+            absent = recorded_absent_days(db, result.dates)
             for target in result.dates:
                 _generate_leave_for_date(
                     db,
@@ -935,6 +1018,7 @@ def generate_auto_leave_reports(
                     non_working,
                     working_overrides,
                     result,
+                    absent=absent.get(target, set()),
                 )
     finally:
         if owns_session:
@@ -960,10 +1044,13 @@ def _generate_leave_for_date(
     non_working: set[date],
     working_overrides: set[date],
     result: AutoReportRunResult,
+    *,
+    absent: set[uuid.UUID] = frozenset(),
 ) -> None:
-    """One date, every employee approved leave covers on it. Never raises: a
-    single employee's failure is rolled back on its own and the sweep carries on,
-    and because nothing was committed for them the next run picks them up
+    """One date, every employee approved leave covers on it, plus every
+    employee a PM marked Absent on it (`absent`, filed as ABSENT). Never raises:
+    a single employee's failure is rolled back on its own and the sweep carries
+    on, and because nothing was committed for them the next run picks them up
     again."""
     if not is_working_day(
         target, non_working=non_working, working_overrides=working_overrides
@@ -973,8 +1060,6 @@ def _generate_leave_for_date(
         # `approved_leave_days` has already excluded the date for the same
         # reason - this is the guard, not the filter.
         result.non_working_dates += 1
-        return
-    if not on_leave:
         return
 
     # A day a PM has ruled on is not an absence any more, whatever the leave
@@ -988,14 +1073,19 @@ def _generate_leave_for_date(
     # comp_off - which `apply_leave_approved` had already refused to overwrite.
     denied = _attendance_denies_leave(db, {(emp_id, target) for emp_id in on_leave})
     on_leave = {emp_id for emp_id in on_leave if (emp_id, target) not in denied}
-    if not on_leave:
+    # Which label each employee's report gets. An Absent row is itself one of
+    # the denials above, so the two sets are disjoint; Absent is applied last
+    # all the same, because the attendance ruling is what the report mirrors.
+    status_for = {emp_id: AUTO_LEAVE_DAY_STATUS for emp_id in on_leave}
+    status_for.update({emp_id: AUTO_ABSENT_DAY_STATUS for emp_id in absent})
+    if not status_for:
         return
 
     # `report_submitters` first, so the leave sweep files for exactly the
     # population the week-off sweep does: active, not soft-deleted, not a PM
     # login, and not before their joining date. An employee outside it owes no
     # report on this date, on leave or otherwise.
-    employees = [e for e in report_submitters(db, target) if e.id in on_leave]
+    employees = [e for e in report_submitters(db, target) if e.id in status_for]
     result.employees_considered += len(employees)
     if not employees:
         return
@@ -1020,7 +1110,7 @@ def _generate_leave_for_date(
                 db,
                 employee,
                 target,
-                day_status=AUTO_LEAVE_DAY_STATUS,
+                day_status=status_for[employee.id],
                 on_working_day=True,
                 non_working=non_working,
                 working_overrides=working_overrides,
@@ -1052,8 +1142,8 @@ def _generate_leave_for_date(
 # RECONCILIATION (Phase 3D) - a closed date becomes a working one
 # ---------------------------------------------------------------------------
 #
-# SCOPE. Exactly `origin = auto AND day_status = week_off`, on a date the
-# calendar now calls WORKING. Nothing else is ever looked at: an employee's own
+# SCOPE. Exactly `origin = auto AND day_status IN (week_off, company_holiday)`
+# (AUTO_CLOSED_DAY_STATUSES), on a date the calendar now calls WORKING. Nothing else is ever looked at: an employee's own
 # week_off report carries origin = 'employee', an automatic LEAVE report carries
 # a different day_status, and both are therefore outside every query below.
 #
@@ -1284,7 +1374,8 @@ def reconcile_auto_reports_for_calendar_change(
     *,
     commit: bool = True,
 ) -> AutoReconcileResult:
-    """Remove or reclassify AUTO week-off reports on dates that are now WORKING.
+    """Remove or reclassify AUTO week-off / holiday reports on dates that are
+    now WORKING.
 
     Call it with every date a calendar write may have re-classified - for an
     update that is the old AND the new event date. The direction does not have to
@@ -1294,8 +1385,9 @@ def reconcile_auto_reports_for_calendar_change(
     is free and does nothing.
 
     Idempotent. The first run leaves no in-scope row behind - a deleted report is
-    gone and a reclassified one no longer carries `week_off` - so a second run
-    selects nothing and writes nothing. Rows outside the scope are never read.
+    gone and a reclassified one no longer carries a closed-day label - so a
+    second run selects nothing and writes nothing. Rows outside the scope are
+    never read.
 
     `commit=False` keeps the work in the caller's transaction, which is how
     `calendar.service` uses it: the calendar row and its reconciliation commit
@@ -1324,7 +1416,10 @@ def reconcile_auto_reports_for_calendar_change(
         select(DailyWorkReport).where(
             DailyWorkReport.report_date.in_(now_working),
             DailyWorkReport.origin == ReportOrigin.auto,
-            DailyWorkReport.day_status == AUTO_WEEKEND_DAY_STATUS,
+            # Both closed-day labels: a holiday deleted from the calendar
+            # re-opens its date exactly as a working_day override re-opens a
+            # Saturday.
+            DailyWorkReport.day_status.in_(AUTO_CLOSED_DAY_STATUSES),
         )
     ).scalars().all()
     result.examined = len(stale)
@@ -1335,14 +1430,15 @@ def reconcile_auto_reports_for_calendar_change(
         # the flush below.
         report_id, employee_id = report.id, report.employee_id
         report_date = report.report_date
-        if is_untouched_auto_report(db, report):
+        generated_status = report.day_status
+        if is_untouched_auto_report(db, report, day_status=generated_status):
             # Nothing of anyone's in it. The periods (and any task rows, of which
             # there are none by definition here) go with it via the DB cascade.
             db.delete(report)
             action = "deleted"
             result.deleted += 1
         else:
-            _reclassify_auto_report(db, report)
+            _reclassify_auto_report(db, report, day_status=generated_status)
             action = "reclassified"
             result.reclassified += 1
         result.outcomes.append(
@@ -1453,6 +1549,22 @@ def _live_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
     }
 
 
+def _recorded_absent_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
+    """The pairs whose `attendance_records` row says `absent` - the whole
+    backing of an automatic ABSENT report."""
+    if not pairs:
+        return set()
+    employee_ids, dates = _split_pairs(pairs)
+    rows = db.execute(
+        select(AttendanceRecord.employee_id, AttendanceRecord.attendance_date).where(
+            AttendanceRecord.employee_id.in_(employee_ids),
+            AttendanceRecord.attendance_date.in_(dates),
+            AttendanceRecord.status == AttendanceStatus.absent,
+        )
+    ).all()
+    return {(emp, day) for emp, day in rows} & pairs
+
+
 def _recorded_leave_pairs(db: Session, pairs: set[LeaveDay]) -> set[LeaveDay]:
     """The pairs whose `attendance_records` row says `leave`.
 
@@ -1523,8 +1635,9 @@ def reconcile_auto_leave_reports(
     pair that moved the other way (or did not move at all) is free and does
     nothing.
 
-    Only `origin = auto AND day_status = leave` rows on exactly those pairs are
-    ever loaded. An employee-authored report, an automatic week-off report,
+    Only `origin = auto AND day_status IN (leave, absent)` rows on exactly those
+    pairs are ever loaded; a `leave` one stands while the absence is in force,
+    an `absent` one while the Absent attendance row does. An employee-authored report, an automatic week-off report,
     another employee and another date are all outside the query.
 
     Idempotent. The first run leaves no in-scope row behind - a deleted report is
@@ -1548,7 +1661,7 @@ def reconcile_auto_leave_reports(
                 DailyWorkReport.employee_id.in_(employee_ids),
                 DailyWorkReport.report_date.in_(dates),
                 DailyWorkReport.origin == ReportOrigin.auto,
-                DailyWorkReport.day_status == AUTO_LEAVE_DAY_STATUS,
+                DailyWorkReport.day_status.in_(AUTO_ABSENCE_DAY_STATUSES),
             )
         )
         .scalars()
@@ -1561,13 +1674,18 @@ def reconcile_auto_leave_reports(
     if not candidates:
         return result
 
-    # One batched read for every candidate, not one per report.
-    still_active = active_leave_pairs(
-        db, {(r.employee_id, r.report_date) for r in candidates}
-    )
+    # One batched read per label for every candidate, not one per report. A
+    # leave report stands while the absence is in force; an absent report
+    # stands while the Absent attendance row does.
+    candidate_pairs = {(r.employee_id, r.report_date) for r in candidates}
+    still_backed = {
+        AUTO_LEAVE_DAY_STATUS: active_leave_pairs(db, candidate_pairs),
+        AUTO_ABSENT_DAY_STATUS: _recorded_absent_pairs(db, candidate_pairs),
+    }
 
     for report in candidates:
-        if (report.employee_id, report.report_date) in still_active:
+        pair = (report.employee_id, report.report_date)
+        if pair in still_backed[report.day_status]:
             # The absence stands - including while a withdrawal is merely
             # REQUESTED. The row is untouched and stays locked.
             result.still_on_leave += 1
@@ -1576,7 +1694,8 @@ def reconcile_auto_leave_reports(
         # the flush below.
         report_id, employee_id = report.id, report.employee_id
         report_date = report.report_date
-        if is_untouched_auto_report(db, report, day_status=AUTO_LEAVE_DAY_STATUS):
+        generated_status = report.day_status
+        if is_untouched_auto_report(db, report, day_status=generated_status):
             # Nothing of anyone's in it. The period (and any task rows, of which
             # there are none by definition here) goes with it via the DB cascade,
             # and the freed slot is what lets the employee file the day normally.
@@ -1585,8 +1704,8 @@ def reconcile_auto_leave_reports(
             result.deleted += 1
         else:
             # Somebody's data is on this row. Nothing of it is removed; only the
-            # now-false `leave` label goes, which also unlocks it.
-            _reclassify_auto_report(db, report, day_status=AUTO_LEAVE_DAY_STATUS)
+            # now-false `leave` / `absent` label goes, which also unlocks it.
+            _reclassify_auto_report(db, report, day_status=generated_status)
             action = "reclassified"
             result.reclassified += 1
         result.outcomes.append(
