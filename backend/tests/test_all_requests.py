@@ -507,6 +507,158 @@ def test_an_unknown_status_is_ignored_rather_than_erroring(
     assert got == {("leave", str(leave.id))}
 
 
+# ---------- employee-name search (`q`) --------------------------------------
+
+def _two_people(make_leave_request, make_permission_request, team, **over):
+    """One leave and one permission for each of emp_a and emp_b."""
+    a_l = make_leave_request(
+        employee_id=team["emp_a"].id,
+        start_date=_d("2027-03-02"), end_date=_d("2027-03-02"), **over,
+    )
+    a_p = make_permission_request(
+        employee_id=team["emp_a"].id, permission_date=_d("2027-03-04"),
+        period=PermissionPeriod.first_half_1h,
+    )
+    b_l = make_leave_request(
+        employee_id=team["emp_b"].id,
+        start_date=_d("2027-03-03"), end_date=_d("2027-03-03"),
+    )
+    b_p = make_permission_request(
+        employee_id=team["emp_b"].id, permission_date=_d("2027-03-05"),
+        period=PermissionPeriod.first_half_1h,
+    )
+    return a_l, a_p, b_l, b_p
+
+
+@pytest.mark.parametrize("q", ["santh", "SANTHOSH", "kUmAr", "Santhosh Kum"])
+def test_search_matches_partial_name_case_insensitively_on_both_kinds(
+    client, team, make_leave_request, make_permission_request, q
+):
+    a_l, a_p, _, _ = _two_people(make_leave_request, make_permission_request, team)
+    got = _keys(client.get(ALL, headers=team["pm"], params={"q": q}))
+    assert got == {("leave", str(a_l.id)), ("permission", str(a_p.id))}
+
+
+def test_an_empty_or_blank_search_changes_nothing(
+    client, team, make_leave_request, make_permission_request
+):
+    _two_people(make_leave_request, make_permission_request, team)
+    unfiltered = _keys(client.get(ALL, headers=team["pm"]))
+    assert len(unfiltered) == 4
+    for q in ("", "   "):
+        assert _keys(client.get(ALL, headers=team["pm"], params={"q": q})) == unfiltered
+
+
+def test_search_reads_the_requester_name_only(
+    client, team, make_leave_request, make_permission_request
+):
+    """Not the reason, not the approver: emp_a's leave mentions Divya in its
+    reason and was decided by Priya, yet neither name finds it."""
+    a_l = make_leave_request(
+        employee_id=team["emp_a"].id,
+        start_date=_d("2027-03-02"), end_date=_d("2027-03-02"),
+        reason="Divya's wedding",
+        status=LeaveStatus.approved, manager_id=team["pm_employee"].id,
+    )
+    b_p = make_permission_request(
+        employee_id=team["emp_b"].id, permission_date=_d("2027-03-05"),
+        period=PermissionPeriod.first_half_1h,
+    )
+    assert _keys(client.get(ALL, headers=team["pm"], params={"q": "priya"})) == set()
+    got = _keys(client.get(ALL, headers=team["pm"], params={"q": "divya"}))
+    assert got == {("permission", str(b_p.id))}
+    assert ("leave", str(a_l.id)) not in got
+
+
+def test_like_wildcards_in_the_search_are_literal(
+    client, team, make_leave_request, make_permission_request
+):
+    _two_people(make_leave_request, make_permission_request, team)
+    for q in ("%", "_", "s%r"):
+        assert _keys(client.get(ALL, headers=team["pm"], params={"q": q})) == set()
+
+
+def test_search_composes_with_the_status_filter(
+    client, team, make_leave_request, make_permission_request
+):
+    a_l, _, _, _ = _two_people(
+        make_leave_request, make_permission_request, team,
+        status=LeaveStatus.approved, manager_id=team["pm_employee"].id,
+    )
+    got = _keys(
+        client.get(ALL, headers=team["pm"], params={"q": "santhosh", "status": "approved"})
+    )
+    assert got == {("leave", str(a_l.id))}
+
+
+def test_search_composes_with_the_date_window(
+    client, team, make_leave_request, make_permission_request
+):
+    _, a_p, _, _ = _two_people(make_leave_request, make_permission_request, team)
+    got = _keys(
+        client.get(
+            ALL, headers=team["pm"],
+            params={"q": "santhosh", "from": "2027-03-04", "to": "2027-03-05"},
+        )
+    )
+    # emp_b's permission on 03-05 is in the window but is the wrong person;
+    # emp_a's leave on 03-02 is the right person but outside it.
+    assert got == {("permission", str(a_p.id))}
+
+
+def test_search_is_applied_before_paging(
+    client, team, make_leave_request, make_permission_request
+):
+    """`total` and every page reflect the search, not just the page in hand."""
+    expected = set()
+    for i in range(3):
+        expected.add(("leave", str(make_leave_request(
+            employee_id=team["emp_a"].id,
+            start_date=_d(f"2027-03-0{i + 1}"), end_date=_d(f"2027-03-0{i + 1}"),
+        ).id)))
+        make_leave_request(
+            employee_id=team["emp_b"].id,
+            start_date=_d(f"2027-04-0{i + 1}"), end_date=_d(f"2027-04-0{i + 1}"),
+        )
+    first = client.get(
+        ALL, headers=team["pm"], params={"q": "santhosh", "limit": 2, "offset": 0}
+    )
+    second = client.get(
+        ALL, headers=team["pm"], params={"q": "santhosh", "limit": 2, "offset": 2}
+    )
+    assert first.json()["total"] == 3
+    assert len(_rows(first)) == 2 and len(_rows(second)) == 1
+    assert _keys(first) | _keys(second) == expected
+
+
+def test_search_never_widens_a_heads_scope(
+    client, team, make_leave_request, make_permission_request
+):
+    """Divya's requests are routed to Head B's project, so Head A searching
+    for her by name gets nothing - the search only narrows."""
+    make_leave_request(
+        employee_id=team["emp_b"].id,
+        start_date=_d("2027-03-03"), end_date=_d("2027-03-03"),
+        routed_project_id=team["project_b"].id,
+    )
+    make_permission_request(
+        employee_id=team["emp_b"].id, permission_date=_d("2027-03-05"),
+        period=PermissionPeriod.first_half_1h,
+        routed_project_id=team["project_b"].id,
+    )
+    assert _keys(client.get(ALL, headers=team["head_a"], params={"q": "divya"})) == set()
+    assert len(_keys(client.get(ALL, headers=team["pm"], params={"q": "divya"}))) == 2
+
+
+def test_search_never_widens_an_employees_scope(
+    client, team, make_leave_request, make_permission_request
+):
+    _two_people(make_leave_request, make_permission_request, team)
+    assert _keys(
+        client.get(ALL, headers=team["emp_a_login"], params={"q": "divya"})
+    ) == set()
+
+
 # ---------- paging over a mixed list ----------------------------------------
 
 def test_paging_covers_every_row_of_both_kinds_exactly_once(

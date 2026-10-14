@@ -31,8 +31,11 @@ export const leaveApi = {
   /** The All Requests history - leave AND permission, already scoped, filtered,
    *  sorted and paged server-side. Takes the SAME query shape `list` does, so
    *  the tab's existing URL filters pass straight through unchanged. */
-  allRequests: (params: AllRequestListParams) =>
-    api.get<AllRequestPage>(`/all-requests?${toQuery(params)}`),
+  allRequests: (params: AllRequestListParams) => {
+    const qs = new URLSearchParams(toQuery(params));
+    if (params.q) qs.set("q", params.q);
+    return api.get<AllRequestPage>(`/all-requests?${qs.toString()}`);
+  },
   get: (id: string) => api.get<LeaveRequest>(`/leave-requests/${id}`),
   create: (body: LeaveRequestCreateBody) => api.post<LeaveRequest>("/leave-requests", body),
   update: (id: string, body: LeaveRequestUpdateBody) =>

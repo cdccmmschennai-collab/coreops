@@ -21,7 +21,9 @@ import { test } from "node:test";
 import {
   allRequestActor,
   allRequestDetailHref,
+  allRequestListParams,
   allRequestTypeLabel,
+  CLEARED_ALL_REQUEST_FILTERS,
   type AllRequest,
 } from "./all-requests.ts";
 import { leaveReturnHref } from "./types.ts";
@@ -292,4 +294,70 @@ test("a forged permission return address is refused", () => {
   ]) {
     assert.equal(permissionReturnHref(forged), PERMISSION_HISTORY_PATH);
   }
+});
+
+// ── employee search + Clear filters: the request the tab sends ──────────────
+// Matching itself (partial, case-insensitive, both kinds, scope) is the
+// backend's and is covered in backend/tests/test_all_requests.py.
+
+const PAGE = { limit: 20, offset: 0, excludeSelf: false };
+const NO_FILTERS = { status: "", employeeId: "", search: "", fromDate: "", toDate: "" };
+
+test("an empty employee search sends the request the tab always sent", () => {
+  const params = allRequestListParams(NO_FILTERS, PAGE);
+  assert.ok(!("q" in params));
+  assert.deepEqual(params, {
+    status: "",
+    employee_id: undefined,
+    from: undefined,
+    to: undefined,
+    limit: 20,
+    offset: 0,
+    exclude_self: false,
+  });
+  // Whitespace alone is no search either.
+  assert.ok(!("q" in allRequestListParams({ ...NO_FILTERS, search: "   " }, PAGE)));
+});
+
+test("the employee search is sent as typed, trimmed, case untouched", () => {
+  // Case folding is the server's ILIKE; the browser does not lowercase.
+  assert.equal(allRequestListParams({ ...NO_FILTERS, search: " abiRAMI " }, PAGE).q, "abiRAMI");
+});
+
+test("employee search travels with the date window and the status filter", () => {
+  const params = allRequestListParams(
+    {
+      ...NO_FILTERS,
+      search: "abirami",
+      status: "approved",
+      fromDate: "2027-03-01",
+      toDate: "2027-03-31",
+    },
+    { limit: 20, offset: 40, excludeSelf: true },
+  );
+  assert.deepEqual(params, {
+    status: "approved",
+    employee_id: undefined,
+    q: "abirami",
+    from: "2027-03-01",
+    to: "2027-03-31",
+    limit: 20,
+    offset: 40,
+    exclude_self: true,
+  });
+});
+
+test("Clear filters returns the tab to its unfiltered request", () => {
+  const filtered = {
+    status: "rejected",
+    employeeId: "",
+    search: "abirami",
+    fromDate: "2027-03-01",
+    toDate: "2027-03-31",
+  };
+  const cleared = { ...filtered, ...CLEARED_ALL_REQUEST_FILTERS };
+  assert.deepEqual(
+    allRequestListParams(cleared, { ...PAGE, offset: 0 }),
+    allRequestListParams(NO_FILTERS, PAGE),
+  );
 });

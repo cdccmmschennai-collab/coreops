@@ -207,11 +207,25 @@ def _names(db: Session, ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
     }
 
 
+def _employees_named(q: str):
+    """Ids of employees whose "First Last" contains `q`, case-insensitively.
+
+    Matches the same "First Last" string `_names` renders in the Employee
+    column, so what the reader types is what they see. LIKE wildcards in `q`
+    are escaped: a typed "%" or "_" is a literal character, not a pattern.
+    Only narrows - it runs on top of each module's own scope, never instead.
+    """
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    full_name = func.concat(Employee.first_name, " ", Employee.last_name)
+    return select(Employee.id).where(full_name.ilike(f"%{escaped}%", escape="\\"))
+
+
 def list_all_requests(
     db: Session,
     actor: User,
     *,
     employee_id: uuid.UUID | None = None,
+    q: str | None = None,
     status: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
@@ -231,6 +245,14 @@ def list_all_requests(
     if employee_id is not None:
         leave_stmt = leave_stmt.where(LeaveRequest.employee_id == employee_id)
         perm_stmt = perm_stmt.where(PermissionRequest.employee_id == employee_id)
+
+    # Employee-name search, applied to both kinds before the union is paged so
+    # `total` and every page reflect it.
+    q = (q or "").strip()
+    if q:
+        named = _employees_named(q)
+        leave_stmt = leave_stmt.where(LeaveRequest.employee_id.in_(named))
+        perm_stmt = perm_stmt.where(PermissionRequest.employee_id.in_(named))
 
     if status:
         # Applied to each table through its OWN enum, so the comparison is a
@@ -317,6 +339,11 @@ def list_all_requests(
 @router.get("", response_model=AllRequestPage)
 def get_all_requests(
     employee_id: uuid.UUID | None = Query(default=None),
+    q: str | None = Query(
+        default=None,
+        max_length=100,
+        description="Case-insensitive partial match on the requester's name.",
+    ),
     status: str | None = Query(
         default=None,
         description="One of the five statuses both kinds share: pending, "
@@ -344,6 +371,7 @@ def get_all_requests(
         db,
         current,
         employee_id=employee_id,
+        q=q,
         status=status if status in SHARED_STATUSES else None,
         date_from=date_from,
         date_to=date_to,

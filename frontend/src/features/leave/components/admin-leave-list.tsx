@@ -1,8 +1,10 @@
 "use client";
 
+import * as React from "react";
 import { useRouter } from "next/navigation";
 
 import { Pagination } from "@/components/data/pagination";
+import { SearchInput } from "@/components/data/search-input";
 import { EmptyState } from "@/components/feedback/empty-state";
 import { TableSkeleton } from "@/components/feedback/table-skeleton";
 import { Input } from "@/components/ui/input";
@@ -28,7 +30,9 @@ import { useUrlState } from "@/lib/use-url-state";
 import {
   allRequestActor,
   allRequestDetailHref,
+  allRequestListParams,
   allRequestTypeLabel,
+  CLEARED_ALL_REQUEST_FILTERS,
   type AllRequestStatus,
 } from "../all-requests";
 import { useAllRequests } from "../hooks";
@@ -87,11 +91,17 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
 
   const [status, setStatus] = useUrlState("ls", "");
   const [employeeId] = useUrlState("le", "");
+  // Employee-name search. `SearchInput` debounces, so this (and the URL) only
+  // changes once typing pauses - one request per pause, not per keystroke.
+  const [search, setSearch] = useUrlState("lq", "");
   // The absence window. Either end may stand alone.
   const [fromDate, setFromDate] = useUrlState("lf", "");
   const [toDate, setToDate] = useUrlState("lt", "");
   const [rawOffset, setOffset] = useUrlState("lo", "0");
   const offset = Math.max(0, Number(rawOffset) || 0);
+  // Remounts the search box on Clear, dropping any text still inside its
+  // debounce window so it cannot re-apply itself after the clear.
+  const [searchKey, setSearchKey] = React.useState(0);
 
   /** Apply a filter and go back to page 1 — the row at offset 60 of the old
    *  result set is not the row at offset 60 of the new one. */
@@ -100,20 +110,28 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
     setOffset("0");
   }
 
-  const query = useAllRequests({
-    status: status as AllRequestStatus | "",
-    employee_id: employeeId || undefined,
-    // Sent to the API, not applied here: the list is paged, so a window filtered
-    // in the browser would only ever filter the 20 rows this page happens to
-    // hold. A leave matches the window by OVERLAP, a permission by its single
-    // date — each kind keeps the meaning its own list has always given these
-    // two parameters.
-    from: fromDate || undefined,
-    to: toDate || undefined,
-    limit: LIMIT,
-    offset,
-    exclude_self: excludeSelf,
-  });
+  function clearFilters() {
+    filter(() => {
+      setFromDate(CLEARED_ALL_REQUEST_FILTERS.fromDate);
+      setToDate(CLEARED_ALL_REQUEST_FILTERS.toDate);
+      setSearch(CLEARED_ALL_REQUEST_FILTERS.search);
+      setStatus(CLEARED_ALL_REQUEST_FILTERS.status);
+    });
+    setSearchKey((k) => k + 1);
+  }
+
+  // Every filter is sent to the API, not applied here: the list is paged, so a
+  // filter applied in the browser would only ever filter the 20 rows this page
+  // happens to hold. A leave matches the window by OVERLAP, a permission by its
+  // single date — each kind keeps the meaning its own list has always given
+  // these two parameters. Each distinct filter set is its own query key, so a
+  // slow response to an older search can never replace the latest one's rows.
+  const query = useAllRequests(
+    allRequestListParams(
+      { status, employeeId, search, fromDate, toDate },
+      { limit: LIMIT, offset, excludeSelf },
+    ),
+  );
   const items = query.data?.items ?? [];
 
   return (
@@ -138,6 +156,13 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
             aria-label="To date"
           />
         </div>
+        <SearchInput
+          key={searchKey}
+          className="sm:w-56"
+          value={search}
+          onChange={(v) => filter(() => setSearch(v))}
+          placeholder="Search employee..."
+        />
         <Select
           value={status || ALL}
           onValueChange={(v) => filter(() => setStatus(v === ALL ? "" : v))}
@@ -151,6 +176,15 @@ export function AdminLeaveList({ excludeSelf = false }: Props) {
             ))}
           </SelectContent>
         </Select>
+        {/* Plain text, not a Button - the same inline link the Benchmark
+            Guide's filters use. */}
+        <button
+          type="button"
+          onClick={clearFilters}
+          className="self-start rounded-sm text-sm font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:self-auto"
+        >
+          Clear filters
+        </button>
       </div>
       {query.isLoading ? (
         <TableSkeleton rows={5} cols={7} />

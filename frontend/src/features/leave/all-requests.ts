@@ -109,6 +109,9 @@ export interface AllRequestPage {
 
 export interface AllRequestListParams {
   employee_id?: string;
+  /** Case-insensitive partial match on the requester's name, applied
+   *  server-side before paging. Omitted when the search box is empty. */
+  q?: string;
   status?: AllRequestStatus | "";
   from?: string;
   to?: string;
@@ -117,6 +120,53 @@ export interface AllRequestListParams {
   /** Drop the caller's own requests - what a Project Head's reused panel passes,
    *  since nobody reviews their own. Enforced server-side either way. */
   exclude_self?: boolean;
+}
+
+/** The tab's filter state, exactly as its URL keys hold it. */
+export interface AllRequestFilters {
+  /** `ls` */
+  status: string;
+  /** `le` - no control on the tab; only ever arrives in a URL. */
+  employeeId: string;
+  /** `lq` - the employee search text, already debounced. */
+  search: string;
+  /** `lf` / `lt` */
+  fromDate: string;
+  toDate: string;
+}
+
+/** What "Clear filters" resets `ls` / `lq` / `lf` / `lt` to - each key's
+ *  default, so the URL drops them. Pagination (`lo`) goes back to "0". */
+export const CLEARED_ALL_REQUEST_FILTERS = {
+  status: "",
+  search: "",
+  fromDate: "",
+  toDate: "",
+} as const satisfies Partial<AllRequestFilters>;
+
+/**
+ * The `GET /all-requests` params for the tab's filters.
+ *
+ * Every filter goes to the API and none is applied in the browser: the list is
+ * paged, so filtering here would only ever filter the page in hand. An empty
+ * (or blank) search is omitted entirely, so the request - and its cache key -
+ * is the one the tab sent before the search box existed.
+ */
+export function allRequestListParams(
+  filters: AllRequestFilters,
+  page: { limit: number; offset: number; excludeSelf: boolean },
+): AllRequestListParams {
+  const q = filters.search.trim();
+  return {
+    status: filters.status as AllRequestStatus | "",
+    employee_id: filters.employeeId || undefined,
+    ...(q ? { q } : {}),
+    from: filters.fromDate || undefined,
+    to: filters.toDate || undefined,
+    limit: page.limit,
+    offset: page.offset,
+    exclude_self: page.excludeSelf,
+  };
 }
 
 /**
