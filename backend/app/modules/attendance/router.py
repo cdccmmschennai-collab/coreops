@@ -5,6 +5,7 @@
   GET    /attendance/{id}                   read (RBAC-scoped)
   PATCH  /attendance/{id}                   update (admin)
   DELETE /attendance/{id}                   delete (admin)
+  POST   /attendance/bulk-apply             one status over employees x dates (admin)
   GET    /employees/{employee_id}/attendance   list one employee's attendance (scoped)
 """
 import uuid
@@ -15,9 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_role
-from app.modules.attendance import service
+from app.modules.attendance import bulk_apply, service
 from app.modules.attendance.models import AttendanceStatus
 from app.modules.attendance.schemas import (
+    AttendanceBulkApply,
+    AttendanceBulkApplyResult,
     AttendanceBulkSave,
     AttendanceCreate,
     AttendanceOut,
@@ -96,6 +99,19 @@ def bulk_save_attendance(
         attendance_date=body.date,
         exists=exists,
         rows=[AttendanceSheetRow.model_validate(r) for r in rows],
+    )
+
+
+@router.post("/bulk-apply", response_model=AttendanceBulkApplyResult)
+def bulk_apply_attendance(
+    body: AttendanceBulkApply,
+    admin: User = Depends(require_role("project_manager")),
+    db: Session = Depends(get_db),
+) -> AttendanceBulkApplyResult:
+    """One status over employees x dates. `dry_run` (default true) previews;
+    false applies with partial success. Per-pair outcomes in `results`."""
+    return AttendanceBulkApplyResult.model_validate(
+        bulk_apply.bulk_apply(db, admin, body)
     )
 
 

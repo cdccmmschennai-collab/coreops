@@ -5,8 +5,9 @@ they are not accepted on create/update.
 """
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.attendance.models import AttendanceStatus
 from app.modules.permissions.models import PermissionPeriod
@@ -137,3 +138,79 @@ class AttendanceBulkSave(BaseModel):
     records: list[AttendanceBulkRecord]
     # One reason for the whole batch. Required when `date` is in the past.
     note: str | None = Field(default=None, max_length=MAX_NOTE_LEN)
+
+
+# ---------- bulk apply (Phase 4) --------------------------------------------
+# Bounds on one bulk action. A month of dates for a team, or a whole team on
+# one day, fits comfortably; anything larger is a mistake or a script.
+MAX_BULK_EMPLOYEES = 200
+MAX_BULK_DATES = 62
+MAX_BULK_PAIRS = 500
+
+BulkApplyOutcome = Literal["created", "updated", "unchanged", "protected", "rejected"]
+
+
+class AttendanceBulkApply(BaseModel):
+    """One status applied to every (employee, date) pair of employees x dates.
+
+    One employee across many dates and many employees on one date are both
+    this shape. STATUS ONLY: check-in/out and permission data are never written.
+    `dry_run` defaults to True so a client that forgets it previews, not writes.
+    """
+
+    employee_ids: list[uuid.UUID] = Field(min_length=1, max_length=MAX_BULK_EMPLOYEES)
+    dates: list[date] = Field(min_length=1, max_length=MAX_BULK_DATES)
+    status: AttendanceStatus
+    # The action's one reason. Required for every PAST pair that would change.
+    note: str | None = Field(default=None, max_length=MAX_NOTE_LEN)
+    # Non-working days (weekly off, company holiday) are skipped unless set.
+    include_non_working: bool = False
+    dry_run: bool = True
+
+    @model_validator(mode="after")
+    def _check_size(self) -> "AttendanceBulkApply":
+        if len(self.employee_ids) * len(self.dates) > MAX_BULK_PAIRS:
+            raise ValueError(
+                f"A bulk action can cover at most {MAX_BULK_PAIRS} employee-days."
+            )
+        return self
+
+
+class AttendanceBulkWarning(BaseModel):
+    code: str
+    message: str
+
+
+class AttendanceBulkApplyItem(BaseModel):
+    """What happened (or, in a preview, would happen) to one employee-day."""
+
+    employee_id: uuid.UUID
+    employee_code: str | None = None
+    employee_name: str | None = None
+    attendance_date: date
+    outcome: BulkApplyOutcome
+    # Machine-readable why, for protected / rejected / unchanged outcomes.
+    reason_code: str | None = None
+    message: str | None = None
+    record_id: uuid.UUID | None = None
+    previous_status: AttendanceStatus | None = None
+    # The day's status after the action (or in the preview, after applying).
+    status: AttendanceStatus | None = None
+    warnings: list[AttendanceBulkWarning] = []
+
+
+class AttendanceBulkApplySummary(BaseModel):
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    protected: int = 0
+    rejected: int = 0
+
+
+class AttendanceBulkApplyResult(BaseModel):
+    dry_run: bool
+    # Set on an applied action; the same id is on every audit entry it wrote.
+    bulk_action_id: uuid.UUID | None = None
+    status: AttendanceStatus
+    summary: AttendanceBulkApplySummary
+    results: list[AttendanceBulkApplyItem]

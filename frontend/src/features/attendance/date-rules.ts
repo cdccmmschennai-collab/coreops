@@ -27,6 +27,22 @@ export function isFutureDate(date: string, today: string): boolean {
   return date > today;
 }
 
+/**
+ * What the Reason box opens with when an existing record is edited.
+ *
+ * Empty for a past day: a correction must explain THIS change, and a reason
+ * already on the row explains the previous decision - pre-filling it would let
+ * the PM save the old text as the new reason. Today and the future keep the
+ * stored reason, so saving them does not erase it.
+ */
+export function initialReason(
+  date: string,
+  existingNote: string | null | undefined,
+  today: string,
+): string {
+  return isPastDate(date, today) ? "" : (existingNote ?? "");
+}
+
 /** True when saving this day would be refused for want of a reason. */
 export function isReasonMissing(date: string, note: string, today: string): boolean {
   return isPastDate(date, today) && note.trim() === "";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isFutureDate, isPastDate, isReasonMissing } from "./date-rules.ts";
+import { initialReason, isFutureDate, isPastDate, isReasonMissing } from "./date-rules.ts";
 
 const TODAY = "2026-10-14";
 
@@ -27,4 +27,13 @@ test("a past date needs a reason; today and the future do not", () => {
   assert.ok(!isReasonMissing("2026-10-01", "Missed punch", TODAY));
   assert.ok(!isReasonMissing(TODAY, "", TODAY));
   assert.ok(!isReasonMissing("2026-11-01", "", TODAY));
+});
+
+test("editing a past record starts with an empty reason, even if one is stored", () => {
+  assert.equal(initialReason("2026-10-01", "Old reason", TODAY), "");
+  assert.equal(initialReason("2026-10-01", null, TODAY), "");
+  // Today and the future keep the stored reason so a save does not erase it.
+  assert.equal(initialReason(TODAY, "Old reason", TODAY), "Old reason");
+  assert.equal(initialReason("2026-11-01", "Planned", TODAY), "Planned");
+  assert.equal(initialReason(TODAY, null, TODAY), "");
 });

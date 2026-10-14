@@ -44,6 +44,7 @@ import {
 import {
   FUTURE_TIMES_NOTICE,
   REASON_REQUIRED_MESSAGE,
+  initialReason,
   isFutureDate,
   isPastDate,
   isReasonMissing,
@@ -109,9 +110,9 @@ export function RecordDecisionDialog({
     setStatus((row.attendance_status as AttendanceStatus) ?? "present");
     setCheckIn(toTimeInput(row.attendance_check_in_at ?? row.first_in));
     setCheckOut(toTimeInput(row.attendance_check_out_at ?? row.last_out));
-    // Seed the existing reason so re-opening a decided day shows what was
-    // written rather than a blank box that would erase it on save.
-    setNote(row.attendance_note ?? "");
+    // A past day opens with an EMPTY reason - the correction must explain
+    // itself. Today/future seed the existing reason so a save does not erase it.
+    setNote(initialReason(date, row.attendance_note, istTodayISO()));
     // Unticked unless this day already says it charged leave. A day that never
     // stated a fraction (every row written before migration 0083, including the
     // company-wide half day) opens as "no leave", which is exactly what it has
@@ -120,7 +121,7 @@ export function RecordDecisionDialog({
     const seeded = seedPermission(row);
     setPermission(seeded);
     setSeededPermission(seeded);
-  }, [row]);
+  }, [row, date]);
 
   const pending = create.isPending || update.isPending;
 

@@ -7,8 +7,10 @@ import { PageHeader } from "@/components/shell/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AppError } from "@/lib/api-client";
 import { toDatetimeLocal } from "@/lib/format";
+import { istTodayISO } from "@/lib/ist";
 
 import { AttendanceForm } from "./attendance-form";
+import { initialReason } from "../date-rules";
 import { useAttendance } from "../hooks";
 import type { AttendanceFormValues } from "../schemas";
 
@@ -42,9 +44,9 @@ export function AttendanceEdit({ id }: { id: string }) {
     status: record.status,
     check_in_at: toDatetimeLocal(record.check_in_at),
     check_out_at: toDatetimeLocal(record.check_out_at),
-    // Seeded like the Records dialog, so saving does not erase the reason
-    // already recorded for this day.
-    note: record.note ?? "",
+    // Seeded like the Records dialog: empty for a past day (the correction
+    // needs its own reason), the stored reason otherwise so a save keeps it.
+    note: initialReason(record.attendance_date, record.note, istTodayISO()),
   };
 
   return (

@@ -315,12 +315,14 @@ def _audit_record(
     previous_status: AttendanceStatus | None,
     previous: dict | None = None,
     source: str = "individual",
+    extra: dict | None = None,
 ) -> None:
     """Record who decided what a day means, and why. FLUSHES, never commits.
 
     `previous` is the row's state before an update (see `_snapshot`), so the
     entry shows what changed, not only the result. `source` says how the change
-    was made ("individual" or "bulk").
+    was made ("individual" or "bulk"). `extra` adds caller-specific keys (the
+    bulk-apply action id).
 
     Attendance had no audit trail at all before this. It needs one precisely
     BECAUSE biometric evidence is immutable: punches cannot change, so the only
@@ -353,6 +355,8 @@ def _audit_record(
         details.update({f"previous_{key}": value for key, value in previous.items()})
     details["source"] = source
     details["retrospective"] = record.attendance_date < _business_today()
+    if extra:
+        details.update(extra)
 
     record_audit(
         db,
