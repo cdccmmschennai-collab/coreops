@@ -2,6 +2,8 @@ import { api } from "@/lib/api-client";
 
 import type {
   Attendance,
+  AttendanceBulkApplyBody,
+  AttendanceBulkApplyResult,
   AttendanceBulkSaveBody,
   AttendanceCreateBody,
   AttendanceListParams,
@@ -33,4 +35,8 @@ export const attendanceApi = {
     api.get<AttendanceSheet>(`/attendance/sheet?date=${date}`),
   bulkSave: (body: AttendanceBulkSaveBody) =>
     api.post<AttendanceSheet>("/attendance/bulk", body),
+  // One endpoint for both steps; `dry_run` decides preview vs apply. Callers go
+  // through `bulk-apply.ts` (`previewBody` / `applyBody`), which pins it.
+  bulkApply: (body: AttendanceBulkApplyBody) =>
+    api.post<AttendanceBulkApplyResult>("/attendance/bulk-apply", body),
 };

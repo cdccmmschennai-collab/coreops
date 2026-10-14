@@ -657,6 +657,10 @@ def test_rejected_protected_and_unchanged_pairs_write_no_audit(
 # ---------------------------------------------------------------------------
 
 
+def _long(day: date) -> str:
+    return f"{day.day} {day:%B %Y}"
+
+
 def _notifications(db, user_id):
     db.expire_all()
     return db.query(Notification).filter(Notification.user_id == user_id).all()
@@ -672,7 +676,11 @@ def test_one_summary_notification_per_employee(client, pm, make_user, make_emplo
     [nb] = _notifications(db, ub.id)
     assert na.title == "Attendance updated for 3 days"
     assert na.type == "attendance_recorded"
-    assert na.message.count("Leave") == 3
+    # One span for the action, not one line per day.
+    assert (
+        f"{_long(days[0])} to {_long(days[-1])}: Leave (3 days)" in na.message
+    )
+    assert na.message.count("Leave") == 1
     assert na.target_url == f"/attendance?att_month={days[0]:%Y-%m}"
     assert nb.title == "Attendance updated for 3 days"
 
@@ -688,6 +696,23 @@ def test_summary_names_changes_from_a_previous_status(
     assert n.type == "attendance_changed"
     assert "Leave -> Present" in n.message
     assert n.title == "Attendance updated for 1 day"
+
+
+def test_summary_span_still_names_each_changed_day(
+    client, pm, make_user, make_employee, make_attendance, db
+):
+    e, u = _employee_with_login(make_user, make_employee, "BNT-F")
+    days = [_working(db, 10), _working(db, 11), _working(db, 12)]
+    make_attendance(
+        employee_id=e.id, attendance_date=days[1], status=AttendanceStatus.absent
+    )
+    _apply(client, pm, [e], days, status="leave")
+    [n] = _notifications(db, u.id)
+    assert n.message.endswith(
+        f"{_long(days[0])} to {_long(days[-1])}: Leave (3 days); "
+        f"{_long(days[1])}: Absent -> Leave."
+    )
+    assert n.title == "Attendance updated for 3 days"
 
 
 def test_present_only_actions_stay_silent(client, pm, make_user, make_employee, db):

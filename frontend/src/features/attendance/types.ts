@@ -13,6 +13,12 @@ export type AttendanceSheetRow = components["schemas"]["AttendanceSheetRow"];
 export type AttendanceBulkSaveBody = components["schemas"]["AttendanceBulkSave"];
 export type AttendanceBulkRecord = components["schemas"]["AttendanceBulkRecord"];
 
+// Bulk apply (one status over employees x dates; dry_run previews)
+export type AttendanceBulkApplyBody = components["schemas"]["AttendanceBulkApply"];
+export type AttendanceBulkApplyResult = components["schemas"]["AttendanceBulkApplyResult"];
+export type AttendanceBulkApplyItem = components["schemas"]["AttendanceBulkApplyItem"];
+export type AttendanceBulkApplyOutcome = AttendanceBulkApplyItem["outcome"];
+
 export interface AttendanceListParams {
   employee_id: string;
   status: AttendanceStatus | "";

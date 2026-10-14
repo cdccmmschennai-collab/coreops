@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Pencil } from "lucide-react";
+import { ListChecks, Pencil } from "lucide-react";
 
 import { Pagination } from "@/components/data/pagination";
 import { EmptyState } from "@/components/feedback/empty-state";
@@ -169,6 +170,14 @@ export function AttendanceRecords() {
             ))}
           </SelectContent>
         </Select>
+        {/* This tab is manager-only already; the route and the API guard
+            the bulk write as well. */}
+        <Button variant="secondary" className="sm:ml-auto" asChild>
+          <Link href="/attendance/bulk">
+            <ListChecks className="h-4 w-4" />
+            Bulk Update
+          </Link>
+        </Button>
       </div>
 
       {/* Summary counts for the whole day - not just the current page or

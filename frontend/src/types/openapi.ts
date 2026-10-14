@@ -712,6 +712,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attendance/bulk-apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Apply Attendance
+         * @description One status over employees x dates. `dry_run` (default true) previews;
+         *     false applies with partial success. Per-pair outcomes in `results`.
+         */
+        post: operations["bulk_apply_attendance_api_v1_attendance_bulk_apply_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attendance/{record_id}": {
         parameters: {
             query?: never;
@@ -3184,6 +3205,110 @@ export interface components {
             /** Is Active */
             is_active?: boolean | null;
         };
+        /**
+         * AttendanceBulkApply
+         * @description One status applied to every (employee, date) pair of employees x dates.
+         *
+         *     One employee across many dates and many employees on one date are both
+         *     this shape. STATUS ONLY: check-in/out and permission data are never written.
+         *     `dry_run` defaults to True so a client that forgets it previews, not writes.
+         */
+        AttendanceBulkApply: {
+            /** Employee Ids */
+            employee_ids: string[];
+            /** Dates */
+            dates: string[];
+            status: components["schemas"]["AttendanceStatus"];
+            /** Note */
+            note?: string | null;
+            /**
+             * Include Non Working
+             * @default false
+             */
+            include_non_working: boolean;
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+        };
+        /**
+         * AttendanceBulkApplyItem
+         * @description What happened (or, in a preview, would happen) to one employee-day.
+         */
+        AttendanceBulkApplyItem: {
+            /**
+             * Employee Id
+             * Format: uuid
+             */
+            employee_id: string;
+            /** Employee Code */
+            employee_code?: string | null;
+            /** Employee Name */
+            employee_name?: string | null;
+            /**
+             * Attendance Date
+             * Format: date
+             */
+            attendance_date: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "created" | "updated" | "unchanged" | "protected" | "rejected";
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Message */
+            message?: string | null;
+            /** Record Id */
+            record_id?: string | null;
+            previous_status?: components["schemas"]["AttendanceStatus"] | null;
+            status?: components["schemas"]["AttendanceStatus"] | null;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: components["schemas"]["AttendanceBulkWarning"][];
+        };
+        /** AttendanceBulkApplyResult */
+        AttendanceBulkApplyResult: {
+            /** Dry Run */
+            dry_run: boolean;
+            /** Bulk Action Id */
+            bulk_action_id?: string | null;
+            status: components["schemas"]["AttendanceStatus"];
+            summary: components["schemas"]["AttendanceBulkApplySummary"];
+            /** Results */
+            results: components["schemas"]["AttendanceBulkApplyItem"][];
+        };
+        /** AttendanceBulkApplySummary */
+        AttendanceBulkApplySummary: {
+            /**
+             * Created
+             * @default 0
+             */
+            created: number;
+            /**
+             * Updated
+             * @default 0
+             */
+            updated: number;
+            /**
+             * Unchanged
+             * @default 0
+             */
+            unchanged: number;
+            /**
+             * Protected
+             * @default 0
+             */
+            protected: number;
+            /**
+             * Rejected
+             * @default 0
+             */
+            rejected: number;
+        };
         /** AttendanceBulkRecord */
         AttendanceBulkRecord: {
             /**
@@ -3208,6 +3333,13 @@ export interface components {
             records: components["schemas"]["AttendanceBulkRecord"][];
             /** Note */
             note?: string | null;
+        };
+        /** AttendanceBulkWarning */
+        AttendanceBulkWarning: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
         };
         /** AttendanceCreate */
         AttendanceCreate: {
@@ -9186,6 +9318,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AttendanceSheet"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_apply_attendance_api_v1_attendance_bulk_apply_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttendanceBulkApply"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttendanceBulkApplyResult"];
                 };
             };
             /** @description Validation Error */

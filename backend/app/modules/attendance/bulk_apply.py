@@ -419,17 +419,7 @@ def _notify_summary(
             continue
         days.sort(key=lambda pair: pair[0].attendance_date)
         changed = any(previous is not None for _, previous in days)
-        lines = [
-            f"{service._long_date(r.attendance_date)}: "
-            + (
-                f"{service._STATUS_LABELS[prev]} -> {service._STATUS_LABELS[r.status]}"
-                if prev is not None
-                else service._STATUS_LABELS[r.status]
-            )
-            for r, prev in days[:_NOTIFY_MAX_DAYS]
-        ]
-        if len(days) > _NOTIFY_MAX_DAYS:
-            lines.append(f"and {len(days) - _NOTIFY_MAX_DAYS} more")
+        lines = _summary_lines(days)
         count = len(days)
         first = days[0][0]
         try:
@@ -446,6 +436,47 @@ def _notify_summary(
             db.commit()
         except Exception:
             db.rollback()
+
+
+def _day_line(record: AttendanceRecord, previous: AttendanceStatus | None) -> str:
+    label = service._STATUS_LABELS[record.status]
+    if previous is not None:
+        label = f"{service._STATUS_LABELS[previous]} -> {label}"
+    return f"{service._long_date(record.attendance_date)}: {label}"
+
+
+def _summary_lines(
+    days: list[tuple[AttendanceRecord, AttendanceStatus | None]],
+) -> list[str]:
+    """The notification body, one span per new status rather than one line per day.
+
+        13 October 2026 to 19 October 2026: Leave (6 days); 14 October 2026: Absent -> Leave
+
+    The day count stays in the span because the days need not be consecutive (a
+    skipped Sunday sits inside it), so "13 to 19" alone would overstate it. Days
+    that changed FROM another status are still named one by one, since that is
+    the part the employee did not already have. A single day keeps the plain
+    per-day line. `days` is sorted by date.
+    """
+    by_status: dict[AttendanceStatus, list] = defaultdict(list)
+    for record, previous in days:
+        by_status[record.status].append((record, previous))
+
+    lines: list[str] = []
+    for status, group in by_status.items():
+        if len(group) == 1:
+            lines.append(_day_line(*group[0]))
+            continue
+        first, last = group[0][0].attendance_date, group[-1][0].attendance_date
+        lines.append(
+            f"{service._long_date(first)} to {service._long_date(last)}: "
+            f"{service._STATUS_LABELS[status]} ({len(group)} days)"
+        )
+        changes = [(r, prev) for r, prev in group if prev is not None]
+        lines.extend(_day_line(r, prev) for r, prev in changes[:_NOTIFY_MAX_DAYS])
+        if len(changes) > _NOTIFY_MAX_DAYS:
+            lines.append(f"and {len(changes) - _NOTIFY_MAX_DAYS} more changed")
+    return lines
 
 
 def _response(
