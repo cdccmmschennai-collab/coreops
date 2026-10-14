@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { istTodayISO } from "@/lib/ist";
 import {
   formatISTTime,
   istTimeInputValue,
@@ -40,6 +41,13 @@ import {
   type PermissionPeriod,
 } from "@/features/permissions/types";
 
+import {
+  FUTURE_TIMES_NOTICE,
+  REASON_REQUIRED_MESSAGE,
+  isFutureDate,
+  isPastDate,
+  isReasonMissing,
+} from "../date-rules";
 import { useCreateAttendance, useUpdateAttendance } from "../hooks";
 import { ATTENDANCE_STATUSES, ATTENDANCE_STATUS_LABEL } from "../schemas";
 import type { AttendanceStatus } from "../types";
@@ -116,6 +124,14 @@ export function RecordDecisionDialog({
 
   const pending = create.isPending || update.isPending;
 
+  // Where the day sits decides two rules, both also enforced by the backend: a
+  // past day is a correction and needs a reason, a future day is planned by
+  // status only. Read once per render from the IST calendar.
+  const today = istTodayISO();
+  const future = isFutureDate(date, today);
+  const pastDay = isPastDate(date, today);
+  const reasonMissing = isReasonMissing(date, note, today);
+
   // The hours this day already holds are given back if the PM picks another
   // option, so they count as available for the choice.
   const heldHours = row?.permission_hours ?? 0;
@@ -123,11 +139,11 @@ export function RecordDecisionDialog({
   const exhausted = available !== null && available < 1;
 
   async function onSave() {
-    if (!row) return;
+    if (!row || reasonMissing) return;
     const body = {
       status,
-      check_in_at: toInstant(date, checkIn),
-      check_out_at: toInstant(date, checkOut),
+      check_in_at: future ? null : toInstant(date, checkIn),
+      check_out_at: future ? null : toInstant(date, checkOut),
       note: note.trim() || null,
       // Sent for every save, so unticking the box CLEARS the charge rather than
       // leaving the previous fraction behind. `null` on a non-half day means
@@ -296,7 +312,7 @@ export function RecordDecisionDialog({
                   id="decision-in"
                   type="time"
                   value={checkIn}
-                  disabled={!row.can_set_check_in}
+                  disabled={future || !row.can_set_check_in}
                   onChange={(e) => setCheckIn(e.target.value)}
                 />
               </div>
@@ -306,19 +322,24 @@ export function RecordDecisionDialog({
                   id="decision-out"
                   type="time"
                   value={checkOut}
-                  disabled={!row.can_set_check_out}
+                  disabled={future || !row.can_set_check_out}
                   onChange={(e) => setCheckOut(e.target.value)}
                 />
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              {row.can_set_check_in || row.can_set_check_out
-                ? "The device did not record one of these. Enter the real time."
-                : "Both punches came from the device and cannot be edited."}
+              {future
+                ? FUTURE_TIMES_NOTICE
+                : row.can_set_check_in || row.can_set_check_out
+                  ? "The device did not record one of these. Enter the real time."
+                  : "Both punches came from the device and cannot be edited."}
             </p>
 
             <div className="space-y-1.5">
-              <Label htmlFor="decision-note">Reason</Label>
+              <Label htmlFor="decision-note">
+                Reason
+                {pastDay && <span className="text-destructive"> *</span>}
+              </Label>
               <Textarea
                 id="decision-note"
                 rows={2}
@@ -326,9 +347,13 @@ export function RecordDecisionDialog({
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 maxLength={500}
+                aria-required={pastDay}
+                aria-invalid={reasonMissing}
               />
               <p className="text-xs text-muted-foreground">
-                Recorded in the audit trail with your name and the time.
+                {pastDay
+                  ? `${REASON_REQUIRED_MESSAGE} It is recorded in the audit trail with your name and the time.`
+                  : "Recorded in the audit trail with your name and the time."}
               </p>
             </div>
           </div>
@@ -338,7 +363,7 @@ export function RecordDecisionDialog({
           <Button variant="secondary" onClick={onClose} disabled={pending}>
             Cancel
           </Button>
-          <Button onClick={() => void onSave()} disabled={pending}>
+          <Button onClick={() => void onSave()} disabled={pending || reasonMissing}>
             {pending ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>

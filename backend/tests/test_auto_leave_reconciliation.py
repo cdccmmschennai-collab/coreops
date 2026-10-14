@@ -413,7 +413,7 @@ def test_pm_moving_the_day_off_leave_reconciles_that_day(
     record = _attendance(db, employee.id, _WED)
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=new_status)
+        db, pm, record.id, AttendanceUpdate(status=new_status, note="Correction")
     )
 
     # Exactly that day, and nothing either side of it.
@@ -431,7 +431,7 @@ def test_a_pm_change_back_to_leave_reconciles_nothing(
     record = _attendance(db, employee.id, _WED)
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.leave)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.leave, note="Correction")
     )
 
     assert _dates_of(db, employee.id) == _WEEK
@@ -465,6 +465,7 @@ def test_the_bulk_sheet_reconciles_only_the_rows_it_moved_off_leave(
                 employee_id=other_employee.id, status=AttendanceStatus.leave
             ),
         ],
+        note="Correction",
     )
 
     assert _report(db, employee.id, _WED) is None
@@ -489,6 +490,7 @@ def test_creating_a_non_leave_attendance_row_reconciles_too(
             employee_id=employee.id,
             attendance_date=_WED,
             status=AttendanceStatus.present,
+            note="Correction",
         ),
     )
 
@@ -506,7 +508,7 @@ def test_the_01_00_sweep_does_not_undo_a_pm_attendance_change(
     _generate(db)
     record = _attendance(db, employee.id, _WED)
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present, note="Correction")
     )
     assert _report(db, employee.id, _WED) is None
 
@@ -796,7 +798,7 @@ def test_a_manual_leave_record_gets_the_same_auto_report(db, pm, employee):
         db,
         pm,
         AttendanceCreate(
-            employee_id=employee.id, attendance_date=_WED, status=AttendanceStatus.leave
+            employee_id=employee.id, attendance_date=_WED, status=AttendanceStatus.leave, note="Correction"
         ),
     )
 
@@ -875,7 +877,7 @@ def test_pm_changing_a_manual_leave_record_releases_its_report(db, pm, employee)
     assert _report(db, employee.id, _WED) is not None
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present, note="Correction")
     )
 
     assert _report(db, employee.id, _WED) is None

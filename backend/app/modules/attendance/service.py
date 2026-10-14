@@ -9,11 +9,13 @@ RBAC (this module):
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.attendance.schemas import AttendanceCreate, AttendanceUpdate
 from app.modules.audit.constants import AuditAction, EntityType
@@ -255,6 +257,45 @@ def _settle_leave_fraction(
         record.leave_day_fraction = _validated_leave_fraction(None, record.status)
 
 
+def _business_today() -> date:
+    """Today on the attendance calendar (Asia/Kolkata), never the server's date."""
+    return datetime.now(ZoneInfo(settings.ATTENDANCE_TIMEZONE)).date()
+
+
+def _assert_reason_for_past(attendance_date: date, note: str | None) -> None:
+    """A change to a day that has already ended must say why.
+
+    Today and future days are ordinary entry and need no explanation; a PAST
+    day being created or changed is a correction of the record, and the reason
+    is what the audit entry carries for it.
+    """
+    if attendance_date < _business_today() and _clean_note(note) is None:
+        raise AppError(
+            "validation_error",
+            "A reason is required when changing attendance for a past date.",
+            422,
+        )
+
+
+def _assert_no_future_times(
+    attendance_date: date, check_in: datetime | None, check_out: datetime | None
+) -> None:
+    """A future day is planned by STATUS only.
+
+    Nobody can know the times of a day that has not happened, and a planned
+    time stored on the row would outlive the real punches when they arrive (the
+    display prefers the device, but `total_minutes` would come from the guess).
+    """
+    if attendance_date > _business_today() and (
+        check_in is not None or check_out is not None
+    ):
+        raise AppError(
+            "validation_error",
+            "Check-in and check-out times can't be entered for a future date.",
+            422,
+        )
+
+
 def _clean_note(value: str | None) -> str | None:
     """Whitespace-only is no note. Keeps "  " out of the column so the UI can
     treat NULL as the single "no reason given" case."""
@@ -272,8 +313,14 @@ def _audit_record(
     record: AttendanceRecord,
     note: str | None,
     previous_status: AttendanceStatus | None,
+    previous: dict | None = None,
+    source: str = "individual",
 ) -> None:
     """Record who decided what a day means, and why. FLUSHES, never commits.
+
+    `previous` is the row's state before an update (see `_snapshot`), so the
+    entry shows what changed, not only the result. `source` says how the change
+    was made ("individual" or "bulk").
 
     Attendance had no audit trail at all before this. It needs one precisely
     BECAUSE biometric evidence is immutable: punches cannot change, so the only
@@ -302,6 +349,10 @@ def _audit_record(
         details["previous_status"] = previous_status.value
     if note and note.strip():
         details["note"] = note.strip()
+    if previous is not None:
+        details.update({f"previous_{key}": value for key, value in previous.items()})
+    details["source"] = source
+    details["retrospective"] = record.attendance_date < _business_today()
 
     record_audit(
         db,
@@ -311,6 +362,24 @@ def _audit_record(
         entity_id=record.id,
         details=details,
     )
+
+
+def _snapshot(record: AttendanceRecord) -> dict:
+    """The fields a correction can change, as they stood before it - JSON-ready
+    for the audit entry's `previous_*` keys."""
+    return {
+        "status": record.status.value,
+        "check_in_at": record.check_in_at.isoformat() if record.check_in_at else None,
+        "check_out_at": record.check_out_at.isoformat() if record.check_out_at else None,
+        "note": record.note,
+        "leave_day_fraction": (
+            float(record.leave_day_fraction)
+            if record.leave_day_fraction is not None
+            else None
+        ),
+    }
+
+
 def _compute_minutes(
     check_in: datetime | None, check_out: datetime | None
 ) -> tuple[int, int]:
@@ -461,6 +530,8 @@ def create_attendance(db: Session, actor: User, data: AttendanceCreate) -> Atten
         and data.check_out_at < data.check_in_at
     ):
         raise AppError("validation_error", "Check-out cannot be before check-in.", 422)
+    _assert_no_future_times(data.attendance_date, data.check_in_at, data.check_out_at)
+    _assert_reason_for_past(data.attendance_date, data.note)
 
     if db.execute(
         select(AttendanceRecord).where(
@@ -520,11 +591,16 @@ def update_attendance(
     record = _fetch(db, record_id)
     fields = data.model_dump(exclude_unset=True)
     previous_status = record.status
+    previous = _snapshot(record)
 
     new_in = fields.get("check_in_at", record.check_in_at)
     new_out = fields.get("check_out_at", record.check_out_at)
     if new_in is not None and new_out is not None and new_out < new_in:
         raise AppError("validation_error", "Check-out cannot be before check-in.", 422)
+    _assert_no_future_times(record.attendance_date, new_in, new_out)
+    # The reason must come with THIS change - a note already on the row
+    # explains the previous decision, not this one.
+    _assert_reason_for_past(record.attendance_date, fields.get("note"))
 
     if "status" in fields and fields["status"] is not None:
         record.status = fields["status"]
@@ -563,6 +639,7 @@ def update_attendance(
         record=record,
         note=data.note,
         previous_status=previous_status,
+        previous=previous,
     )
     _reconcile_auto_leave_reports(db, [record])
     permission_change = _apply_manual_permission(
@@ -657,15 +734,25 @@ def get_attendance_sheet(db: Session, actor: User, attendance_date: date):
 
 
 def bulk_save_attendance(
-    db: Session, actor: User, attendance_date: date, records: list
+    db: Session,
+    actor: User,
+    attendance_date: date,
+    records: list,
+    note: str | None = None,
 ) -> None:
     """Upsert every record in a single transaction (no partial saves).
 
     Existing (employee, date) rows are updated; the rest are inserted. An
     unknown/deleted employee or invalid check-in/out aborts the whole batch.
+
+    `note` is the batch's one reason. Required for a past date, exactly as on
+    the single-record endpoints, so this path is not a way around the rule;
+    when given it is written to every row in the batch.
     """
     if not records:
         return
+    _assert_reason_for_past(attendance_date, note)
+    note = _clean_note(note)
 
     employee_ids = [r.employee_id for r in records]
     valid_ids = {
@@ -691,8 +778,10 @@ def bulk_save_attendance(
         .all()
     }
 
-    # (record, was_created, previous_status) for the audit pass below.
-    touched: list[tuple[AttendanceRecord, bool, AttendanceStatus | None]] = []
+    # (record, was_created, previous_status, previous) for the audit pass below.
+    touched: list[
+        tuple[AttendanceRecord, bool, AttendanceStatus | None, dict | None]
+    ] = []
 
     for item in records:
         if (
@@ -703,10 +792,12 @@ def bulk_save_attendance(
             raise AppError(
                 "validation_error", "Check-out cannot be before check-in.", 422
             )
+        _assert_no_future_times(attendance_date, item.check_in_at, item.check_out_at)
         total, overtime = _compute_minutes(item.check_in_at, item.check_out_at)
         record = existing.get(item.employee_id)
         created = record is None
         previous_status = None if created else record.status
+        previous = None if created else _snapshot(record)
         if record is None:
             record = AttendanceRecord(
                 employee_id=item.employee_id,
@@ -723,15 +814,17 @@ def bulk_save_attendance(
         record.check_out_at = item.check_out_at
         record.total_minutes = total
         record.overtime_minutes = overtime
+        if note is not None:
+            record.note = note
         record.updated_by = actor.id
-        touched.append((record, created, previous_status))
+        touched.append((record, created, previous_status, previous))
 
     try:
         # Audited per employee-day, not per batch: one row here is one decision
         # about one person, and "who marked me half-day" has to be answerable
         # afterwards. Flushed first so an inserted record has its id.
         db.flush()
-        for record, created, previous_status in touched:
+        for record, created, previous_status, previous in touched:
             _audit_record(
                 db,
                 actor=actor,
@@ -741,14 +834,18 @@ def bulk_save_attendance(
                     else AuditAction.ATTENDANCE_RECORD_UPDATE
                 ),
                 record=record,
-                note=None,
+                note=note,
                 previous_status=previous_status,
+                previous=previous,
+                source="bulk",
             )
-        _reconcile_auto_leave_reports(db, [record for record, _, _ in touched])
+        _reconcile_auto_leave_reports(db, [record for record, _, _, _ in touched])
         db.commit()
     except IntegrityError:
         db.rollback()
         raise AppError("conflict", "Attendance violates a uniqueness constraint.", 409)
     _notify_rulings(
-        db, actor, [(record, previous_status) for record, _, previous_status in touched]
+        db,
+        actor,
+        [(record, previous_status) for record, _, previous_status, _ in touched],
     )

@@ -267,13 +267,11 @@ def list_daily_review(
             f"classification must be one of {sorted(CLASSIFICATIONS)}.",
             422,
         )
-    # A future date has no evidence and never will yet: every row would read
-    # "No record", which looks like a company-wide absence rather than a date
-    # that has not happened. "Today" is judged in the attendance timezone, not
-    # the server's.
+    # A future date is allowed for attendance PLANNING. It has no evidence yet,
+    # so its rows are marked `future`: nothing is flagged for review and no time
+    # can be entered - an empty future day is not a missing punch. "Today" is
+    # judged in the attendance timezone, not the server's.
     today_local = datetime.now(ZoneInfo(settings.ATTENDANCE_TIMEZONE)).date()
-    if review_date > today_local:
-        raise AppError("validation_error", "Date must not be in the future.", 422)
 
     result = service.list_daily_review(
         db,
@@ -283,6 +281,7 @@ def list_daily_review(
         q=q,
         limit=limit,
         offset=offset,
+        future=review_date > today_local,
     )
     return DailyReviewPage.model_validate(result)
 
@@ -308,12 +307,15 @@ def get_daily_review_detail(
             f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}.",
             422,
         )
+    # Future dates are allowed for planning - see `list_daily_review`.
     today_local = datetime.now(ZoneInfo(settings.ATTENDANCE_TIMEZONE)).date()
-    if review_date > today_local:
-        raise AppError("validation_error", "Date must not be in the future.", 422)
 
     result = service.get_daily_review_detail(
-        db, provider=normalized_provider, on_date=review_date, employee_id=employee_id
+        db,
+        provider=normalized_provider,
+        on_date=review_date,
+        employee_id=employee_id,
+        future=review_date > today_local,
     )
     return DailyReviewDetailOut.model_validate(result)
 

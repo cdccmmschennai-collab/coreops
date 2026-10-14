@@ -31,6 +31,7 @@ import {
 import type { PunchEntry } from "@/features/biometric/types";
 
 import { RecordDecisionDialog } from "@/features/attendance/components/record-decision-dialog";
+import { FUTURE_DATE_NOTICE, isFutureDate } from "@/features/attendance/date-rules";
 import { ATTENDANCE_STATUS_LABEL } from "@/features/attendance/schemas";
 import type { AttendanceStatus } from "@/features/attendance/types";
 
@@ -66,6 +67,7 @@ function AttendanceRecordDetail() {
 
   const rawDate = searchParams.get("date");
   const date = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : today;
+  const future = isFutureDate(date, today);
 
   const [editing, setEditing] = React.useState(false);
 
@@ -157,9 +159,13 @@ function AttendanceRecordDetail() {
                   <p className="mt-0.5 text-sm">{boundarySourceLabel(row)}</p>
                 </div>
                 <div className="col-span-3">
-                  <Badge variant={CLASSIFICATION_VARIANT[row.classification]} dot>
-                    {CLASSIFICATION_LABEL[row.classification]}
-                  </Badge>
+                  {future ? (
+                    <p className="text-sm text-muted-foreground">{FUTURE_DATE_NOTICE}</p>
+                  ) : (
+                    <Badge variant={CLASSIFICATION_VARIANT[row.classification]} dot>
+                      {CLASSIFICATION_LABEL[row.classification]}
+                    </Badge>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -226,7 +232,11 @@ function AttendanceRecordDetail() {
               {punches.length === 0 ? (
                 <EmptyState
                   title="No punch"
-                  description="The biometric device recorded nothing for this employee on this day."
+                  description={
+                    future
+                      ? FUTURE_DATE_NOTICE
+                      : "The biometric device recorded nothing for this employee on this day."
+                  }
                 />
               ) : (
                 <ul className="divide-y divide-border">

@@ -29,6 +29,9 @@ export const attendanceFormSchema = z
     status: z.enum(ATTENDANCE_STATUSES),
     check_in_at: z.string(),
     check_out_at: z.string(),
+    // Required for a past date - checked in the form against today's IST date
+    // (and by the backend), since the schema has no clock.
+    note: z.string().max(500, "Keep the reason under 500 characters"),
   })
   .refine(
     (v) => !(v.check_in_at && v.check_out_at) || v.check_out_at >= v.check_in_at,
@@ -43,6 +46,7 @@ export const EMPTY_ATTENDANCE_FORM: AttendanceFormValues = {
   status: "present",
   check_in_at: "",
   check_out_at: "",
+  note: "",
 };
 
 const orNull = (v: string): string | null => (v.trim() === "" ? null : v);
@@ -54,6 +58,7 @@ export function toCreateBody(v: AttendanceFormValues): AttendanceCreateBody {
     status: v.status,
     check_in_at: orNull(v.check_in_at),
     check_out_at: orNull(v.check_out_at),
+    note: orNull(v.note),
   };
 }
 
@@ -63,5 +68,6 @@ export function toUpdateBody(v: AttendanceFormValues): AttendanceUpdateBody {
     status: v.status,
     check_in_at: orNull(v.check_in_at),
     check_out_at: orNull(v.check_out_at),
+    note: orNull(v.note),
   };
 }

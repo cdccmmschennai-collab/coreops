@@ -73,6 +73,8 @@ def _record(client, login, team, day: date, period: str | None, *, status="prese
         "attendance_date": day.isoformat(),
         "status": status,
         "permission_period": period,
+        # Required when the day is in the past; harmless otherwise.
+        "note": "Recorded by PM",
     })
 
 
@@ -391,8 +393,8 @@ def test_an_employee_cannot_record_through_attendance(client, login, team):
 
 def test_the_daily_review_row_carries_the_recorded_option(client, login, team):
     """What the edit dialog seeds its selector from. A PAST day (10 Aug 2026, a
-    Monday in a closed month): `/daily-review` refuses future dates, and a PM may
-    still settle a closed month's record, as a reviewer may approve in one."""
+    Monday in a closed month): a PM may still settle a closed month's record, as
+    a reviewer may approve in one."""
     day = date(2026, 8, 10)
     rec = _record(client, login, team, day, "second_half_1h")
     assert rec.status_code == 201, rec.text

@@ -16,6 +16,8 @@ def _payload(employee_id, **over):
         "employee_id": str(employee_id),
         "attendance_date": DAY,
         "status": "present",
+        # DAY is in the past, so every change to it must give a reason.
+        "note": "Correction",
     }
     base.update(over)
     return base
@@ -78,7 +80,7 @@ def test_update_recomputes_minutes(client, auth_header, make_employee):
         json=_payload(e.id, check_in_at=IN_9, check_out_at=OUT_18),
     ).json()
     res = client.patch(
-        f"/api/v1/attendance/{created['id']}", headers=h, json={"check_out_at": OUT_17}
+        f"/api/v1/attendance/{created['id']}", headers=h, json={"check_out_at": OUT_17, "note": "Correction"}
     )
     assert res.status_code == 200
     assert res.json()["total_minutes"] == 480
@@ -90,7 +92,7 @@ def test_update_status(client, auth_header, make_employee):
     e = make_employee(employee_code="E-6")
     created = client.post("/api/v1/attendance", headers=h, json=_payload(e.id)).json()
     res = client.patch(
-        f"/api/v1/attendance/{created['id']}", headers=h, json={"status": "absent"}
+        f"/api/v1/attendance/{created['id']}", headers=h, json={"status": "absent", "note": "Correction"}
     )
     assert res.status_code == 200
     assert res.json()["status"] == "absent"
@@ -262,7 +264,7 @@ def test_sheet_requires_project_manager(client, auth_header, make_employee):
 
 # ---------- bulk: POST save ----------
 def _bulk(records, day=DAY):
-    return {"date": day, "records": records}
+    return {"date": day, "records": records, "note": "Correction"}
 
 
 def test_bulk_creates_records(client, auth_header, make_employee):
@@ -375,7 +377,7 @@ def test_status_change_away_from_leave_notifies(
     rec = make_attendance(
         employee_id=e.id, attendance_date=date(2026, 5, 1), status=AttendanceStatus.leave
     )
-    res = client.patch(f"/api/v1/attendance/{rec.id}", headers=h, json={"status": "present"})
+    res = client.patch(f"/api/v1/attendance/{rec.id}", headers=h, json={"status": "present", "note": "Correction"})
     assert res.status_code == 200, res.text
     notifs = _notifications(db, u.id, "attendance_changed")
     assert len(notifs) == 1

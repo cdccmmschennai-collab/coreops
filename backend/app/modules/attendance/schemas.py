@@ -135,3 +135,5 @@ class AttendanceBulkRecord(BaseModel):
 class AttendanceBulkSave(BaseModel):
     date: date
     records: list[AttendanceBulkRecord]
+    # One reason for the whole batch. Required when `date` is in the past.
+    note: str | None = Field(default=None, max_length=MAX_NOTE_LEN)

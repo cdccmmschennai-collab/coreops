@@ -3206,6 +3206,8 @@ export interface components {
             date: string;
             /** Records */
             records: components["schemas"]["AttendanceBulkRecord"][];
+            /** Note */
+            note?: string | null;
         };
         /** AttendanceCreate */
         AttendanceCreate: {

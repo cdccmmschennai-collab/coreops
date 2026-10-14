@@ -42,6 +42,9 @@ export function AttendanceEdit({ id }: { id: string }) {
     status: record.status,
     check_in_at: toDatetimeLocal(record.check_in_at),
     check_out_at: toDatetimeLocal(record.check_out_at),
+    // Seeded like the Records dialog, so saving does not erase the reason
+    // already recorded for this day.
+    note: record.note ?? "",
   };
 
   return (

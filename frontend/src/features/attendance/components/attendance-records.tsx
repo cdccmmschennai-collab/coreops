@@ -50,6 +50,7 @@ import {
 import type { DailyReviewRow } from "@/features/biometric/types";
 
 import { RecordDecisionDialog } from "./record-decision-dialog";
+import { FUTURE_DATE_NOTICE, isFutureDate } from "../date-rules";
 import { ATTENDANCE_STATUS_LABEL } from "../schemas";
 import type { AttendanceStatus } from "../types";
 
@@ -87,6 +88,9 @@ export function AttendanceRecords() {
   const [rawOffset, setRawOffset] = useUrlState("offset", "0");
 
   const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : today;
+  // A future date is attendance PLANNING: the device cannot have seen it yet,
+  // so its empty evidence is not shown as a gap.
+  const future = isFutureDate(date, today);
   const filter = isReviewFilter(rawFilter) ? rawFilter : DEFAULT_REVIEW_FILTER;
   const offset = Math.max(0, Number(rawOffset) || 0);
 
@@ -142,7 +146,6 @@ export function AttendanceRecords() {
           type="date"
           className="sm:w-44"
           value={date}
-          max={today}
           onChange={(e) => e.target.value && setDate(e.target.value)}
           aria-label="Attendance date"
         />
@@ -173,7 +176,13 @@ export function AttendanceRecords() {
           is no Leave, Permission or Half day count here, since that data
           does not exist yet and a count reading "Leave 0" would be a claim,
           not a blank. */}
-      {counts && (
+      {counts && future && (
+        <div className="mb-4 rounded-lg border border-border bg-card px-4 py-3">
+          <p className="text-sm font-semibold">{formatReviewDate(date)}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{FUTURE_DATE_NOTICE}</p>
+        </div>
+      )}
+      {counts && !future && (
         <div className="mb-4 rounded-lg border border-border bg-card px-4 py-3">
           <p className="text-sm font-semibold">{formatReviewDate(date)}</p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -242,9 +251,13 @@ export function AttendanceRecords() {
                     {/* RAW BIOMETRIC EVIDENCE: the conservative verdict the punch
                         stream alone supports. */}
                     <TableCell>
-                      <Badge variant={CLASSIFICATION_VARIANT[r.classification]} dot>
-                        {CLASSIFICATION_LABEL[r.classification]}
-                      </Badge>
+                      {future ? (
+                        <span className="text-sm text-muted-foreground">{EMPTY}</span>
+                      ) : (
+                        <Badge variant={CLASSIFICATION_VARIANT[r.classification]} dot>
+                          {CLASSIFICATION_LABEL[r.classification]}
+                        </Badge>
+                      )}
                     </TableCell>
                     {/* FINAL ATTENDANCE STATUS: the PM's official decision, when
                         one exists. Distinct column from Biometric on purpose - a

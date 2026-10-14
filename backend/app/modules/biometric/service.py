@@ -1355,6 +1355,7 @@ def _review_row(
     record: AttendanceRecord | None,
     permission_hours: int | None = None,
     permission_period: str | None = None,
+    future: bool = False,
 ) -> dict:
     """One employee-day, as both the roster view and the detail view need it.
 
@@ -1376,6 +1377,11 @@ def _review_row(
     does not touch `classification` and does not settle `review_required`. The
     caller supplies it already resolved (`permissions.attendance_link`), and it
     is attached at the very end so no rule above can accidentally read it.
+
+    `future` marks a day that has not happened yet (attendance planning). The
+    device cannot have seen it, so its empty evidence is NOT a gap: nothing is
+    flagged for review, and no time may be entered - a planned day is
+    status-only, which `attendance.service` enforces on write as well.
     """
     first_in, first_in_source = _merge_boundary(
         verdict.first_in, record.check_in_at if record else None
@@ -1398,14 +1404,18 @@ def _review_row(
         "scheduled_minutes": verdict.scheduled_minutes,
         # Evidence-only. See docstring above - never derived from `record`.
         "classification": verdict.classification,
-        "review_required": verdict.review_required and record is None,
+        "review_required": verdict.review_required and record is None and not future,
         # Biometric evidence is immutable and complete evidence cannot be
         # improved, so the PM may supply a time ONLY where the DEVICE (not the
-        # official record) did not record one.
-        "can_set_check_in": verdict.first_in is None,
-        "can_set_check_out": verdict.last_out is None,
-        "review_reasons": list(verdict.reasons),
-        "blocking_reasons": [r for r in verdict.reasons if r in BLOCKING_REVIEW_REASONS],
+        # official record) did not record one - and never on a future day.
+        "can_set_check_in": verdict.first_in is None and not future,
+        "can_set_check_out": verdict.last_out is None and not future,
+        "review_reasons": [] if future else list(verdict.reasons),
+        "blocking_reasons": (
+            []
+            if future
+            else [r for r in verdict.reasons if r in BLOCKING_REVIEW_REASONS]
+        ),
         "attendance_record_id": record.id if record else None,
         "attendance_status": record.status.value if record else None,
         "attendance_check_in_at": record.check_in_at if record else None,
@@ -1434,6 +1444,7 @@ def list_daily_review(
     q: str | None = None,
     limit: int = 15,
     offset: int = 0,
+    future: bool = False,
 ) -> dict:
     """One attendance day across every in-scope employee, for PM review.
 
@@ -1507,6 +1518,7 @@ def list_daily_review(
             record=record,
             permission_hours=permissions.get(employee_id),
             permission_period=_period_value(periods.get(employee_id)),
+            future=future,
         )
 
         if row["review_required"]:
@@ -1539,7 +1551,12 @@ def list_daily_review(
 
 
 def get_daily_review_detail(
-    db: Session, *, provider: str, on_date: date, employee_id: uuid.UUID
+    db: Session,
+    *,
+    provider: str,
+    on_date: date,
+    employee_id: uuid.UUID,
+    future: bool = False,
 ) -> dict:
     """One employee, one day - the Phase 9B PM detail screen.
 
@@ -1582,6 +1599,7 @@ def get_daily_review_detail(
         record=record,
         permission_hours=permission_hours,
         permission_period=_period_value(permission_period),
+        future=future,
     )
 
     kept = day_summary.kept

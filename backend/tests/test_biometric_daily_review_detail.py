@@ -119,7 +119,7 @@ def test_missing_out_is_completed_and_in_stays_device(client, pm, db, make_emplo
             "status": "present",
             "check_in_at": before["row"]["first_in"],
             "check_out_at": f"{DAY}T17:30:00+05:30",
-            "note": None,
+            "note": "OUT punch missed.",
         },
     )
     assert update.status_code == 201, update.text
@@ -188,12 +188,22 @@ def test_note_survives_reopening_and_editing(client, pm, db, make_employee):
     reopened = client.get(DETAIL.format(employee_id=emp.id), params={"date": DAY}, headers=pm).json()
     assert reopened["row"]["attendance_note"] == "Left early - doctor appointment."
 
-    # Editing status without resending note must not erase it.
-    update = client.patch(
+    # DAY is in the past, so a change without a reason is refused - and the
+    # refusal must leave the stored reason exactly as it was.
+    refused = client.patch(
         f"{ATTEND}/{record_id}", headers=pm, json={"status": "present"}
     )
+    assert refused.status_code == 422, refused.text
+    kept = client.get(DETAIL.format(employee_id=emp.id), params={"date": DAY}, headers=pm).json()
+    assert kept["row"]["attendance_note"] == "Left early - doctor appointment."
+
+    update = client.patch(
+        f"{ATTEND}/{record_id}",
+        headers=pm,
+        json={"status": "present", "note": "Stayed the full day after all."},
+    )
     assert update.status_code == 200, update.text
-    assert update.json()["note"] == "Left early - doctor appointment."
+    assert update.json()["note"] == "Stayed the full day after all."
 
 
 def test_device_punches_are_never_modified_by_a_pm_decision(client, pm, db, make_employee):
@@ -215,7 +225,7 @@ def test_device_punches_are_never_modified_by_a_pm_decision(client, pm, db, make
             "status": "present",
             "check_in_at": f"{DAY}T09:05:00+05:30",
             "check_out_at": f"{DAY}T17:45:00+05:30",
-            "note": None,
+            "note": "OUT punch missed.",
         },
     )
 
@@ -264,7 +274,11 @@ def test_leave_status_flows_through_the_same_pipeline_as_present(client, pm, db,
     assert with_evidence["row"]["classification"] == "present"
     assert with_evidence["row"]["attendance_status"] == "leave"  # still leave until PM acts
 
-    resolved = client.patch(f"{ATTEND}/{record_id}", headers=pm, json={"status": "present"})
+    resolved = client.patch(
+        f"{ATTEND}/{record_id}",
+        headers=pm,
+        json={"status": "present", "note": "Worked after all."},
+    )
     assert resolved.status_code == 200, resolved.text
 
     final = client.get(DETAIL.format(employee_id=emp.id), params={"date": DAY}, headers=pm).json()

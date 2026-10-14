@@ -72,7 +72,7 @@ def _mark(db, pm, employee, day, status=AttendanceStatus.absent):
     """The PM marking a day in Records, through the real service."""
     return attendance_service.create_attendance(
         db, pm,
-        AttendanceCreate(employee_id=employee.id, attendance_date=day, status=status),
+        AttendanceCreate(employee_id=employee.id, attendance_date=day, status=status, note="Correction"),
     )
 
 
@@ -134,6 +134,7 @@ def test_a_sent_fraction_cannot_change_what_absent_costs(db, pm, employee):
         AttendanceCreate(
             employee_id=employee.id, attendance_date=_WED,
             status=AttendanceStatus.absent, leave_day_fraction=0,
+            note="Correction",
         ),
     )
     assert record.leave_day_fraction == Decimal("1.00")
@@ -204,6 +205,7 @@ def test_a_sheet_resave_does_not_charge_a_historical_absent(db, pm, employee):
         db, pm, _MON,
         [AttendanceBulkRecord(employee_id=employee.id,
                               status=AttendanceStatus.absent)],
+        note="Correction",
     )
 
     assert _consumed(db, employee) == Decimal("0")
@@ -214,6 +216,7 @@ def test_the_sheet_charges_a_newly_marked_absent(db, pm, employee):
         db, pm, _WED,
         [AttendanceBulkRecord(employee_id=employee.id,
                               status=AttendanceStatus.absent)],
+        note="Correction",
     )
 
     assert _consumed(db, employee) == Decimal("1")
@@ -296,7 +299,7 @@ def test_changing_absent_to_present_releases_report_and_charge(db, pm, employee)
     _sweep(db)
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.present, note="Correction")
     )
 
     db.refresh(record)
@@ -322,7 +325,7 @@ def test_changing_present_to_absent_charges_and_reports(db, pm, employee):
     assert _consumed(db, employee) == Decimal("0")
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.absent)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.absent, note="Correction")
     )
 
     db.refresh(record)
@@ -339,7 +342,7 @@ def test_changing_absent_to_leave_swaps_the_label_and_keeps_one_charge(
     _sweep(db)
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.leave)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.leave, note="Correction")
     )
 
     # The ABSENT report no longer has an Absent behind it.
@@ -359,7 +362,7 @@ def test_changing_leave_to_absent_swaps_the_label_and_keeps_one_charge(
     assert _report(db, employee, _WED).day_status == DayStatus.leave
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.absent)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.absent, note="Correction")
     )
 
     assert _report(db, employee, _WED) is None
@@ -372,11 +375,11 @@ def test_a_half_day_charge_does_not_linger_on_an_absent(db, pm, employee):
     record = attendance_service.create_attendance(
         db, pm,
         AttendanceCreate(employee_id=employee.id, attendance_date=_WED,
-                         status=AttendanceStatus.half_day, leave_day_fraction=0.5),
+                         status=AttendanceStatus.half_day, leave_day_fraction=0.5, note="Correction"),
     )
 
     attendance_service.update_attendance(
-        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.absent)
+        db, pm, record.id, AttendanceUpdate(status=AttendanceStatus.absent, note="Correction")
     )
 
     db.refresh(record)

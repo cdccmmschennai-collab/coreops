@@ -90,7 +90,7 @@ def bulk_save_attendance(
     admin: User = Depends(require_role("project_manager")),
     db: Session = Depends(get_db),
 ) -> AttendanceSheet:
-    service.bulk_save_attendance(db, admin, body.date, body.records)
+    service.bulk_save_attendance(db, admin, body.date, body.records, body.note)
     rows, exists = service.get_attendance_sheet(db, admin, body.date)
     return AttendanceSheet(
         attendance_date=body.date,

@@ -104,7 +104,7 @@ def test_one_device_punch_plus_pm_completion_keeps_device_value(client, pm, db, 
             "status": "present",
             "check_in_at": f"{DAY}T09:05:00+05:30",
             "check_out_at": f"{DAY}T17:30:00+05:30",
-            "note": None,
+            "note": "OUT punch missed.",
         },
     )
     assert update.status_code == 201, update.text

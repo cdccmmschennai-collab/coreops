@@ -24,8 +24,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { AppError } from "@/lib/api-client";
+import { istTodayISO } from "@/lib/ist";
 
+import { REASON_REQUIRED_MESSAGE, isPastDate, isReasonMissing } from "../date-rules";
 import { useEmployeeOptions } from "../employee-options";
 import { useCreateAttendance, useUpdateAttendance } from "../hooks";
 import {
@@ -57,8 +60,15 @@ export function AttendanceForm({ mode, defaultValues, recordId }: AttendanceForm
   const updateMutation = useUpdateAttendance(recordId ?? "");
   const isPending = createMutation.isPending || updateMutation.isPending;
 
+  const pastDay = isPastDate(form.watch("attendance_date"), istTodayISO());
+
   async function onSubmit(values: AttendanceFormValues) {
     setFormError(null);
+    // Same rule the backend enforces: a past day needs a reason for the change.
+    if (isReasonMissing(values.attendance_date, values.note, istTodayISO())) {
+      form.setError("note", { message: REASON_REQUIRED_MESSAGE });
+      return;
+    }
     try {
       const result =
         mode === "create"
@@ -156,6 +166,34 @@ export function AttendanceForm({ mode, defaultValues, recordId }: AttendanceForm
               />
               <div className="hidden sm:block" aria-hidden />
             </div>
+
+            <FormField
+              control={form.control}
+              name="note"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Reason
+                    {pastDay && <span className="text-destructive"> *</span>}
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={2}
+                      maxLength={500}
+                      placeholder="Why this day was set this way"
+                      aria-required={pastDay}
+                      {...field}
+                    />
+                  </FormControl>
+                  <p className="text-xs text-muted-foreground">
+                    {pastDay
+                      ? `${REASON_REQUIRED_MESSAGE} It is recorded in the audit trail with your name and the time.`
+                      : "Recorded in the audit trail with your name and the time."}
+                  </p>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <div className="flex justify-end gap-2 pt-2">
               <Button
