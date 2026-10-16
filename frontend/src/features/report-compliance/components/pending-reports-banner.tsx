@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { PageContainer } from "@/components/shell/page-container";
 import { Button } from "@/components/ui/button";
 
 import { useMyCompliance } from "../hooks";
+import { REPORTS_LIST_PATH, pendingReportOutcome } from "../pending-target";
 
 const DISMISS_KEY = "pending-reports-banner-dismissed";
 
@@ -18,8 +20,10 @@ const DISMISS_KEY = "pending-reports-banner-dismissed";
  * next login but not on every navigation within the same session.
  */
 export function PendingReportsBanner() {
-  const { data } = useMyCompliance();
+  const { data, refetch } = useMyCompliance();
+  const router = useRouter();
   const [dismissed, setDismissed] = React.useState(true);
+  const [resolving, setResolving] = React.useState(false);
 
   // Read the per-session dismissal flag after mount (avoids SSR mismatch).
   React.useEffect(() => {
@@ -31,6 +35,35 @@ export function PendingReportsBanner() {
   // than attendance implies (e.g. half-day report on a full present day).
   const mismatch = data?.fraction_mismatch_today === true;
   if (dismissed || (count < 1 && !mismatch)) return null;
+
+  // Re-read the server's outstanding dates on EVERY click, so a report
+  // submitted since the banner rendered has already dropped out and the next
+  // earliest date is the one opened.
+  async function openNextPending() {
+    setResolving(true);
+    try {
+      const fresh = await refetch();
+      if (fresh.isError) {
+        toast.error("Couldn't load your pending reports. Please try again.");
+        return;
+      }
+      const outcome = pendingReportOutcome(fresh.data);
+      if (outcome.kind === "open") {
+        router.push(outcome.path);
+        return;
+      }
+      if (outcome.kind === "today_incomplete") {
+        toast.info(
+          "No reports are overdue. Today's report looks incomplete - you can still complete it until tomorrow.",
+        );
+      } else {
+        toast.success("All pending work reports have been completed.");
+      }
+      router.push(REPORTS_LIST_PATH);
+    } finally {
+      setResolving(false);
+    }
+  }
 
   function dismiss() {
     sessionStorage.setItem(DISMISS_KEY, "1");
@@ -48,8 +81,8 @@ export function PendingReportsBanner() {
           {mismatch &&
             `Today's report covers ${Math.round((data?.reported_work_fraction_today ?? 0) * 100)}% of the day but attendance shows ${Math.round((data?.attendance_work_fraction_today ?? 0) * 100)}% worked — it may be incomplete.`}
         </p>
-        <Button size="sm" asChild>
-          <Link href="/work-reports">Submit Pending Reports</Link>
+        <Button size="sm" loading={resolving} onClick={() => void openNextPending()}>
+          Submit Pending Reports
         </Button>
         <Button
           variant="ghost"
