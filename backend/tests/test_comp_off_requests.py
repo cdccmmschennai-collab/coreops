@@ -355,8 +355,8 @@ def test_approval_records_reviewer_time_and_status(client, login, db, team, pend
     assert row.manager_id == team["pm"].id and row.reviewed_at is not None
     assert row.manager_comment == "ok"
     assert db.execute(select(AuditLog).where(AuditLog.action == "comp_off.request.approve")).scalar_one()
-    # Phase boundary: approval writes no attendance.
-    assert db.query(AttendanceRecord).count() == 0
+    # Phase 4: approval writes exactly one day off (see test_comp_off_attendance.py).
+    assert db.query(AttendanceRecord).count() == 1
 
 
 @pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": "   "}])

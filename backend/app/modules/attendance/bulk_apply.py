@@ -9,7 +9,8 @@ Every (employee, date) pair is judged on its own and gets exactly one outcome:
     updated     the record's status changes
     unchanged   the record already has this status - nothing is written
     protected   the record was written by an approved leave and is still the
-                row that leave's cancellation would remove - never touched
+                row that leave's cancellation would remove, or is the day off an
+                approved comp off request wrote - never touched
     rejected    the pair is invalid; `reason_code` says why
 
 Nothing is skipped silently: a non-working day, a duplicate pair, a missing
@@ -268,6 +269,19 @@ def _evaluate(
         item.record = record
         item.previous_status = record.status
         item.status = record.status
+        if (
+            record.comp_off_request_id is not None
+            and record.status == AttendanceStatus.comp_off
+        ):
+            # The day off an approved comp off request wrote (migration 0088).
+            # An approved request is final, so the row is protected for as long
+            # as it is still the comp off it wrote.
+            item.outcome, item.reason_code = "protected", "comp_off_approval"
+            item.message = (
+                "Written by an approved comp off request. Change it from the "
+                "attendance record itself, not here."
+            )
+            return None
         if _is_protected(record, live, working=working, converted=converted):
             item.outcome, item.reason_code = "protected", "leave_approval"
             item.message = (

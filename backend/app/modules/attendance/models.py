@@ -82,11 +82,25 @@ class AttendanceRecord(UUIDMixin, TimestampMixin, Base):
     leave_day_fraction: Mapped[Decimal | None] = mapped_column(
         Numeric(3, 2), nullable=True
     )
+    # The approved comp off request that wrote this day off (migration 0088).
+    # NULL on every row a comp off approval did not write - PM-entered days,
+    # leave days, and legacy `comp_off` rows, which name no request. UNIQUE, so
+    # one request can mark at most one day however often its approval runs.
+    comp_off_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "comp_off_requests.id",
+            name="attendance_comp_off_request_fk",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("employee_id", "attendance_date", name="attendance_emp_date_uq"),
+        UniqueConstraint("comp_off_request_id", name="attendance_comp_off_request_uq"),
         CheckConstraint(
             "total_minutes >= 0 AND overtime_minutes >= 0", name="attendance_minutes_nonneg"
         ),

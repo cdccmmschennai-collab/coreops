@@ -42,11 +42,26 @@ Decisions lock the request row (`FOR UPDATE`) and re-read it before checking
 its status, so concurrent approve/reject/cancel calls produce exactly one
 winner; the others get 409 and nothing of theirs is written.
 
-PHASE BOUNDARY
-==============
-Approval records the decision only. It does NOT write attendance - the
-attendance link is Phase 4 - and no notification is sent yet (there is no page
-to land on until the frontend phase).
+APPROVAL MARKS THE DAY OFF (Phase 4)
+====================================
+An approval writes ONE `comp_off` attendance row on `off_date`, linked back by
+`attendance_records.comp_off_request_id` (migration 0088), in the SAME
+transaction as `status = approved`. Either both land or neither does: a failed
+attendance write or audit leaves the request pending with no row.
+
+It never overwrites. `_assert_off_date_free` refuses any existing row on the
+day, and the database backs that check against a write that lands in between:
+
+    attendance_emp_date_uq          a row someone else wrote meanwhile
+    attendance_comp_off_request_uq  this request's day written twice
+
+Either violation rolls the whole approval back and returns 409.
+
+The worked date is not touched - its attendance, report and activities stay
+exactly where they are. Nothing is copied to the day off.
+
+Not in this phase: notifications, and cancelling an APPROVED request (its
+reversal policy is undecided, so an approved request is final).
 """
 from __future__ import annotations
 
@@ -58,6 +73,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.attendance import service as attendance_service
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.audit.service import record_audit
@@ -292,7 +308,14 @@ def _assert_no_comp_off_conflict(
 
 # ---------- audit -----------------------------------------------------------
 
-def _audit(db: Session, *, actor: User, action: str, req: CompOffRequest) -> None:
+def _audit(
+    db: Session,
+    *,
+    actor: User,
+    action: str,
+    req: CompOffRequest,
+    extra: dict | None = None,
+) -> None:
     """FLUSHES, never commits - lands in the caller's transaction."""
     details: dict = {
         "comp_off_request_id": str(req.id),
@@ -303,6 +326,8 @@ def _audit(db: Session, *, actor: User, action: str, req: CompOffRequest) -> Non
     }
     if req.manager_comment:
         details["comment"] = req.manager_comment
+    if extra:
+        details.update(extra)
     record_audit(
         db,
         action=action,
@@ -474,10 +499,69 @@ def approve_comp_off_request(
     req.reviewed_at = _now()
     req.updated_by = actor.id
     db.flush()
-    _audit(db, actor=actor, action=AuditAction.COMP_OFF_REQUEST_APPROVE, req=req)
+    record = _mark_off_day(db, actor, req)
+    _audit(
+        db, actor=actor, action=AuditAction.COMP_OFF_REQUEST_APPROVE, req=req,
+        extra={"attendance_record_id": str(record.id)},
+    )
     db.commit()
     db.refresh(req)
     return req
+
+
+def _mark_off_day(db: Session, actor: User, req: CompOffRequest) -> AttendanceRecord:
+    """Write the approved request's day off. FLUSHES, never commits.
+
+    Shaped like a leave approval's row - no times, no minutes - with the link
+    column naming the request. No `leave_day_fraction`: a comp off is not drawn
+    from the leave pool, and `comp_off` is not a leave-bearing status.
+
+    A unique violation here means the day was taken between the eligibility
+    check and this write (or this request's day already exists). The whole
+    transaction is rolled back, so the request is still pending afterwards.
+    """
+    note = f"Approved Comp Off for work on {_long_date(req.worked_date)}."
+    record = AttendanceRecord(
+        employee_id=req.employee_id,
+        attendance_date=req.off_date,
+        status=AttendanceStatus.comp_off,
+        check_in_at=None,
+        check_out_at=None,
+        total_minutes=0,
+        overtime_minutes=0,
+        note=note,
+        comp_off_request_id=req.id,
+        created_by=actor.id,
+        updated_by=actor.id,
+    )
+    db.add(record)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise AppError(
+            "conflict",
+            f"Attendance for {_long_date(req.off_date)} was recorded while this "
+            "request was being approved. The request is still pending - review "
+            "the day and try again.",
+            409,
+        )
+    # In the attendance module's own vocabulary, so "who decided this day was a
+    # comp off" is answerable from the same audit filter as every other day.
+    attendance_service._audit_record(
+        db,
+        actor=actor,
+        action=AuditAction.ATTENDANCE_RECORD_CREATE,
+        record=record,
+        note=note,
+        previous_status=None,
+        source="comp_off_approval",
+        extra={
+            "comp_off_request_id": str(req.id),
+            "worked_date": req.worked_date.isoformat(),
+        },
+    )
+    return record
 
 
 def reject_comp_off_request(
