@@ -64,6 +64,7 @@ from app.modules.leave.models import (
     HALF_DAY_DURATION_LABEL,
     HALF_DAY_LEAVE_FRACTION,
     RETIRED_LEAVE_TYPE,
+    LeaveHalfDayPeriod,
     LeaveRequest,
     LeaveStatus,
 )
@@ -156,6 +157,28 @@ def _worked_attendance_dates(
     )
 
 
+def _conflicting_worked_dates(
+    db: Session,
+    employee_id: uuid.UUID,
+    start_date: date,
+    end_date: date,
+    half_day_period: LeaveHalfDayPeriod | None,
+) -> list[date]:
+    """The worked days that refuse THIS request.
+
+    A full-day leave is refused by any worked day. A half-day leave is taken on a
+    day the employee also attends, so a recorded `present` is not a contradiction
+    for it - approval converts that row into the half-day row (see
+    `effects.plan_leave_days`). Only a day already recorded as `half_day` still
+    refuses it: that day has already been split.
+    """
+    if half_day_period is None:
+        return _worked_attendance_dates(db, employee_id, start_date, end_date)
+    return _attendance_dates_with_status(
+        db, employee_id, start_date, end_date, (AttendanceStatus.half_day,)
+    )
+
+
 def _recorded_leave_dates(
     db: Session, employee_id: uuid.UUID, start_date: date, end_date: date
 ) -> list[date]:
@@ -241,6 +264,18 @@ def _format_present_days(settled: dict[date, DayClassification]) -> str:
             )
         parts.append(f"{_long_date(day)}{window}")
     return ", ".join(parts)
+
+
+def _biometric_blocks(req: LeaveRequest | LeaveRequestCreate) -> bool:
+    """Whether the biometric guard applies to this request at all.
+
+    Only a full-day leave is refused over punches. A half-day leave is BY
+    DEFINITION taken on a day the employee also attends - they punch for the
+    half they work - so a settled-present day is the expected evidence for it,
+    not a contradiction. The recorded-attendance guard (`_worked_attendance_dates`)
+    is untouched and still applies to both.
+    """
+    return req.half_day_period is None
 
 
 def _assert_not_biometrically_present(
@@ -833,7 +868,9 @@ def create_leave_request(
     if data.end_date < data.start_date:
         raise AppError("validation_error", "End date cannot be before start date.", 422)
 
-    worked = _worked_attendance_dates(db, me.id, data.start_date, data.end_date)
+    worked = _conflicting_worked_dates(
+        db, me.id, data.start_date, data.end_date, data.half_day_period
+    )
     if worked:
         raise AppError(
             "validation_error",
@@ -841,7 +878,8 @@ def create_leave_request(
             "leave for a day you've already attended.",
             422,
         )
-    _assert_not_biometrically_present(db, me.id, data.start_date, data.end_date)
+    if _biometric_blocks(data):
+        _assert_not_biometrically_present(db, me.id, data.start_date, data.end_date)
     _assert_not_already_on_leave(db, me.id, data.start_date, data.end_date)
     _assert_no_overlap(db, me.id, data.start_date, data.end_date)
 
@@ -914,7 +952,9 @@ def update_leave_request(
     if new_end < new_start:
         raise AppError("validation_error", "End date cannot be before start date.", 422)
 
-    worked = _worked_attendance_dates(db, me.id, new_start, new_end)
+    worked = _conflicting_worked_dates(
+        db, me.id, new_start, new_end, req.half_day_period
+    )
     if worked:
         raise AppError(
             "validation_error",
@@ -922,7 +962,8 @@ def update_leave_request(
             "leave for a day you've already attended.",
             422,
         )
-    _assert_not_biometrically_present(db, me.id, new_start, new_end)
+    if _biometric_blocks(req):
+        _assert_not_biometrically_present(db, me.id, new_start, new_end)
     _assert_not_already_on_leave(db, me.id, new_start, new_end)
     _assert_no_overlap(db, me.id, new_start, new_end, exclude_id=req.id)
 
@@ -1238,7 +1279,9 @@ def approve_leave_request(
 
     # Guard against approving leave for days the employee was actually present
     # (e.g. a request filed before attendance was marked). Reject it instead.
-    worked = _worked_attendance_dates(db, req.employee_id, req.start_date, req.end_date)
+    worked = _conflicting_worked_dates(
+        db, req.employee_id, req.start_date, req.end_date, req.half_day_period
+    )
     if worked:
         raise AppError(
             "validation_error",
@@ -1257,8 +1300,9 @@ def approve_leave_request(
     # connector on their own schedule, so a request filed on Monday morning can
     # still be in the queue when Monday's own punches arrive. Approving then
     # would write Leave over a day the device had, by that point, settled as
-    # worked.
-    _assert_approvable_against_biometric(db, req.employee_id, to_mark)
+    # worked. A half-day leave is exempt: punches are expected on its day.
+    if _biometric_blocks(req):
+        _assert_approvable_against_biometric(db, req.employee_id, to_mark)
 
     # THE BALANCE DOES NOT GATE THE APPROVAL.
     #

@@ -62,6 +62,12 @@ it, and reports it back so the caller can tell the manager. `present` / `half_da
 days are rejected earlier still, by the service's own guard - you cannot be
 granted leave for a day you are recorded as having worked.
 
+The one exception is a HALF-DAY leave on a `present` day: the employee worked
+the other half, so the approval converts that row in place to `half_day` + 0.5
+(times kept), and a cancellation restores it to `present` instead of deleting
+it. The conversion is remembered by its own audit entry (`converted_rows`), not
+by anything on the editable row - see `CONVERSION`.
+
 WHY REMOVAL IS NARROW
 =====================
 Cancellation deletes ONLY a row that still looks exactly like the one an approval
@@ -109,6 +115,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.attendance.models import AttendanceRecord, AttendanceStatus
 from app.modules.audit.constants import AuditAction, EntityType
+from app.modules.audit.models import AuditLog
 from app.modules.audit.service import record_audit
 from app.modules.calendar.working_days import (
     is_working_day,
@@ -304,9 +311,61 @@ def plan_leave_days(
     """
     working = leave_working_days(db, req.start_date, req.end_date)
     existing = _existing_records(db, req.employee_id, working)
-    to_mark = [d for d in working if d not in existing]
-    skipped = [d for d in working if d in existing]
+    to_mark = [d for d in working if _markable(req, existing.get(d))]
+    skipped = [d for d in working if not _markable(req, existing.get(d))]
     return to_mark, skipped
+
+
+# Marks the audit entry a half-day approval writes when it converts a `present`
+# row in place. That entry - append-only, written in the approval's own
+# transaction, keyed by the row id and the leave request id - is the durable
+# record of the conversion: what the reversal restores from, and what bulk apply
+# protects by. Nothing on the row itself is trusted for it, because every field
+# of the row (note included) is editable by a PM afterwards.
+CONVERSION = "present_to_half_day"
+
+
+def _takes_over(req: LeaveRequest, record: AttendanceRecord | None) -> bool:
+    """Whether a half-day approval converts this existing row in place.
+
+    A half-day leave is taken on a day the employee also attends, so a recorded
+    `present` is not a decision the leave contradicts - it is the attended half,
+    and the approval splits it into `half_day` + 0.5. Every other existing row
+    (leave, absent, half_day, ...) is still a decision approval skips.
+    """
+    return (
+        req.half_day_period is not None
+        and record is not None
+        and record.status == AttendanceStatus.present
+    )
+
+
+def _markable(req: LeaveRequest, record: AttendanceRecord | None) -> bool:
+    return record is None or _takes_over(req, record)
+
+
+def converted_rows(
+    db: Session, request_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict]:
+    """`{attendance_record_id: conversion details}` for the `present` rows these
+    leave requests' approvals converted. One query for all of them.
+
+    Read from the conversion's audit entry, so it is tied to the exact request
+    and survives any later edit of the row's note, times or fraction.
+    """
+    if not request_ids:
+        return {}
+    rows = db.execute(
+        select(AuditLog.entity_id, AuditLog.details).where(
+            AuditLog.action == AuditAction.ATTENDANCE_RECORD_UPDATE,
+            AuditLog.entity_type == EntityType.ATTENDANCE_RECORD,
+            AuditLog.details["conversion"].astext == CONVERSION,
+            AuditLog.details["leave_request_id"].astext.in_(
+                [str(i) for i in request_ids]
+            ),
+        )
+    ).all()
+    return {entity_id: details for entity_id, details in rows}
 
 
 # ---------- balance ---------------------------------------------------------
@@ -333,6 +392,11 @@ def _balance_on(db: Session, employee_id: uuid.UUID, day: date) -> Decimal:
 
 def _long_date(value: date) -> str:
     return f"{value.day} {value:%B %Y}"
+
+
+def _float_or_none(value: Decimal | None) -> float | None:
+    """A fraction as the audit JSON carries it (the attendance module's form)."""
+    return float(value) if value is not None else None
 
 
 def _period(req: LeaveRequest) -> str:
@@ -375,7 +439,49 @@ def apply_leave_approved(
         else None
     )
 
+    existing = _existing_records(db, req.employee_id, to_mark)
     for day in to_mark:
+        note = (
+            f"Approved {leave_type_label(classification, req.half_day_period)} "
+            f"({_period(req)})."
+        )
+        current = existing.get(day)
+        if current is not None:
+            # A half-day leave on a recorded Present day (`_takes_over`): the
+            # same row becomes the half-day row, keeping its times, so the
+            # attended half stays on record and 0.5 is charged. What it was is
+            # kept in the audit entry below, which the reversal restores from.
+            previous_status = current.status
+            previous_note = current.note
+            previous_fraction = current.leave_day_fraction
+            current.status = status
+            current.leave_day_fraction = fraction
+            current.note = note
+            current.updated_by = actor.id
+            db.add(current)
+            db.flush()
+            record_audit(
+                db,
+                action=AuditAction.ATTENDANCE_RECORD_UPDATE,
+                actor=actor,
+                entity_type=EntityType.ATTENDANCE_RECORD,
+                entity_id=current.id,
+                details={
+                    "employee_id": str(req.employee_id),
+                    "attendance_date": day.isoformat(),
+                    "conversion": CONVERSION,
+                    "previous_status": previous_status.value,
+                    "status": status.value,
+                    "previous_leave_day_fraction": _float_or_none(previous_fraction),
+                    "leave_day_fraction": _float_or_none(fraction),
+                    "previous_note": previous_note,
+                    "note": note,
+                    "half_day_period": req.half_day_period.value,
+                    "source": "leave_approval",
+                    "leave_request_id": str(req.id),
+                },
+            )
+            continue
         record = AttendanceRecord(
             employee_id=req.employee_id,
             attendance_date=day,
@@ -390,10 +496,7 @@ def apply_leave_approved(
             # Named by the composer every other Type surface uses, so the day
             # says what the employee actually filed ("Half Day (First)") rather
             # than the Normal/Special a one-day range would classify as.
-            note=(
-                f"Approved {leave_type_label(classification, req.half_day_period)} "
-                f"({_period(req)})."
-            ),
+            note=note,
             created_by=actor.id,
             updated_by=actor.id,
         )
@@ -458,13 +561,58 @@ def reverse_leave_approved(
         else None
     )
 
+    converted = (
+        converted_rows(db, [req.id]) if req.half_day_period is not None else {}
+    )
+
     removed: list[date] = []
     kept: list[date] = []
     for day in working:
         record = existing.get(day)
         if record is None:
             continue
-        if is_approval_row(record, status, fraction):
+        conversion = converted.get(record.id)
+        if conversion is not None:
+            # The approval converted a Present day. Never deleted - it was a
+            # worked day before the leave. Restored only while it is still the
+            # half day the approval made; a PM who has since moved it to another
+            # status has ruled on the day and that stands.
+            if record.status != AttendanceStatus.half_day:
+                kept.append(day)
+                continue
+            previous_note = record.note
+            previous_fraction = record.leave_day_fraction
+            record.status = AttendanceStatus.present
+            record.leave_day_fraction = None
+            # The original note comes back unless a PM has since written their
+            # own - a later correction's reason is not overwritten. Times are
+            # never touched, so a corrected check-in/out survives the restore.
+            if record.note == conversion.get("note"):
+                record.note = conversion.get("previous_note")
+            record.updated_by = actor.id
+            db.add(record)
+            record_audit(
+                db,
+                action=AuditAction.ATTENDANCE_RECORD_UPDATE,
+                actor=actor,
+                entity_type=EntityType.ATTENDANCE_RECORD,
+                entity_id=record.id,
+                details={
+                    "employee_id": str(req.employee_id),
+                    "attendance_date": day.isoformat(),
+                    "restored": CONVERSION,
+                    "previous_status": AttendanceStatus.half_day.value,
+                    "status": AttendanceStatus.present.value,
+                    "previous_leave_day_fraction": _float_or_none(previous_fraction),
+                    "leave_day_fraction": None,
+                    "previous_note": previous_note,
+                    "note": record.note,
+                    "source": "leave_cancellation",
+                    "leave_request_id": str(req.id),
+                },
+            )
+            removed.append(day)
+        elif is_approval_row(record, status, fraction):
             record_audit(
                 db,
                 action=AuditAction.ATTENDANCE_RECORD_DELETE,

@@ -55,7 +55,11 @@ from app.modules.attendance.schemas import AttendanceBulkApply
 from app.modules.audit.constants import AuditAction
 from app.modules.calendar.working_days import is_working_day, load_calendar_overrides
 from app.modules.employees.models import Employee, EmployeeStatus
-from app.modules.leave.effects import attendance_marking, is_approval_row
+from app.modules.leave.effects import (
+    attendance_marking,
+    converted_rows,
+    is_approval_row,
+)
 from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.leave_balances.ledger import LIVE_LEAVE_STATUSES
 from app.modules.users.models import User
@@ -139,7 +143,11 @@ def _leave_requests(
 
 
 def _is_protected(
-    record: AttendanceRecord, live: list[LeaveRequest], *, working: bool
+    record: AttendanceRecord,
+    live: list[LeaveRequest],
+    *,
+    working: bool,
+    converted: set[uuid.UUID],
 ) -> bool:
     """Whether a live leave approval's cancellation would still remove this row.
 
@@ -147,9 +155,15 @@ def _is_protected(
     day of the request's range, and a row still shaped like the approval wrote
     it (`is_approval_row`). A row a PM has since edited fails the shape test
     and is an ordinary record again.
+
+    Or would still RESTORE it: a Present day a live half-day leave converted
+    (`converted`, from `effects.converted_rows`) and still `half_day`. It keeps
+    its times, so the shape test cannot see it.
     """
     if not working:
         return False
+    if record.id in converted and record.status == AttendanceStatus.half_day:
+        return True
     for req in live:
         if req.start_date <= record.attendance_date <= req.end_date:
             status, fraction = attendance_marking(req)
@@ -181,6 +195,12 @@ def bulk_apply(db: Session, actor: User, data: AttendanceBulkApply) -> dict:
         if target in _WORKED
         else {}
     )
+    converted = set(
+        converted_rows(
+            db,
+            [r.id for reqs in live.values() for r in reqs if r.half_day_period is not None],
+        )
+    )
 
     items: list[_Item] = []
     seen: set[tuple[uuid.UUID, date]] = set()
@@ -208,6 +228,7 @@ def bulk_apply(db: Session, actor: User, data: AttendanceBulkApply) -> dict:
                 include_non_working=data.include_non_working,
                 live=live.get(employee_id, []),
                 pending=pending.get(employee_id, []),
+                converted=converted,
             )
 
     bulk_action_id = None
@@ -230,6 +251,7 @@ def _evaluate(
     include_non_working: bool,
     live: list[LeaveRequest],
     pending: list[LeaveRequest],
+    converted: set[uuid.UUID],
 ) -> None:
     """Decide one pair's outcome. Reads only; the same verdict for preview and apply."""
     day = item.attendance_date
@@ -246,7 +268,7 @@ def _evaluate(
         item.record = record
         item.previous_status = record.status
         item.status = record.status
-        if _is_protected(record, live, working=working):
+        if _is_protected(record, live, working=working, converted=converted):
             item.outcome, item.reason_code = "protected", "leave_approval"
             item.message = (
                 "Written by an approved leave request. Change it through the "
