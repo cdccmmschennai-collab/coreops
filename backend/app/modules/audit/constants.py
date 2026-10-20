@@ -18,6 +18,7 @@ class EntityType:
     ATTENDANCE_RECORD = "attendance_record"
     LEAVE_REQUEST = "leave_request"
     PERMISSION_REQUEST = "permission_request"
+    COMP_OFF_REQUEST = "comp_off_request"
     PRODUCTION_STATUS = "production_status"
 
 
@@ -124,6 +125,14 @@ class AuditAction:
     # Review (migration 0086). Not a request and not an approval, so it is not
     # logged as either.
     PERMISSION_RECORD = "permission.record"
+
+    # --- comp off decisions (Tier B, migration 0087) ---
+    # Submission is audited for the same reason permission's is: the request row
+    # moves on after a decision, and this is the record of the original ask.
+    COMP_OFF_REQUEST_SUBMIT = "comp_off.request.submit"
+    COMP_OFF_REQUEST_APPROVE = "comp_off.request.approve"
+    COMP_OFF_REQUEST_REJECT = "comp_off.request.reject"
+    COMP_OFF_REQUEST_CANCEL = "comp_off.request.cancel"
 
     # --- production status (Tier B, migration 0070) ---
     # The status table is itself append-only, so this row is not the history -

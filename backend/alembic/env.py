@@ -35,6 +35,7 @@ import app.modules.biometric.models  # noqa: E402,F401
 import app.modules.permissions.models  # noqa: E402,F401
 import app.modules.production_status.models  # noqa: E402,F401
 import app.modules.continuation_requests.models  # noqa: E402,F401
+import app.modules.comp_off.models  # noqa: E402,F401
 
 target_metadata = Base.metadata
 

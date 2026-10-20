@@ -27,6 +27,7 @@ from app.modules.attendance.router import (
     router as attendance_router,
 )
 from app.modules.auth.router import router as auth_router
+from app.modules.comp_off.router import router as comp_off_router
 from app.modules.employees.router import router as employees_router
 from app.modules.leave.all_requests import router as all_requests_router
 from app.modules.leave.router import router as leave_router
@@ -109,6 +110,8 @@ def create_app() -> FastAPI:
     # Permission (Phase 11) = 1h/2h of sanctioned absence inside a working day,
     # against a 4h monthly allowance. Not RBAC.
     app.include_router(permissions_router, prefix=settings.API_V1_PREFIX)
+    # Comp Off: a day off in return for working a non-working day. PM-approved.
+    app.include_router(comp_off_router, prefix=settings.API_V1_PREFIX)
     app.include_router(calendar_router, prefix=settings.API_V1_PREFIX)
     app.include_router(notifications_router, prefix=settings.API_V1_PREFIX)
     app.include_router(activity_types_router, prefix=settings.API_V1_PREFIX)
