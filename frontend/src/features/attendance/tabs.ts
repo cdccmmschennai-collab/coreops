@@ -18,6 +18,7 @@ export type TabKey =
   | "calendar"
   | "history"
   | "leave"
+  | "comp-off"
   | "leave-balance"
   | "corrections"
   | "holidays";
@@ -53,6 +54,9 @@ export function attendanceTabs({ canManage, correctionsEnabled }: TabOptions): T
     // notification and dashboard shortcut names, so it never changes with the
     // wording (the same reason `history` still reads "Records").
     { value: "leave", label: "Leave Requests" },
+    // Comp Off: every role. Employees request, project managers review - the
+    // panel decides which; the tab itself is the same for both.
+    { value: "comp-off", label: "Comp Off" },
     // Leave Balance is a manager/admin-only maintenance view.
     ...(canManage ? ([{ value: "leave-balance", label: "Leave Balance" }] as TabItem[]) : []),
     // Corrections is deferred until biometric / automated attendance capture

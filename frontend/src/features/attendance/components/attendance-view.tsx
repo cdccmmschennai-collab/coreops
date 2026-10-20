@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs } from "@/components/ui/tabs";
 import { useAuth } from "@/features/auth/auth-provider";
+import { CompOffTab } from "@/features/comp-off/components/comp-off-tab";
 import { LeaveRequestDialog } from "@/features/leave/components/leave-request-dialog";
 import { LeaveTab } from "@/features/leave/components/leave-tab";
 import { LeaveBalanceTab } from "@/features/leave-balances/components/leave-balance-tab";
@@ -136,6 +137,7 @@ export function AttendanceView() {
           as in the tab list so a hand-typed ?tab=history cannot reach it. */}
       {tab === "history" && canManage && <AttendanceRecords />}
       {tab === "leave" && <LeaveTab />}
+      {tab === "comp-off" && <CompOffTab />}
       {/* Same selected month as the cards and the grid: the balances a manager
           reads here are the ones the employee sees on their own tiles. */}
       {tab === "leave-balance" && canManage && (

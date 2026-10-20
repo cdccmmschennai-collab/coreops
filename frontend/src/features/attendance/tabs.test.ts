@@ -60,8 +60,8 @@ test("Records is not labelled as the biometric daily review", () => {
 
 // ── everything else must be untouched ──────────────────────────────────────
 
-test("the employee tab row is Calendar, Leave Requests, Holidays", () => {
-  assert.deepEqual(labels(EMPLOYEE), ["Calendar", "Leave Requests", "Holidays"]);
+test("the employee tab row is Calendar, Leave Requests, Comp Off, Holidays", () => {
+  assert.deepEqual(labels(EMPLOYEE), ["Calendar", "Leave Requests", "Comp Off", "Holidays"]);
 });
 
 test("a manager also sees Leave Balance, in place", () => {
@@ -71,9 +71,29 @@ test("a manager also sees Leave Balance, in place", () => {
     "Calendar",
     "Records",
     "Leave Requests",
+    "Comp Off",
     "Leave Balance",
     "Holidays",
   ]);
+});
+
+// -- Comp Off (Phase 5) -------------------------------------------------------
+
+test("Comp Off sits directly after Leave Requests for every role", () => {
+  for (const options of [EMPLOYEE, MANAGER, { canManage: true, correctionsEnabled: true }]) {
+    const rendered = labels(options);
+    assert.equal(rendered[rendered.indexOf("Leave Requests") + 1], "Comp Off");
+  }
+});
+
+test("Comp Off is one tab of the Attendance page, reachable by its key", () => {
+  // A tab on this page, not a separate route: `?tab=comp-off` resolves for both
+  // roles and the label appears exactly once.
+  assert.equal(resolveTab("comp-off", EMPLOYEE), "comp-off");
+  assert.equal(resolveTab("comp-off", MANAGER), "comp-off");
+  assert.equal(labels(MANAGER).filter((l) => l === "Comp Off").length, 1);
+  // The label is not a key.
+  assert.equal(resolveTab("Comp Off", EMPLOYEE), "calendar");
 });
 
 test("Leave Balance is manager-only", () => {
@@ -88,6 +108,7 @@ test("Corrections appears only behind its feature flag", () => {
     "Calendar",
     "Records",
     "Leave Requests",
+    "Comp Off",
     "Leave Balance",
     "Corrections",
     "Holidays",
@@ -106,6 +127,7 @@ test("no other tab was renamed", () => {
   );
   assert.equal(byKey.calendar, "Calendar");
   assert.equal(byKey.leave, "Leave Requests");
+  assert.equal(byKey["comp-off"], "Comp Off");
   assert.equal(byKey["leave-balance"], "Leave Balance");
   assert.equal(byKey.corrections, "Corrections");
   assert.equal(byKey.holidays, "Holidays");
