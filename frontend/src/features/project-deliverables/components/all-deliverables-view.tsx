@@ -51,6 +51,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useProjects } from "@/features/projects/hooks";
 import { AppError } from "@/lib/api-client";
+import { useUrlState } from "@/lib/use-url-state";
 
 import {
   useAllDeliverables,
@@ -67,6 +68,12 @@ import {
   type DeliverableFormValues,
 } from "../schemas";
 import { canManageRow, creatableProjects } from "../manage-access";
+import {
+  ALL,
+  filterDeliverables,
+  isFiltered,
+  projectFilterOptions,
+} from "../list-filters";
 import { DELIVERABLE_STATUS_LABEL, type Deliverable } from "../types";
 import { DeliverableStatusBadge } from "./status-badge";
 
@@ -376,13 +383,28 @@ export function AllDeliverablesView() {
 
   const isFormOpen = showForm || editing !== null;
 
+  // Filters live in the URL so they survive opening a deliverable and coming back.
+  const [projectFilter, setProjectFilter] = useUrlState("project", ALL);
+  const [activityFilter, setActivityFilter] = useUrlState("activity", "");
+  const [statusFilter, setStatusFilter] = useUrlState("status", ALL);
+  const filters = { project: projectFilter, activity: activityFilter, status: statusFilter };
+
+  function clearFilters() {
+    setProjectFilter(ALL);
+    setActivityFilter("");
+    setStatusFilter(ALL);
+  }
+
+  // While adding/editing, the page shows ONLY the form (no list) - start at the top.
   function openAdd() {
     setEditing(null);
     setShowForm(true);
+    window.scrollTo({ top: 0 });
   }
   function openEdit(d: Deliverable) {
     setShowForm(false);
     setEditing(d);
+    window.scrollTo({ top: 0 });
   }
   function closeForm() {
     setShowForm(false);
@@ -390,8 +412,11 @@ export function AllDeliverablesView() {
   }
 
   const deliverables = query.data ?? [];
+  const visible = filterDeliverables(deliverables, filters);
+  const projectFilterItems = projectFilterOptions(deliverables);
+  const filtered = isFiltered(filters);
   // Edit/Delete follow the backend's per-row `can_manage` for this caller.
-  const showActions = deliverables.some(canManageRow);
+  const showActions = visible.some(canManageRow);
 
   return (
     <>
@@ -411,12 +436,61 @@ export function AllDeliverablesView() {
         }
       />
 
-      {isFormOpen && (
+      {isFormOpen ? (
         <DeliverableFormPanel
           editing={editing}
           projectOptions={projectOptions}
           onDone={closeForm}
         />
+      ) : (
+      <>
+      {deliverables.length > 0 && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.8fr)_auto] sm:items-end">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Project</label>
+            <Select value={projectFilter} onValueChange={setProjectFilter}>
+              <SelectTrigger aria-label="Filter by project">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All projects</SelectItem>
+                {projectFilterItems.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Activity</label>
+            <Input
+              aria-label="Filter by activity"
+              placeholder="Search activity…"
+              value={activityFilter}
+              onChange={(e) => setActivityFilter(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Status</label>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger aria-label="Filter by status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All statuses</SelectItem>
+                {DELIVERABLE_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {DELIVERABLE_STATUS_LABEL[s]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button variant="ghost" disabled={!filtered} onClick={clearFilters}>
+            Clear
+          </Button>
+        </div>
       )}
 
       <Card>
@@ -446,6 +520,17 @@ export function AllDeliverablesView() {
                 </button>
               )}
             </p>
+          ) : !visible.length ? (
+            <p className="p-4 text-sm text-muted-foreground">
+              No deliverables match these filters.{" "}
+              <button
+                type="button"
+                className="text-primary underline-offset-2 hover:underline"
+                onClick={clearFilters}
+              >
+                Clear filters
+              </button>
+            </p>
           ) : (
             <Table>
               <TableHeader>
@@ -458,7 +543,7 @@ export function AllDeliverablesView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {deliverables.map((d) => (
+                {visible.map((d) => (
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
@@ -517,6 +602,8 @@ export function AllDeliverablesView() {
           )}
         </CardContent>
       </Card>
+      </>
+      )}
 
       <DeleteDeliverableDialog
         target={pendingDelete}

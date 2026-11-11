@@ -26,7 +26,7 @@ import type { DeadlineState, Deliverable } from "@/features/project-deliverables
 import { cn } from "@/lib/utils";
 
 /** Rows shown before "+N more" - keeps the card a dashboard card, not a page. */
-const MAX_ROWS = 6;
+const MAX_ROWS = 5;
 
 // ── per-state styling (state itself always comes from the backend) ──────────
 
