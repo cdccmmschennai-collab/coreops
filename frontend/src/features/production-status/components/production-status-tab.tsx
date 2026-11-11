@@ -302,7 +302,7 @@ export function ProductionStatusTab({
       />
 
       {/* The same AlertDialog confirmation every other destructive action in
-          CoreOps uses (see submissions-tab, deliverables-tab). */}
+          CoreOps uses (see submissions-tab, all-deliverables-view). */}
       <AlertDialog
         open={!!rowToDelete}
         onOpenChange={(open) => {

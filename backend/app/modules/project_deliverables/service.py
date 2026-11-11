@@ -1,21 +1,28 @@
 """Project deliverables service.
 
-RBAC:
-  project_manager  full CRUD on any project
-  team_lead        full CRUD on projects they lead
-  contributor/qc   read-only on their assigned projects
-  non-member       no access
+RBAC (ADR-003 Amendment 2) - resolved through the central `app.core.authz`
+helpers, never by project-member role:
+  project_manager   view + manage on every live project
+  project Head      view + manage on the projects they are assigned Head of
+  project member    read-only on the projects they belong to (team_lead,
+                    contributor, qc alike - a team-lead role grants nothing more)
+  anyone else       no access
+"Manage" = create, edit (deadline / status / details) and delete.
+
+Deliverables of soft-deleted projects are invisible to everyone.
 """
 import uuid
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import select, union
 from sqlalchemy.orm import Session
 
+from app.core import authz
 from app.modules.audit import service as audit
 from app.modules.audit.constants import AuditAction, EntityType
 from app.modules.employees.models import Employee
 from app.modules.employees.service import _current_employee
+from app.modules.project_deliverables.deadline import business_today
 from app.modules.project_deliverables.models import (
     DeliverableChange,
     DeliverableChangeField,
@@ -23,7 +30,7 @@ from app.modules.project_deliverables.models import (
     ProjectDeliverable,
 )
 from app.modules.project_deliverables.schemas import DeliverableCreate, DeliverableUpdate
-from app.modules.projects.models import Project, ProjectMember, ProjectMemberRole
+from app.modules.projects.models import Project, ProjectMember
 from app.modules.users.models import User, UserRole
 from app.shared.errors import AppError
 
@@ -32,36 +39,34 @@ from app.shared.errors import AppError
 # RBAC helpers
 # ---------------------------------------------------------------------------
 
-def _assert_member(db: Session, actor: User, project_id: uuid.UUID) -> None:
-    """Raise 403 if the actor has no access to this project at all."""
+def _can_manage(db: Session, actor: User, project: Project) -> bool:
+    """PM on any project, or the employee assigned as THIS project's Head."""
     if actor.role == UserRole.project_manager:
-        return
-    me = _current_employee(db, actor)
-    if me is None:
-        raise AppError("forbidden", "No access to this project.", 403)
-    if not db.execute(
-        select(ProjectMember.id).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.employee_id == me.id,
-        )
-    ).first():
+        return True
+    return authz.is_project_head(db, actor, project)
+
+
+def _assert_member(db: Session, actor: User, project: Project) -> None:
+    """Raise 403 unless the actor may view this project (PM, Head or member)."""
+    if not authz.can_view_project(db, actor, project):
         raise AppError("forbidden", "You can only view deliverables for projects you're assigned to.", 403)
 
 
-def _assert_can_manage(db: Session, actor: User, project_id: uuid.UUID) -> None:
-    """Raise 403 unless actor is PM or team lead on this project."""
-    if actor.role == UserRole.project_manager:
-        return
-    me = _current_employee(db, actor)
-    if me is not None and db.execute(
-        select(ProjectMember.id).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.employee_id == me.id,
-            ProjectMember.role == ProjectMemberRole.team_lead,
+def _assert_can_manage(db: Session, actor: User, project: Project) -> None:
+    """Raise 403 unless the actor is a PM or this project's assigned Head."""
+    if not _can_manage(db, actor, project):
+        raise AppError(
+            "forbidden",
+            "Only project managers and the project's Head may modify deliverables.",
+            403,
         )
-    ).first():
-        return
-    raise AppError("forbidden", "Only project managers and team leads may modify deliverables.", 403)
+
+
+def _attach_can_manage(rows: list[ProjectDeliverable], manageable: set[uuid.UUID] | None) -> None:
+    """Stamp the per-row `can_manage` flag. `manageable=None` means every row
+    (PM); otherwise only rows whose project id is in the set."""
+    for r in rows:
+        r.can_manage = manageable is None or r.project_id in manageable  # type: ignore[attr-defined]
 
 
 def _fetch_project(db: Session, project_id: uuid.UUID) -> Project:
@@ -108,18 +113,36 @@ def list_all_deliverables(
     db: Session,
     actor: User,
 ) -> list[ProjectDeliverable]:
-    """Return all deliverables visible to the actor, across all their projects."""
-    from app.modules.projects.service import _alive
+    """Return all deliverables visible to the actor, across all their projects.
 
+    PM: every live project. Others: projects they are a member of or Head of.
+    Soft-deleted projects are excluded on both branches.
+    """
+    manageable: set[uuid.UUID] | None
     if actor.role == UserRole.project_manager:
         project_ids_stmt = select(Project.id).where(Project.deleted_at.is_(None))
+        manageable = None
     else:
         me = _current_employee(db, actor)
         if me is None:
             return []
-        project_ids_stmt = (
-            select(ProjectMember.project_id)
-            .where(ProjectMember.employee_id == me.id)
+        visible = union(
+            select(ProjectMember.project_id.label("pid")).where(
+                ProjectMember.employee_id == me.id
+            ),
+            select(Project.id.label("pid")).where(Project.head_employee_id == me.id),
+        ).subquery()
+        project_ids_stmt = select(Project.id).where(
+            Project.id.in_(select(visible.c.pid)),
+            Project.deleted_at.is_(None),
+        )
+        manageable = set(
+            db.execute(
+                select(Project.id).where(
+                    Project.head_employee_id == me.id,
+                    Project.deleted_at.is_(None),
+                )
+            ).scalars().all()
         )
 
     project_ids = db.execute(project_ids_stmt).scalars().all()
@@ -140,6 +163,7 @@ def list_all_deliverables(
     )
     _attach_owner_names(db, list(rows))
     _attach_project_names(db, list(rows))
+    _attach_can_manage(list(rows), manageable)
     return list(rows)
 
 
@@ -217,8 +241,8 @@ def list_deliverables(
     actor: User,
     project_id: uuid.UUID,
 ) -> list[ProjectDeliverable]:
-    _fetch_project(db, project_id)
-    _assert_member(db, actor, project_id)
+    project = _fetch_project(db, project_id)
+    _assert_member(db, actor, project)
 
     rows = (
         db.execute(
@@ -230,6 +254,7 @@ def list_deliverables(
         .all()
     )
     _attach_owner_names(db, list(rows))
+    _attach_can_manage(list(rows), None if _can_manage(db, actor, project) else set())
     return list(rows)
 
 
@@ -240,7 +265,7 @@ def create_deliverable(
     data: DeliverableCreate,
 ) -> ProjectDeliverable:
     project = _fetch_project(db, project_id)
-    _assert_can_manage(db, actor, project_id)
+    _assert_can_manage(db, actor, project)
 
     d = ProjectDeliverable(
         project_id=project_id,
@@ -250,6 +275,7 @@ def create_deliverable(
     db.commit()
     db.refresh(d)
     _attach_owner_names(db, [d])
+    _attach_can_manage([d], None)
 
     _notify_members(
         db,
@@ -279,7 +305,7 @@ def update_deliverable(
     data: DeliverableUpdate,
 ) -> ProjectDeliverable:
     project = _fetch_project(db, project_id)
-    _assert_can_manage(db, actor, project_id)
+    _assert_can_manage(db, actor, project)
 
     d = _fetch_deliverable(db, project_id, deliverable_id)
 
@@ -391,6 +417,7 @@ def update_deliverable(
     db.commit()
     db.refresh(d)
     _attach_owner_names(db, [d])
+    _attach_can_manage([d], None)
 
     # Schedule-change notification: the planned delivery (target) date moved.
     if "target_date" in payload and d.target_date != prev_target_date:
@@ -423,7 +450,7 @@ def update_deliverable(
                 "A deliverable for your project has been marked as completed.\n"
                 f"Project: {project.name}\n"
                 f"Activity: {d.name}\n"
-                f"Completion Date: {_fmt(d.completion_date or date.today())}"
+                f"Completion Date: {_fmt(d.completion_date or business_today())}"
             ),
         )
     return d
@@ -436,10 +463,11 @@ def get_deliverable(
     d = db.get(ProjectDeliverable, deliverable_id)
     if d is None:
         raise AppError("not_found", "Deliverable not found.", 404)
-    _fetch_project(db, d.project_id)
-    _assert_member(db, actor, d.project_id)
+    project = _fetch_project(db, d.project_id)
+    _assert_member(db, actor, project)
     _attach_owner_names(db, [d])
     _attach_project_names(db, [d])
+    _attach_can_manage([d], None if _can_manage(db, actor, project) else set())
     return d
 
 
@@ -449,8 +477,8 @@ def list_deliverable_changes(
     d = db.get(ProjectDeliverable, deliverable_id)
     if d is None:
         raise AppError("not_found", "Deliverable not found.", 404)
-    _fetch_project(db, d.project_id)
-    _assert_member(db, actor, d.project_id)
+    project = _fetch_project(db, d.project_id)
+    _assert_member(db, actor, project)
 
     rows = db.execute(
         select(DeliverableChange)
@@ -476,8 +504,8 @@ def delete_deliverable(
     project_id: uuid.UUID,
     deliverable_id: uuid.UUID,
 ) -> None:
-    _fetch_project(db, project_id)
-    _assert_can_manage(db, actor, project_id)
+    project = _fetch_project(db, project_id)
+    _assert_can_manage(db, actor, project)
 
     d = _fetch_deliverable(db, project_id, deliverable_id)
     db.delete(d)

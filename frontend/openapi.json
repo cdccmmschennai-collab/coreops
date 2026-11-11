@@ -14925,6 +14925,37 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "can_manage": {
+            "type": "boolean",
+            "title": "Can Manage",
+            "default": false
+          },
+          "days_remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Remaining",
+            "readOnly": true
+          },
+          "deadline_state": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "no_deadline",
+              "overdue",
+              "due_today",
+              "urgent",
+              "due_soon",
+              "on_track"
+            ],
+            "title": "Deadline State",
+            "readOnly": true
           }
         },
         "type": "object",
@@ -14934,7 +14965,9 @@
           "name",
           "status",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "days_remaining",
+          "deadline_state"
         ],
         "title": "DeliverableOut"
       },

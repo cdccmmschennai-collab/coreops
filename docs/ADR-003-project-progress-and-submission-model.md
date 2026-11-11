@@ -8,6 +8,8 @@
 - Activity Progress must aggregate by `activity_type_id` FK, not free-text activity labels
 - Project Submissions must carry a `status` field: `draft → submitted → approved / rejected`
 
+**Amendment 2 (accepted 2026-11-11) - Deliverable submission deadlines:** Section 1's withdrawal of `project_deliverables` and the "no overdue status" rule in Sections 2 / "What is NOT in scope" are revised **for project deliverables only**. See "Amendment 2" at the end of this document. The project-level `planned_completion_date` rules are unchanged.
+
 ---
 
 ## Context
@@ -216,3 +218,22 @@ Each phase gate is explicit. Phase A must be reviewed and tested before Phase D 
 - Automatic quantity calculation from work reports (V2)
 - Client portal or external submission workflow
 - Jira / PM tool integration
+
+---
+
+## Amendment 2 - Deliverable submission deadlines (2026-11-11)
+
+**Status:** Accepted
+
+**Context.** The Deliverables module (0029) was revived after this ADR, through 0045 (`planned_start_date` + `deliverable_changes` history) and 0047 (status `planned`/`completed`). It is in production use as the place where recurring client submissions (FMTL, MTL, DOC IDB, PM IDB, ...) get a deadline per project. The business now needs deadline visibility: days remaining, due today, and overdue. See `docs/audits/project-deliverables-deadline-tracker-phase1-audit.md`.
+
+**Decision.**
+1. `project_deliverables` is an active, supported module. It is no longer withdrawn from the roadmap.
+2. A deliverable's `target_date` is its **submission deadline**. A **deadline state** is derived from it: `no_deadline | on_track | due_soon | urgent | due_today | overdue | completed`. The reminder window is 5 days: `due_soon` = 2-5 days left, `urgent` = 1 day, `due_today` = 0, `overdue` = past the deadline while still `planned`.
+3. The state is **computed at read time, never persisted**. The stored status stays exactly `planned | completed`. No new enum value and no migration. The leave-review Deliverable Impact check (`status == planned`) depends on this.
+4. "Today" is the business date in **Asia/Kolkata**, not the server's local date.
+5. Management (create, edit deadline, change status, delete) is limited to the **Project Manager (any project)** and the **assigned Project Head (their projects only)**, enforced in the backend. Team-lead project roles no longer grant it. Everyone else is read-only on projects they belong to or head.
+6. Activity names stay free text. No activity-type FK is added for deliverables.
+7. Deadline changes keep the existing mandatory-reason `deliverable_changes` trail and audit-log entries.
+
+**Unchanged.** Section 2 still holds for `projects.planned_completion_date`: no overdue state is derived for projects themselves.

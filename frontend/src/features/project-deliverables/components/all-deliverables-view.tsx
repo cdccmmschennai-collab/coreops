@@ -51,7 +51,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useProjects } from "@/features/projects/hooks";
 import { AppError } from "@/lib/api-client";
-import { can } from "@/lib/rbac";
 
 import {
   useAllDeliverables,
@@ -67,6 +66,7 @@ import {
   toUpdateBody,
   type DeliverableFormValues,
 } from "../schemas";
+import { canManageRow, creatableProjects } from "../manage-access";
 import { DELIVERABLE_STATUS_LABEL, type Deliverable } from "../types";
 import { DeliverableStatusBadge } from "./status-badge";
 
@@ -353,16 +353,22 @@ function DeleteDeliverableDialog({
 
 export function AllDeliverablesView() {
   const router = useRouter();
-  const { role } = useAuth();
-  const canManage = can(role, "project.manage");
+  const { role, employeeId } = useAuth();
 
   const query = useAllDeliverables();
   const projectsQuery = useProjects({ q: "", status: "active", limit: 100, offset: 0 });
 
-  const projectOptions: ProjectOption[] = (projectsQuery.data?.items ?? []).map((p) => ({
+  // PM: every project. Project Head: only the projects they head. The backend
+  // enforces the same rule on every write; this only decides what to show.
+  const projectOptions: ProjectOption[] = creatableProjects(
+    role,
+    employeeId,
+    projectsQuery.data?.items ?? [],
+  ).map((p) => ({
     id: p.id,
     label: p.code ? `${p.code} — ${p.name}` : p.name,
   }));
+  const canAdd = projectOptions.length > 0;
 
   const [showForm, setShowForm] = React.useState(false);
   const [editing, setEditing] = React.useState<Deliverable | null>(null);
@@ -384,6 +390,8 @@ export function AllDeliverablesView() {
   }
 
   const deliverables = query.data ?? [];
+  // Edit/Delete follow the backend's per-row `can_manage` for this caller.
+  const showActions = deliverables.some(canManageRow);
 
   return (
     <>
@@ -394,7 +402,7 @@ export function AllDeliverablesView() {
         className="mt-2"
         title="Deliverables"
         actions={
-          canManage && !isFormOpen ? (
+          canAdd && !isFormOpen ? (
             <Button onClick={openAdd}>
               <Plus className="h-4 w-4" />
               Add Deliverable
@@ -428,7 +436,7 @@ export function AllDeliverablesView() {
           ) : !deliverables.length ? (
             <p className="p-4 text-sm text-muted-foreground">
               No deliverables found.{" "}
-              {canManage && !isFormOpen && (
+              {canAdd && !isFormOpen && (
                 <button
                   type="button"
                   className="text-primary underline-offset-2 hover:underline"
@@ -446,7 +454,7 @@ export function AllDeliverablesView() {
                   <TableHead>Activity</TableHead>
                   <TableHead>Planned Submission</TableHead>
                   <TableHead>Status</TableHead>
-                  {canManage && <TableHead className="w-20 text-right">Actions</TableHead>}
+                  {showActions && <TableHead className="w-20 text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -472,8 +480,9 @@ export function AllDeliverablesView() {
                     <TableCell>
                       <DeliverableStatusBadge status={d.status} />
                     </TableCell>
-                    {canManage && (
+                    {showActions && (
                       <TableCell className="text-right">
+                        {canManageRow(d) && (
                         <div className="flex justify-end gap-1">
                           <Button
                             variant="ghost"
@@ -498,6 +507,7 @@ export function AllDeliverablesView() {
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         </div>
+                        )}
                       </TableCell>
                     )}
                   </TableRow>

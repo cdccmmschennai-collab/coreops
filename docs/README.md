@@ -70,6 +70,12 @@ This `docs/` directory is the **single source of truth** for the platform (worki
 | 43 | [PRODUCTION_HARDENING_PLAN.md](./PRODUCTION_HARDENING_PLAN.md) | Hardening plan for C1/C2/C3/H2/H3: files to change, order, impact, rollback, verification, risk |
 | 44 | [REMAINING_ROADMAP.md](./REMAINING_ROADMAP.md) | Remaining sidebar items: state inventory, missing routes/modules, dependency graph, order, risk, effort |
 
+### Feature references (as implemented)
+
+| # | Document | What it covers |
+|---|---|---|
+| 45 | [PLAN_SUBMISSION_TRACKER.md](./PLAN_SUBMISSION_TRACKER.md) | Deliverable deadlines: IST deadline states, PM dashboard reminders, status transitions + reversal reasons, PM / Project Head permissions |
+
 ## Conventions
 - _(proposed)_ = design intent, not built. _(assumed)_ = taken as true, unconfirmed.
 - Open questions are tracked as **U-0xx**, assumptions as **A-0xx**, decisions as **D-0xx** in `decisions.md`.

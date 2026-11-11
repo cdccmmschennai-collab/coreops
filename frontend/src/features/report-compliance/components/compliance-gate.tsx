@@ -1,5 +1,7 @@
 "use client";
 
+import { DeliverableDueBanner } from "@/features/project-deliverables/components/deliverable-due-banner";
+
 import { DailyReportReminder } from "./daily-report-reminder";
 import { PendingReportsBanner } from "./pending-reports-banner";
 
@@ -13,6 +15,8 @@ export function ComplianceGate() {
   return (
     <>
       <PendingReportsBanner />
+      {/* Independent of the reports banner: both stack when both apply. */}
+      <DeliverableDueBanner />
       <DailyReportReminder />
     </>
   );

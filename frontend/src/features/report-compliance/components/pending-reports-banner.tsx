@@ -7,11 +7,17 @@ import { toast } from "sonner";
 
 import { PageContainer } from "@/components/shell/page-container";
 import { Button } from "@/components/ui/button";
+import {
+  LOGIN_BANNER_KEYS,
+  dismissBanner,
+  isBannerDismissed,
+} from "@/lib/login-banners";
 
 import { useMyCompliance } from "../hooks";
 import { REPORTS_LIST_PATH, pendingReportOutcome } from "../pending-target";
 
-const DISMISS_KEY = "pending-reports-banner-dismissed";
+// Dismissal lasts for the current login only (reset on login/logout).
+const DISMISS_KEY = LOGIN_BANNER_KEYS.pendingReports;
 
 /**
  * Login-check banner: when the employee has one or more previous working days
@@ -27,7 +33,7 @@ export function PendingReportsBanner() {
 
   // Read the per-session dismissal flag after mount (avoids SSR mismatch).
   React.useEffect(() => {
-    setDismissed(sessionStorage.getItem(DISMISS_KEY) === "1");
+    setDismissed(isBannerDismissed(DISMISS_KEY));
   }, []);
 
   const count = data?.pending_count ?? 0;
@@ -66,7 +72,7 @@ export function PendingReportsBanner() {
   }
 
   function dismiss() {
-    sessionStorage.setItem(DISMISS_KEY, "1");
+    dismissBanner(DISMISS_KEY);
     setDismissed(true);
   }
 

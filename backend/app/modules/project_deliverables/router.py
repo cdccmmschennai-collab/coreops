@@ -4,9 +4,12 @@
   GET    /deliverables/{id}                              detail (member+)
   GET    /deliverables/{id}/changes                      change history (member+)
   GET    /projects/{project_id}/deliverables            list (member+)
-  POST   /projects/{project_id}/deliverables            create (PM / team lead)
-  PATCH  /projects/{project_id}/deliverables/{id}       update (PM / team lead)
-  DELETE /projects/{project_id}/deliverables/{id}       delete (PM / team lead)
+  POST   /projects/{project_id}/deliverables            create (PM / project Head)
+  PATCH  /projects/{project_id}/deliverables/{id}       update (PM / project Head)
+  DELETE /projects/{project_id}/deliverables/{id}       delete (PM / project Head)
+
+Every DeliverableOut carries read-only, derived `days_remaining` /
+`deadline_state` (IST, never stored) and the caller's `can_manage`.
 """
 import uuid
 

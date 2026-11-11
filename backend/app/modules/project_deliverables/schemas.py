@@ -2,8 +2,9 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from app.modules.project_deliverables import deadline
 from app.modules.project_deliverables.models import DeliverableStatus
 
 
@@ -24,6 +25,26 @@ class DeliverableOut(BaseModel):
     completion_date: date | None = None
     created_at: datetime
     updated_at: datetime
+    # Whether the CALLER may create/edit/delete deliverables on this row's
+    # project (PM, or the project's assigned Head). Populated by the service;
+    # the backend still enforces it on every write.
+    can_manage: bool = False
+
+    # Derived at read time from target_date + status + today (IST). Never stored
+    # (ADR-003 Amendment 2) - see deadline.py for the ladder.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def days_remaining(self) -> int | None:
+        return deadline.days_remaining(
+            self.target_date, self.status, deadline.business_today()
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def deadline_state(self) -> deadline.DeadlineState:
+        return deadline.deadline_state(
+            self.target_date, self.status, deadline.business_today()
+        )
 
 
 class DeliverableCreate(BaseModel):

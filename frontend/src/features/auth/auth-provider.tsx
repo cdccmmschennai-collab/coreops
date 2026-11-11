@@ -4,6 +4,7 @@ import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { clearToken, getToken, setToken } from "@/lib/auth-storage";
+import { resetLoginBanners } from "@/lib/login-banners";
 import type { EmployeeProfile, Role, User } from "@/types/api";
 
 import { authApi } from "./api";
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = React.useCallback(
     async (accessToken: string) => {
+      resetLoginBanners();
       setToken(accessToken);
       setTokenState(accessToken);
       await queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY });
@@ -57,6 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Best-effort server revocation; always clear locally.
     }
     clearToken();
+    resetLoginBanners();
     setTokenState(null);
     queryClient.clear();
   }, [queryClient]);

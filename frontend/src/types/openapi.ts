@@ -4291,6 +4291,18 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Can Manage
+             * @default false
+             */
+            can_manage: boolean;
+            /** Days Remaining */
+            readonly days_remaining: number | null;
+            /**
+             * Deadline State
+             * @enum {string}
+             */
+            readonly deadline_state: "completed" | "no_deadline" | "overdue" | "due_today" | "urgent" | "due_soon" | "on_track";
         };
         /**
          * DeliverableStatus

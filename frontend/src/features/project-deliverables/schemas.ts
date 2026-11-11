@@ -58,27 +58,3 @@ export function toUpdateBody(v: DeliverableFormValues): DeliverableUpdateBody {
     reason: nullIfEmpty(v.reason) ?? undefined,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Timeline edit (tracked fields — reason mandatory)
-// ---------------------------------------------------------------------------
-
-export const deliverableTimelineSchema = z.object({
-  planned_start_date: z.string().optional(),
-  target_date: z.string().optional(),
-  status: z.enum(DELIVERABLE_STATUSES),
-  reason: z.string().trim().min(1, "Reason is required").max(500),
-});
-
-export type DeliverableTimelineFormValues = z.infer<typeof deliverableTimelineSchema>;
-
-export function toTimelineUpdateBody(
-  v: DeliverableTimelineFormValues,
-): DeliverableUpdateBody {
-  return {
-    planned_start_date: nullIfEmpty(v.planned_start_date),
-    target_date: nullIfEmpty(v.target_date),
-    status: v.status,
-    reason: v.reason.trim(),
-  };
-}
