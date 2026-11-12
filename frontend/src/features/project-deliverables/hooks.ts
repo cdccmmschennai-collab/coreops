@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "@/features/auth/auth-provider";
-import { isManagerial } from "@/lib/rbac";
 
 import { deliverablesApi } from "./api";
 import { deliverablesKeys } from "./keys";
@@ -16,16 +15,16 @@ export function useAllDeliverables() {
 
 /**
  * The scoped deliverables list for the login reminder banner. Enabled for
- * authenticated non-PM users only (project Heads and members); the backend
- * already limits it to projects they belong to or head. PMs get reminders on
- * their dashboard card instead. Shares the global-list cache key.
+ * every authenticated user (PMs, project Heads and members); the backend
+ * already limits it to projects the user may see. Shares the global-list
+ * cache key with the PM dashboard card / Deliverables page.
  */
 export function useMyDeliverableReminders() {
-  const { status, role } = useAuth();
+  const { status } = useAuth();
   return useQuery({
     queryKey: deliverablesKeys.globalList(),
     queryFn: () => deliverablesApi.listAll(),
-    enabled: status === "authenticated" && !isManagerial(role),
+    enabled: status === "authenticated",
     refetchInterval: 10 * 60_000,
     refetchOnWindowFocus: true,
     staleTime: 60_000,

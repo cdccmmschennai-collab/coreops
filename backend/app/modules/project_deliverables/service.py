@@ -336,7 +336,7 @@ def update_deliverable(
         ))
 
     if "status" in payload and payload["status"] != d.status:
-        # Only a reversal *out of* completed is a tracked change requiring a reason.
+        # Only a reversal *out of* completed is a tracked change.
         if d.status == DeliverableStatus.completed and payload["status"] != DeliverableStatus.completed:
             tracked.append((
                 DeliverableChangeField.STATUS,
@@ -353,16 +353,15 @@ def update_deliverable(
         and d.status != DeliverableStatus.completed
     )
 
-    if tracked and not reason:
-        raise AppError(
-            "validation_error",
-            "A reason is required when changing the planned start date, due date, "
-            "or reverting a completed deliverable.",
-            422,
-        )
-
     for field, value in payload.items():
         setattr(d, field, value)
+
+    # Actual submission date: stamped with today's IST business date when the
+    # deliverable is completed (unless one was given), cleared on a reversal.
+    if completing and d.completion_date is None:
+        d.completion_date = business_today()
+    elif prev_status == DeliverableStatus.completed and d.status != DeliverableStatus.completed:
+        d.completion_date = None
 
     for field_name, old_value, new_value in tracked:
         db.add(
@@ -372,7 +371,8 @@ def update_deliverable(
                 old_value=old_value,
                 new_value=new_value,
                 changed_by=actor.id,
-                reason=reason,
+                # Optional: the column is NOT NULL, so "no reason" is stored as "".
+                reason=reason or "",
             )
         )
         audit.record_audit(

@@ -260,19 +260,20 @@ def test_pm_can_manage_any_project(client, login, world):
 # History and reason rule preserved
 # ======================================================================
 
-def test_deadline_change_still_needs_reason_and_is_logged(client, login, world, db):
+def test_deadline_change_reason_is_optional_and_is_logged(client, login, world, db):
     h = login("head@x.com")
     url = f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}"
-    new_date = (TODAY + timedelta(days=8)).isoformat()
+    first = (TODAY + timedelta(days=7)).isoformat()
+    second = (TODAY + timedelta(days=8)).isoformat()
 
-    assert client.patch(url, headers=h, json={"target_date": new_date}).status_code == 422
-
-    ok = client.patch(url, headers=h, json={"target_date": new_date, "reason": "Rescoped"})
+    assert client.patch(url, headers=h, json={"target_date": first}).status_code == 200
+    ok = client.patch(url, headers=h, json={"target_date": second, "reason": "Rescoped"})
     assert ok.status_code == 200, ok.text
 
     changes = db.query(DeliverableChange).filter_by(deliverable_id=world["d1"].id).all()
-    assert [(c.field, c.new_value, c.reason) for c in changes] == [
-        ("due_date", new_date, "Rescoped")
+    assert sorted((c.new_value, c.reason) for c in changes) == [
+        (first, ""),
+        (second, "Rescoped"),
     ]
 
 
@@ -364,16 +365,29 @@ def test_head_changes_are_recorded_with_head_identity(client, login, world, db):
     assert {a.action for a in audits} == {"deliverable.field.change"}
 
 
-def test_status_reversal_needs_reason_forward_completion_does_not(client, login, world):
-    """Existing (0045) rule, unchanged by Phase 2: completing needs no reason
-    (logged with a system reason); reverting completed -> planned does."""
+def test_status_changes_need_no_reason(client, login, world):
+    """Completing and reverting both work without a reason (it is optional)."""
     h = login("pm@x.com")
     url = f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}"
     assert client.patch(url, headers=h, json={"status": "completed"}).status_code == 200
-    assert client.patch(url, headers=h, json={"status": "planned"}).status_code == 422
-    back = client.patch(url, headers=h, json={"status": "planned", "reason": "Rejected by client"})
+    back = client.patch(url, headers=h, json={"status": "planned"})
     assert back.status_code == 200
     assert back.json()["deadline_state"] == "due_soon"
+
+
+def test_completion_stamps_actual_submission_and_reversal_clears_it(client, login, world):
+    from app.modules.project_deliverables.deadline import business_today
+
+    h = login("pm@x.com")
+    url = f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}"
+    done = client.patch(url, headers=h, json={"status": "completed"}).json()
+    assert done["completion_date"] == business_today().isoformat()
+    back = client.patch(url, headers=h, json={"status": "planned", "reason": "Redo"}).json()
+    assert back["completion_date"] is None
+    given = client.patch(
+        url, headers=h, json={"status": "completed", "completion_date": "2026-01-05"}
+    ).json()
+    assert given["completion_date"] == "2026-01-05"
 
 
 def test_existing_response_fields_are_unchanged(client, login, world):

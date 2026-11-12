@@ -7,7 +7,6 @@ import { CalendarClock, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { PageContainer } from "@/components/shell/page-container";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
-import { isManagerial } from "@/lib/rbac";
 import {
   LOGIN_BANNER_KEYS,
   dismissBanner,
@@ -26,7 +25,7 @@ import {
 const DISMISS_KEY = LOGIN_BANNER_KEYS.deliverableDue;
 
 /**
- * Login reminder for project Heads and members: planned deliverables due
+ * Login reminder for every user (PMs, project Heads and members): planned deliverables due
  * within the next 3 days (IST, backend-derived), shown ONE AT A TIME,
  * nearest deadline first, with "1 of N" and Previous / Next - so ten due
  * deliverables are still a single line, not ten. "View Deliverable" opens the
@@ -34,7 +33,7 @@ const DISMISS_KEY = LOGIN_BANNER_KEYS.deliverableDue;
  */
 export function DeliverableDueBanner() {
   const { data } = useMyDeliverableReminders();
-  const { status, role } = useAuth();
+  const { status } = useAuth();
   const router = useRouter();
   const [dismissed, setDismissed] = React.useState(true);
   const [index, setIndex] = React.useState(0);
@@ -44,10 +43,7 @@ export function DeliverableDueBanner() {
   }, []);
 
   const due = React.useMemo(() => selectLoginReminders(data ?? []), [data]);
-  // Never for PMs. The query is disabled for them, but it shares its cache key
-  // with the PM dashboard card / Deliverables page, so cached data would
-  // otherwise leak into this banner - gate on the role explicitly.
-  if (status !== "authenticated" || isManagerial(role)) return null;
+  if (status !== "authenticated") return null;
   if (dismissed || due.length === 0) return null;
 
   // A refetch can shrink the list (e.g. one was completed) - stay in range.

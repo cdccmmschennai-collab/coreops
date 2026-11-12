@@ -120,24 +120,9 @@ function DeliverableFormPanel({
       : EMPTY_DELIVERABLE_FORM,
   });
 
-  // Which tracked fields changed vs the original — used to require a reason.
-  function trackedChanged(v: DeliverableFormValues): boolean {
-    if (!editing) return false;
-    const submissionChanged = (v.target_date || "") !== (editing.target_date ?? "");
-    const reversal = editing.status === "completed" && v.status !== "completed";
-    return submissionChanged || reversal;
-  }
-
   async function onSubmit(values: DeliverableFormValues) {
     if (!editing && !projectId) {
       toast.error("Select a project first.");
-      return;
-    }
-    if (trackedChanged(values) && !values.reason?.trim()) {
-      form.setError("reason", {
-        message:
-          "A reason is required when changing the planned submission date or reverting status.",
-      });
       return;
     }
     try {
@@ -270,10 +255,10 @@ function DeliverableFormPanel({
                   name="reason"
                   render={({ field }) => (
                     <FormItem className="sm:col-span-2">
-                      <FormLabel>Reason for change</FormLabel>
+                      <FormLabel>Reason for change (optional)</FormLabel>
                       <FormControl>
                         <Textarea
-                          placeholder="Required when changing the planned submission date or reverting status"
+                          placeholder="Optional - why the planned submission date or status changed"
                           className="resize-none"
                           rows={2}
                           {...field}

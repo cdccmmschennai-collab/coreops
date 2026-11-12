@@ -132,9 +132,11 @@ function Timeline({
                         {label} changed {renderChangeValue(c.field, c.old_value)} →{" "}
                         {renderChangeValue(c.field, c.new_value)}
                       </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Reason: {c.reason}
-                      </p>
+                      {c.reason ? (
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Reason: {c.reason}
+                        </p>
+                      ) : null}
                     </>
                   )}
                   <p className="mt-0.5 text-xs text-muted-foreground">
@@ -282,6 +284,13 @@ function DetailsCard({ deliverable }: { deliverable: Deliverable }) {
           <InfoRow label="Planned Submission">
             <span className="font-semibold tabular">{fmtDate(deliverable.target_date)}</span>
           </InfoRow>
+          {deliverable.status === "completed" && deliverable.completion_date ? (
+            <InfoRow label="Actual Submission">
+              <span className="font-semibold tabular">
+                {fmtDate(deliverable.completion_date)}
+              </span>
+            </InfoRow>
+          ) : null}
         </dl>
       </CardContent>
     </Card>
