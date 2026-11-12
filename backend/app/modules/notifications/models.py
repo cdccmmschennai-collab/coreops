@@ -43,6 +43,11 @@ class Notification(UUIDMixin, Base):
     is_read: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # Seen = the user opened the notification panel since this arrived. Only
+    # drives the badge count; `is_read` (clicked) drives the bold styling.
+    is_seen: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     # NULL = still an active/unresolved condition. Irrelevant for one-off
     # event notifications, which are never "resolved", just read.
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

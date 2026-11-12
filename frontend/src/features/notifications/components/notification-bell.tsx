@@ -5,13 +5,14 @@ import { usePathname } from "next/navigation";
 import { Bell } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { useUnreadCount } from "../hooks";
+import { useMarkSeen, useUnreadCount } from "../hooks";
 import { NotificationDropdown } from "./notification-dropdown";
 
 export function NotificationBell() {
   const [open, setOpen] = React.useState(false);
   const { data } = useUnreadCount();
   const count = data?.count ?? 0;
+  const markSeen = useMarkSeen();
 
   const buttonRef = React.useRef<HTMLButtonElement>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
@@ -56,7 +57,11 @@ export function NotificationBell() {
           "relative flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           open && "bg-muted text-foreground",
         )}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          // Opening the panel clears the badge; items stay bold until clicked.
+          if (!open && count > 0) markSeen.mutate();
+          setOpen((v) => !v);
+        }}
       >
         <Bell className="h-5 w-5" />
         {count > 0 && (

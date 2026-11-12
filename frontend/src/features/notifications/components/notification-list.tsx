@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/feedback/empty-state";
@@ -11,7 +12,7 @@ import { Pagination } from "@/components/data/pagination";
 import { TableSkeleton } from "@/components/feedback/table-skeleton";
 import { useUrlState } from "@/lib/use-url-state";
 
-import { useMarkAllRead, useMarkRead, useNotifications } from "../hooks";
+import { useMarkAllRead, useMarkRead, useMarkSeen, useNotifications } from "../hooks";
 import { NotificationItemFull } from "./notification-item";
 
 const LIMIT = 20;
@@ -31,6 +32,13 @@ export function NotificationList() {
   });
   const markRead  = useMarkRead();
   const markAll   = useMarkAllRead();
+
+  // Landing on the Notifications page clears the bell / sidebar badge, same as
+  // opening the dropdown. Unread rows stay bold until clicked.
+  const { mutate: clearBadge } = useMarkSeen();
+  React.useEffect(() => {
+    clearBadge();
+  }, [clearBadge]);
 
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;

@@ -22,4 +22,5 @@ export const notificationsApi = {
   markRead: (id: string) =>
     api.post<Notification>(`/notifications/${id}/read`),
   markAllRead: () => api.post<UnreadCount>("/notifications/read-all"),
+  markSeen: () => api.post<UnreadCount>("/notifications/seen"),
 };

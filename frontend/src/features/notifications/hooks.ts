@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { notificationsApi } from "./api";
 import { notifKeys } from "./keys";
-import type { NotificationListParams } from "./types";
+import type { NotificationListParams, UnreadCount } from "./types";
 
 export function useNotifications(params: NotificationListParams = {}) {
   return useQuery({
@@ -26,6 +26,20 @@ export function useMarkRead() {
   return useMutation({
     mutationFn: (id: string) => notificationsApi.markRead(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: notifKeys.all }),
+  });
+}
+
+/** Opening the panel / page clears the badge (unseen -> seen). Unread items
+ *  stay bold until clicked - only the count goes away. */
+export function useMarkSeen() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => notificationsApi.markSeen(),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: notifKeys.unreadCount() });
+      qc.setQueryData<UnreadCount>(notifKeys.unreadCount(), { count: 0 });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: notifKeys.unreadCount() }),
   });
 }
 

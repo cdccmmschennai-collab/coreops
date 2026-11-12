@@ -176,13 +176,29 @@ def list_notifications(
 
 
 def get_unread_count(db: Session, actor: User) -> int:
+    """Badge count = notifications the user has not SEEN yet (not opened the
+    panel since they arrived). Unread-but-seen rows stay bold in the list but
+    no longer count here."""
     return db.execute(
         select(func.count()).select_from(Notification).where(
             Notification.user_id == actor.id,
+            Notification.is_seen.is_(False),
             Notification.is_read.is_(False),
             Notification.resolved_at.is_(None),
         )
     ).scalar_one()
+
+
+def mark_all_as_seen(db: Session, actor: User) -> int:
+    """User opened the notification panel/page - clears the badge. Leaves
+    `is_read` alone so unopened items stay bold until clicked."""
+    result = db.execute(
+        update(Notification)
+        .where(Notification.user_id == actor.id, Notification.is_seen.is_(False))
+        .values(is_seen=True)
+    )
+    db.commit()
+    return result.rowcount
 
 
 def mark_as_read(db: Session, actor: User, notification_id: uuid.UUID) -> Notification | None:
@@ -195,6 +211,7 @@ def mark_as_read(db: Session, actor: User, notification_id: uuid.UUID) -> Notifi
     if notif is None:
         return None
     notif.is_read = True
+    notif.is_seen = True
     db.add(notif)
     db.commit()
     db.refresh(notif)
@@ -205,7 +222,7 @@ def mark_all_as_read(db: Session, actor: User) -> int:
     result = db.execute(
         update(Notification)
         .where(Notification.user_id == actor.id, Notification.is_read.is_(False))
-        .values(is_read=True)
+        .values(is_read=True, is_seen=True)
     )
     db.commit()
     return result.rowcount

@@ -115,6 +115,28 @@ def test_mark_all_read(client, make_user, login):
     assert client.get("/api/v1/notifications/unread-count", headers=h).json()["count"] == 0
 
 
+def test_mark_seen_clears_badge_but_keeps_unread(client, make_user, login):
+    u = make_user("seen@x.com")
+    from app.core.database import SessionLocal
+    with SessionLocal() as db:
+        for _ in range(3):
+            _notif(db, u.id)
+
+    h = login("seen@x.com")
+    assert client.get("/api/v1/notifications/unread-count", headers=h).json()["count"] == 3
+    res = client.post("/api/v1/notifications/seen", headers=h)
+    assert res.status_code == 200
+    assert client.get("/api/v1/notifications/unread-count", headers=h).json()["count"] == 0
+    # Still unread (bold) until clicked.
+    items = client.get("/api/v1/notifications?unread_only=true", headers=h).json()["items"]
+    assert len(items) == 3 and all(not n["is_read"] for n in items)
+
+    # A new arrival counts again.
+    with SessionLocal() as db:
+        _notif(db, u.id)
+    assert client.get("/api/v1/notifications/unread-count", headers=h).json()["count"] == 1
+
+
 def test_mark_read_wrong_user_404(client, make_user, login):
     u1 = make_user("u1r@x.com")
     u2 = make_user("u2r@x.com")

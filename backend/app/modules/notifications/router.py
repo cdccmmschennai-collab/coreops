@@ -1,7 +1,8 @@
 """Notification endpoints.
 
   GET   /notifications                  list own notifications (filterable unread)
-  GET   /notifications/unread-count     unread badge count
+  GET   /notifications/unread-count     badge count (unseen + unread)
+  POST  /notifications/seen             panel opened - clear the badge
   POST  /notifications/{id}/read        mark single notification read
   POST  /notifications/read-all         mark all notifications read
 """
@@ -49,6 +50,15 @@ def unread_count(
     db: Session = Depends(get_db),
 ) -> UnreadCountOut:
     return UnreadCountOut(count=service.get_unread_count(db, current))
+
+
+@router.post("/seen", response_model=UnreadCountOut)
+def mark_all_seen(
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UnreadCountOut:
+    service.mark_all_as_seen(db, current)
+    return UnreadCountOut(count=0)
 
 
 @router.post("/read-all", response_model=UnreadCountOut)
