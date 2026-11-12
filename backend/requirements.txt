@@ -8,6 +8,8 @@ psycopg[binary]==3.2.3
 alembic==1.13.3
 redis==5.1.1
 celery==5.4.0
+# Pinned: celery 5.4.0 accepts kombu<6, but kombu>=5.6 requires redis-py>=6.1
+kombu==5.4.2
 
 # Auth — bcrypt used directly (no passlib; audit F7 / decision D-V1-1)
 bcrypt==4.2.1
