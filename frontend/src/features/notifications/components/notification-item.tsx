@@ -61,6 +61,7 @@ const TYPE_CONFIG: Record<
   report_rejected:       { Icon: XCircle,       color: "red" },
   project_assigned:      { Icon: FolderKanban,  color: "blue" },
   deliverable_planned:   { Icon: ClipboardList, color: "blue" },
+  deliverable_assigned:  { Icon: UserCheck,     color: "blue" },
   deliverable_date_updated:{ Icon: CalendarClock, color: "amber" },
   deliverable_completed: { Icon: CheckCircle,   color: "green" },
   calendar_event_created:{ Icon: CalendarDays,  color: "violet" },

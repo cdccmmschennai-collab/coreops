@@ -1,11 +1,22 @@
 """Pydantic schemas for project deliverables."""
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.modules.project_deliverables import deadline
 from app.modules.project_deliverables.models import DeliverableStatus
+
+AssigneeRole = Literal["employee", "project_head"]
+
+
+class DeliverableAssigneeOut(BaseModel):
+    """One valid Assignee option: the project's Head or a project member."""
+
+    employee_id: uuid.UUID
+    name: str
+    role: AssigneeRole
 
 
 class DeliverableOut(BaseModel):
@@ -21,6 +32,9 @@ class DeliverableOut(BaseModel):
     target_date: date | None = None
     owner_employee_id: uuid.UUID | None = None
     owner_name: str | None = None   # populated by service
+    # Assignee role, derived at read time (never stored): "project_head" when
+    # the Assignee is the project's current Head, else "employee"; None = unassigned.
+    owner_role: AssigneeRole | None = None
     status: DeliverableStatus
     completion_date: date | None = None
     created_at: datetime

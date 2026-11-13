@@ -8,6 +8,7 @@ import {
   deliverableHref,
   dueInLabel,
   formatDueDate,
+  isMyDeliverable,
   LOGIN_REMINDER_DAYS,
   selectLoginReminders,
   isPending,
@@ -195,4 +196,25 @@ test("login reminder wording", () => {
   assert.equal(dueInLabel(0), "Due today");
   assert.equal(dueInLabel(1), "Due tomorrow");
   assert.equal(dueInLabel(3), "Due in 3 days");
+});
+
+
+test("login banner: only the Assignee's own deliverables, plus Head/PM-managed ones", () => {
+  const mine = { owner_employee_id: "e1", can_manage: false };
+  const someoneElses = { owner_employee_id: "e2", can_manage: false };
+  const unassigned = { owner_employee_id: null, can_manage: false };
+  assert.equal(isMyDeliverable(mine, "e1"), true);
+  assert.equal(isMyDeliverable(someoneElses, "e1"), false);
+  assert.equal(isMyDeliverable(unassigned, "e1"), false);
+  // Head of the project / PM (backend can_manage) still sees every one.
+  assert.equal(isMyDeliverable({ ...someoneElses, can_manage: true }, "e1"), true);
+  assert.equal(isMyDeliverable({ ...unassigned, can_manage: true }, null), true);
+  // No employee profile: never matches an Assignee.
+  assert.equal(isMyDeliverable(unassigned, null), false);
+
+  const src = readFileSync(
+    fileURLToPath(new URL("./components/deliverable-due-banner.tsx", import.meta.url)),
+    "utf8",
+  );
+  assert.ok(src.includes("isMyDeliverable(d, employeeId)"));
 });

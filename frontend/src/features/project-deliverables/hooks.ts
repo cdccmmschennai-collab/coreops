@@ -55,6 +55,16 @@ export function useDeliverableChanges(id: string | undefined) {
   });
 }
 
+/** Valid Assignees (project Head + members) for the create/edit form.
+ *  Manager-only server-side, so only fetch while a manager has a project picked. */
+export function useDeliverableAssignees(projectId: string | undefined) {
+  return useQuery({
+    queryKey: deliverablesKeys.assignees(projectId ?? ""),
+    queryFn: () => deliverablesApi.assignees(projectId as string),
+    enabled: !!projectId,
+  });
+}
+
 function useInvalidate(projectId: string, id?: string) {
   const qc = useQueryClient();
   return () => {

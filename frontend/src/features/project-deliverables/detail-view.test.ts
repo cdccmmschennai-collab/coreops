@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   PROJECT_HEAD_TEXT,
+  assigneeDisplay,
   daysLeftLabel,
   projectHeadDisplay,
   projectHref,
@@ -88,6 +89,7 @@ test("detail page source: two columns on desktop, details first, timeline preser
     "daysLeftLabel(deliverable)",
     'data-testid="deliverable-days-left"',
     'label="Project"',
+    'label="Assignee"',
     'label="Project Head"',
     'label="Activity"',
     'label="Planned Submission"',
@@ -102,4 +104,34 @@ test("detail page source: two columns on desktop, details first, timeline preser
   ]) {
     assert.equal(src.includes(kept), true, `detail page must contain ${JSON.stringify(kept)}`);
   }
+  // Assignee sits directly after Project, before Project Head and Activity.
+  const at = (s: string) => src.indexOf(s);
+  assert.ok(at('label="Project"') < at('label="Assignee"'));
+  assert.ok(at('label="Assignee"') < at('label="Project Head"'));
+  assert.ok(at('label="Project Head"') < at('label="Activity"'));
+  assert.ok(src.includes("assigneeDisplay(deliverable)"));
+});
+
+test("Assignee display: name only, unassigned, unresolved name", () => {
+  assert.deepEqual(
+    assigneeDisplay({ owner_employee_id: "e1", owner_name: " Santhosh " }),
+    { assigned: true, name: "Santhosh" },
+  );
+  assert.deepEqual(
+    assigneeDisplay({ owner_employee_id: null, owner_name: null }),
+    { assigned: false, name: "Unassigned" },
+  );
+  // Assigned but name not resolved: still assigned, never "Unassigned".
+  assert.deepEqual(
+    assigneeDisplay({ owner_employee_id: "e2", owner_name: null }),
+    { assigned: true, name: "Unknown" },
+  );
+});
+
+test("detail page shows the Assignee name only, no role text", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./components/deliverable-detail.tsx", import.meta.url)),
+    "utf8",
+  );
+  assert.equal(src.includes("assignee.role"), false);
 });

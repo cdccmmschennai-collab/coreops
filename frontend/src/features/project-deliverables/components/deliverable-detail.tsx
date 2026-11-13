@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 
 import {
   PROJECT_HEAD_TEXT,
+  assigneeDisplay,
   daysLeftLabel,
   projectHeadDisplay,
   projectHref,
@@ -237,6 +238,9 @@ function DetailsCard({ deliverable }: { deliverable: Deliverable }) {
   const head = projectHeadDisplay(projectQuery);
   const project = projectLabel(deliverable);
   const daysLeft = daysLeftLabel(deliverable);
+  // Same helper as the Deliverables table, from the same GET /deliverables/{id}
+  // row (invalidated on every update), so the two always agree.
+  const assignee = assigneeDisplay(deliverable);
 
   return (
     <Card>
@@ -268,6 +272,17 @@ function DetailsCard({ deliverable }: { deliverable: Deliverable }) {
                 {project.description}
               </p>
             ) : null}
+          </InfoRow>
+          <InfoRow label="Assignee">
+            {assignee.assigned ? (
+              <span data-testid="deliverable-assignee" className="font-medium">
+                {assignee.name}
+              </span>
+            ) : (
+              <span data-testid="deliverable-assignee" className="text-muted-foreground">
+                Unassigned
+              </span>
+            )}
           </InfoRow>
           <InfoRow label="Project Head">
             {head.kind === "loading" ? (

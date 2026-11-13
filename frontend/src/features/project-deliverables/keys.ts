@@ -4,4 +4,5 @@ export const deliverablesKeys = {
   list: (projectId: string) => ["deliverables", "list", projectId] as const,
   detail: (id: string) => ["deliverables", "detail", id] as const,
   changes: (id: string) => ["deliverables", "changes", id] as const,
+  assignees: (projectId: string) => ["deliverables", "assignees", projectId] as const,
 };

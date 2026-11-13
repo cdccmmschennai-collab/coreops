@@ -37,6 +37,19 @@ export const PROJECT_HEAD_TEXT: Record<Exclude<ProjectHeadDisplay["kind"], "load
   unavailable: "Unavailable",
 };
 
+/**
+ * The Assignee as both the table and the Details card show it: just the name,
+ * or "Unassigned". An id whose name could not be resolved is shown as
+ * "Unknown" rather than "Unassigned" - it IS assigned.
+ */
+export function assigneeDisplay(d: {
+  owner_employee_id: string | null;
+  owner_name: string | null;
+}): { assigned: boolean; name: string } {
+  if (!d.owner_employee_id) return { assigned: false, name: "Unassigned" };
+  return { assigned: true, name: d.owner_name?.trim() || "Unknown" };
+}
+
 /** Project row: bold number + optional secondary description. Falls back to
  *  the id only when the project has no code, so the link is never empty. */
 export function projectLabel(d: {

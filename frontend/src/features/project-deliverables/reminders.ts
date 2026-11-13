@@ -77,6 +77,19 @@ export function selectReminderRows<T extends ReminderFields>(
   return { rows, hidden: sorted.length - rows.length };
 }
 
+/**
+ * Whose login banner a deliverable belongs on: its Assignee, plus whoever
+ * manages it (the project's Head, or a PM) - the backend's per-row
+ * `can_manage`. Other project members do not get reminders for deliverables
+ * that are not theirs.
+ */
+export function isMyDeliverable(
+  d: { owner_employee_id: string | null; can_manage: boolean },
+  employeeId: string | null | undefined,
+): boolean {
+  return d.can_manage || (!!employeeId && d.owner_employee_id === employeeId);
+}
+
 /** Login banner window: planned deliverables due within this many days. */
 export const LOGIN_REMINDER_DAYS = 3;
 

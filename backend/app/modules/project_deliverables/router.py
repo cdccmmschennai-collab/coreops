@@ -4,6 +4,7 @@
   GET    /deliverables/{id}                              detail (member+)
   GET    /deliverables/{id}/changes                      change history (member+)
   GET    /projects/{project_id}/deliverables            list (member+)
+  GET    /projects/{project_id}/deliverables/assignees  Assignee options (PM / project Head)
   POST   /projects/{project_id}/deliverables            create (PM / project Head)
   PATCH  /projects/{project_id}/deliverables/{id}       update (PM / project Head)
   DELETE /projects/{project_id}/deliverables/{id}       delete (PM / project Head)
@@ -20,6 +21,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.modules.project_deliverables import service
 from app.modules.project_deliverables.schemas import (
+    DeliverableAssigneeOut,
     DeliverableChangeOut,
     DeliverableCreate,
     DeliverableOut,
@@ -73,6 +75,21 @@ def list_deliverables(
 ) -> list[DeliverableOut]:
     rows = service.list_deliverables(db, current, project_id)
     return [DeliverableOut.model_validate(r) for r in rows]
+
+
+@_projects.get(
+    "/{project_id}/deliverables/assignees",
+    response_model=list[DeliverableAssigneeOut],
+)
+def list_deliverable_assignees(
+    project_id: uuid.UUID,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[DeliverableAssigneeOut]:
+    return [
+        DeliverableAssigneeOut.model_validate(a)
+        for a in service.list_assignees(db, current, project_id)
+    ]
 
 
 @_projects.post(

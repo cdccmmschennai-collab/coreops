@@ -22,6 +22,7 @@ import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import {
   Form,
   FormControl,
@@ -53,10 +54,12 @@ import { useProjects } from "@/features/projects/hooks";
 import { AppError } from "@/lib/api-client";
 import { useUrlState } from "@/lib/use-url-state";
 
+import { assigneeDisplay } from "../detail-view";
 import {
   useAllDeliverables,
   useCreateDeliverable,
   useDeleteDeliverable,
+  useDeliverableAssignees,
   useUpdateDeliverable,
 } from "../hooks";
 import {
@@ -70,9 +73,16 @@ import {
 import { canManageRow, creatableProjects } from "../manage-access";
 import {
   ALL,
+  activityFilterOptions,
+  assigneeFilterOptions,
   filterDeliverables,
   isFiltered,
+  pageNumbers,
+  paginate,
+  parsePage,
   projectFilterOptions,
+  type FilterOption,
+  type Page,
 } from "../list-filters";
 import { DELIVERABLE_STATUS_LABEL, type Deliverable } from "../types";
 import { DeliverableStatusBadge } from "./status-badge";
@@ -103,6 +113,26 @@ function DeliverableFormPanel({
     editing?.id ?? "",
   );
   const isPending = createMutation.isPending || updateMutation.isPending;
+
+  // Assignee options: the chosen project's Head + members (backend-validated).
+  const assignableProjectId = editing?.project_id ?? projectId;
+  const assigneesQuery = useDeliverableAssignees(assignableProjectId || undefined);
+  const assigneeOptions: ComboboxOption[] = (assigneesQuery.data ?? []).map((a) => ({
+    value: a.employee_id,
+    label: a.name,
+  }));
+  // Keep a current Assignee who has since left the project visible on edit
+  // (unchanged values are not re-validated by the backend).
+  if (
+    editing?.owner_employee_id &&
+    assigneesQuery.data &&
+    !assigneeOptions.some((o) => o.value === editing.owner_employee_id)
+  ) {
+    assigneeOptions.push({
+      value: editing.owner_employee_id,
+      label: editing.owner_name ?? "Unknown",
+    });
+  }
 
   const form = useForm<DeliverableFormValues>({
     resolver: zodResolver(deliverableFormSchema),
@@ -161,7 +191,14 @@ function DeliverableFormPanel({
               {!editing && (
                 <div className="sm:col-span-2 space-y-2">
                   <label className="text-sm font-medium leading-none">Project *</label>
-                  <Select value={projectId} onValueChange={setProjectId}>
+                  <Select
+                    value={projectId}
+                    onValueChange={(next) => {
+                      // A different project has different valid Assignees.
+                      if (next !== projectId) form.setValue("owner_employee_id", "");
+                      setProjectId(next);
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Select project…" />
                     </SelectTrigger>
@@ -180,11 +217,37 @@ function DeliverableFormPanel({
                 control={form.control}
                 name="name"
                 render={({ field }) => (
-                  <FormItem className="sm:col-span-2">
+                  <FormItem>
                     <FormLabel>Activity Name *</FormLabel>
                     <FormControl>
                       <Input placeholder="e.g. MDR Package" {...field} />
                     </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="owner_employee_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Assignee</FormLabel>
+                    <Combobox
+                      value={field.value ?? ""}
+                      onValueChange={field.onChange}
+                      options={assigneeOptions}
+                      disabled={!assignableProjectId || assigneesQuery.isLoading}
+                      placeholder={
+                        !assignableProjectId
+                          ? "Select a project first"
+                          : assigneesQuery.isLoading
+                            ? "Loading…"
+                            : "Unassigned"
+                      }
+                      searchPlaceholder="Search by name…"
+                      emptyMessage="No matching employees or Project Head."
+                    />
                     <FormMessage />
                   </FormItem>
                 )}
@@ -340,6 +403,107 @@ function DeleteDeliverableDialog({
 }
 
 // ---------------------------------------------------------------------------
+// Filter dropdown, Assignee cell, pagination
+// ---------------------------------------------------------------------------
+
+/** Searchable filter dropdown; ALL is the first option and the reset value. */
+function FilterCombobox({
+  label,
+  allLabel,
+  searchPlaceholder,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  allLabel: string;
+  searchPlaceholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: FilterOption[];
+}) {
+  return (
+    <div className="min-w-0 space-y-1.5" data-testid={`filter-${label.toLowerCase()}`}>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <Combobox
+        value={value}
+        onValueChange={onChange}
+        options={[{ value: ALL, label: allLabel }, ...options]}
+        allowClear={value !== ALL}
+        placeholder={allLabel}
+        searchPlaceholder={searchPlaceholder}
+        emptyMessage="No matches."
+      />
+    </div>
+  );
+}
+
+function AssigneeCell({ deliverable }: { deliverable: Deliverable }) {
+  const a = assigneeDisplay(deliverable);
+  if (!a.assigned) return <span className="text-muted-foreground">Unassigned</span>;
+  return <span className="font-medium">{a.name}</span>;
+}
+
+function DeliverablesPagination({
+  page,
+  onPageChange,
+}: {
+  page: Page<Deliverable>;
+  onPageChange: (page: number) => void;
+}) {
+  return (
+    <div
+      data-testid="deliverables-pagination"
+      className="flex flex-col gap-2 border-t border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+    >
+      <span className="tabular">
+        Showing {page.start}-{page.end} of {page.total}{" "}
+        {page.total === 1 ? "deliverable" : "deliverables"}
+        <span className="ml-2">
+          (Page {page.page} of {page.totalPages})
+        </span>
+      </span>
+      <div className="flex flex-wrap items-center gap-1">
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={page.page <= 1}
+          onClick={() => onPageChange(page.page - 1)}
+        >
+          Previous
+        </Button>
+        {pageNumbers(page.page, page.totalPages).map((p, i) =>
+          p === "…" ? (
+            <span key={`gap-${i}`} className="px-1">
+              …
+            </span>
+          ) : (
+            <Button
+              key={p}
+              variant={p === page.page ? "primary" : "ghost"}
+              size="sm"
+              aria-current={p === page.page ? "page" : undefined}
+              aria-label={`Page ${p}`}
+              onClick={() => onPageChange(p)}
+            >
+              {p}
+            </Button>
+          ),
+        )}
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={page.page >= page.totalPages}
+          onClick={() => onPageChange(page.page + 1)}
+        >
+          Next
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
 
@@ -368,16 +532,33 @@ export function AllDeliverablesView() {
 
   const isFormOpen = showForm || editing !== null;
 
-  // Filters live in the URL so they survive opening a deliverable and coming back.
+  // Filters + page live in the URL so they survive opening a deliverable and
+  // coming back. Any filter change (or Clear) returns to page 1.
   const [projectFilter, setProjectFilter] = useUrlState("project", ALL);
-  const [activityFilter, setActivityFilter] = useUrlState("activity", "");
+  const [activityFilter, setActivityFilter] = useUrlState("activity", ALL);
+  const [assigneeFilter, setAssigneeFilter] = useUrlState("assignee", ALL);
   const [statusFilter, setStatusFilter] = useUrlState("status", ALL);
-  const filters = { project: projectFilter, activity: activityFilter, status: statusFilter };
+  const [pageParam, setPageParam] = useUrlState("page", "1");
+  const filters = {
+    project: projectFilter,
+    activity: activityFilter,
+    assignee: assigneeFilter,
+    status: statusFilter,
+  };
+
+  function changeFilter(set: (v: string) => void) {
+    return (v: string) => {
+      set(v || ALL);
+      setPageParam("1");
+    };
+  }
 
   function clearFilters() {
     setProjectFilter(ALL);
-    setActivityFilter("");
+    setActivityFilter(ALL);
+    setAssigneeFilter(ALL);
     setStatusFilter(ALL);
+    setPageParam("1");
   }
 
   // While adding/editing, the page shows ONLY the form (no list) - start at the top.
@@ -397,11 +578,22 @@ export function AllDeliverablesView() {
   }
 
   const deliverables = query.data ?? [];
+  // Filter first, then paginate the filtered result.
   const visible = filterDeliverables(deliverables, filters);
-  const projectFilterItems = projectFilterOptions(deliverables);
+  const page = paginate(visible, parsePage(pageParam));
   const filtered = isFiltered(filters);
   // Edit/Delete follow the backend's per-row `can_manage` for this caller.
-  const showActions = visible.some(canManageRow);
+  // Decided over ALL rows so the column doesn't flicker between pages/filters.
+  const showActions = deliverables.some(canManageRow);
+
+  // Options come only from rows the backend already scoped to this caller.
+  const projectItems = projectFilterOptions(deliverables);
+  const activityItems = activityFilterOptions(deliverables);
+  const assigneeItems = assigneeFilterOptions(deliverables);
+  const statusItems: FilterOption[] = DELIVERABLE_STATUSES.map((s) => ({
+    value: s,
+    label: DELIVERABLE_STATUS_LABEL[s],
+  }));
 
   return (
     <>
@@ -430,48 +622,39 @@ export function AllDeliverablesView() {
       ) : (
       <>
       {deliverables.length > 0 && (
-        <div className="mb-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.8fr)_auto] sm:items-end">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Project</label>
-            <Select value={projectFilter} onValueChange={setProjectFilter}>
-              <SelectTrigger aria-label="Filter by project">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>All projects</SelectItem>
-                {projectFilterItems.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Activity</label>
-            <Input
-              aria-label="Filter by activity"
-              placeholder="Search activity…"
-              value={activityFilter}
-              onChange={(e) => setActivityFilter(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Status</label>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger aria-label="Filter by status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>All statuses</SelectItem>
-                {DELIVERABLE_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {DELIVERABLE_STATUS_LABEL[s]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(4,minmax(0,1fr))_auto] lg:items-end">
+          <FilterCombobox
+            label="Project"
+            allLabel="All projects"
+            searchPlaceholder="Search project name or code…"
+            value={projectFilter}
+            onChange={changeFilter(setProjectFilter)}
+            options={projectItems}
+          />
+          <FilterCombobox
+            label="Activity"
+            allLabel="All activities"
+            searchPlaceholder="Search activity…"
+            value={activityFilter}
+            onChange={changeFilter(setActivityFilter)}
+            options={activityItems}
+          />
+          <FilterCombobox
+            label="Assignee"
+            allLabel="All assignees"
+            searchPlaceholder="Search by name…"
+            value={assigneeFilter}
+            onChange={changeFilter(setAssigneeFilter)}
+            options={assigneeItems}
+          />
+          <FilterCombobox
+            label="Status"
+            allLabel="All statuses"
+            searchPlaceholder="Search status…"
+            value={statusFilter}
+            onChange={changeFilter(setStatusFilter)}
+            options={statusItems}
+          />
           <Button variant="ghost" disabled={!filtered} onClick={clearFilters}>
             Clear
           </Button>
@@ -522,13 +705,14 @@ export function AllDeliverablesView() {
                 <TableRow>
                   <TableHead>Project</TableHead>
                   <TableHead>Activity</TableHead>
+                  <TableHead>Assignee</TableHead>
                   <TableHead>Planned Submission</TableHead>
                   <TableHead>Status</TableHead>
                   {showActions && <TableHead className="w-20 text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visible.map((d) => (
+                {page.items.map((d) => (
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
@@ -544,6 +728,9 @@ export function AllDeliverablesView() {
                       </Link>
                     </TableCell>
                     <TableCell className="font-medium">{d.name}</TableCell>
+                    <TableCell className="text-sm">
+                      <AssigneeCell deliverable={d} />
+                    </TableCell>
                     <TableCell className="text-sm">
                       {d.target_date ?? <span className="text-muted-foreground">—</span>}
                     </TableCell>
@@ -584,6 +771,9 @@ export function AllDeliverablesView() {
                 ))}
               </TableBody>
             </Table>
+          )}
+          {visible.length > 0 && !query.isLoading && !query.isError && (
+            <DeliverablesPagination page={page} onPageChange={(p) => setPageParam(String(p))} />
           )}
         </CardContent>
       </Card>

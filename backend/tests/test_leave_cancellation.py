@@ -235,7 +235,8 @@ def test_cancelled_leave_is_not_a_deliverable_conflict(client, login, pending,
     project = make_project(code="P1")
     make_project_member(project_id=project.id, employee_id=team["employee"].id)
     db.add(ProjectDeliverable(project_id=project.id, name="Final drawings",
-                              status=DeliverableStatus.planned, target_date=NEXT_WEEK))
+                              status=DeliverableStatus.planned, target_date=NEXT_WEEK,
+                              owner_employee_id=team["employee"].id))
     db.commit()
 
     mgr_h = login("mgr@x.com")
@@ -537,7 +538,8 @@ def test_cancellation_requested_leave_is_still_an_active_conflict(
     project = make_project(code="P1")
     make_project_member(project_id=project.id, employee_id=team["employee"].id)
     db.add(ProjectDeliverable(project_id=project.id, name="Final drawings",
-                              status=DeliverableStatus.planned, target_date=NEXT_WEEK))
+                              status=DeliverableStatus.planned, target_date=NEXT_WEEK,
+                              owner_employee_id=team["employee"].id))
     db.commit()
     mgr_h = login("mgr@x.com")
 

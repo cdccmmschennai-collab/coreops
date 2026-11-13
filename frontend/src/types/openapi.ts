@@ -4278,6 +4278,8 @@ export interface components {
             owner_employee_id?: string | null;
             /** Owner Name */
             owner_name?: string | null;
+            /** Owner Role */
+            owner_role?: ("employee" | "project_head") | null;
             status: components["schemas"]["DeliverableStatus"];
             /** Completion Date */
             completion_date?: string | null;

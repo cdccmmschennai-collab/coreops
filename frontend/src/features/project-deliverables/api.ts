@@ -2,6 +2,7 @@ import { api } from "@/lib/api-client";
 
 import type {
   Deliverable,
+  DeliverableAssignee,
   DeliverableChange,
   DeliverableCreateBody,
   DeliverableUpdateBody,
@@ -19,6 +20,9 @@ export const deliverablesApi = {
 
   list: (projectId: string) =>
     api.get<Deliverable[]>(`/projects/${projectId}/deliverables`),
+
+  assignees: (projectId: string) =>
+    api.get<DeliverableAssignee[]>(`/projects/${projectId}/deliverables/assignees`),
 
   create: (projectId: string, body: DeliverableCreateBody) =>
     api.post<Deliverable>(`/projects/${projectId}/deliverables`, body),

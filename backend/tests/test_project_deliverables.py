@@ -10,6 +10,7 @@ Pins:
 
     docker exec wms-backend-1 pytest tests/test_project_deliverables.py
 """
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -294,7 +295,8 @@ def test_overdue_is_not_persisted_and_still_counts_for_leave_impact(
     """An overdue deliverable keeps stored status 'planned', so the leave
     review's +/-2 day Deliverable Impact still flags it."""
     overdue = ProjectDeliverable(project_id=world["p1"].id, name="MTL rev B",
-                                 status=PLANNED, target_date=TODAY - timedelta(days=1))
+                                 status=PLANNED, target_date=TODAY - timedelta(days=1),
+                                 owner_employee_id=world["member"].id)
     db.add(overdue)
     db.commit()
 
@@ -394,12 +396,231 @@ def test_existing_response_fields_are_unchanged(client, login, world):
     legacy = {"id", "project_id", "project_name", "project_code", "name", "description",
               "planned_start_date", "target_date", "owner_employee_id", "owner_name",
               "status", "completion_date", "created_at", "updated_at"}
-    added = {"can_manage", "days_remaining", "deadline_state"}
+    added = {"can_manage", "days_remaining", "deadline_state", "owner_role"}
     row = client.get("/api/v1/deliverables", headers=login("pm@x.com")).json()[0]
     assert set(row) == legacy | added
 
 
 def test_deadline_state_is_not_a_stored_column():
     cols = set(ProjectDeliverable.__table__.columns.keys())
-    assert not cols & {"days_remaining", "deadline_state", "can_manage"}
+    assert not cols & {"days_remaining", "deadline_state", "can_manage", "owner_role"}
     assert set(DeliverableStatus) == {PLANNED, COMPLETED}
+
+
+# ======================================================================
+# Assignee (owner_employee_id)
+# ======================================================================
+
+def _assignees_url(world, key="p1"):
+    return f"/api/v1/projects/{world[key].id}/deliverables/assignees"
+
+
+def test_assignee_options_are_head_first_then_members(client, login, world):
+    res = client.get(_assignees_url(world), headers=login("pm@x.com"))
+    assert res.status_code == 200, res.text
+    rows = res.json()
+    assert rows[0] == {"employee_id": str(world["head"].id), "name": "Test User",
+                       "role": "project_head"}
+    assert {r["employee_id"] for r in rows[1:]} == {
+        str(world[k].id) for k in ("member", "lead", "qc")
+    }
+    assert all(r["role"] == "employee" for r in rows[1:])
+    # Head of P1 sees the same options; never another project's people.
+    head_rows = client.get(_assignees_url(world), headers=login("head@x.com")).json()
+    assert head_rows == rows
+    assert str(world["head2"].id) not in {r["employee_id"] for r in rows}
+
+
+@pytest.mark.parametrize("who", ["member", "lead", "outsider", "head2"])
+def test_assignee_options_are_manager_only(client, login, world, who):
+    assert client.get(_assignees_url(world), headers=login(f"{who}@x.com")).status_code == 403
+
+
+def test_assignee_options_skip_exited_employees(client, login, world, db):
+    from app.modules.employees.models import EmployeeStatus
+    world["qc"].status = EmployeeStatus.exited
+    db.commit()
+    ids = {r["employee_id"] for r in
+           client.get(_assignees_url(world), headers=login("pm@x.com")).json()}
+    assert str(world["qc"].id) not in ids
+
+
+def test_employee_assignment_shows_in_list_and_detail(client, login, world):
+    h = login("head@x.com")
+    res = client.post(f"/api/v1/projects/{world['p1'].id}/deliverables", headers=h,
+                      json={"name": "ASSET REGISTER",
+                            "owner_employee_id": str(world["member"].id)})
+    assert res.status_code == 201, res.text
+    assert res.json()["owner_name"] == "Test User"
+    assert res.json()["owner_role"] == "employee"
+    did = res.json()["id"]
+
+    row = next(r for r in client.get("/api/v1/deliverables", headers=h).json()
+               if r["id"] == did)
+    detail = client.get(f"/api/v1/deliverables/{did}", headers=h).json()
+    for out in (row, detail):
+        assert out["owner_employee_id"] == str(world["member"].id)
+        assert (out["owner_name"], out["owner_role"]) == ("Test User", "employee")
+
+
+def test_project_head_assignment_and_reassign_and_unassign(client, login, world):
+    h = login("pm@x.com")
+    base = f"/api/v1/projects/{world['p1'].id}/deliverables"
+    url = f"{base}/{world['d1'].id}"
+
+    to_head = client.patch(url, headers=h, json={"owner_employee_id": str(world["head"].id)})
+    assert to_head.status_code == 200, to_head.text
+    assert to_head.json()["owner_role"] == "project_head"
+
+    to_lead = client.patch(url, headers=h, json={"owner_employee_id": str(world["lead"].id)})
+    assert to_lead.json()["owner_role"] == "employee"
+    detail = client.get(f"/api/v1/deliverables/{world['d1'].id}", headers=h).json()
+    assert detail["owner_employee_id"] == str(world["lead"].id)
+
+    cleared = client.patch(url, headers=h, json={"owner_employee_id": None})
+    assert cleared.status_code == 200
+    assert (cleared.json()["owner_employee_id"], cleared.json()["owner_name"],
+            cleared.json()["owner_role"]) == (None, None, None)
+
+
+def test_unassigned_deliverable_has_no_assignee(client, login, world):
+    row = client.get(f"/api/v1/deliverables/{world['d1'].id}",
+                     headers=login("member@x.com")).json()
+    assert (row["owner_employee_id"], row["owner_name"], row["owner_role"]) == (None, None, None)
+
+
+@pytest.mark.parametrize("who", ["outsider", "head2"])
+def test_cannot_assign_someone_outside_the_project(client, login, world, who, db):
+    import uuid as _uuid
+    h = login("pm@x.com")
+    base = f"/api/v1/projects/{world['p1'].id}/deliverables"
+    bad = str(world[who].id)
+    assert client.post(base, headers=h,
+                       json={"name": "X", "owner_employee_id": bad}).status_code == 422
+    assert client.patch(f"{base}/{world['d1'].id}", headers=h,
+                        json={"owner_employee_id": bad}).status_code == 422
+    assert client.patch(f"{base}/{world['d1'].id}", headers=h,
+                        json={"owner_employee_id": str(_uuid.uuid4())}).status_code == 422
+    db.expire_all()
+    assert db.get(ProjectDeliverable, world["d1"].id).owner_employee_id is None
+
+
+def test_non_manager_cannot_change_assignee(client, login, world, db):
+    res = client.patch(f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}",
+                       headers=login("member@x.com"),
+                       json={"owner_employee_id": str(world["member"].id)})
+    assert res.status_code == 403
+    db.expire_all()
+    assert db.get(ProjectDeliverable, world["d1"].id).owner_employee_id is None
+
+
+def test_unchanged_stale_assignee_does_not_block_other_edits(client, login, world, db):
+    # Assignee later left the project: re-sending the same id with an
+    # unrelated edit must still succeed (only a CHANGE is validated).
+    world["d1"].owner_employee_id = world["outsider"].id
+    db.commit()
+    res = client.patch(f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}",
+                       headers=login("pm@x.com"),
+                       json={"name": "FMTL v2", "owner_employee_id": str(world["outsider"].id)})
+    assert res.status_code == 200, res.text
+    assert res.json()["owner_role"] == "employee"
+
+
+# ======================================================================
+# Notifications go to the Assignee + project Head only (never all members)
+# ======================================================================
+
+def _notified(db, deliverable_id, type_):
+    """{user email: count} of notifications of `type_` for this deliverable."""
+    from app.modules.notifications.models import Notification
+    from app.modules.users.models import User as _User
+    db.expire_all()
+    rows = db.query(Notification).filter(
+        Notification.entity_id == deliverable_id, Notification.type == type_
+    ).all()
+    out = {}
+    for n in rows:
+        email = db.get(_User, n.user_id).email
+        out[email] = out.get(email, 0) + 1
+    return out
+
+
+def test_planned_notifies_assignee_and_head_not_other_members(client, login, world, db):
+    res = client.post(f"/api/v1/projects/{world['p1'].id}/deliverables",
+                      headers=login("pm@x.com"),
+                      json={"name": "ASSET REGISTER",
+                            "owner_employee_id": str(world["member"].id)})
+    assert res.status_code == 201, res.text
+    got = _notified(db, uuid.UUID(res.json()["id"]), "deliverable_planned")
+    assert got == {"member@x.com": 1, "head@x.com": 1}     # lead / qc get nothing
+
+
+def test_unassigned_deliverable_notifies_head_only(client, login, world, db):
+    res = client.post(f"/api/v1/projects/{world['p1'].id}/deliverables",
+                      headers=login("pm@x.com"), json={"name": "NO OWNER"})
+    assert _notified(db, uuid.UUID(res.json()["id"]), "deliverable_planned") == {"head@x.com": 1}
+
+
+def test_assignee_who_is_the_head_is_notified_once(client, login, world, db):
+    h = login("pm@x.com")
+    base = f"/api/v1/projects/{world['p1'].id}/deliverables"
+    res = client.post(base, headers=h, json={"name": "HEAD OWNED",
+                                             "owner_employee_id": str(world["head"].id)})
+    did = res.json()["id"]
+    assert _notified(db, uuid.UUID(did), "deliverable_planned") == {"head@x.com": 1}
+    client.patch(f"{base}/{did}", headers=h, json={"status": "completed"})
+    assert _notified(db, uuid.UUID(did), "deliverable_completed") == {"head@x.com": 1}
+
+
+def test_assigning_notifies_new_assignee_and_head(client, login, world, db):
+    h = login("pm@x.com")
+    url = f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}"
+    client.patch(url, headers=h, json={"owner_employee_id": str(world["lead"].id)})
+    assert _notified(db, world["d1"].id, "deliverable_assigned") == {
+        "lead@x.com": 1, "head@x.com": 1}
+    # Re-sending the same Assignee is not a new assignment.
+    client.patch(url, headers=h, json={"owner_employee_id": str(world["lead"].id), "name": "FMTL"})
+    assert _notified(db, world["d1"].id, "deliverable_assigned") == {
+        "lead@x.com": 1, "head@x.com": 1}
+    # Clearing the Assignee sends no assignment notification.
+    client.patch(url, headers=h, json={"owner_employee_id": None})
+    assert _notified(db, world["d1"].id, "deliverable_assigned") == {
+        "lead@x.com": 1, "head@x.com": 1}
+
+
+def test_date_change_and_completion_go_to_assignee_and_head_only(client, login, world, db):
+    h = login("pm@x.com")
+    url = f"/api/v1/projects/{world['p1'].id}/deliverables/{world['d1'].id}"
+    client.patch(url, headers=h, json={"owner_employee_id": str(world["qc"].id)})
+    client.patch(url, headers=h, json={"target_date": (TODAY + timedelta(days=8)).isoformat()})
+    client.patch(url, headers=h, json={"status": "completed"})
+    for type_ in ("deliverable_date_updated", "deliverable_completed"):
+        assert _notified(db, world["d1"].id, type_) == {"qc@x.com": 1, "head@x.com": 1}, type_
+
+
+# ======================================================================
+# Deliverable impact (leave review) - Assignee only
+# ======================================================================
+
+def _impact_names(client, login, leave_id):
+    res = client.post("/api/v1/leave-requests/deliverable-impact", headers=login("pm@x.com"),
+                      json={"leave_request_ids": [str(leave_id)]})
+    assert res.status_code == 200, res.text
+    items = res.json()["items"]
+    return sorted(c["deliverable_name"] for i in items for c in i["conflicts"])
+
+
+def test_impact_only_for_the_assignee_on_leave(client, login, world, make_leave_request, db):
+    world["d1"].owner_employee_id = world["member"].id     # FMTL, due in 3 days
+    db.add(ProjectDeliverable(project_id=world["p1"].id, name="UNASSIGNED DOC",
+                              status=PLANNED, target_date=TODAY + timedelta(days=3)))
+    db.commit()
+    day = TODAY + timedelta(days=2)
+    member_leave = make_leave_request(employee_id=world["member"].id, start_date=day, end_date=day)
+    lead_leave = make_leave_request(employee_id=world["lead"].id, start_date=day, end_date=day)
+    head_leave = make_leave_request(employee_id=world["head"].id, start_date=day, end_date=day)
+
+    assert _impact_names(client, login, member_leave.id) == ["FMTL"]
+    # Same project, but not the Assignee: no impact (nor for unassigned ones).
+    assert _impact_names(client, login, lead_leave.id) == []
+    assert _impact_names(client, login, head_leave.id) == []

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core import authz
 from app.modules.audit import service as audit
 from app.modules.audit.constants import AuditAction, EntityType
-from app.modules.employees.models import Employee
+from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.employees.service import _current_employee
 from app.modules.project_deliverables.deadline import business_today
 from app.modules.project_deliverables.models import (
@@ -90,19 +90,98 @@ def _fetch_deliverable(
     return d
 
 
+OWNER_ROLE_HEAD = "project_head"
+OWNER_ROLE_EMPLOYEE = "employee"
+
+
 def _attach_owner_names(db: Session, rows: list[ProjectDeliverable]) -> None:
-    """Bulk-fetch employee names and attach as owner_name."""
+    """Bulk-fetch the Assignee (owner_employee_id) name and role.
+
+    owner_role is "project_head" when the assignee is the project's current
+    Head, otherwise "employee"; both stay None for an unassigned row.
+    (`Employee.full_name` is a Python property, so whole rows are loaded.)
+    """
     emp_ids = {r.owner_employee_id for r in rows if r.owner_employee_id}
     if not emp_ids:
         for r in rows:
             r.owner_name = None  # type: ignore[attr-defined]
+            r.owner_role = None  # type: ignore[attr-defined]
         return
-    employees = db.execute(
-        select(Employee.id, Employee.full_name).where(Employee.id.in_(emp_ids))
-    ).all()
-    by_id = {e.id: e.full_name for e in employees}
+    employees = db.execute(select(Employee).where(Employee.id.in_(emp_ids))).scalars().all()
+    names = {e.id: e.full_name for e in employees}
+    heads = dict(
+        db.execute(
+            select(Project.id, Project.head_employee_id).where(
+                Project.id.in_({r.project_id for r in rows})
+            )
+        ).all()
+    )
     for r in rows:
-        r.owner_name = by_id.get(r.owner_employee_id) if r.owner_employee_id else None  # type: ignore[attr-defined]
+        if not r.owner_employee_id:
+            r.owner_name = None  # type: ignore[attr-defined]
+            r.owner_role = None  # type: ignore[attr-defined]
+            continue
+        r.owner_name = names.get(r.owner_employee_id)  # type: ignore[attr-defined]
+        r.owner_role = (  # type: ignore[attr-defined]
+            OWNER_ROLE_HEAD
+            if heads.get(r.project_id) == r.owner_employee_id
+            else OWNER_ROLE_EMPLOYEE
+        )
+
+
+# ---------------------------------------------------------------------------
+# Assignee (owner_employee_id) - who may be assigned
+# ---------------------------------------------------------------------------
+
+def _assignable_employees(db: Session, project: Project) -> list[tuple[Employee, str]]:
+    """The project's Head plus its project members - the only valid Assignees.
+
+    Soft-deleted and exited employees are excluded. The Head comes first; the
+    rest are sorted by name. A Head who is also a member appears once, as Head.
+    """
+    member_ids = set(
+        db.execute(
+            select(ProjectMember.employee_id).where(ProjectMember.project_id == project.id)
+        ).scalars().all()
+    )
+    ids = member_ids | ({project.head_employee_id} if project.head_employee_id else set())
+    if not ids:
+        return []
+    employees = db.execute(
+        select(Employee).where(
+            Employee.id.in_(ids),
+            Employee.deleted_at.is_(None),
+            Employee.status != EmployeeStatus.exited,
+        )
+    ).scalars().all()
+    head = [(e, OWNER_ROLE_HEAD) for e in employees if e.id == project.head_employee_id]
+    rest = sorted(
+        ((e, OWNER_ROLE_EMPLOYEE) for e in employees if e.id != project.head_employee_id),
+        key=lambda pair: pair[0].full_name.lower(),
+    )
+    return head + rest
+
+
+def list_assignees(db: Session, actor: User, project_id: uuid.UUID) -> list[dict]:
+    """Assignee options for the create/edit form - managers only."""
+    project = _fetch_project(db, project_id)
+    _assert_can_manage(db, actor, project)
+    return [
+        {"employee_id": e.id, "name": e.full_name, "role": role}
+        for e, role in _assignable_employees(db, project)
+    ]
+
+
+def _validate_owner(db: Session, project: Project, owner_id: uuid.UUID | None) -> None:
+    """Reject any Assignee who is not this project's Head or a project member."""
+    if owner_id is None:
+        return
+    if owner_id not in {e.id for e, _ in _assignable_employees(db, project)}:
+        raise AppError(
+            "invalid_assignee",
+            "The Assignee must be this project's Head or one of its members.",
+            422,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -168,41 +247,51 @@ def list_all_deliverables(
 
 
 # ---------------------------------------------------------------------------
-# Notifications — every employee assigned to the project is told when a
-# deliverable is planned, its delivery date moves, or it is completed.
+# Notifications — only the deliverable's Assignee and the project's Head are
+# told when a deliverable is planned, assigned, its delivery date moves, or it
+# is completed. Other project members are NOT notified.
 # ---------------------------------------------------------------------------
 
-def _project_member_user_ids(db: Session, project_id: uuid.UUID) -> list[uuid.UUID]:
-    """Distinct user ids of all employees assigned to the project (skips
-    members without a login)."""
+def _deliverable_recipient_user_ids(
+    db: Session, project: Project, d: ProjectDeliverable
+) -> list[uuid.UUID]:
+    """Login user ids of the Assignee and the project Head.
+
+    De-duplicated by user id, so an Assignee who is also the Head is notified
+    ONCE. People without a login, and soft-deleted employees, are skipped. An
+    unassigned deliverable notifies the Head only.
+    """
+    emp_ids = {e for e in (d.owner_employee_id, project.head_employee_id) if e}
+    if not emp_ids:
+        return []
     rows = db.execute(
-        select(Employee.user_id)
-        .join(ProjectMember, ProjectMember.employee_id == Employee.id)
-        .where(
-            ProjectMember.project_id == project_id,
+        select(Employee.user_id).where(
+            Employee.id.in_(emp_ids),
             Employee.user_id.is_not(None),
+            Employee.deleted_at.is_(None),
         )
     ).scalars().all()
-    return list({uid for uid in rows if uid is not None})
+    return sorted({uid for uid in rows if uid is not None}, key=str)
 
 
 def _notify_members(
     db: Session,
-    project_id: uuid.UUID,
-    deliverable_id: uuid.UUID,
+    project: Project,
+    d: ProjectDeliverable,
     *,
     type_: str,
     title: str,
     message: str,
 ) -> None:
-    """Fan a deliverable event out to every project member. Best-effort: a
-    notification failure must not roll back the deliverable change the caller
-    already committed."""
+    """Send a deliverable event to its Assignee + the project Head. Best-effort:
+    a notification failure must not roll back the deliverable change the
+    caller already committed."""
     try:
         from app.modules.notifications.service import create_notification
 
+        deliverable_id = d.id
         target_url = f"/projects/deliverables/{deliverable_id}"
-        for uid in _project_member_user_ids(db, project_id):
+        for uid in _deliverable_recipient_user_ids(db, project, d):
             create_notification(
                 db,
                 user_id=uid,
@@ -266,6 +355,7 @@ def create_deliverable(
 ) -> ProjectDeliverable:
     project = _fetch_project(db, project_id)
     _assert_can_manage(db, actor, project)
+    _validate_owner(db, project, data.owner_employee_id)
 
     d = ProjectDeliverable(
         project_id=project_id,
@@ -279,18 +369,23 @@ def create_deliverable(
 
     _notify_members(
         db,
-        project_id,
-        d.id,
+        project,
+        d,
         type_="deliverable_planned",
         title="Deliverable Planned",
         message=(
             "A new deliverable has been planned for your project.\n"
             f"Project: {project.name}\n"
             f"Activity: {d.name}\n"
+            f"Assignee: {_assignee_text(d)}\n"
             f"Planned Delivery Date: {_fmt(d.target_date)}"
         ),
     )
     return d
+
+
+def _assignee_text(d: ProjectDeliverable) -> str:
+    return getattr(d, "owner_name", None) or "Unassigned"
 
 
 def _date_str(value: date | None) -> str | None:
@@ -312,10 +407,16 @@ def update_deliverable(
     # Snapshot the fields that drive notifications before the update is applied.
     prev_target_date = d.target_date
     prev_status = d.status
+    prev_owner = d.owner_employee_id
 
     payload = data.model_dump(exclude_unset=True)
     raw_reason = payload.pop("reason", None)
     reason = raw_reason.strip() if isinstance(raw_reason, str) else None
+
+    # Only a CHANGED Assignee is validated, so an unrelated edit never fails
+    # because an earlier Assignee has since left the project.
+    if "owner_employee_id" in payload and payload["owner_employee_id"] != d.owner_employee_id:
+        _validate_owner(db, project, payload["owner_employee_id"])
 
     # Detect tracked changes (planned start date, due date, status reversal)
     # against the current values before applying the update.
@@ -419,12 +520,30 @@ def update_deliverable(
     _attach_owner_names(db, [d])
     _attach_can_manage([d], None)
 
+    # Assignment notification: a (new) Assignee was set. Goes to the new
+    # Assignee + the Head; clearing the Assignee sends nothing.
+    if d.owner_employee_id and d.owner_employee_id != prev_owner:
+        _notify_members(
+            db,
+            project,
+            d,
+            type_="deliverable_assigned",
+            title="Deliverable Assigned",
+            message=(
+                "A deliverable has been assigned.\n"
+                f"Project: {project.name}\n"
+                f"Activity: {d.name}\n"
+                f"Assignee: {_assignee_text(d)}\n"
+                f"Planned Delivery Date: {_fmt(d.target_date)}"
+            ),
+        )
+
     # Schedule-change notification: the planned delivery (target) date moved.
     if "target_date" in payload and d.target_date != prev_target_date:
         _notify_members(
             db,
-            project_id,
-            d.id,
+            project,
+            d,
             type_="deliverable_date_updated",
             title="Delivery Date Updated",
             message=(
@@ -442,8 +561,8 @@ def update_deliverable(
     ):
         _notify_members(
             db,
-            project_id,
-            d.id,
+            project,
+            d,
             type_="deliverable_completed",
             title="Deliverable Completed",
             message=(

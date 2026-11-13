@@ -18,6 +18,7 @@ import {
   deliverableHref,
   dueInLabel,
   formatDueDate,
+  isMyDeliverable,
   selectLoginReminders,
 } from "../reminders";
 
@@ -25,7 +26,8 @@ import {
 const DISMISS_KEY = LOGIN_BANNER_KEYS.deliverableDue;
 
 /**
- * Login reminder for every user (PMs, project Heads and members): planned deliverables due
+ * Login reminder for a deliverable's Assignee and its managers (project Head,
+ * PMs) - other project members are not reminded: planned deliverables due
  * within the next 3 days (IST, backend-derived), shown ONE AT A TIME,
  * nearest deadline first, with "1 of N" and Previous / Next - so ten due
  * deliverables are still a single line, not ten. "View Deliverable" opens the
@@ -33,7 +35,7 @@ const DISMISS_KEY = LOGIN_BANNER_KEYS.deliverableDue;
  */
 export function DeliverableDueBanner() {
   const { data } = useMyDeliverableReminders();
-  const { status } = useAuth();
+  const { status, employeeId } = useAuth();
   const router = useRouter();
   const [dismissed, setDismissed] = React.useState(true);
   const [index, setIndex] = React.useState(0);
@@ -42,7 +44,11 @@ export function DeliverableDueBanner() {
     setDismissed(isBannerDismissed(DISMISS_KEY));
   }, []);
 
-  const due = React.useMemo(() => selectLoginReminders(data ?? []), [data]);
+  // Only the Assignee's own deliverables, plus those the user manages (Head / PM).
+  const due = React.useMemo(
+    () => selectLoginReminders((data ?? []).filter((d) => isMyDeliverable(d, employeeId))),
+    [data, employeeId],
+  );
   if (status !== "authenticated") return null;
   if (dismissed || due.length === 0) return null;
 

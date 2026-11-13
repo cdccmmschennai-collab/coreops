@@ -24,6 +24,20 @@ export type DeadlineState =
   | "no_deadline"
   | "completed";
 
+export type AssigneeRole = "employee" | "project_head";
+
+export const ASSIGNEE_ROLE_LABEL: Record<AssigneeRole, string> = {
+  employee: "Employee",
+  project_head: "Project Head",
+};
+
+/** One valid Assignee option (GET /projects/{id}/deliverables/assignees). */
+export interface DeliverableAssignee {
+  employee_id: string;
+  name: string;
+  role: AssigneeRole;
+}
+
 export interface Deliverable {
   id: string;
   project_id: string;
@@ -35,8 +49,11 @@ export interface Deliverable {
   description: string | null;
   planned_start_date: string | null;
   target_date: string | null;
+  /** The Assignee (an employee or the project's Head); null = unassigned. */
   owner_employee_id: string | null;
   owner_name: string | null;
+  /** Backend-derived: "project_head" when the Assignee is the project's Head. */
+  owner_role: AssigneeRole | null;
   status: DeliverableStatus;
   completion_date: string | null;
   created_at: string;
@@ -62,6 +79,7 @@ export type _DeliverableContractCheck = [
   Assert<Exact<DeliverableStatus, ApiDeliverableOut["status"]>>,
   Assert<Exact<Deliverable["days_remaining"], ApiDeliverableOut["days_remaining"]>>,
   Assert<Exact<Deliverable["can_manage"], ApiDeliverableOut["can_manage"]>>,
+  Assert<Exact<Deliverable["owner_role"], NonNullable<ApiDeliverableOut["owner_role"]> | null>>,
   // Every field the backend sends exists on the frontend type, and vice versa.
   Assert<Exact<keyof Deliverable, keyof ApiDeliverableOut>>,
 ];

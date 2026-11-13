@@ -1414,8 +1414,9 @@ def deliverable_impacts(
     db: Session, actor: User, leave_request_ids: list[uuid.UUID]
 ) -> list[LeaveDeliverableImpactOut]:
     """For the given leave requests, find Planned deliverables whose target
-    date falls within Â±2 days of the requested leave, on projects the
-    requesting employee is assigned to.
+    date falls within Â±2 days of the requested leave, where the requesting
+    employee is the deliverable's ASSIGNEE (owner_employee_id). Deliverables
+    assigned to someone else, or unassigned, are not an impact for them.
 
     Informational only â€” never blocks approval. Computed in a handful of bulk
     queries for the whole displayed page (no per-row querying).
@@ -1424,7 +1425,7 @@ def deliverable_impacts(
         DeliverableStatus,
         ProjectDeliverable,
     )
-    from app.modules.projects.models import Project, ProjectMember
+    from app.modules.projects.models import Project
 
     if actor.role != UserRole.project_manager:
         raise AppError(
@@ -1450,20 +1451,6 @@ def deliverable_impacts(
 
     employee_ids = {r.employee_id for r in reqs}
 
-    # employee â†’ set of project ids they belong to
-    member_rows = db.execute(
-        select(ProjectMember.employee_id, ProjectMember.project_id).where(
-            ProjectMember.employee_id.in_(employee_ids)
-        )
-    ).all()
-    projects_by_emp: dict[uuid.UUID, set[uuid.UUID]] = {}
-    project_ids: set[uuid.UUID] = set()
-    for emp_id, proj_id in member_rows:
-        projects_by_emp.setdefault(emp_id, set()).add(proj_id)
-        project_ids.add(proj_id)
-    if not project_ids:
-        return []
-
     # Bound the deliverable scan to the widest possible impact window across
     # all displayed requests, so we never scan the whole deliverables table.
     win_lo = min(r.start_date for r in reqs) - DELIVERABLE_IMPACT_WINDOW
@@ -1475,12 +1462,15 @@ def deliverable_impacts(
             ProjectDeliverable.project_id.label("project_id"),
             ProjectDeliverable.name.label("deliverable_name"),
             ProjectDeliverable.target_date.label("target_date"),
+            ProjectDeliverable.owner_employee_id.label("owner_employee_id"),
             Project.name.label("project_name"),
             Project.code.label("project_code"),
         )
         .join(Project, Project.id == ProjectDeliverable.project_id)
         .where(
-            ProjectDeliverable.project_id.in_(project_ids),
+            # Only deliverables the employee on leave is the ASSIGNEE of -
+            # other deliverables on their projects are not their concern.
+            ProjectDeliverable.owner_employee_id.in_(employee_ids),
             ProjectDeliverable.status == DeliverableStatus.planned,
             ProjectDeliverable.target_date.is_not(None),
             ProjectDeliverable.target_date >= win_lo,
@@ -1488,9 +1478,9 @@ def deliverable_impacts(
             Project.deleted_at.is_(None),
         )
     ).all()
-    delivs_by_project: dict[uuid.UUID, list] = {}
+    delivs_by_owner: dict[uuid.UUID, list] = {}
     for d in deliv_rows:
-        delivs_by_project.setdefault(d.project_id, []).append(d)
+        delivs_by_owner.setdefault(d.owner_employee_id, []).append(d)
 
     emp_names = {
         row.id: f"{row.first_name} {row.last_name}".strip()
@@ -1507,26 +1497,23 @@ def deliverable_impacts(
         # overlaps [D-2, D+2], i.e. D in [start-2, end+2].
         lo = r.start_date - DELIVERABLE_IMPACT_WINDOW
         hi = r.end_date + DELIVERABLE_IMPACT_WINDOW
-        seen: set[uuid.UUID] = set()
         conflicts: list[DeliverableConflictOut] = []
-        for proj_id in projects_by_emp.get(r.employee_id, ()):
-            for d in delivs_by_project.get(proj_id, ()):
-                if d.deliverable_id in seen or not (lo <= d.target_date <= hi):
-                    continue
-                seen.add(d.deliverable_id)
-                conflicts.append(
-                    DeliverableConflictOut(
-                        deliverable_id=d.deliverable_id,
-                        deliverable_name=d.deliverable_name,
-                        project_id=d.project_id,
-                        project_name=d.project_name,
-                        project_code=d.project_code,
-                        status=DeliverableStatus.planned.value,
-                        target_date=d.target_date,
-                        employee_id=r.employee_id,
-                        employee_name=emp_names.get(r.employee_id),
-                    )
+        for d in delivs_by_owner.get(r.employee_id, ()):
+            if not (lo <= d.target_date <= hi):
+                continue
+            conflicts.append(
+                DeliverableConflictOut(
+                    deliverable_id=d.deliverable_id,
+                    deliverable_name=d.deliverable_name,
+                    project_id=d.project_id,
+                    project_name=d.project_name,
+                    project_code=d.project_code,
+                    status=DeliverableStatus.planned.value,
+                    target_date=d.target_date,
+                    employee_id=r.employee_id,
+                    employee_name=emp_names.get(r.employee_id),
                 )
+            )
         if conflicts:
             conflicts.sort(key=lambda c: c.target_date or date.max)
             items.append(
