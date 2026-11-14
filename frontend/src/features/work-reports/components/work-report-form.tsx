@@ -512,7 +512,8 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
 
       if (mode === "create") {
         // Re-open the now-saved report so the Pending card renders in edit mode.
-        router.push(`/work-reports/${savedReportId}/edit`);
+        // Replace (not push) so Back never returns to the empty "new" form.
+        router.replace(`/work-reports/${savedReportId}/edit`);
       } else {
         setDraftPart(null);
         remove(values.tasks.length - 1);
@@ -791,7 +792,10 @@ export function WorkReportForm({ mode, defaultValues, reportId }: WorkReportForm
           ? await createMutation.mutateAsync(toCreateBody(persist))
           : await updateMutation.mutateAsync(toUpdateBody(persist));
       toast.success(mode === "create" ? "Draft saved" : "Changes saved");
-      router.push(`/work-reports/${result.id}`);
+      // REPLACE, never push: the form's history entry becomes the report's
+      // preview, so history stays `Reports -> Report` and Back from the preview
+      // goes to the Reports log instead of looping back into the edit form.
+      router.replace(`/work-reports/${result.id}`);
     } catch (error) {
       // Safety net: if the date was claimed between load and submit, the
       // backend returns 409 — open the existing report rather than dead-ending.

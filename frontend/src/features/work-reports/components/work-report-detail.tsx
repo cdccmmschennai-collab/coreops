@@ -265,7 +265,7 @@ export function WorkReportDetail({ id }: { id: string }) {
       {canAuthorAct && isEditable && (
         <>
           <Button variant="secondary" asChild>
-            <Link href={`/work-reports/${report.id}/edit`}>
+            <Link href={`/work-reports/${report.id}/edit`} replace>
               <Pencil className="h-4 w-4" />
               Edit
             </Link>
@@ -286,7 +286,7 @@ export function WorkReportDetail({ id }: { id: string }) {
           request-edit/grant-edit handshake (they're the report's only reviewer). */}
       {canAuthorAct && canSelfEdit && (
         <Button variant="secondary" asChild>
-          <Link href={`/work-reports/${report.id}/edit`}>
+          <Link href={`/work-reports/${report.id}/edit`} replace>
             <Pencil className="h-4 w-4" />
             Edit
           </Link>
@@ -323,7 +323,7 @@ export function WorkReportDetail({ id }: { id: string }) {
           fall back to a bare /reports only on a direct load with no history. */}
       <button
         type="button"
-        onClick={() => (window.history.length > 1 ? router.back() : router.push("/reports"))}
+        onClick={() => (window.history.length > 1 ? router.back() : router.replace("/reports"))}
         className="text-sm text-primary hover:underline"
       >
         ← Reports
@@ -853,7 +853,7 @@ export function WorkReportDetail({ id }: { id: string }) {
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-        onDone={() => router.push("/reports")}
+        onDone={() => router.replace("/reports")}
       />
     </>
   );

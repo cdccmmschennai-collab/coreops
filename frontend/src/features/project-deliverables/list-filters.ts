@@ -120,56 +120,53 @@ export function assigneeFilterOptions(
   return [...options, { value: UNASSIGNED, label: "Unassigned" }];
 }
 
-// ── pagination ──────────────────────────────────────────────────────────────
+// ── pagination (same offset/limit model as the shared <Pagination>) ─────────
 
 export interface Page<T> {
   items: T[];
-  /** 1-based, clamped into [1, totalPages] */
-  page: number;
-  totalPages: number;
   total: number;
-  /** 1-based index of the first row shown (0 when empty) */
-  start: number;
-  /** 1-based index of the last row shown (0 when empty) */
-  end: number;
+  limit: number;
+  /** clamped onto a real page boundary */
+  offset: number;
 }
 
-/** Parse a page number from the URL; anything invalid is page 1. */
-export function parsePage(raw: string): number {
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 1 ? n : 1;
+/** Parse `?offset=` from the URL; anything invalid is 0 (first page). */
+export function parseOffset(raw: string | null | undefined): number {
+  const n = Number(raw ?? "0");
+  return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
 /**
- * Page buttons to render: every page when there are 7 or fewer, otherwise
- * first, last and a window around the current page, with "…" for gaps.
+ * Slice an already-filtered list. Pages never overlap or skip rows; an
+ * out-of-range offset (e.g. the list shrank) snaps to the last real page.
  */
-export function pageNumbers(current: number, totalPages: number): (number | "…")[] {
-  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
-  const keep = new Set([1, totalPages, current - 1, current, current + 1]);
-  const out: (number | "…")[] = [];
-  for (let p = 1; p <= totalPages; p++) {
-    if (!keep.has(p)) continue;
-    const prev = out[out.length - 1];
-    if (typeof prev === "number" && p - prev > 1) out.push("…");
-    out.push(p);
-  }
-  return out;
+export function paginate<T>(items: readonly T[], offset: number, limit = PAGE_SIZE): Page<T> {
+  const total = items.length;
+  const lastOffset = total === 0 ? 0 : Math.floor((total - 1) / limit) * limit;
+  const aligned = Math.floor(Math.max(0, offset) / limit) * limit;
+  const current = Math.min(aligned, lastOffset);
+  return { items: items.slice(current, current + limit), total, limit, offset: current };
 }
 
-/** Slice an already-filtered list. Non-overlapping, gap-free pages. */
-export function paginate<T>(items: readonly T[], page: number, size = PAGE_SIZE): Page<T> {
-  const total = items.length;
-  const totalPages = Math.max(1, Math.ceil(total / size));
-  const current = Math.min(Math.max(1, Math.floor(page) || 1), totalPages);
-  const offset = (current - 1) * size;
-  const slice = items.slice(offset, offset + size);
-  return {
-    items: slice,
-    page: current,
-    totalPages,
-    total,
-    start: total === 0 ? 0 : offset + 1,
-    end: offset + slice.length,
-  };
+// ── return address (list -> detail -> back to the same list state) ──────────
+
+export const DELIVERABLES_LIST_HREF = "/projects/deliverables";
+export const DELIVERABLE_RETURN_PARAM = "from";
+
+/** Detail URL carrying the list URL it was opened from (filters + page). */
+export function deliverableDetailHref(id: string, from?: string | null): string {
+  const base = `${DELIVERABLES_LIST_HREF}/${id}`;
+  const target = (from ?? "").trim();
+  return target ? `${base}?${DELIVERABLE_RETURN_PARAM}=${encodeURIComponent(target)}` : base;
+}
+
+/**
+ * Where "← Deliverables" goes. Only the Deliverables list itself is accepted
+ * as a return target; anything else (other routes, absolute or `//host` URLs,
+ * look-alikes) falls back to the plain list - same rule as Leave Detail.
+ */
+export function deliverableReturnHref(raw: string | null | undefined): string {
+  const target = (raw ?? "").trim();
+  const [path] = target.split("?");
+  return path === DELIVERABLES_LIST_HREF ? target : DELIVERABLES_LIST_HREF;
 }

@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Pagination } from "@/components/data/pagination";
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
@@ -71,18 +72,18 @@ import {
   type DeliverableFormValues,
 } from "../schemas";
 import { canManageRow, creatableProjects } from "../manage-access";
+import { rememberListReturn } from "../return-nav";
 import {
   ALL,
   activityFilterOptions,
   assigneeFilterOptions,
+  deliverableDetailHref,
   filterDeliverables,
   isFiltered,
-  pageNumbers,
   paginate,
-  parsePage,
+  parseOffset,
   projectFilterOptions,
   type FilterOption,
-  type Page,
 } from "../list-filters";
 import { DELIVERABLE_STATUS_LABEL, type Deliverable } from "../types";
 import { DeliverableStatusBadge } from "./status-badge";
@@ -96,7 +97,8 @@ interface ProjectOption {
 // Create / edit form (project selectable on create, locked on edit)
 // ---------------------------------------------------------------------------
 
-function DeliverableFormPanel({
+/** Also used by the Deliverable Details page for its Edit action. */
+export function DeliverableFormPanel({
   editing,
   projectOptions,
   onDone,
@@ -355,7 +357,8 @@ function DeliverableFormPanel({
 // Delete confirmation (project-scoped mutation)
 // ---------------------------------------------------------------------------
 
-function DeleteDeliverableDialog({
+/** Also used by the Deliverable Details page for its Delete action. */
+export function DeleteDeliverableDialog({
   target,
   onOpenChange,
   onDeleted,
@@ -444,65 +447,6 @@ function AssigneeCell({ deliverable }: { deliverable: Deliverable }) {
   return <span className="font-medium">{a.name}</span>;
 }
 
-function DeliverablesPagination({
-  page,
-  onPageChange,
-}: {
-  page: Page<Deliverable>;
-  onPageChange: (page: number) => void;
-}) {
-  return (
-    <div
-      data-testid="deliverables-pagination"
-      className="flex flex-col gap-2 border-t border-border bg-secondary/30 px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
-    >
-      <span className="tabular">
-        Showing {page.start}-{page.end} of {page.total}{" "}
-        {page.total === 1 ? "deliverable" : "deliverables"}
-        <span className="ml-2">
-          (Page {page.page} of {page.totalPages})
-        </span>
-      </span>
-      <div className="flex flex-wrap items-center gap-1">
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={page.page <= 1}
-          onClick={() => onPageChange(page.page - 1)}
-        >
-          Previous
-        </Button>
-        {pageNumbers(page.page, page.totalPages).map((p, i) =>
-          p === "…" ? (
-            <span key={`gap-${i}`} className="px-1">
-              …
-            </span>
-          ) : (
-            <Button
-              key={p}
-              variant={p === page.page ? "primary" : "ghost"}
-              size="sm"
-              aria-current={p === page.page ? "page" : undefined}
-              aria-label={`Page ${p}`}
-              onClick={() => onPageChange(p)}
-            >
-              {p}
-            </Button>
-          ),
-        )}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={page.page >= page.totalPages}
-          onClick={() => onPageChange(page.page + 1)}
-        >
-          Next
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
@@ -538,7 +482,8 @@ export function AllDeliverablesView() {
   const [activityFilter, setActivityFilter] = useUrlState("activity", ALL);
   const [assigneeFilter, setAssigneeFilter] = useUrlState("assignee", ALL);
   const [statusFilter, setStatusFilter] = useUrlState("status", ALL);
-  const [pageParam, setPageParam] = useUrlState("page", "1");
+  // Same `?offset=` model as Projects / Employees / the other paged tables.
+  const [offsetParam, setOffsetParam] = useUrlState("offset", "0");
   const filters = {
     project: projectFilter,
     activity: activityFilter,
@@ -549,7 +494,7 @@ export function AllDeliverablesView() {
   function changeFilter(set: (v: string) => void) {
     return (v: string) => {
       set(v || ALL);
-      setPageParam("1");
+      setOffsetParam("0");
     };
   }
 
@@ -558,7 +503,15 @@ export function AllDeliverablesView() {
     setActivityFilter(ALL);
     setAssigneeFilter(ALL);
     setStatusFilter(ALL);
-    setPageParam("1");
+    setOffsetParam("0");
+  }
+
+  // Open a deliverable carrying THIS list's URL (filters + page), so the
+  // detail page's "← Deliverables" returns to exactly this state.
+  function openDetail(id: string) {
+    const here = `${window.location.pathname}${window.location.search}`;
+    rememberListReturn(id);
+    router.push(deliverableDetailHref(id, here));
   }
 
   // While adding/editing, the page shows ONLY the form (no list) - start at the top.
@@ -580,7 +533,7 @@ export function AllDeliverablesView() {
   const deliverables = query.data ?? [];
   // Filter first, then paginate the filtered result.
   const visible = filterDeliverables(deliverables, filters);
-  const page = paginate(visible, parsePage(pageParam));
+  const page = paginate(visible, parseOffset(offsetParam));
   const filtered = isFiltered(filters);
   // Edit/Delete follow the backend's per-row `can_manage` for this caller.
   // Decided over ALL rows so the column doesn't flicker between pages/filters.
@@ -716,7 +669,7 @@ export function AllDeliverablesView() {
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
-                    onClick={() => router.push(`/projects/deliverables/${d.id}`)}
+                    onClick={() => openDetail(d.id)}
                   >
                     <TableCell className="text-sm">
                       <Link
@@ -773,7 +726,12 @@ export function AllDeliverablesView() {
             </Table>
           )}
           {visible.length > 0 && !query.isLoading && !query.isError && (
-            <DeliverablesPagination page={page} onPageChange={(p) => setPageParam(String(p))} />
+            <Pagination
+              total={page.total}
+              limit={page.limit}
+              offset={page.offset}
+              onPageChange={(next) => setOffsetParam(String(next))}
+            />
           )}
         </CardContent>
       </Card>

@@ -69,8 +69,12 @@ export function WorkReportEdit({ id }: { id: string }) {
 
   return (
     <>
+      {/* `replace`: the edit page swaps back to the preview in the SAME history
+          entry (Edit was opened with replace too), so history stays
+          `Reports -> Report` and Back never loops edit <-> preview. */}
       <Link
         href={`/work-reports/${report.id}`}
+        replace
         className="text-sm text-primary hover:underline"
       >
         ← Report

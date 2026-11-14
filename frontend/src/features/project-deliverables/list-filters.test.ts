@@ -10,11 +10,12 @@ import {
   UNASSIGNED,
   activityFilterOptions,
   assigneeFilterOptions,
+  deliverableDetailHref,
+  deliverableReturnHref,
   filterDeliverables,
   isFiltered,
-  pageNumbers,
   paginate,
-  parsePage,
+  parseOffset,
   projectFilterOptions,
 } from "./list-filters.ts";
 
@@ -124,53 +125,69 @@ test("assignee options only list people present in the (already scoped) rows", (
   assert.deepEqual(assigneeFilterOptions([rows[2]]), [{ value: UNASSIGNED, label: "Unassigned" }]);
 });
 
-// ── pagination ─────────────────────────────────────────────────────────────
+
+// ── pagination (offset/limit, same model as the shared <Pagination>) ──────
 
 const many = Array.from({ length: 27 }, (_, i) => ({ id: String(i + 1) }));
 
-test("10 per page, with correct range and totals", () => {
+test("10 per page, offsets 0 / 10 / 20", () => {
   assert.equal(PAGE_SIZE, 10);
-  const p1 = paginate(many, 1);
-  assert.deepEqual([p1.items.length, p1.start, p1.end, p1.total, p1.totalPages], [10, 1, 10, 27, 3]);
-  const p3 = paginate(many, 3);
-  assert.deepEqual([p3.items.length, p3.start, p3.end], [7, 21, 27]);
+  const p1 = paginate(many, 0);
+  assert.deepEqual([p1.items.length, p1.offset, p1.limit, p1.total], [10, 0, 10, 27]);
+  const p3 = paginate(many, 20);
+  assert.deepEqual([p3.items.length, ids(p3.items)[0], p3.offset], [7, "21", 20]);
 });
 
 test("pages have no duplicates and no gaps", () => {
-  const seen = [1, 2, 3].flatMap((n) => ids(paginate(many, n).items));
+  const seen = [0, 10, 20].flatMap((o) => ids(paginate(many, o).items));
   assert.deepEqual(seen, ids(many));
 });
 
 test("fewer than 10 rows is one page; empty is safe", () => {
-  const few = paginate(many.slice(0, 4), 1);
-  assert.deepEqual([few.items.length, few.page, few.totalPages, few.start, few.end], [4, 1, 1, 1, 4]);
-  const none = paginate([], 1);
-  assert.deepEqual([none.items.length, none.page, none.totalPages, none.start, none.end], [0, 1, 1, 0, 0]);
+  const few = paginate(many.slice(0, 4), 0);
+  assert.deepEqual([few.items.length, few.offset, few.total], [4, 0, 4]);
+  const none = paginate([], 0);
+  assert.deepEqual([none.items.length, none.offset, none.total], [0, 0, 0]);
 });
 
-test("out-of-range or invalid page numbers are clamped", () => {
-  assert.equal(paginate(many, 9).page, 3);
-  assert.equal(paginate(many, 0).page, 1);
-  assert.equal(parsePage("abc"), 1);
-  assert.equal(parsePage("-2"), 1);
-  assert.equal(parsePage("2"), 2);
+test("out-of-range or invalid offsets snap to a real page", () => {
+  assert.equal(paginate(many, 90).offset, 20);    // list shrank -> last page
+  assert.equal(paginate(many, 13).offset, 10);    // mid-page -> page start
+  assert.equal(paginate(many, -5).offset, 0);
+  assert.equal(parseOffset("abc"), 0);
+  assert.equal(parseOffset("-10"), 0);
+  assert.equal(parseOffset(null), 0);
+  assert.equal(parseOffset("20"), 20);
 });
 
 test("pagination applies after filtering", () => {
   const filtered = filterDeliverables(rows, { ...NO_FILTERS, assignee: "e1" });
-  const p = paginate(filtered, 1);
-  assert.deepEqual([p.total, p.totalPages, ids(p.items)], [2, 1, ["1", "4"]]);
+  const p = paginate(filtered, 0);
+  assert.deepEqual([p.total, ids(p.items)], [2, ["1", "4"]]);
 });
 
-test("page buttons: all pages when few, ellipsis when many", () => {
-  assert.deepEqual(pageNumbers(1, 3), [1, 2, 3]);
-  assert.deepEqual(pageNumbers(5, 10), [1, "…", 4, 5, 6, "…", 10]);
-  assert.deepEqual(pageNumbers(1, 10), [1, 2, "…", 10]);
+// ── list -> detail -> back keeps filters + page ────────────────────────────
+
+test("detail link carries the list URL and the back link restores it", () => {
+  const from = "/projects/deliverables?project=p1&assignee=e1&offset=10";
+  const href = deliverableDetailHref("d-1", from);
+  assert.equal(href, `/projects/deliverables/d-1?from=${encodeURIComponent(from)}`);
+  const raw = new URL(href, "http://x").searchParams.get("from");
+  assert.equal(deliverableReturnHref(raw), from);
+});
+
+test("back link only ever returns to the Deliverables list", () => {
+  assert.equal(deliverableDetailHref("d-1"), "/projects/deliverables/d-1");
+  for (const bad of [null, "", "/attendance", "https://evil.example/projects/deliverables",
+                     "//evil.example", "/projects/deliverables-x?a=1"]) {
+    assert.equal(deliverableReturnHref(bad), "/projects/deliverables", String(bad));
+  }
+  assert.equal(deliverableReturnHref("/projects/deliverables"), "/projects/deliverables");
 });
 
 // ── view wiring (no React render harness under node --test) ────────────────
 
-test("list view source: filter order, column order, page reset, pagination", () => {
+test("list view source: filter order, column order, page reset, shared pagination", () => {
   const src = readFileSync(
     fileURLToPath(new URL("./components/all-deliverables-view.tsx", import.meta.url)),
     "utf8",
@@ -192,11 +209,17 @@ test("list view source: filter order, column order, page reset, pagination", () 
     ]),
     "columns must be Project | Activity | Assignee | Planned Submission | Status | Actions",
   );
-  // Every filter change and Clear return to page 1; rows rendered are the page slice.
-  assert.match(src, /set\(v \|\| ALL\);\s*setPageParam\("1"\);/);
-  assert.match(src, /setStatusFilter\(ALL\);\s*setPageParam\("1"\);/);
+  // Every filter change and Clear return to the first page.
+  assert.match(src, /set\(v \|\| ALL\);\s*setOffsetParam\("0"\);/);
+  assert.match(src, /setStatusFilter\(ALL\);\s*setOffsetParam\("0"\);/);
   assert.ok(src.includes("page.items.map((d)"));
   assert.ok(!src.includes("visible.map((d)"));
+  // The SAME pagination control as every other table - not a new one.
+  assert.ok(src.includes('import { Pagination } from "@/components/data/pagination"'));
+  assert.ok(src.includes('useUrlState("offset", "0")'));
+  assert.equal(src.includes("DeliverablesPagination"), false);
+  // Rows open the detail WITH the return address.
+  assert.ok(src.includes("deliverableDetailHref(id, here)"));
   // Responsive: stacked on mobile, 2-up on small, single row on large.
   assert.ok(src.includes("grid gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(4,minmax(0,1fr))_auto]"));
   // Form: Activity Name and Assignee share one row (half width each), and

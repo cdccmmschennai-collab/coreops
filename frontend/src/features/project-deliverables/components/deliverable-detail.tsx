@@ -1,11 +1,14 @@
 "use client";
 
+import * as React from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { CalendarClock, CheckCircle2, RefreshCcw } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CalendarClock, CheckCircle2, Pencil, RefreshCcw, Trash2 } from "lucide-react";
 
 import { ErrorState } from "@/components/feedback/error-state";
 import { PageHeader } from "@/components/shell/page-header";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AppError } from "@/lib/api-client";
@@ -23,6 +26,7 @@ import {
   projectLabel,
 } from "../detail-view";
 import { useDeliverable, useDeliverableChanges } from "../hooks";
+import { DELIVERABLE_RETURN_PARAM, deliverableReturnHref } from "../list-filters";
 import {
   DELIVERABLE_CHANGE_FIELD_LABEL,
   DELIVERABLE_STATUS_LABEL,
@@ -31,6 +35,9 @@ import {
   type DeliverableChange,
   type DeliverableStatus,
 } from "../types";
+import { canManageRow } from "../manage-access";
+import { leaveDetail } from "../return-nav";
+import { DeleteDeliverableDialog, DeliverableFormPanel } from "./all-deliverables-view";
 import { DeliverableStatusBadge } from "./status-badge";
 
 // ── date helpers ───────────────────────────────────────────────────────────────
@@ -158,6 +165,21 @@ function Timeline({
 export function DeliverableDetail({ id }: { id: string }) {
   const query = useDeliverable(id);
   const deliverable = query.data;
+  // "← Deliverables" returns to the exact list state it was opened from
+  // (filters + page, via `?from=`); a cold/deep link falls back to the list.
+  const backHref = deliverableReturnHref(
+    useSearchParams().get(DELIVERABLE_RETURN_PARAM),
+  );
+  const router = useRouter();
+  // Edit happens IN PLACE (no navigation), so it never adds a history entry.
+  const [editing, setEditing] = React.useState(false);
+  const [pendingDelete, setPendingDelete] = React.useState<Deliverable | null>(null);
+
+  // Back link and post-delete exit: history.back() when the list is behind
+  // us, else replace - so Back never loops between details and the list.
+  function goBack() {
+    leaveDetail(id, backHref, router);
+  }
 
   if (query.isLoading) {
     return (
@@ -189,8 +211,15 @@ export function DeliverableDetail({ id }: { id: string }) {
   return (
     <>
       <Link
-        href="/projects/deliverables"
+        href={backHref}
         className="text-sm text-primary hover:underline"
+        onClick={(e) => {
+          // Plain click: leave without growing history. Modified clicks
+          // (new tab / window) keep the normal link behaviour.
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          goBack();
+        }}
       >
         ← Deliverables
       </Link>
@@ -198,22 +227,69 @@ export function DeliverableDetail({ id }: { id: string }) {
         className="mt-2"
         title={deliverable.name}
         subtitle={deliverable.description ?? undefined}
-        actions={<DeliverableStatusBadge status={deliverable.status} />}
+        actions={
+          <div className="flex items-center gap-1">
+            {/* Same Edit / Delete controls as the table's Actions column, to
+                the left of the status badge; PM / project Head only. */}
+            {canManageRow(deliverable) && !editing && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Edit"
+                  onClick={() => setEditing(true)}
+                >
+                  <Pencil className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Delete"
+                  onClick={() => setPendingDelete(deliverable)}
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </>
+            )}
+            <DeliverableStatusBadge status={deliverable.status} />
+          </div>
+        }
       />
 
-      {/* Two columns on desktop (details | timeline), stacked on mobile with
-          details first - DOM order is the mobile order. */}
-      <div
-        data-testid="deliverable-detail-grid"
-        className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2"
-      >
-        <div className="min-w-0">
-          <DetailsCard deliverable={deliverable} />
+      {editing ? (
+        // The list page's own form; saving refreshes this page's details and
+        // timeline (same query invalidation) and returns to the view.
+        <DeliverableFormPanel
+          editing={deliverable}
+          projectOptions={[]}
+          onDone={() => setEditing(false)}
+        />
+      ) : (
+        /* Two columns on desktop (details | timeline), stacked on mobile with
+           details first - DOM order is the mobile order. */
+        <div
+          data-testid="deliverable-detail-grid"
+          className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2"
+        >
+          <div className="min-w-0">
+            <DetailsCard deliverable={deliverable} />
+          </div>
+          <div className="min-w-0">
+            <Timeline deliverableId={deliverable.id} activityName={deliverable.name} />
+          </div>
         </div>
-        <div className="min-w-0">
-          <Timeline deliverableId={deliverable.id} activityName={deliverable.name} />
-        </div>
-      </div>
+      )}
+
+      <DeleteDeliverableDialog
+        target={pendingDelete}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        onDeleted={() => {
+          setPendingDelete(null);
+          goBack();
+        }}
+      />
     </>
   );
 }

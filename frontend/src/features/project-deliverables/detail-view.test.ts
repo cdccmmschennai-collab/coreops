@@ -99,7 +99,8 @@ test("detail page source: two columns on desktop, details first, timeline preser
     "Reason: {c.reason}",
     'c.changed_by_name || "System"',
     "has been delivered.",
-    'href="/projects/deliverables"',
+    "href={backHref}",
+    "deliverableReturnHref(",
     "<DeliverableStatusBadge",
   ]) {
     assert.equal(src.includes(kept), true, `detail page must contain ${JSON.stringify(kept)}`);
