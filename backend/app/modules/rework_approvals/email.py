@@ -154,3 +154,113 @@ def send_request_email(
         )
     except Exception:  # noqa: BLE001 - never endanger the committed submit
         logger.exception("rework_email.failed request=%s", req.id)
+
+
+# ---------- decision emails to the employee ---------------------------------
+
+def render_decision_email(
+    *,
+    employee_name: str,
+    req: ReworkApprovalRequest,
+    reviewer_name: str | None,
+    link: str | None,
+) -> RenderedEmail:
+    """Approved / Rejected letter to the employee. Pure."""
+    from app.modules.rework_approvals.service import DAY_PART_LABEL
+
+    product = settings.PRODUCT_NAME
+    approved = req.status == "approved"
+    project = " - ".join(p for p in (req.project_code, req.project_name) if p) or "-"
+    activity = " / ".join(p for p in (req.activity_name, req.sub_activity_name) if p)
+    details = [
+        ("Activity", activity),
+        ("Project", project),
+        ("Reporting Date", req.report_date.strftime(_DATE_FMT)),
+        ("Day Part", DAY_PART_LABEL.get(req.day_part, req.day_part)),
+        ("Reviewed By", reviewer_name or "-"),
+        ("Status", "Approved" if approved else "Rejected"),
+    ]
+    remarks = (req.review_remarks or "").strip()
+    if remarks:
+        details.append(("Rejection Remarks" if not approved else "PM Remarks", remarks))
+    if approved:
+        intro = "Your rework activity has been approved."
+        closing = "No further action is needed."
+        subject = f"Rework Approved - {req.sub_activity_name} - {req.report_date:%d %b %Y}"
+    else:
+        intro = "Your rework activity has been rejected and needs your action."
+        closing = (
+            "Please open the report, correct the rejected activity and resubmit it. "
+            "Your other activities on this report are unchanged."
+        )
+        subject = (
+            f"Rework Rejected - Action Required - {req.sub_activity_name} - "
+            f"{req.report_date:%d %b %Y}"
+        )
+    link_text = "View Work Report"
+
+    text_lines = [f"Dear {employee_name},", "", intro, ""]
+    text_lines += [f"{label}: {value}" for label, value in details]
+    text_lines += ["", closing]
+    if link:
+        text_lines += ["", f"{link_text}:", link]
+    text_lines += [
+        "", "Regards,", product, "",
+        f"Request ID: {req.id}", "Automated notification - please do not reply.",
+    ]
+
+    e = _html.escape
+    paragraphs = [
+        f"<p>Dear {e(employee_name)},</p>",
+        f"<p><b>{e(intro)}</b></p>",
+        "<p>" + "<br>".join(f"{e(label)}: {e(value)}" for label, value in details) + "</p>",
+        f"<p>{e(closing)}</p>",
+    ]
+    if link:
+        paragraphs.append(
+            f'<p><a href="{e(link, quote=True)}" '
+            f'style="color:#1155cc;text-decoration:underline;"><b>{link_text}</b></a></p>'
+        )
+    paragraphs.append(f"<p>Regards,<br>{e(product)}</p>")
+    paragraphs.append(
+        f"<p>Request ID: {e(str(req.id))}<br>Automated notification - please do not reply.</p>"
+    )
+    html_body = (
+        '<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+        'line-height:1.5;color:#000000;text-align:left;">\n'
+        + "\n".join(paragraphs)
+        + "\n</body></html>"
+    )
+    return RenderedEmail(subject=subject, text_body="\n".join(text_lines), html_body=html_body)
+
+
+def send_decision_email(
+    employee: Employee,
+    req: ReworkApprovalRequest,
+    *,
+    reviewer_name: str | None,
+    report_path: str,
+) -> None:
+    """Queue the decision email to the employee's work email. Never raises."""
+    try:
+        if not (employee.work_email or "").strip():
+            logger.info("rework_decision_email.skipped reason=no_work_email request=%s", req.id)
+            return
+        rendered = render_decision_email(
+            employee_name=employee.full_name,
+            req=req,
+            reviewer_name=reviewer_name,
+            link=build_link(report_path),
+        )
+        result = enqueue_email(
+            to=employee.work_email,
+            subject=rendered.subject,
+            text_body=rendered.text_body,
+            html_body=rendered.html_body,
+        )
+        logger.info(
+            "rework_decision_email.%s request=%s reason=%s",
+            "queued" if result.queued else "not_queued", req.id, result.reason,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("rework_decision_email.failed request=%s", req.id)

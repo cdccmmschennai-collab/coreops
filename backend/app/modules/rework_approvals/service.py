@@ -33,15 +33,18 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.activity_master.models import ActivityMaster
 from app.modules.employees.models import Employee
+from app.modules.employees.service import _current_employee
 from app.modules.projects.models import ProjectManager
 from app.modules.rework_approvals.models import ReworkApprovalRequest, ReworkRequestStatus
-from app.modules.users.models import User
+from app.modules.users.models import User, UserRole
+from app.shared.errors import AppError
 from app.modules.work_reports.models import (
     DailyWorkReport,
     DayPart,
@@ -236,3 +239,415 @@ def notify_new_requests(db: Session, requests: list[ReworkApprovalRequest]) -> N
         except Exception:  # noqa: BLE001 - the submit already committed
             db.rollback()
             logger.exception("rework.notify_failed request=%s", req.id)
+
+
+# ======================================================================
+# Phase 3 - review: listing, detail, approve / reject
+# ======================================================================
+#
+# AUTHORITY: any project_manager may decide any request (the existing
+# PM-reviews-everything rule the user confirmed), except their OWN. Enforced
+# here, never only in the UI. An email link grants nothing: every endpoint
+# requires an authenticated session.
+#
+# CONCURRENCY: a decision locks the request row (SELECT ... FOR UPDATE) and
+# re-checks status == pending under the lock, so two PMs deciding at once
+# produce exactly one decision; the loser gets a clean 422.
+
+_LISTED_STATUSES = (
+    ReworkRequestStatus.pending.value,
+    ReworkRequestStatus.approved.value,
+    ReworkRequestStatus.rejected.value,
+)
+
+
+def _is_pm(actor: User) -> bool:
+    return actor.role == UserRole.project_manager
+
+
+def _require_pm(actor: User) -> None:
+    if not _is_pm(actor):
+        raise AppError("forbidden", "Only project managers can review rework requests.", 403)
+
+
+def _fetch(db: Session, request_id: uuid.UUID) -> ReworkApprovalRequest:
+    req = db.get(ReworkApprovalRequest, request_id)
+    if req is None:
+        raise AppError("not_found", "Rework request not found.", 404)
+    return req
+
+
+def _user_display_names(db: Session, user_ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
+    if not user_ids:
+        return {}
+    names: dict[uuid.UUID, str] = {}
+    for emp in db.execute(
+        select(Employee).where(Employee.user_id.in_(user_ids), Employee.deleted_at.is_(None))
+    ).scalars():
+        names.setdefault(emp.user_id, emp.full_name)
+    for uid, email in db.execute(select(User.id, User.email).where(User.id.in_(user_ids))).all():
+        names.setdefault(uid, email)
+    return names
+
+
+def _serialize(
+    db: Session, actor: User, rows: list[ReworkApprovalRequest]
+) -> list[dict]:
+    if not rows:
+        return []
+    employees = {
+        e.id: e
+        for e in db.execute(
+            select(Employee).where(Employee.id.in_({r.employee_id for r in rows}))
+        ).scalars()
+    }
+    user_ids = {r.requested_by for r in rows if r.requested_by} | {
+        r.reviewer_id for r in rows if r.reviewer_id
+    }
+    names = _user_display_names(db, user_ids)
+    me = _current_employee(db, actor)
+    out = []
+    for r in rows:
+        emp = employees.get(r.employee_id)
+        own = me is not None and r.employee_id == me.id
+        out.append({
+            "id": r.id,
+            "report_id": r.report_id,
+            "employee_id": r.employee_id,
+            "employee_code": (emp.employee_code if emp else "") or "",
+            "employee_name": emp.full_name if emp else "",
+            "project_id": r.project_id,
+            "project_code": r.project_code,
+            "project_name": r.project_name,
+            "activity_id": r.activity_id,
+            "activity_name": r.activity_name,
+            "sub_activity_id": r.sub_activity_id,
+            "sub_activity_name": r.sub_activity_name,
+            "report_date": r.report_date,
+            "day_part": r.day_part,
+            "employee_remarks": r.employee_remarks,
+            "status": r.status,
+            "cycle_no": r.cycle_no,
+            "requested_at": r.requested_at,
+            "requested_by_name": names.get(r.requested_by) if r.requested_by else None,
+            "reviewer_name": names.get(r.reviewer_id) if r.reviewer_id else None,
+            "review_remarks": r.review_remarks,
+            "decided_at": r.decided_at,
+            "can_review": _is_pm(actor)
+            and not own
+            and r.status == ReworkRequestStatus.pending.value,
+        })
+    return out
+
+
+def _filtered(
+    stmt,
+    *,
+    project_id: uuid.UUID | None,
+    employee_id: uuid.UUID | None,
+    report_date: date | None,
+    sub_activity_id: uuid.UUID | None,
+):
+    if project_id is not None:
+        stmt = stmt.where(ReworkApprovalRequest.project_id == project_id)
+    if employee_id is not None:
+        stmt = stmt.where(ReworkApprovalRequest.employee_id == employee_id)
+    if report_date is not None:
+        stmt = stmt.where(ReworkApprovalRequest.report_date == report_date)
+    if sub_activity_id is not None:
+        stmt = stmt.where(ReworkApprovalRequest.sub_activity_id == sub_activity_id)
+    return stmt
+
+
+def list_requests(
+    db: Session,
+    actor: User,
+    *,
+    status: str | None,
+    project_id: uuid.UUID | None,
+    employee_id: uuid.UUID | None,
+    report_date: date | None,
+    sub_activity_id: uuid.UUID | None,
+    limit: int,
+    offset: int,
+) -> dict:
+    """PM listing. Filters combine (AND). The summary counts honour every
+    filter except status, so the three cards always add up to the rows the
+    other filters select. Cancelled cycles are housekeeping, never listed."""
+    _require_pm(actor)
+    filters = dict(
+        project_id=project_id, employee_id=employee_id,
+        report_date=report_date, sub_activity_id=sub_activity_id,
+    )
+    base = _filtered(
+        select(ReworkApprovalRequest).where(
+            ReworkApprovalRequest.status.in_(_LISTED_STATUSES)
+        ),
+        **filters,
+    )
+    counts = {s: 0 for s in _LISTED_STATUSES}
+    for st, n in db.execute(
+        _filtered(
+            select(ReworkApprovalRequest.status, func.count())
+            .where(ReworkApprovalRequest.status.in_(_LISTED_STATUSES))
+            .group_by(ReworkApprovalRequest.status),
+            **filters,
+        )
+    ).all():
+        counts[st] = n
+    stmt = base
+    if status is not None:
+        stmt = stmt.where(ReworkApprovalRequest.status == status)
+    total = db.execute(
+        select(func.count()).select_from(stmt.order_by(None).subquery())
+    ).scalar_one()
+    rows = list(
+        db.execute(
+            stmt.order_by(
+                # Pending first, then newest.
+                (ReworkApprovalRequest.status != ReworkRequestStatus.pending.value),
+                ReworkApprovalRequest.requested_at.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        ).scalars()
+    )
+    return {
+        "items": _serialize(db, actor, rows),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "counts": counts,
+    }
+
+
+def pending_count(db: Session, actor: User) -> int:
+    """Pending requests this PM can act on (their own excluded)."""
+    _require_pm(actor)
+    stmt = select(func.count()).select_from(ReworkApprovalRequest).where(
+        ReworkApprovalRequest.status == ReworkRequestStatus.pending.value
+    )
+    me = _current_employee(db, actor)
+    if me is not None:
+        stmt = stmt.where(ReworkApprovalRequest.employee_id != me.id)
+    return db.execute(stmt).scalar_one()
+
+
+def filter_options(db: Session, actor: User) -> dict:
+    """Dropdown sources built from the requests themselves, so every option
+    selects at least one row."""
+    _require_pm(actor)
+    listed = ReworkApprovalRequest.status.in_(_LISTED_STATUSES)
+    projects = db.execute(
+        select(
+            ReworkApprovalRequest.project_id,
+            func.max(ReworkApprovalRequest.project_code),
+            func.max(ReworkApprovalRequest.project_name),
+        ).where(listed).group_by(ReworkApprovalRequest.project_id)
+    ).all()
+    employees = db.execute(
+        select(Employee).where(
+            Employee.id.in_(select(ReworkApprovalRequest.employee_id).where(listed))
+        )
+    ).scalars().all()
+    activities = db.execute(
+        select(
+            ReworkApprovalRequest.sub_activity_id,
+            func.max(ReworkApprovalRequest.activity_name),
+            func.max(ReworkApprovalRequest.sub_activity_name),
+        ).where(listed).group_by(ReworkApprovalRequest.sub_activity_id)
+    ).all()
+
+    def _join(*parts):
+        return " - ".join(p for p in parts if p)
+
+    return {
+        "projects": sorted(
+            ({"value": pid, "label": _join(code, name) or str(pid)} for pid, code, name in projects),
+            key=lambda o: o["label"].lower(),
+        ),
+        "employees": sorted(
+            (
+                {"value": e.id, "label": _join(e.employee_code, e.full_name)}
+                for e in employees
+            ),
+            key=lambda o: o["label"].lower(),
+        ),
+        "activities": sorted(
+            ({"value": sid, "label": _join(act, sub)} for sid, act, sub in activities),
+            key=lambda o: o["label"].lower(),
+        ),
+    }
+
+
+def _history(db: Session, req: ReworkApprovalRequest) -> list[ReworkApprovalRequest]:
+    """Every cycle of the same report row, oldest first."""
+    if req.report_id is None:
+        chain = [req]
+        prev = req.previous_request_id
+        while prev is not None:
+            p = db.get(ReworkApprovalRequest, prev)
+            if p is None:
+                break
+            chain.insert(0, p)
+            prev = p.previous_request_id
+        return chain
+    return list(
+        db.execute(
+            select(ReworkApprovalRequest)
+            .where(
+                ReworkApprovalRequest.report_id == req.report_id,
+                ReworkApprovalRequest.day_part == req.day_part,
+                ReworkApprovalRequest.sub_activity_id == req.sub_activity_id,
+            )
+            .order_by(ReworkApprovalRequest.cycle_no, ReworkApprovalRequest.requested_at)
+        ).scalars()
+    )
+
+
+def get_request(db: Session, actor: User, request_id: uuid.UUID) -> dict:
+    """Detail for the PM, or for the employee who owns the request."""
+    req = _fetch(db, request_id)
+    if not _is_pm(actor):
+        me = _current_employee(db, actor)
+        if me is None or me.id != req.employee_id:
+            raise AppError("forbidden", "You cannot view this rework request.", 403)
+    [out] = _serialize(db, actor, [req])
+    out["history"] = _serialize(db, actor, _history(db, req))
+
+    report = db.get(DailyWorkReport, req.report_id) if req.report_id else None
+    out["report_status"] = report.status.value if report is not None else None
+    activities = []
+    if report is not None:
+        part_by_period = dict(
+            db.execute(
+                select(WorkReportPeriod.id, WorkReportPeriod.day_part).where(
+                    WorkReportPeriod.report_id == report.id
+                )
+            ).all()
+        )
+        rows = list(
+            db.execute(
+                select(WorkReportTask)
+                .where(WorkReportTask.report_id == report.id)
+                .order_by(WorkReportTask.created_at)
+            ).scalars()
+        )
+        statuses = status_by_request_id(
+            db, {r.rework_request_id for r in rows if r.rework_request_id}
+        )
+        for r in rows:
+            activities.append({
+                "activity_name": r.activity_name,
+                "sub_activity_name": r.sub_activity_name,
+                "project_code": r.project_code,
+                "day_part": part_by_period.get(r.period_id) if r.period_id else None,
+                "description": r.description,
+                "rework_approval_status": statuses.get(r.rework_request_id)
+                if r.rework_request_id
+                else None,
+            })
+    out["report_activities"] = activities
+    if report is not None and report.status.value != "submitted":
+        # The employee is editing the report; nothing to decide until resubmit.
+        out["can_review"] = False
+    return out
+
+
+def _decide(
+    db: Session,
+    actor: User,
+    request_id: uuid.UUID,
+    *,
+    approve: bool,
+    remarks: str | None,
+) -> ReworkApprovalRequest:
+    _require_pm(actor)
+    if not approve and not remarks:
+        raise AppError("validation_error", "Rejection remarks are required.", 422)
+    req = db.execute(
+        select(ReworkApprovalRequest)
+        .where(ReworkApprovalRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if req is None:
+        raise AppError("not_found", "Rework request not found.", 404)
+    me = _current_employee(db, actor)
+    if me is not None and req.employee_id == me.id:
+        raise AppError("forbidden", "You can't review your own rework request.", 403)
+    if req.status != ReworkRequestStatus.pending.value:
+        raise AppError("validation_error", "This request has already been decided.", 422)
+    report = db.get(DailyWorkReport, req.report_id) if req.report_id else None
+    if report is None or report.status.value != "submitted":
+        raise AppError(
+            "validation_error",
+            "The employee is editing this report. Decide it after they resubmit.",
+            422,
+        )
+    req.status = (
+        ReworkRequestStatus.approved.value if approve else ReworkRequestStatus.rejected.value
+    )
+    req.reviewer_id = actor.id
+    req.review_remarks = remarks
+    req.decided_at = datetime.now(timezone.utc)
+    db.add(req)
+    from app.modules.audit.service import record_audit
+
+    record_audit(
+        db,
+        action="rework_request.approved" if approve else "rework_request.rejected",
+        actor=actor,
+        entity_type="rework_approval_request",
+        entity_id=req.id,
+        details={"sub_activity": req.sub_activity_name, "report_date": str(req.report_date)},
+    )
+    db.commit()
+    db.refresh(req)
+    _notify_decision(db, actor, req)
+    return req
+
+
+def approve_request(db: Session, actor: User, request_id: uuid.UUID, remarks: str | None) -> dict:
+    req = _decide(db, actor, request_id, approve=True, remarks=remarks)
+    return get_request(db, actor, req.id)
+
+
+def reject_request(db: Session, actor: User, request_id: uuid.UUID, remarks: str | None) -> dict:
+    req = _decide(db, actor, request_id, approve=False, remarks=remarks)
+    return get_request(db, actor, req.id)
+
+
+def _notify_decision(db: Session, actor: User, req: ReworkApprovalRequest) -> None:
+    """Bell + email to the employee. Runs after the commit; never raises."""
+    from app.modules.rework_approvals.email import send_decision_email
+
+    try:
+        employee = db.get(Employee, req.employee_id)
+        if employee is None:
+            return
+        approved = req.status == ReworkRequestStatus.approved.value
+        target = f"/work-reports/{req.report_id}" if req.report_id else detail_path(req.id)
+        if employee.user_id is not None:
+            from app.modules.notifications.service import create_notification
+
+            create_notification(
+                db,
+                user_id=employee.user_id,
+                type_="rework_approval_approved" if approved else "rework_approval_rejected",
+                title="Rework activity approved" if approved else "Rework activity rejected",
+                message=(
+                    f"'{req.sub_activity_name}' on {req.report_date:%d %b %Y} was approved."
+                    if approved
+                    else f"'{req.sub_activity_name}' on {req.report_date:%d %b %Y} was rejected: "
+                    f"{req.review_remarks}. Correct it and resubmit."
+                ),
+                entity_type="rework_approval_request",
+                entity_id=req.id,
+                target_url=target,
+            )
+            db.commit()
+        reviewer = _user_display_names(db, {actor.id}).get(actor.id)
+        send_decision_email(employee, req, reviewer_name=reviewer, report_path=target)
+    except Exception:  # noqa: BLE001 - the decision already committed
+        db.rollback()
+        logger.exception("rework.decision_notify_failed request=%s", req.id)

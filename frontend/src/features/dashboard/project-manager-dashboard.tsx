@@ -2,7 +2,15 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarOff, CalendarX2, Clock, Hourglass, ListPlus } from "lucide-react";
+import {
+  ArrowRight,
+  CalendarOff,
+  CalendarX2,
+  Clock,
+  Hourglass,
+  ListPlus,
+  ShieldCheck,
+} from "lucide-react";
 
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +22,7 @@ import { useEmployeeOptions } from "@/features/attendance/employee-options";
 import { PerformanceTable } from "@/features/employee-performance/components/performance-table";
 import { useActivityRequestPendingCount } from "@/features/activity-requests/hooks";
 import { usePendingContinuationRequests } from "@/features/continuation-requests/hooks";
+import { useReworkPendingCount } from "@/features/rework-approvals/hooks";
 import { useLeaveList } from "@/features/leave/hooks";
 import { usePermissionList } from "@/features/permissions/hooks";
 
@@ -57,6 +66,10 @@ export function ProjectManagerDashboard() {
   const activityRequestCount = useActivityRequestPendingCount();
   const pendingActivityRequests = activityRequestCount.data?.count ?? 0;
 
+  // Rework approvals awaiting this PM (their own excluded) - second line.
+  const reworkCount = useReworkPendingCount();
+  const pendingRework = reworkCount.data?.count ?? 0;
+
   // Lump-sum activity continuation requests awaiting review. A PM reviews
   // every project's, so this is unconditional here.
   const pendingContinuations = usePendingContinuationRequests();
@@ -94,13 +107,23 @@ export function ProjectManagerDashboard() {
               </Link>
             </Button>
           </CardHeader>
-          <CardContent className="p-4">
+          <CardContent className="flex flex-col gap-2 p-4">
             <Button asChild className="w-full justify-start" variant="secondary">
-              <Link href="/activity-requests">
+              <Link href="/activity-requests?tab=additions">
                 <ListPlus className="h-4 w-4" /> Pending requests
                 {pendingActivityRequests > 0 && (
                   <Badge variant="warning" className="ml-auto">
                     {pendingActivityRequests}
+                  </Badge>
+                )}
+              </Link>
+            </Button>
+            <Button asChild className="w-full justify-start" variant="secondary">
+              <Link href="/activity-requests?tab=rework">
+                <ShieldCheck className="h-4 w-4" /> Rework approvals
+                {pendingRework > 0 && (
+                  <Badge variant="warning" className="ml-auto">
+                    {pendingRework}
                   </Badge>
                 )}
               </Link>

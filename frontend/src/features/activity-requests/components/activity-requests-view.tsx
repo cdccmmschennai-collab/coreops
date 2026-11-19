@@ -18,14 +18,65 @@ import {
   type RelevantCountField,
 } from "@/features/activity-master/types";
 
+import { Tabs } from "@/components/ui/tabs";
+import { useUrlState } from "@/lib/use-url-state";
+import { ReworkApprovalsList } from "@/features/rework-approvals/components/rework-approvals-list";
+import { useReworkPendingCount } from "@/features/rework-approvals/hooks";
+
 import {
+  useActivityRequestPendingCount,
   useApproveActivityRequest,
   usePendingActivityRequests,
   useRejectActivityRequest,
 } from "../hooks";
 import { ACTIVITY_REQUEST_STATUS_LABEL, type ActivityRequest } from "../types";
 
+/**
+ * Activity Requests: two queues on one page. "Rework Approvals" (Rework
+ * Activity Approval, the default tab) and "Activity Additions" (the original
+ * request-another-activity list, unchanged). The tab is URL state, so Back
+ * from a rework request returns to this tab.
+ */
 export function ActivityRequestsView() {
+  const [tab, setTab] = useUrlState("tab", "rework");
+  const additions = useActivityRequestPendingCount();
+  const rework = useReworkPendingCount();
+
+  return (
+    <>
+      <Link href="/" className="text-sm text-primary hover:underline">
+        ← Home
+      </Link>
+      <PageHeader
+        className="mt-2"
+        title="Activity Requests"
+        subtitle="Rework approvals and requests to be added to another activity"
+      />
+      <Tabs
+        className="mb-4"
+        value={tab}
+        onChange={setTab}
+        items={[
+          {
+            value: "rework",
+            label: "Rework Approvals",
+            count: rework.data?.count ?? 0,
+            countVariant: "warning",
+          },
+          {
+            value: "additions",
+            label: "Activity Additions",
+            count: additions.data?.count ?? 0,
+            countVariant: "warning",
+          },
+        ]}
+      />
+      {tab === "additions" ? <ActivityAdditionsQueue /> : <ReworkApprovalsList />}
+    </>
+  );
+}
+
+function ActivityAdditionsQueue() {
   const query = usePendingActivityRequests();
   const approve = useApproveActivityRequest();
   const reject = useRejectActivityRequest();
@@ -59,15 +110,6 @@ export function ActivityRequestsView() {
 
   return (
     <>
-      <Link href="/" className="text-sm text-primary hover:underline">
-        ← Home
-      </Link>
-      <PageHeader
-        className="mt-2"
-        title="Activity Requests"
-        subtitle="Employees requesting to be added to another activity"
-      />
-
       {query.isLoading ? (
         <Card>
           <CardContent className="space-y-2 p-4">
