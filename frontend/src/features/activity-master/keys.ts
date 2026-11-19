@@ -15,4 +15,7 @@ export const activityMasterKeys = {
   // session never serves another identity's access-filtered rows from cache.
   benchmarkGuide: (scope: string) =>
     [...activityMasterKeys.all, "benchmark-guide", scope] as const,
+  // Approval Activities list (migration 0090). Under `all` so a change also
+  // refreshes the report dropdown's requires_pm_approval flags.
+  approvalActivities: () => [...activityMasterKeys.all, "approval-activities"] as const,
 };

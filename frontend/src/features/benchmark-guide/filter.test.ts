@@ -30,6 +30,7 @@ function row(over: Partial<SubActivityFlat> = {}): SubActivityFlat {
     benchmark_remarks: null,
     relevant_count_field: null,
     is_active: true,
+    requires_pm_approval: false,
     ...over,
   };
 }

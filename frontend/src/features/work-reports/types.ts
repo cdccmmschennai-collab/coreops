@@ -92,6 +92,9 @@ export type WorkReportPage = Omit<
 export type WorkReportTask = components["schemas"]["WorkReportTaskOut"] & {
   continuation_request_id?: string | null;
   continuation_approval_status?: "pending" | "approved" | "rejected" | null;
+  // Rework Activity Approval (migration 0091) - null on normal rows and drafts.
+  rework_request_id?: string | null;
+  rework_approval_status?: "pending" | "approved" | "rejected" | "cancelled" | null;
   overall_is_lumpsum?: boolean;
   overall_target_days?: number | null;
   overall_days_used?: number | null;

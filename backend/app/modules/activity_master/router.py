@@ -13,6 +13,9 @@
   GET    /activity-master/sub-activities                      flat list-all, for dropdowns (auth)
                                                               ?include_restricted=true bypasses the
                                                               per-employee access filter (PM only)
+
+  GET    /activity-master/approval-activities                 sub-activities needing PM approval (PM)
+  PUT    /activity-master/sub-activities/{id}/approval        add/remove from that list (PM)
 """
 import uuid
 
@@ -32,6 +35,8 @@ from app.modules.activity_master.schemas import (
     ActivityCreate,
     ActivityMasterOut,
     ActivityMasterUpdate,
+    ApprovalActivityOut,
+    ApprovalSettingIn,
     SubActivityCreate,
     SubActivityFlatOut,
 )
@@ -118,6 +123,33 @@ def list_all_sub_activities_flat(
         db, active_only=active_only, employee_id=employee.id if employee else None
     )
     return [SubActivityFlatOut.model_validate(r) for r in rows]
+
+
+# ── Rework Activity Approval configuration (PM-only, migration 0090) ─────────
+
+@router.get("/approval-activities", response_model=list[ApprovalActivityOut])
+def list_approval_activities(
+    _admin: User = AdminUser,
+    db: Session = Depends(get_db),
+) -> list[ApprovalActivityOut]:
+    return [
+        ApprovalActivityOut.model_validate(r)
+        for r in service.list_approval_activities(db)
+    ]
+
+
+@router.put("/sub-activities/{sub_activity_id}/approval", response_model=ApprovalActivityOut)
+def set_sub_activity_approval(
+    sub_activity_id: uuid.UUID,
+    body: ApprovalSettingIn,
+    admin: User = AdminUser,
+    db: Session = Depends(get_db),
+) -> ApprovalActivityOut:
+    return ApprovalActivityOut.model_validate(
+        service.set_requires_pm_approval(
+            db, admin, sub_activity_id, body.requires_pm_approval
+        )
+    )
 
 
 # ── activity access control (PM-only, migration 0061) ────────────────────────

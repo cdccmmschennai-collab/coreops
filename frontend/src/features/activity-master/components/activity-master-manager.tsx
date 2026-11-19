@@ -43,6 +43,11 @@ import { ActivityAccessBadge } from "@/features/activity-access/components/activ
 import { ActivityAccessTab } from "@/features/activity-access/components/activity-access-tab";
 
 import {
+  ApprovalActivitiesButton,
+  ApprovalActivitiesPanel,
+} from "./approval-activities-section";
+
+import {
   useActivities,
   useActivityMasterSearchIndex,
   useCreateActivity,
@@ -738,6 +743,7 @@ function ExpandedActivityPanel({
 
 export function ActivityMasterManager() {
   const [showForm, setShowForm] = React.useState(false);
+  const [showApproval, setShowApproval] = React.useState(false);
   const [editing, setEditing] = React.useState<ActivityMaster | null>(null);
   // The PM's own expansion (one activity at a time, as before). Search never
   // writes to it: search-driven expansion is a derived overlay (below) that
@@ -840,17 +846,27 @@ export function ActivityMasterManager() {
           className="w-[60%] min-w-0"
           aria-label="Search activities and sub-activities"
         />
-        {!showForm && (
-          <Button
-            size="sm"
-            className="shrink-0"
-            onClick={() => { setEditing(null); setShowForm(true); }}
-          >
-            <PlusCircle className="h-4 w-4" />
-            New Activity
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Rework Activity Approval configuration (migration 0090). Opens
+              its panel below this row; the listing itself is unchanged. */}
+          <ApprovalActivitiesButton
+            open={showApproval}
+            onToggle={() => setShowApproval((v) => !v)}
+          />
+          {!showForm && (
+            <Button
+              size="sm"
+              className="shrink-0"
+              onClick={() => { setEditing(null); setShowForm(true); }}
+            >
+              <PlusCircle className="h-4 w-4" />
+              New Activity
+            </Button>
+          )}
+        </div>
       </div>
+
+      {showApproval && <ApprovalActivitiesPanel onClose={() => setShowApproval(false)} />}
 
       {showForm && <ActivityForm editing={editing} onDone={closeForm} />}
 

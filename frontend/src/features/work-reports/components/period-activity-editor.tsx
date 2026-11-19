@@ -55,6 +55,7 @@ import {
   resolveExceptionCode,
 } from "../benchmark-exception";
 import { scaledTarget } from "../benchmark-target";
+import { PM_APPROVAL_REQUIRED_LABEL, PM_APPROVAL_REQUIRED_MESSAGE } from "../rework-approval";
 import {
   continuationRowStatus,
   isContinuationRow,
@@ -819,6 +820,28 @@ export function PeriodActivityEditor({
                 }}
               />
             </div>
+
+            {/* Rework Activity Approval (migration 0090): the selected
+                sub-activity needs PM approval. Draft saves change nothing;
+                the backend raises the request on Submit. */}
+            {(() => {
+              const subId = watchedTasks?.[index]?.sub_activity_id;
+              const sub = subId ? subActivityById.get(subId) : undefined;
+              if (!sub?.requires_pm_approval) return null;
+              return (
+                <div
+                  role="note"
+                  className="flex flex-col gap-1 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 sm:flex-row sm:items-center sm:gap-3"
+                >
+                  <Badge variant="warning" dot className="w-fit shrink-0">
+                    {PM_APPROVAL_REQUIRED_LABEL}
+                  </Badge>
+                  <p className="text-xs text-muted-foreground">
+                    {PM_APPROVAL_REQUIRED_MESSAGE}
+                  </p>
+                </div>
+              );
+            })()}
 
             {/* Activity Master guidance for a quantity-only mode
                 (NUMERIC / NUMERIC_DAILY). Task modes render their note

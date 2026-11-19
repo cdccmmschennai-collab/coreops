@@ -1059,9 +1059,86 @@ def list_all_sub_activities_flat(
             "benchmark_remarks": sub.benchmark_remarks,
             "relevant_count_field": sub.relevant_count_field,
             "is_active": sub.is_active,
+            "requires_pm_approval": sub.requires_pm_approval,
         }
         for sub, parent_name in rows
     ]
+
+
+# ── Rework Activity Approval configuration (migration 0090) ──────────────────
+
+def list_approval_activities(db: Session) -> list[dict]:
+    """Every sub-activity configured to need PM approval, with its parent
+    Activity's name. Inactive rows are included so an administrator can still
+    see - and remove - a configured sub-activity that was later deactivated."""
+    Parent = aliased(ActivityMaster)
+    rows = db.execute(
+        select(ActivityMaster, Parent.name)
+        .join(Parent, ActivityMaster.parent_id == Parent.id)
+        .where(
+            ActivityMaster.level == LEVEL_SUB_ACTIVITY,
+            ActivityMaster.requires_pm_approval.is_(True),
+        )
+        .order_by(Parent.sort_order, Parent.name, ActivityMaster.sort_order, ActivityMaster.name)
+    ).all()
+    return [
+        {
+            "id": sub.id,
+            "code": sub.code,
+            "name": sub.name,
+            "activity_id": sub.parent_id,
+            "activity_name": parent_name,
+            "is_active": sub.is_active,
+        }
+        for sub, parent_name in rows
+    ]
+
+
+def set_requires_pm_approval(
+    db: Session, actor, sub_activity_id: uuid.UUID, value: bool
+) -> dict:
+    """Add a sub-activity to (or remove it from) the Approval Activities list.
+
+    Sub-activity level only: a parent Activity is refused, so flagging a parent
+    can never silently cover its children. Idempotent - setting the value a row
+    already has changes nothing and writes no audit row, which is also what
+    makes a duplicate "add" impossible.
+
+    Only FUTURE submissions read this flag. Requests already raised keep their
+    own snapshot of the activity, so removing a sub-activity here never
+    invalidates a pending or historical approval."""
+    from app.modules.audit.service import record_audit
+
+    row = _fetch(db, sub_activity_id)
+    if row.level != LEVEL_SUB_ACTIVITY:
+        raise AppError(
+            "validation_error",
+            "PM approval can only be configured on a sub-activity, not an activity.",
+            422,
+        )
+    if row.requires_pm_approval != value:
+        row.requires_pm_approval = value
+        db.add(row)
+        record_audit(
+            db,
+            action="activity_master.pm_approval_added"
+            if value
+            else "activity_master.pm_approval_removed",
+            actor=actor,
+            entity_type="activity_master",
+            entity_id=row.id,
+            details={"sub_activity": row.name},
+        )
+        db.commit()
+    parent = db.get(ActivityMaster, row.parent_id) if row.parent_id else None
+    return {
+        "id": row.id,
+        "code": row.code,
+        "name": row.name,
+        "activity_id": row.parent_id,
+        "activity_name": parent.name if parent else "",
+        "is_active": row.is_active,
+    }
 
 
 def _assert_is_activity(db: Session, activity_id: uuid.UUID) -> ActivityMaster:

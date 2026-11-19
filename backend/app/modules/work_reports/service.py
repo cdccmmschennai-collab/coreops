@@ -48,6 +48,7 @@ from app.modules.activity_master.service import (
 )
 from app.modules.continuation_requests import service as continuation_requests_service
 from app.modules.continuation_requests.models import ContinuationRequest
+from app.modules.rework_approvals import service as rework_service
 from app.modules.work_reports import work_items as wi
 from app.modules.work_reports.auto_reports import auto_report_author_editable
 from app.modules.employees.models import Employee, EmployeeStatus
@@ -834,11 +835,18 @@ def _attach_tasks(db: Session, reports: list[DailyWorkReport]) -> None:
                 )
             ).all()
         )
+    # Rework Activity Approval (migration 0091): same derived-on-read rule.
+    rework_statuses = rework_service.status_by_request_id(
+        db, {row.rework_request_id for row in rows if row.rework_request_id}
+    )
     for row in rows:
         row.continuation_approval_status = (
             continuation_statuses.get(row.continuation_request_id)
             if row.continuation_request_id
             else None
+        )
+        row.rework_approval_status = (
+            rework_statuses.get(row.rework_request_id) if row.rework_request_id else None
         )
         # Transient, computed fresh on every read (never stored) — same
         # pattern as report.can_review below.
@@ -2549,6 +2557,10 @@ def submit_work_report(
     )
 
     _apply_benchmarks(db, report)
+    # Rework Activity Approval (migration 0091): every row on a sub-activity
+    # configured for PM approval raises (or reuses) its approval cycle IN THIS
+    # transaction. Normal rows are untouched and never wait on a decision.
+    new_rework_requests = rework_service.raise_requests_for_report(db, actor, report)
     report.status = WorkReportStatus.submitted
     report.submitted_at = _now()
     report.reviewed_by = None
@@ -2558,8 +2570,16 @@ def submit_work_report(
     report.edit_request_note = None
     report.updated_by = actor.id
     db.add(report)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent submit of the same report won the one-pending-per-row
+        # index (rework_requests_one_pending_uq); this one changes nothing.
+        db.rollback()
+        raise AppError("conflict", "This report has already been submitted.", 409)
     db.refresh(report)
+    # Only after the commit: tell the PM. Never raises.
+    rework_service.notify_new_requests(db, new_rework_requests)
     return _decorate(db, actor, [report])[0]
 
 

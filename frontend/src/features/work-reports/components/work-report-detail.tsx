@@ -31,6 +31,7 @@ import {
   useWorkReport,
 } from "../hooks";
 import { overallTaskBadge } from "../open-task-state";
+import { reworkRowBadge } from "../rework-approval";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_STATUS_LABEL,
@@ -233,8 +234,15 @@ export function WorkReportDetail({ id }: { id: string }) {
 
   async function onSubmit() {
     try {
-      await submit.mutateAsync();
-      toast.success("Report submitted");
+      const submitted = await submit.mutateAsync();
+      const reworkPending = (submitted?.tasks ?? []).some(
+        (t) => (t as WorkReportTask).rework_approval_status === "pending",
+      );
+      toast.success(
+        reworkPending
+          ? "Report submitted - rework approval requested from your PM"
+          : "Report submitted",
+      );
     } catch (error) {
       toast.error(error instanceof AppError ? error.message : "Could not submit report.");
     }
@@ -511,6 +519,16 @@ export function WorkReportDetail({ id }: { id: string }) {
                           ? `${t.activity_name ?? "—"} / ${t.sub_activity_name ?? "—"}`
                           : t.activity_type ?? "—"}
                       </p>
+                      {/* Rework Activity Approval: this row's own state, read
+                          off the server (never inferred from the name). */}
+                      {(() => {
+                        const badge = reworkRowBadge(false, t.rework_approval_status);
+                        return badge ? (
+                          <Badge variant={badge.tone} dot className="mt-1 w-fit">
+                            {badge.label}
+                          </Badge>
+                        ) : null;
+                      })()}
                     </div>
 
                     {/* Maintenance Plant — independent of the project's own

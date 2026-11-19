@@ -469,6 +469,16 @@ class WorkReportTask(UUIDMixin, Base):
         ForeignKey("continuation_requests.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # The Rework Approval cycle that GOVERNS this row (migration 0091). Stamped
+    # at SUBMIT only (draft saves rewrite every row and carry no link), for a
+    # row whose sub-activity requires PM approval. NULL = no approval needed.
+    # The row's approval state is the linked request's status, never stored here.
+    # SET NULL: losing a request record must never delete report history.
+    rework_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("rework_approval_requests.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     # Independent of the project's own assigned plant (projects.maintenance_plant_id)
     # — the employee picks which plant they actually worked at that day. Pick the
     # Maintenance Plant directly; Planning Plant code/description auto-derive and
@@ -513,4 +523,10 @@ class WorkReportTask(UUIDMixin, Base):
         Index("work_report_tasks_maintenance_plant_idx", "maintenance_plant_id"),
         Index("work_report_tasks_work_item_idx", "work_item_id"),
         Index("work_report_tasks_continuation_request_idx", "continuation_request_id"),
+        Index("work_report_tasks_rework_request_idx", "rework_request_id"),
     )
+
+
+# Registers rework_approval_requests on the shared metadata so the
+# work_report_tasks.rework_request_id foreign key always resolves (migration 0091).
+import app.modules.rework_approvals.models  # noqa: E402,F401

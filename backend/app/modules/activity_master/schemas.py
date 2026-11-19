@@ -38,6 +38,8 @@ class ActivityMasterOut(BaseModel):
     # COMMON / RESTRICTED — the access mode. Only meaningful on level='activity'
     # rows; sub-activities inherit and always echo their own stored default.
     access_type: Literal["COMMON", "RESTRICTED"]
+    # Rework Activity Approval (migration 0090). Sub-activities only.
+    requires_pm_approval: bool = False
     created_at: datetime
 
 
@@ -70,6 +72,10 @@ class SubActivityFlatOut(BaseModel):
     # must never be used as the unit's source.
     relevant_count_field: RelevantCountField | None
     is_active: bool
+    # True = this sub-activity needs PM approval once the report is submitted
+    # (migration 0090). Drives the report form's "PM Approval Required" badge;
+    # the backend re-checks it authoritatively at submit.
+    requires_pm_approval: bool = False
 
 
 class ActivityCreate(BaseModel):
@@ -138,3 +144,19 @@ class ActivityMasterPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class ApprovalActivityOut(BaseModel):
+    """One configured Approval Activity - a sub-activity whose report rows need
+    PM approval, shown with its parent Activity's name."""
+
+    id: uuid.UUID
+    code: str | None
+    name: str
+    activity_id: uuid.UUID
+    activity_name: str
+    is_active: bool
+
+
+class ApprovalSettingIn(BaseModel):
+    requires_pm_approval: bool

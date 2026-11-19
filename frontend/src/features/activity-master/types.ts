@@ -115,6 +115,8 @@ export interface ActivityMaster {
   /** COMMON (default) / RESTRICTED — the access mode. Meaningful on top-level
    *  activities; sub-activities inherit their parent's. */
   access_type: AccessType;
+  /** Rework Activity Approval (migration 0090). Sub-activities only. */
+  requires_pm_approval: boolean;
   created_at: string;
 }
 
@@ -142,5 +144,19 @@ export interface SubActivityFlat {
   // The real, calculation-driving unit. benchmark_unit_note is free text and is
   // never the unit's source.
   relevant_count_field: RelevantCountField | null;
+  is_active: boolean;
+  /** True = a report row on this sub-activity needs PM approval once the
+   *  report is submitted (migration 0090). Drives the "PM Approval Required"
+   *  badge on the report form; the backend re-checks it at submit. */
+  requires_pm_approval: boolean;
+}
+
+/** One configured Approval Activity, shown with its parent Activity. */
+export interface ApprovalActivity {
+  id: string;
+  code: string | null;
+  name: string;
+  activity_id: string;
+  activity_name: string;
   is_active: boolean;
 }

@@ -29,6 +29,7 @@ function activity(id: string, name: string, code: string | null = null): Activit
     is_active: true,
     sort_order: 0,
     access_type: "COMMON",
+    requires_pm_approval: false,
     created_at: "2026-01-01T00:00:00Z",
   };
 }
@@ -46,6 +47,7 @@ function sub(id: string, activityId: string, name: string): SubActivityFlat {
     benchmark_remarks: null,
     relevant_count_field: null,
     is_active: true,
+    requires_pm_approval: false,
   };
 }
 

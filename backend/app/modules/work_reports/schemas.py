@@ -238,6 +238,12 @@ class WorkReportTaskOut(BaseModel):
     # report entirely (work_reports.service.withdraw_continuation_rows).
     continuation_request_id: uuid.UUID | None = None
     continuation_approval_status: str | None = None
+    # Rework Activity Approval (migration 0091). Set at SUBMIT on a row whose
+    # sub-activity requires PM approval; status is the linked cycle's CURRENT
+    # value, resolved on read: "pending" (In Review) / "approved" / "rejected".
+    # Both None on every normal row and on every draft.
+    rework_request_id: uuid.UUID | None = None
+    rework_approval_status: str | None = None
     # Explicit daily-row vs overall-task completion (task continuation), so the
     # UI never has to overload is_completed/completed_date (which are row-level).
     #   row_*            — completion state of THIS report row.

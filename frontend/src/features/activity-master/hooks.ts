@@ -52,6 +52,25 @@ export function useActivityMasterSearchIndex(enabled: boolean) {
   });
 }
 
+/** Sub-activities configured to need PM approval (PM-only). */
+export function useApprovalActivities() {
+  return useQuery({
+    queryKey: activityMasterKeys.approvalActivities(),
+    queryFn: () => activityMasterApi.listApprovalActivities(),
+    staleTime: 60 * 1000,
+  });
+}
+
+/** Add a sub-activity to (true) or remove it from (false) the list. */
+export function useSetApproval() {
+  const invalidate = useInvalidateActivityMaster();
+  return useMutation({
+    mutationFn: ({ id, value }: { id: string; value: boolean }) =>
+      activityMasterApi.setApproval(id, value),
+    onSuccess: invalidate,
+  });
+}
+
 function useInvalidateActivityMaster() {
   const qc = useQueryClient();
   return () => qc.invalidateQueries({ queryKey: activityMasterKeys.all });

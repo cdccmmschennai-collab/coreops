@@ -204,6 +204,13 @@ class ActivityMaster(UUIDMixin, TimestampMixin, Base):
     access_type: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default=text("'COMMON'")
     )
+    # Rework Activity Approval (migration 0090). True = a report row on this
+    # SUB-ACTIVITY needs Project Manager approval once the report is submitted.
+    # Explicit configuration only - never derived from the name. Sub-activity
+    # level only (CHECK below); a parent Activity never carries it.
+    requires_pm_approval: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     __table_args__ = (
@@ -236,6 +243,15 @@ class ActivityMaster(UUIDMixin, TimestampMixin, Base):
         CheckConstraint(
             "access_type IN ('COMMON', 'RESTRICTED')",
             name="activity_master_access_type_valid",
+        ),
+        CheckConstraint(
+            "requires_pm_approval = false OR level = 'sub_activity'",
+            name="activity_master_pm_approval_sub_only",
+        ),
+        Index(
+            "activity_master_pm_approval_idx",
+            "id",
+            postgresql_where=text("requires_pm_approval = true"),
         ),
         Index("activity_master_parent_idx", "parent_id"),
         Index("activity_master_active_idx", "is_active"),

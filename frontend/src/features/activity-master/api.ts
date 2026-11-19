@@ -1,6 +1,12 @@
 import { api } from "@/lib/api-client";
 
-import type { ActivityMaster, BenchmarkType, RelevantCountField, SubActivityFlat } from "./types";
+import type {
+  ActivityMaster,
+  ApprovalActivity,
+  BenchmarkType,
+  RelevantCountField,
+  SubActivityFlat,
+} from "./types";
 
 export interface ActivityCreateBody {
   code?: string | null;
@@ -53,4 +59,12 @@ export const activityMasterApi = {
     api.get<SubActivityFlat[]>(
       "/activity-master/sub-activities?active_only=false&include_restricted=true",
     ),
+
+  // Rework Activity Approval configuration (PM-only, migration 0090).
+  listApprovalActivities: () =>
+    api.get<ApprovalActivity[]>("/activity-master/approval-activities"),
+  setApproval: (subActivityId: string, requiresPmApproval: boolean) =>
+    api.put<ApprovalActivity>(`/activity-master/sub-activities/${subActivityId}/approval`, {
+      requires_pm_approval: requiresPmApproval,
+    }),
 };
