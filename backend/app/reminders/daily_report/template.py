@@ -18,7 +18,11 @@ from datetime import date
 
 from app.core.config import settings
 from app.reminders.daily_report.csv_report import build_csv, csv_filename
-from app.reminders.daily_report.service import PMReminder
+from app.reminders.daily_report.service import (
+    SUFFIX_IN_REVIEW,
+    SUFFIX_REJECTED,
+    PMReminder,
+)
 
 _DATE_FMT = "%d %b %Y"          # -> "12 Aug 2026"
 _SUBJECT_SEP = " • "       # bullet, matches the approved subject format
@@ -41,13 +45,14 @@ def render_daily_report_reminder(reminder: PMReminder) -> RenderedEmail:
     # Address the PM by the name on their own record; each PM gets their own email.
     greeting = f"Hello {reminder.pm_name}"
     rows = _employee_rows(reminder)
+    note = _status_note(reminder)
 
     return RenderedEmail(
         subject=_SUBJECT_SEP.join(
             [product, "Outstanding Daily Reports", target_label]
         ),
-        html_body=_render_html(rows, product, greeting, target_label),
-        text_body=_render_text(rows, product, greeting, target_label),
+        html_body=_render_html(rows, product, greeting, target_label, note),
+        text_body=_render_text(rows, product, greeting, target_label, note),
         csv_filename=csv_filename(target),
         csv_bytes=build_csv(rows, report_date=target, date_fmt=_DATE_FMT),
     )
@@ -60,9 +65,31 @@ def _employee_rows(reminder: PMReminder) -> list[tuple[str, str]]:
     they cannot disagree. The date is the same for every row and lives on the
     reminder itself.
     """
-    rows = [(emp.code, emp.name) for emp in reminder.employees]
+    # display_name carries the Rework Approval suffix - "ABIRAMI S (IN REVIEW)"
+    # - and is the plain name for a genuinely missing report.
+    rows = [(emp.code, emp.display_name) for emp in reminder.employees]
     rows.sort(key=lambda r: r[1].lower())
     return rows
+
+
+def _status_note(reminder: PMReminder) -> str:
+    """One explanatory sentence, only when a Rework Approval suffix appears -
+    a run with only genuinely missing reports renders exactly as before."""
+    suffixes = {emp.suffix for emp in reminder.employees if emp.suffix}
+    if not suffixes:
+        return ""
+    parts = []
+    if SUFFIX_IN_REVIEW in suffixes:
+        parts.append(
+            f"({SUFFIX_IN_REVIEW}) means the report was submitted with a rework "
+            "activity that is waiting for your approval"
+        )
+    if SUFFIX_REJECTED in suffixes:
+        parts.append(
+            f"({SUFFIX_REJECTED}) means a rejected rework activity has not been "
+            "corrected and resubmitted yet"
+        )
+    return "; ".join(parts) + "."
 
 
 def _code_and_name(code: str, name: str) -> str:
@@ -77,6 +104,7 @@ def _render_text(
     product: str,
     greeting: str,
     target_label: str,
+    note: str = "",
 ) -> str:
     lines = [
         product,
@@ -91,6 +119,7 @@ def _render_text(
         "",
         _text_table(rows, target_label),
         "",
+        *([note, ""] if note else []),
         "The detailed list is attached as a CSV file and can be opened directly "
         "in Microsoft Excel.",
         "",
@@ -128,6 +157,7 @@ def _render_html(
     product: str,
     greeting: str,
     target_label: str,
+    note: str = "",
 ) -> str:
     """Table-based, inline-CSS-only layout.
 
@@ -173,6 +203,7 @@ def _render_html(
                 </tr>
                 {body_rows}
               </table>
+              {f'<p style="margin:16px 0 0;font-size:12px;color:#57606a;">{_escape(note)}</p>' if note else ""}
               <p style="margin:16px 0 0;">The detailed list is attached as a CSV file and can be opened directly in Microsoft Excel.</p>
               <p style="margin:10px 0 0;">Please follow up with the respective employees and ask them to submit their pending report.</p>
               <p style="margin:18px 0 0;">Regards,<br>{_escape(product)}</p>

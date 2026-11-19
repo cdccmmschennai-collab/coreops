@@ -15,6 +15,8 @@ import {
 import { AutoBadge, StatusBadge } from "@/features/work-reports/components/status-badge";
 import type { WorkReport } from "@/features/work-reports/types";
 
+import { markReportOpenedFromList } from "@/features/work-reports/return-nav";
+
 import { useEmployeeWeekReports } from "../../hooks";
 
 /** Distinct project names from a report's task snapshots, collapsed for display. */
@@ -56,7 +58,10 @@ export function ReportsTab({ employeeId }: { employeeId: string }) {
               <TableRow
                 key={r.id}
                 className="cursor-pointer"
-                onClick={() => router.push(`/work-reports/${r.id}`)}
+                onClick={() => {
+                  markReportOpenedFromList(r.id);
+                  router.push(`/work-reports/${r.id}`);
+                }}
               >
                 <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{projectLabel(r)}</TableCell>

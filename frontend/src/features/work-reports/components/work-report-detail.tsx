@@ -32,6 +32,8 @@ import {
 } from "../hooks";
 import { overallTaskBadge } from "../open-task-state";
 import { reworkRowBadge } from "../rework-approval";
+import { wasReportOpenedFromList } from "../return-nav";
+import { RejectedReworkPanel } from "./rework-correction";
 import { useProjectOptions } from "../project-options";
 import {
   DAY_STATUS_LABEL,
@@ -326,12 +328,17 @@ export function WorkReportDetail({ id }: { id: string }) {
 
   return (
     <>
-      {/* Go back to the list the user came from so their filters survive
-          (router.back restores the previous URL, including its query string);
-          fall back to a bare /reports only on a direct load with no history. */}
+      {/* Opened from an in-app list: go back to it so its filters survive
+          (router.back restores the previous URL, query string included).
+          Opened from a notification / email / direct link: go to the Reports
+          log, never back to the page the link was clicked on. */}
       <button
         type="button"
-        onClick={() => (window.history.length > 1 ? router.back() : router.replace("/reports"))}
+        onClick={() =>
+          wasReportOpenedFromList(report.id) && window.history.length > 1
+            ? router.back()
+            : router.replace("/reports")
+        }
         className="text-sm text-primary hover:underline"
       >
         ← Reports
@@ -529,6 +536,12 @@ export function WorkReportDetail({ id }: { id: string }) {
                           </Badge>
                         ) : null;
                       })()}
+                      {/* Rejected: the author corrects ONLY this row and
+                          resubmits it; the report stays submitted. */}
+                      {t.rework_approval_status === "rejected" &&
+                        t.rework_request_id &&
+                        isAuthor &&
+                        isSubmitted && <RejectedReworkPanel task={t} />}
                     </div>
 
                     {/* Maintenance Plant — independent of the project's own

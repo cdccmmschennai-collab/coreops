@@ -1194,6 +1194,11 @@ def build_activity_rows(
     remarks_by_report = _combined_remarks_by_report(db, list(task_reports.values()))
 
     rows: list[dict] = []
+    # Rework Activity Approval: each row's CURRENT approval cycle, read once
+    # (no N+1). Blank for every row that never needed approval.
+    rework_statuses = rework_service.status_by_request_id(
+        db, {t.rework_request_id for t, *_rest in task_result if t.rework_request_id}
+    )
     for task, report, emp, period, bench in task_result:
         # Period scaling, mirroring _apply_benchmarks: the period's own fraction,
         # else the legacy report-wide half_day rule. Only ever consulted by the
@@ -1251,6 +1256,13 @@ def build_activity_rows(
             "benchmark_type": benchmark_type,
             "benchmark_value": benchmark_value,
             "benchmark_unit": benchmark_unit,
+            # "IN REVIEW" / "APPROVED" / "REJECTED", or None for a row that
+            # needed no PM approval (a cancelled cycle reads as none too).
+            "rework_status": rework_service.EXPORT_STATUS_LABEL.get(
+                rework_statuses.get(task.rework_request_id)
+            )
+            if task.rework_request_id
+            else None,
             "remarks": remarks_by_report[report.id],
         })
 
@@ -1440,6 +1452,7 @@ def build_activity_groups(
                 "benchmark_type": r["benchmark_type"],
                 "benchmark_value": r["benchmark_value"],
                 "benchmark_unit": r["benchmark_unit"],
+                "rework_status": r.get("rework_status"),
             }
             for r in day_rows
             if r["project_code"] is not None
@@ -2427,7 +2440,9 @@ def update_task_completion(
 _COUNT_FIELD_COLUMNS = COUNT_FIELD_BY_UNIT
 
 
-def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
+def _apply_benchmarks(
+    db: Session, report: DailyWorkReport, only_task_ids: set | None = None
+) -> None:
     """Freeze benchmark snapshot + compute deficit/productivity_pct for every
     task row with a NUMERIC sub-activity. Runs once, at submit time only — never
     on draft save, and recomputed (overwriting prior values) on every
@@ -2460,6 +2475,10 @@ def _apply_benchmarks(db: Session, report: DailyWorkReport) -> None:
     rows = db.execute(
         select(WorkReportTask).where(WorkReportTask.report_id == report.id)
     ).scalars().all()
+    if only_task_ids is not None:
+        # Rework correction: freeze ONLY the replaced row. The report's other
+        # rows were frozen at their own submit and must not move.
+        rows = [r for r in rows if r.id in only_task_ids]
     for row in rows:
         sub = (
             db.get(ActivityMaster, row.sub_activity_id)
@@ -2580,6 +2599,124 @@ def submit_work_report(
     db.refresh(report)
     # Only after the commit: tell the PM. Never raises.
     rework_service.notify_new_requests(db, new_rework_requests)
+    return _decorate(db, actor, [report])[0]
+
+
+# ---------- rework correction (Rework Activity Approval, Phase 4) ------------
+def correct_rejected_rework_row(
+    db: Session, actor: User, request_id: uuid.UUID, task_in
+) -> DailyWorkReport:
+    """Replace ONLY the row a PM rejected, and resubmit it for approval.
+
+    The report stays submitted throughout and every other row - the normal
+    activity included - is left exactly as it was: no reopen, no draft, no
+    re-freeze of its benchmark. That is why this is its own path rather than
+    the report-wide edit (update_work_report deletes and re-inserts every row).
+
+    The new row goes through the same validation as any save (_validate_tasks:
+    project, membership, activity access, counts) and lands in the SAME period
+    (day part) as the rejected one. Its benchmark is frozen as at submit. Then
+    raise_requests_for_report opens the next approval cycle, linked to the
+    rejected one, when the chosen sub-activity still requires approval; a
+    sub-activity that does not simply becomes an ordinary submitted row.
+    The rejected cycle itself is never touched - it stays in the history.
+    """
+    from app.modules.rework_approvals.models import (
+        ReworkApprovalRequest,
+        ReworkRequestStatus,
+    )
+
+    req = db.execute(
+        select(ReworkApprovalRequest)
+        .where(ReworkApprovalRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+    if req is None or req.report_id is None:
+        raise AppError("not_found", "Rework request not found.", 404)
+    report = _fetch(db, req.report_id)
+    me = _assert_author(db, actor, report)
+    if req.status != ReworkRequestStatus.rejected.value:
+        raise AppError(
+            "validation_error", "Only a rejected rework activity can be corrected.", 422
+        )
+    if report.status != WorkReportStatus.submitted:
+        raise AppError(
+            "validation_error",
+            "This report is open for editing - save and submit it instead.",
+            422,
+        )
+    row = db.execute(
+        select(WorkReportTask).where(
+            WorkReportTask.report_id == report.id,
+            WorkReportTask.rework_request_id == req.id,
+        )
+    ).scalars().first()
+    if row is None:
+        raise AppError(
+            "validation_error", "This rejected activity has already been corrected.", 422
+        )
+
+    _total, [snap] = _validate_tasks(db, me.id, [task_in], exclude_report_id=report.id)
+    period_id = row.period_id
+    old_item_ids = {row.work_item_id} - {None}
+    db.delete(row)
+    db.flush()
+    new_continuation_requests: list = []
+    life = _lifecycle_row_kwargs(
+        db, report, task_in, snap,
+        seen=set(),
+        new_continuation_requests=new_continuation_requests,
+        existing_links=old_item_ids,
+    )
+    _add_task_row(db, report, period_id, task_in, snap, life)
+    db.flush()
+    removed = old_item_ids - wi.linked_item_ids_for_report(db, report.id)
+    if removed:
+        wi.reconcile_removed_links(
+            db, report_date=report.report_date, removed_item_ids=removed
+        )
+    new_row = db.execute(
+        select(WorkReportTask).where(
+            WorkReportTask.report_id == report.id,
+            WorkReportTask.period_id.is_(None) if period_id is None
+            else WorkReportTask.period_id == period_id,
+            WorkReportTask.rework_request_id.is_(None),
+            WorkReportTask.sub_activity_id == task_in.sub_activity_id,
+        ).order_by(WorkReportTask.created_at.desc())
+    ).scalars().first()
+    report.total_minutes = int(
+        db.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        func.coalesce(WorkReportTask.minutes_spent, 0)
+                        + func.coalesce(WorkReportTask.task_minutes_spent, 0)
+                    ),
+                    0,
+                )
+            ).where(WorkReportTask.report_id == report.id)
+        ).scalar_one()
+    )
+    _apply_benchmarks(db, report, only_task_ids={new_row.id} if new_row else set())
+    new_rework_requests = rework_service.raise_requests_for_report(db, actor, report)
+    # A switch to a DIFFERENT rework sub-activity starts a new key; it is still
+    # the next attempt of the rejected request, so chain it explicitly.
+    for n in new_rework_requests:
+        if n.day_part == req.day_part and n.previous_request_id is None:
+            n.previous_request_id = req.id
+            n.cycle_no = req.cycle_no + 1
+            db.add(n)
+    report.updated_by = actor.id
+    db.add(report)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise AppError("conflict", "This activity has already been resubmitted.", 409)
+    db.refresh(report)
+    rework_service.notify_new_requests(db, new_rework_requests)
+    for creq in new_continuation_requests:
+        continuation_requests_service.notify_new_pending_request(db, creq)
     return _decorate(db, actor, [report])[0]
 
 

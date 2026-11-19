@@ -45,7 +45,12 @@ from app.modules.calendar.working_days import (
 from app.modules.employees.models import Employee, EmployeeStatus
 from app.modules.leave.models import LeaveRequest, LeaveStatus
 from app.modules.users.models import User, UserRole
-from app.modules.work_reports.models import DailyWorkReport, WorkReportStatus
+from app.modules.rework_approvals.models import ReworkApprovalRequest, ReworkRequestStatus
+from app.modules.work_reports.models import (
+    DailyWorkReport,
+    WorkReportStatus,
+    WorkReportTask,
+)
 
 # Leave states that still count as an active absence on the target date, so a
 # missing report must not be raised for them. `cancellation_requested` stays
@@ -56,12 +61,26 @@ _ACTIVE_LEAVE_STATUSES = (LeaveStatus.approved, LeaveStatus.cancellation_request
 logger = logging.getLogger("coreops.reminders.daily_report")
 
 
+# Rework Activity Approval suffixes. An employee whose report IS recorded but
+# carries an unresolved rework row is not "missing" - they are listed with the
+# state that is holding the day open, so the PM can tell the cases apart.
+SUFFIX_IN_REVIEW = "IN REVIEW"
+SUFFIX_REJECTED = "REJECTED - ACTION REQUIRED"
+
+
 @dataclass(frozen=True)
 class MissingEmployee:
     employee_id: uuid.UUID
     name: str
     # Human-facing staff code (e.g. "EMP225"). Shown in the reminder email.
     code: str = ""
+    # "" = genuinely no report. Otherwise SUFFIX_IN_REVIEW / SUFFIX_REJECTED.
+    suffix: str = ""
+
+    @property
+    def display_name(self) -> str:
+        """"ABIRAMI S (IN REVIEW)" - the name as the email and CSV print it."""
+        return f"{self.name} ({self.suffix})" if self.suffix else self.name
 
 
 @dataclass(frozen=True)
@@ -128,12 +147,15 @@ class DailyReportReminderService:
 
         reported = self._employees_with_report(db, all_employee_ids, target)
         on_leave = self._employees_on_leave(db, all_employee_ids, target)
+        rework_state = self._unresolved_rework(db, list(reported), target)
         pm_names = self._pm_display_names(db, pms)
 
         reminders: list[PMReminder] = []
         for pm in pms:
             pm_employees = employees_by_pm.get(pm.id, [])
-            missing = self._missing_employees(pm_employees, reported, on_leave, target)
+            missing = self._missing_employees(
+                pm_employees, reported, on_leave, target, rework_state
+            )
             if not missing:
                 continue
             reminders.append(
@@ -205,6 +227,46 @@ class DailyReportReminderService:
             )
         ).scalars()
         return set(rows)
+
+    def _unresolved_rework(
+        self, db: Session, employee_ids: list[uuid.UUID], target: date
+    ) -> dict[uuid.UUID, str]:
+        """Employees with a RECORDED report for the target date that still
+        carries an unresolved rework row -> the suffix to print.
+
+        A rejected row needs the employee's action, so it outranks a pending one
+        when a report has both. A row with an approved (or no) request is
+        resolved. The state is read off each row's CURRENT linked cycle - the
+        same source the report page shows - so a corrected-and-resubmitted row
+        reads IN REVIEW again, and an approved one drops off the list.
+        """
+        if not employee_ids:
+            return {}
+        rows = db.execute(
+            select(DailyWorkReport.employee_id, ReworkApprovalRequest.status)
+            .join(WorkReportTask, WorkReportTask.report_id == DailyWorkReport.id)
+            .join(
+                ReworkApprovalRequest,
+                ReworkApprovalRequest.id == WorkReportTask.rework_request_id,
+            )
+            .where(
+                DailyWorkReport.employee_id.in_(employee_ids),
+                DailyWorkReport.report_date == target,
+                DailyWorkReport.status.in_(
+                    [WorkReportStatus.submitted, WorkReportStatus.granted]
+                ),
+                ReworkApprovalRequest.status.in_(
+                    [ReworkRequestStatus.pending.value, ReworkRequestStatus.rejected.value]
+                ),
+            )
+        ).all()
+        out: dict[uuid.UUID, str] = {}
+        for emp_id, status in rows:
+            if status == ReworkRequestStatus.rejected.value:
+                out[emp_id] = SUFFIX_REJECTED
+            else:
+                out.setdefault(emp_id, SUFFIX_IN_REVIEW)
+        return out
 
     def _employees_on_leave(
         self, db: Session, employee_ids: list[uuid.UUID], target: date
@@ -279,15 +341,25 @@ class DailyReportReminderService:
         reported: set[uuid.UUID],
         on_leave: set[uuid.UUID],
         target: date,
+        rework_state: dict[uuid.UUID, str] | None = None,
     ) -> list[MissingEmployee]:
-        missing = [
-            MissingEmployee(
-                employee_id=emp.id, name=emp.full_name, code=emp.employee_code
-            )
-            for emp in employees
-            if self._owes_report(emp, target)
-            and emp.id not in reported
-            and emp.id not in on_leave
-        ]
+        rework_state = rework_state or {}
+        missing: list[MissingEmployee] = []
+        for emp in employees:
+            if not self._owes_report(emp, target):
+                continue
+            if emp.id not in reported:
+                # Leave suppresses only a genuinely missing report.
+                if emp.id not in on_leave:
+                    missing.append(MissingEmployee(
+                        employee_id=emp.id, name=emp.full_name, code=emp.employee_code
+                    ))
+            elif emp.id in rework_state:
+                # Recorded, but held open by an unresolved rework row. One row
+                # per employee - never a duplicate for the same date.
+                missing.append(MissingEmployee(
+                    employee_id=emp.id, name=emp.full_name, code=emp.employee_code,
+                    suffix=rework_state[emp.id],
+                ))
         missing.sort(key=lambda e: e.name.lower())
         return missing

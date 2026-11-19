@@ -231,7 +231,9 @@ export function ReworkApprovalsList() {
                         "cursor-pointer",
                         r.status === "pending" && "bg-warning/5",
                       )}
-                      onClick={() => router.push(`/activity-requests/rework/${r.id}`)}
+                      // ?from=list tells the detail page its Back can return
+                      // here with the filters intact (see ReworkBackButton).
+                      onClick={() => router.push(`/activity-requests/rework/${r.id}?from=list`)}
                     >
                       <TableCell className="font-medium">
                         {employeeLabel(r.employee_code, r.employee_name)}

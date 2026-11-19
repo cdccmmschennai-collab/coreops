@@ -32,6 +32,9 @@ class ActivityCell(BaseModel):
     benchmark_type: str | None = None
     benchmark_value: float | None = None
     benchmark_unit: str | None = None
+    # Rework Activity Approval: "IN REVIEW" / "APPROVED" / "REJECTED", or None
+    # for an activity that needed no PM approval.
+    rework_status: str | None = None
 
 
 class ActivityRow(BaseModel):

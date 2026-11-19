@@ -5,6 +5,7 @@ import { Download } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/shell/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -189,6 +190,22 @@ export function PmActivityReportView() {
                           <span className="font-medium">{a.activity_type ?? "—"}</span>
                           {a.sub_activity_type ? (
                             <span className="text-xs text-muted-foreground">· {a.sub_activity_type}</span>
+                          ) : null}
+                          {/* Rework Activity Approval - same value as the
+                              export's REWORK STATUS column for this row. */}
+                          {a.rework_status ? (
+                            <Badge
+                              variant={
+                                a.rework_status === "APPROVED"
+                                  ? "success"
+                                  : a.rework_status === "REJECTED"
+                                    ? "danger"
+                                    : "warning"
+                              }
+                              className="text-[10px]"
+                            >
+                              Rework: {a.rework_status}
+                            </Badge>
                           ) : null}
                         </li>
                       ))}

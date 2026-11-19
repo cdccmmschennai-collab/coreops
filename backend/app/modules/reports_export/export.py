@@ -74,6 +74,9 @@ _COLUMNS: list[tuple[str, float, bool]] = [
     ("NO. OF PAGES", 11.0, True),
     ("NO. OF RECORDS", 12.0, True),
     ("BENCHMARK", 16.0, False),
+    # Rework Activity Approval: this activity row's own approval state -
+    # IN REVIEW / APPROVED / REJECTED, blank when no approval was needed.
+    ("REWORK STATUS", 15.0, True),
     ("DAY REMARKS", 68.4, False),
 ]
 _COL = {label: idx for idx, (label, _w, _c) in enumerate(_COLUMNS, start=1)}
@@ -937,6 +940,7 @@ def build_workbook(rows: list[dict], max_activities: int = 1) -> BytesIO:
                 # the NOT NULL DEFAULT 0 the other count columns carry.
                 ws.cell(r, _COL[header], activity.get(key) or 0)
             ws.cell(r, _COL["BENCHMARK"], benchmark_display(activity))
+            ws.cell(r, _COL["REWORK STATUS"], activity.get("rework_status"))
         ws.cell(r, _REMARKS_COL, _upper(row.get("remarks")))
         for col in range(1, _TOTAL_COLS + 1):
             _style_data_cell(

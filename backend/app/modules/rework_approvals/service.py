@@ -71,6 +71,15 @@ STATUS_LABEL = {
 }
 
 
+# The Weekly Activity Report's REWORK STATUS column (preview + Excel). A
+# cancelled cycle is housekeeping, so it maps to nothing (blank cell).
+EXPORT_STATUS_LABEL = {
+    ReworkRequestStatus.pending.value: "IN REVIEW",
+    ReworkRequestStatus.approved.value: "APPROVED",
+    ReworkRequestStatus.rejected.value: "REJECTED",
+}
+
+
 def detail_path(request_id: uuid.UUID) -> str:
     """The in-app detail page for one request - the email and bell destination."""
     return f"/activity-requests/rework/{request_id}"

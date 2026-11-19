@@ -21,6 +21,9 @@ export interface ActivityCell {
   benchmark_type: string | null;
   benchmark_value: number | null;
   benchmark_unit: string | null;
+  // Rework Activity Approval: "IN REVIEW" / "APPROVED" / "REJECTED", or null
+  // when the activity needed no PM approval (the export's REWORK STATUS).
+  rework_status?: string | null;
 }
 
 export interface ActivityRow {

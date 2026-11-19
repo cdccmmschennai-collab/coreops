@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { clearReportOpenedFromList } from "@/features/work-reports/return-nav";
+
 import type { Notification, NotificationSeverity } from "../types";
 
 function timeAgo(iso: string): string {
@@ -111,7 +113,11 @@ export function NotificationItemCompact({
   function handleClick() {
     if (!n.is_read) onMarkRead?.(n.id);
     onClose?.();
-    if (n.target_url) router.push(n.target_url);
+    if (n.target_url) {
+      // A notification is not a list: the opened page's Back must not return here.
+      clearReportOpenedFromList();
+      router.push(n.target_url);
+    }
   }
 
   return (
@@ -173,7 +179,11 @@ export function NotificationItemFull({
 
   function handleNavigate() {
     if (!n.is_read) onMarkRead?.(n.id);
-    if (n.target_url) router.push(n.target_url);
+    if (n.target_url) {
+      // A notification is not a list: the opened page's Back must not return here.
+      clearReportOpenedFromList();
+      router.push(n.target_url);
+    }
   }
 
   return (

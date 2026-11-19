@@ -29,17 +29,18 @@ ROWS = "/api/v1/reports-export/activity-rows"
 XLSX = "/api/v1/reports-export/activity-rows.xlsx"
 MONDAY = date(2026, 8, 24)
 
-# The 17 columns, in order — the export's published contract.
+# The 18 columns, in order — the export's published contract. REWORK STATUS
+# (Rework Activity Approval) sits between BENCHMARK and DAY REMARKS.
 EXPECTED_HEADERS = [
     "EMPLOYEE ID & NAME", "DATE", "DAY", "DAY STATUS", "HALF", "PROJECT CODE",
     "MAINTENANCE PLANT", "ACTIVITY TYPE", "SUB ACTIVITY TYPE", "NO. OF TAGS", "NO. OF DOCS",
     "NO. OF BOM HEADER", "NO. OF SPARES", "NO. OF PAGES", "NO. OF RECORDS",
-    "BENCHMARK", "DAY REMARKS",
+    "BENCHMARK", "REWORK STATUS", "DAY REMARKS",
 ]
 # Everything a status-only period row must leave alone.
 ACTIVITY_COLUMNS = [
     "PROJECT CODE", "MAINTENANCE PLANT", "ACTIVITY TYPE", "SUB ACTIVITY TYPE",
-    "BENCHMARK",
+    "BENCHMARK", "REWORK STATUS",
     "NO. OF TAGS", "NO. OF DOCS", "NO. OF BOM HEADER", "NO. OF SPARES",
     "NO. OF PAGES", "NO. OF RECORDS",
 ]
@@ -189,7 +190,7 @@ def test_day_identity_still_merges_across_a_status_period_row():
     merged = {str(r) for r in ws.merged_cells.ranges}
     # Employee / Date / Day / Day Remarks span the day; DAY STATUS differs
     # between the halves, so it stays two separately filterable cells.
-    assert {"A2:A3", "B2:B3", "C2:C3", "Q2:Q3"} <= merged
+    assert {"A2:A3", "B2:B3", "C2:C3", "R2:R3"} <= merged
     assert "D2:D3" not in merged
 
 
@@ -198,7 +199,7 @@ def test_autofilter_covers_the_added_period_row():
         [_activity(day_part="first_half")],
         [{"day_part": "second_half", "period_status": "Leave"}],
     )])
-    assert ws.auto_filter.ref == "A1:Q3"
+    assert ws.auto_filter.ref == "A1:R3"
 
 
 def test_column_names_and_order_are_unchanged():

@@ -39,6 +39,18 @@ export function useReworkRequest(id: string) {
   });
 }
 
+/** Employee: correct + resubmit a rejected rework row. */
+export function useCorrectReworkRequest(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => reworkApprovalsApi.correct(id, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: reworkApprovalKeys.all });
+      qc.invalidateQueries({ queryKey: workReportKeys.all });
+    },
+  });
+}
+
 export function useDecideReworkRequest(id: string) {
   const qc = useQueryClient();
   return useMutation({

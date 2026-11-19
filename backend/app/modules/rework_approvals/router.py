@@ -6,6 +6,8 @@
   GET  /rework-approvals/{id}               detail (PM, or the owning employee)
   POST /rework-approvals/{id}/approve       PM, remarks optional
   POST /rework-approvals/{id}/reject        PM, remarks REQUIRED
+  POST /rework-approvals/{id}/correct       employee: replace the rejected row
+                                            and resubmit it (new cycle)
 
 Every authorization rule is enforced in service.py; an email link grants
 nothing on its own - all routes require an authenticated session.
@@ -27,6 +29,7 @@ from app.modules.rework_approvals.schemas import (
     ReworkStatus,
 )
 from app.modules.users.models import User
+from app.modules.work_reports.schemas import WorkReportOut, WorkReportTaskIn
 
 router = APIRouter(prefix="/rework-approvals", tags=["rework-approvals"])
 
@@ -85,6 +88,22 @@ def approve_rework_request(
 ) -> ReworkRequestDetailOut:
     return ReworkRequestDetailOut.model_validate(
         service.approve_request(db, user, request_id, body.remarks)
+    )
+
+
+@router.post("/{request_id}/correct", response_model=WorkReportOut)
+def correct_rework_request(
+    request_id: uuid.UUID,
+    body: WorkReportTaskIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WorkReportOut:
+    """Employee: replace the rejected row and resubmit it (a new approval
+    cycle). Only the rejected row changes; the report stays submitted."""
+    from app.modules.work_reports import service as work_reports_service
+
+    return WorkReportOut.model_validate(
+        work_reports_service.correct_rejected_rework_row(db, user, request_id, body)
     )
 
 

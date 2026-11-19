@@ -2,11 +2,11 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Check, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, ChevronLeft, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { ErrorState } from "@/components/feedback/error-state";
-import { BackButton } from "@/components/shell/back-button";
 import { PageHeader } from "@/components/shell/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
   employeeLabel,
 } from "../labels";
 import type { ReworkRequest, ReworkRequestDetail } from "../types";
+import { markReportOpenedFromList } from "@/features/work-reports/return-nav";
 
 function formatDate(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
@@ -54,13 +55,46 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+const REWORK_LIST_PATH = "/activity-requests?tab=rework";
+
+/**
+ * Back always lands on the Rework Approvals list - never on whatever page
+ * happened to open this one (the notifications panel, an email, the employee's
+ * report). Opened FROM the list (?from=list), it steps back so the list's own
+ * filters and page survive; from anywhere else it REPLACES this entry with the
+ * list, so Back from the list can't bounce into this request again.
+ */
+function ReworkBackButton() {
+  const router = useRouter();
+
+  function handleClick() {
+    const fromList =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("from") === "list" &&
+      window.history.length > 1;
+    if (fromList) router.back();
+    else router.replace(REWORK_LIST_PATH);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="mb-3 inline-flex items-center gap-1 rounded text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ChevronLeft className="h-4 w-4" />
+      Back to Rework Approvals
+    </button>
+  );
+}
+
 /** /activity-requests/rework/[id] - also the page the PM's email opens. */
 export function ReworkApprovalDetail({ id }: { id: string }) {
   const query = useReworkRequest(id);
 
   return (
     <>
-      <BackButton fallback="/activity-requests" label="Back to Activity Requests" />
+      <ReworkBackButton />
       {query.isLoading ? (
         <Card>
           <CardContent className="space-y-2 p-4">
@@ -102,58 +136,55 @@ function DetailBody({ req }: { req: ReworkRequestDetail }) {
         }
       />
 
+      {/* Split: the info card (label | value rows, then the report's
+          activities) on the left; PM Review + Approval History beside it.
+          Stacks into one column on smaller screens. */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className="space-y-4">
-          <Card>
-            <CardHeader className="border-b border-border px-5 py-3.5">
-              <CardTitle className="text-base">Request Details</CardTitle>
-            </CardHeader>
-            <CardContent className="p-5">
-              <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="Employee ID" value={req.employee_code} />
-                <Field label="Employee Name" value={req.employee_name} />
-                <Field
-                  label="Project"
-                  value={[req.project_code, req.project_name].filter(Boolean).join(" - ")}
-                />
-                <Field label="Reporting Date" value={formatDate(req.report_date)} />
-                <Field label="Parent Activity" value={req.activity_name} />
-                <Field label="Sub-Activity" value={req.sub_activity_name} />
-                <Field label="Day Part" value={dayPartLabel(req.day_part)} />
-                <Field
-                  label="Attempt"
-                  value={req.cycle_no > 1 ? `Resubmission ${req.cycle_no - 1}` : "First request"}
-                />
-              </dl>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="border-b border-border px-5 py-3.5">
-              <CardTitle className="text-base">Employee Remarks</CardTitle>
-            </CardHeader>
-            <CardContent className="p-5">
-              <p className="whitespace-pre-line text-sm">
-                {req.employee_remarks?.trim() || (
-                  <span className="text-muted-foreground">No remarks were entered.</span>
-                )}
-              </p>
-            </CardContent>
-          </Card>
+      <Card className="h-fit">
+        <CardContent className="p-5">
+          <dl className="divide-y divide-border/60">
+            <InfoRow
+              label="Employee ID & Name"
+              value={employeeLabel(req.employee_code, req.employee_name)}
+            />
+            {/* Project code only; the long name adds nothing for the review. */}
+            <InfoRow label="Project" value={req.project_code || req.project_name} />
+            <InfoRow label="Reporting Date" value={formatDate(req.report_date)} />
+            <InfoRow label="Activity" value={req.activity_name} />
+            <InfoRow label="Sub-Activity" value={req.sub_activity_name} />
+            <InfoRow label="Day Part" value={dayPartLabel(req.day_part)} />
+            <InfoRow
+              label="Attempt"
+              value={req.cycle_no > 1 ? `Resubmission ${req.cycle_no - 1}` : "First request"}
+            />
+            <InfoRow
+              label="Remarks"
+              value={
+                req.employee_remarks?.trim() ? (
+                  <span className="whitespace-pre-line">{req.employee_remarks}</span>
+                ) : null
+              }
+            />
+          </dl>
 
           {req.report_activities.length > 0 && (
-            <Card>
-              <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border px-5 py-3.5">
-                <CardTitle className="text-base">Activities on this Report</CardTitle>
+            <div className="mt-5 border-t border-border pt-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold">Activities on this Report</h3>
                 {req.report_id && (
                   <Button variant="ghost" size="sm" asChild>
-                    <Link href={`/work-reports/${req.report_id}`}>Open report</Link>
+                    <Link
+                      href={`/work-reports/${req.report_id}`}
+                      onClick={() => markReportOpenedFromList(req.report_id!)}
+                    >
+                      Open report
+                    </Link>
                   </Button>
                 )}
-              </CardHeader>
-              <CardContent className="divide-y divide-border p-0">
+              </div>
+              <ul className="divide-y divide-border/60">
                 {req.report_activities.map((a, i) => (
-                  <div key={i} className="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
+                  <li key={i} className="flex items-start justify-between gap-3 py-2.5">
                     <div className="min-w-0">
                       <p className="text-sm font-medium">
                         {a.activity_name ?? "-"} / {a.sub_activity_name ?? "-"}
@@ -161,30 +192,38 @@ function DetailBody({ req }: { req: ReworkRequestDetail }) {
                       <p className="text-xs text-muted-foreground">
                         {a.project_code ?? "-"} | {dayPartLabel(a.day_part)}
                       </p>
-                      {a.description?.trim() && (
-                        <p className="mt-1 whitespace-pre-line text-xs">{a.description}</p>
-                      )}
                     </div>
                     <Badge
                       variant={a.rework_approval_status ? STATUS_TONE[a.rework_approval_status] : "neutral"}
-                      className="w-fit shrink-0"
+                      className="shrink-0"
                     >
                       {a.rework_approval_status
                         ? STATUS_LABEL[a.rework_approval_status]
                         : "Submitted"}
                     </Badge>
-                  </div>
+                  </li>
                 ))}
-              </CardContent>
-            </Card>
+              </ul>
+            </div>
           )}
-        </div>
+        </CardContent>
+      </Card>
 
-        <div className="space-y-4">
-          <ReviewPanel req={req} />
-          <HistoryCard history={req.history} currentId={req.id} />
-        </div>
+      <div className="space-y-4">
+        <ReviewPanel req={req} />
+        <HistoryCard history={req.history} currentId={req.id} />
       </div>
+      </div>
+    </div>
+  );
+}
+
+/** "Label    value" on one line (stacked on phones), as in the agreed layout. */
+function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 gap-0.5 py-2.5 sm:grid-cols-[11rem_minmax(0,1fr)] sm:gap-4">
+      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dd className="break-words text-sm font-medium">{value || "-"}</dd>
     </div>
   );
 }

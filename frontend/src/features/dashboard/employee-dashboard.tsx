@@ -29,6 +29,7 @@ import { useLeaveList } from "@/features/leave/hooks";
 import { usePendingContinuationRequests } from "@/features/continuation-requests/hooks";
 
 import { greeting, todayISO, weekStartISO } from "./utils";
+import { markReportOpenedFromList } from "@/features/work-reports/return-nav";
 
 const CHART_COLORS = ["#3b82f6", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#6366f1"];
 
@@ -169,7 +170,10 @@ export function EmployeeDashboard() {
                     <TableRow
                       key={r.id}
                       className="cursor-pointer"
-                      onClick={() => router.push(`/work-reports/${r.id}`)}
+                      onClick={() => {
+                        markReportOpenedFromList(r.id);
+                        router.push(`/work-reports/${r.id}`);
+                      }}
                     >
                       <TableCell className="font-medium tabular">{r.report_date}</TableCell>
                       <TableCell

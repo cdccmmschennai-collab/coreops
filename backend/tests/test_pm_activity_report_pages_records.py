@@ -150,7 +150,7 @@ def test_export_header_order_places_pages_records_after_spares():
     # Pages/Records land immediately after Spares, before Benchmark + Remarks.
     assert headers.index("NO. OF PAGES") == headers.index("NO. OF SPARES") + 1
     assert headers.index("NO. OF RECORDS") == headers.index("NO. OF PAGES") + 1
-    assert headers[-2:] == ["BENCHMARK", "DAY REMARKS"]
+    assert headers[-3:] == ["BENCHMARK", "REWORK STATUS", "DAY REMARKS"]
     # No numbered repeats survive — that is the whole point of the new layout.
     assert not [h for h in headers if h and h.rstrip().endswith(" 2")]
 
