@@ -188,7 +188,11 @@ def render_decision_email(
         closing = "No further action is needed."
         subject = f"Rework Approved - {req.sub_activity_name} - {req.report_date:%d %b %Y}"
     else:
-        intro = "Your rework activity has been rejected and needs your action."
+        intro = (
+            f"Your rework activity has been rejected by {reviewer_name}."
+            if reviewer_name
+            else "Your rework activity has been rejected."
+        )
         closing = (
             "Please open the report, correct the rejected activity and resubmit it. "
             "Your other activities on this report are unchanged."
