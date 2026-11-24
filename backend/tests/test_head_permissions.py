@@ -113,6 +113,178 @@ def test_edit_request_notifies_head_not_manager(
     assert edit_req_count(mgr_u.id) == 0
 
 
+# ---- PM fallback when a project has no Head --------------------------------
+def _edit_req_count(db, user_id):
+    return db.execute(
+        text(
+            "SELECT count(*) FROM notifications "
+            "WHERE user_id = :uid AND type = 'report_edit_requested'"
+        ),
+        {"uid": str(user_id)},
+    ).scalar_one()
+
+
+def _headless_report(db, make_user, make_employee, make_project, make_project_member, *, tag):
+    """Submitted report on a project with NO Head, author has a reporting PM,
+    edit request filed. Returns (author_u, rep_pm, project, report)."""
+    rep_pm = make_user(f"rpm-{tag}@x.com", role=UserRole.project_manager)
+    author_u = make_user(f"author-{tag}@x.com", role=UserRole.employee)
+    author_e = make_employee(employee_code=f"AU-{tag}", user_id=author_u.id,
+                             reporting_pm_id=rep_pm.id)
+    project = make_project(code=f"NH-{tag}", status=ProjectStatus.active)
+    make_project_member(project_id=project.id, employee_id=author_e.id)
+    report = wr_svc.create_work_report(db, author_u, WorkReportCreate(
+        report_date=TODAY,
+        tasks=[WorkReportTaskIn(project_id=project.id, description="w", minutes_spent=60)],
+    ))
+    wr_svc.submit_work_report(db, author_u, report.id)
+    wr_svc.request_edit_work_report(db, author_u, report.id, WorkReportEditRequest(note="fix"))
+    return author_u, rep_pm, project, report
+
+
+def test_no_head_edit_request_notifies_reporting_pm(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    _a, rep_pm, _p, _r = _headless_report(
+        db, make_user, make_employee, make_project, make_project_member, tag="F1")
+    assert _edit_req_count(db, rep_pm.id) == 1
+
+
+def test_no_head_only_reporting_pm_notified_not_other_pms(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    other_pm = make_user("other-pm-f5@x.com", role=UserRole.project_manager)
+    _a, rep_pm, _p, _r = _headless_report(
+        db, make_user, make_employee, make_project, make_project_member, tag="F5")
+    assert _edit_req_count(db, rep_pm.id) == 1
+    assert _edit_req_count(db, other_pm.id) == 0
+
+
+def test_no_head_no_reporting_pm_notifies_all_pms(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    pm_a = make_user("pm-a-f6@x.com", role=UserRole.project_manager)
+    pm_b = make_user("pm-b-f6@x.com", role=UserRole.project_manager)
+    author_u = make_user("author-f6@x.com", role=UserRole.employee)
+    author_e = make_employee(employee_code="AU-F6", user_id=author_u.id)  # no reporting PM
+    project = make_project(code="NH-F6", status=ProjectStatus.active)
+    make_project_member(project_id=project.id, employee_id=author_e.id)
+    report = wr_svc.create_work_report(db, author_u, WorkReportCreate(
+        report_date=TODAY,
+        tasks=[WorkReportTaskIn(project_id=project.id, description="w", minutes_spent=60)],
+    ))
+    wr_svc.submit_work_report(db, author_u, report.id)
+    wr_svc.request_edit_work_report(db, author_u, report.id, WorkReportEditRequest(note="fix"))
+
+    assert _edit_req_count(db, pm_a.id) == 1
+    assert _edit_req_count(db, pm_b.id) == 1
+
+
+def test_no_head_pm_can_grant_edit(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    _a, rep_pm, _p, report = _headless_report(
+        db, make_user, make_employee, make_project, make_project_member, tag="F2")
+    assert wr_svc.get_work_report(db, rep_pm, report.id).can_review is True
+    out = wr_svc.grant_edit_work_report(db, rep_pm, report.id)
+    assert out.status == WorkReportStatus.granted
+
+
+def test_head_removed_hands_pending_request_to_pm(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    """Authority is live: clearing the Head lets a PM grant a request that was
+    filed while the Head was assigned."""
+    _author_u, _head_u, report = _submitted_report_with_head(
+        db, make_user, make_employee, make_project, make_project_member,
+        author_email="author-f3@x.com", author_code="AU-F3",
+        head_email="head-f3@x.com", head_code="HD-F3", proj_code="HR-F3",
+    )
+    pm_u = make_user("pm-f3@x.com", role=UserRole.project_manager)
+    with pytest.raises(AppError):
+        wr_svc.grant_edit_work_report(db, pm_u, report.id)
+
+    project_id = report.tasks[0].project_id
+    proj_svc.set_project_head(db, pm_u, project_id, None)
+    out = wr_svc.grant_edit_work_report(db, pm_u, report.id)
+    assert out.status == WorkReportStatus.granted
+
+
+def test_head_assigned_pm_not_notified(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    """With a Head assigned the reporting PM is not notified (Head-only)."""
+    rep_pm = make_user("rpm-f4@x.com", role=UserRole.project_manager)
+    author_u = make_user("author-f4@x.com", role=UserRole.employee)
+    author_e = make_employee(employee_code="AU-F4", user_id=author_u.id,
+                             reporting_pm_id=rep_pm.id)
+    project = make_project(code="HR-F4", status=ProjectStatus.active)
+    make_project_member(project_id=project.id, employee_id=author_e.id)
+    head_u = make_user("head-f4@x.com", role=UserRole.employee)
+    head_e = make_employee(employee_code="HD-F4", user_id=head_u.id)
+    proj_svc.set_project_head(db, rep_pm, project.id, head_e.id)
+
+    report = wr_svc.create_work_report(db, author_u, WorkReportCreate(
+        report_date=TODAY,
+        tasks=[WorkReportTaskIn(project_id=project.id, description="w", minutes_spent=60)],
+    ))
+    wr_svc.submit_work_report(db, author_u, report.id)
+    wr_svc.request_edit_work_report(db, author_u, report.id, WorkReportEditRequest(note="fix"))
+
+    assert _edit_req_count(db, head_u.id) == 1
+    assert _edit_req_count(db, rep_pm.id) == 0
+
+
+# ---- edit_reviewers: who the pending request is waiting on ------------------
+def test_edit_reviewers_names_head_and_follows_head_change(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    author_u, _head_u, report = _submitted_report_with_head(
+        db, make_user, make_employee, make_project, make_project_member,
+        author_email="author-r1@x.com", author_code="AU-R1",
+        head_email="head-r1@x.com", head_code="HD-R1", proj_code="HR-R1",
+    )
+    out = wr_svc.get_work_report(db, author_u, report.id)
+    assert [r["role"] for r in out.edit_reviewers] == ["head"]
+
+    new_head_u = make_user("head2-r1@x.com", role=UserRole.employee)
+    new_head = make_employee(employee_code="HD-R1B", user_id=new_head_u.id,
+                             first_name="New", last_name="Head")
+    pm_u = make_user("pm-r1@x.com", role=UserRole.project_manager)
+    proj_svc.set_project_head(db, pm_u, report.tasks[0].project_id, new_head.id)
+
+    out = wr_svc.get_work_report(db, author_u, report.id)
+    assert out.edit_reviewers == [{"role": "head", "name": "New Head"}]
+
+
+def test_edit_reviewers_no_head_names_reporting_pm(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    author_u, rep_pm, _p, report = _headless_report(
+        db, make_user, make_employee, make_project, make_project_member, tag="R2")
+    make_employee(employee_code="PM-R2", user_id=rep_pm.id, first_name="Alex", last_name="Manager")
+    out = wr_svc.get_work_report(db, author_u, report.id)
+    assert out.edit_reviewers == [{"role": "reporting_pm", "name": "Alex Manager"}]
+
+
+def test_edit_reviewers_no_head_no_reporting_pm_is_empty(
+    db, make_user, make_employee, make_project, make_project_member
+):
+    make_user("pm-r3@x.com", role=UserRole.project_manager)
+    author_u = make_user("author-r3@x.com", role=UserRole.employee)
+    author_e = make_employee(employee_code="AU-R3", user_id=author_u.id)
+    project = make_project(code="NH-R3", status=ProjectStatus.active)
+    make_project_member(project_id=project.id, employee_id=author_e.id)
+    report = wr_svc.create_work_report(db, author_u, WorkReportCreate(
+        report_date=TODAY,
+        tasks=[WorkReportTaskIn(project_id=project.id, description="w", minutes_spent=60)],
+    ))
+    wr_svc.submit_work_report(db, author_u, report.id)
+    wr_svc.request_edit_work_report(db, author_u, report.id, WorkReportEditRequest(note="fix"))
+
+    assert wr_svc.get_work_report(db, author_u, report.id).edit_reviewers == []
+
+
 # ---- visibility -----------------------------------------------------------
 def test_head_can_view_project_and_timeline(
     client, auth_header, make_project, make_employee, make_user, login

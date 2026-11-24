@@ -41,7 +41,20 @@ import {
   type DayStatus,
   type WorkLocation,
 } from "../schemas";
-import type { WorkReport, WorkReportTask } from "../types";
+import type { EditReviewer, WorkReport, WorkReportTask } from "../types";
+
+/** "Waiting for your edit request to be reviewed by project head (A, B) or
+ *  Reporting manager (C)". Falls back to the generic text when the request
+ *  went to every PM (no named reviewer). */
+function editRequestWaitingText(reviewers: EditReviewer[]): string {
+  const base = "Waiting for your edit request to be reviewed";
+  const heads = reviewers.filter((r) => r.role === "head").map((r) => r.name);
+  const pms = reviewers.filter((r) => r.role === "reporting_pm").map((r) => r.name);
+  const parts: string[] = [];
+  if (heads.length) parts.push(`project head (${heads.join(", ")})`);
+  if (pms.length) parts.push(`Reporting manager (${pms.join(", ")})`);
+  return parts.length ? `${base} by ${parts.join(" or ")}` : `${base}.`;
+}
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -211,7 +224,8 @@ export function WorkReportDetail({ id }: { id: string }) {
   const isSubmitted = report.status === "submitted";
   const editRequested = !!report.edit_requested_at;
   // can_review is computed per-actor by the API — the Project Head of the
-  // report's projects may grant edit access (never the PM).
+  // report's projects may grant edit access; the PM only when one of the
+  // report's projects has no Head.
   const canReview = !isAuthor && report.can_review === true;
   // can_self_edit is computed per-actor by the API — the author who is also the
   // current Project Head of one of this submitted report's projects may edit it
@@ -380,7 +394,7 @@ export function WorkReportDetail({ id }: { id: string }) {
           <span className="mt-1 block text-muted-foreground">
             {canReview
               ? "Grant edit to reopen the report for the author."
-              : "Waiting for the Project Head to review your edit request."}
+              : editRequestWaitingText(report.edit_reviewers ?? [])}
           </span>
         </div>
       )}

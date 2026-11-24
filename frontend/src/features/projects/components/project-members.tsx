@@ -4,6 +4,14 @@ import * as React from "react";
 import { ChevronRight, X } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -445,6 +453,20 @@ export function ProjectMembers({ project }: { project: Project }) {
     }
   }
 
+  const [confirmRemoveHead, setConfirmRemoveHead] = React.useState(false);
+
+  // Clears the Head (PUT /head with null). Until a new Head is assigned the PM
+  // is the fallback reviewer for this project's report edit requests.
+  async function removeHead() {
+    try {
+      await setHead.mutateAsync({ head_employee_id: null });
+      toast.success("Project Head removed");
+      setConfirmRemoveHead(false);
+    } catch (error) {
+      toast.error(error instanceof AppError ? error.message : "Could not remove Head.");
+    }
+  }
+
   async function unassign(activityId: string, employeeIdToRemove: string) {
     try {
       await removeMember.mutateAsync({ activityId, employeeId: employeeIdToRemove });
@@ -526,12 +548,55 @@ export function ProjectMembers({ project }: { project: Project }) {
               </Select>
               <Button
                 onClick={() => void assignHead()}
-                disabled={!selectedHead}
-                loading={setHead.isPending}
+                disabled={!selectedHead || setHead.isPending}
+                loading={setHead.isPending && !confirmRemoveHead}
               >
                 {headEmployeeId ? "Change Head" : "Assign Head"}
               </Button>
+              {headEmployeeId && (
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfirmRemoveHead(true)}
+                  disabled={setHead.isPending}
+                >
+                  Remove Head
+                </Button>
+              )}
             </div>
+
+            <AlertDialog
+              open={confirmRemoveHead}
+              onOpenChange={(open) => {
+                if (!setHead.isPending) setConfirmRemoveHead(open);
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Remove Project Head?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {project.head_employee_name ?? "The current Head"} will no longer be
+                    the Head of this project. Until a new Head is assigned, report edit
+                    requests for this project will go to the project manager.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setConfirmRemoveHead(false)}
+                    disabled={setHead.isPending}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="danger"
+                    onClick={() => void removeHead()}
+                    loading={setHead.isPending}
+                  >
+                    Remove Head
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </>
         )}
 

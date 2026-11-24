@@ -113,12 +113,131 @@ def _notify_author(db: Session, report: DailyWorkReport, type_: str, title: str,
           f"/work-reports/{report.id}")
 
 
+def _headless_project_ids(db: Session, project_ids: set[uuid.UUID]) -> set[uuid.UUID]:
+    """The subset of `project_ids` that currently have no Project Head.
+
+    A report touching such a project has no Head to review it, so edit-access
+    review falls back to the PM for that report. Resolved live on every call,
+    never stored: a Head removed while a request is pending hands it to the PM
+    immediately, and assigning a Head takes it back."""
+    if not project_ids:
+        return set()
+    return set(db.execute(
+        select(Project.id).where(
+            Project.id.in_(project_ids),
+            Project.head_employee_id.is_(None),
+        )
+    ).scalars().all())
+
+
+def _usable_reporting_pm(db: Session, author: Employee) -> User | None:
+    """The author's reporting PM (`Employee.reporting_pm_id`, a users.id) when
+    it resolves to an active, non-deleted project_manager who is not the author;
+    otherwise None."""
+    pm_id = author.reporting_pm_id
+    if pm_id is None or pm_id == author.user_id:
+        return None
+    pm = db.get(User, pm_id)
+    if (
+        pm is not None
+        and pm.deleted_at is None
+        and pm.is_active
+        and pm.role == UserRole.project_manager
+    ):
+        return pm
+    return None
+
+
+def _fallback_pm_user_ids(db: Session, author: Employee) -> set[uuid.UUID]:
+    """Who hears about an edit request on a project with no Head.
+
+    The author's usable reporting PM; otherwise every active PM, so the request
+    is never sent to nobody. Never includes the author."""
+    pm = _usable_reporting_pm(db, author)
+    if pm is not None:
+        return {pm.id}
+    all_pms = db.execute(
+        select(User.id).where(
+            User.role == UserRole.project_manager,
+            User.is_active.is_(True),
+            User.deleted_at.is_(None),
+        )
+    ).scalars().all()
+    return {uid for uid in all_pms if uid != author.user_id}
+
+
+def _attach_edit_reviewers(db: Session, reports: list[DailyWorkReport]) -> None:
+    """Attach `edit_reviewers` - who a pending edit request is waiting on - to
+    each submitted report with an edit request. Same rule as the notification
+    (_notify_project_heads), resolved live on every read so a Head change is
+    reflected immediately:
+      - the Head of each of the report's projects that has one (role "head");
+      - if any project has no Head, the author's usable reporting PM
+        (role "reporting_pm"). When there is none every PM is notified, which
+        is not one name, so nothing is added and the UI shows the generic text.
+    Project ids are read from the DB, not r.tasks, so a Lead-trimmed view still
+    names the right reviewers."""
+    for r in reports:
+        r.edit_reviewers = []
+    pending = [
+        r for r in reports
+        if r.status == WorkReportStatus.submitted and r.edit_requested_at is not None
+    ]
+    if not pending:
+        return
+    rows = db.execute(
+        select(WorkReportTask.report_id, Project.id, Project.head_employee_id)
+        .join(Project, Project.id == WorkReportTask.project_id)
+        .where(WorkReportTask.report_id.in_([r.id for r in pending]))
+        .distinct()
+    ).all()
+    by_report: dict[uuid.UUID, list[uuid.UUID | None]] = {}
+    for report_id, _project_id, head_id in rows:
+        by_report.setdefault(report_id, []).append(head_id)
+
+    emp_cache: dict[uuid.UUID, Employee | None] = {}
+
+    def _emp(emp_id: uuid.UUID) -> Employee | None:
+        if emp_id not in emp_cache:
+            emp_cache[emp_id] = db.get(Employee, emp_id)
+        return emp_cache[emp_id]
+
+    for r in pending:
+        heads = by_report.get(r.id, [])
+        reviewers: list[dict] = []
+        seen: set[uuid.UUID] = set()
+        for head_id in heads:
+            if head_id is None or head_id == r.employee_id or head_id in seen:
+                continue
+            seen.add(head_id)
+            head = _emp(head_id)
+            if head is not None:
+                reviewers.append({"role": "head", "name": head.full_name})
+        if any(h is None for h in heads):
+            author = _emp(r.employee_id)
+            pm = _usable_reporting_pm(db, author) if author is not None else None
+            if pm is not None:
+                pm_emp = db.execute(
+                    select(Employee).where(
+                        Employee.user_id == pm.id, Employee.deleted_at.is_(None)
+                    ).limit(1)
+                ).scalars().first()
+                reviewers.append({
+                    "role": "reporting_pm",
+                    "name": pm_emp.full_name if pm_emp else pm.email,
+                })
+        r.edit_reviewers = reviewers
+
+
 def _notify_project_heads(db: Session, report: DailyWorkReport, author: Employee,
                           type_: str, title: str, message: str) -> None:
-    """Notify the Project Head of each of the report's projects — and only them.
-    The Head owns report review, so an edit request goes solely to the Head;
-    the PM and the author's manager are never notified. (Requires report.tasks
-    to be attached.)"""
+    """Notify whoever can grant this edit request.
+
+    The Project Head of each of the report's projects is notified. If any of
+    those projects has no Head, the PM fallback is notified too: the author's
+    reporting PM, or every active PM when there is none (_fallback_pm_user_ids).
+    Never the author themselves. (Requires
+    report.tasks to be attached.)"""
     url = f"/work-reports/{report.id}"
     project_ids = {t.project_id for t in getattr(report, "tasks", [])}
     if not project_ids:
@@ -129,12 +248,19 @@ def _notify_project_heads(db: Session, report: DailyWorkReport, author: Employee
             Project.head_employee_id.is_not(None),
         )
     ).scalars().all()
+    notified_users: set[uuid.UUID] = set()
     for emp_id in set(head_emp_ids):
         if emp_id == author.id:
             continue
         head = db.get(Employee, emp_id)
         if head and head.user_id:
-            _push(db, head.user_id, type_, title, message, report.id, url)
+            notified_users.add(head.user_id)
+    # Fallback: a project with no Head -> the author's reporting PM, or every
+    # active PM when the author has no usable reporting PM.
+    if _headless_project_ids(db, project_ids):
+        notified_users |= _fallback_pm_user_ids(db, author)
+    for user_id in notified_users:
+        _push(db, user_id, type_, title, message, report.id, url)
 
 
 _EDITABLE = {
@@ -239,7 +365,8 @@ def _decorate(
 
     can_review = the Project Head of one of the report's projects may grant edit
     access on it (but never on one's own report — authors request edits, they
-    don't grant them). The PM does not grant edit access, so this is Head-only.
+    don't grant them). The PM grants only as the fallback reviewer, when one of
+    the report's projects has no Head (_headless_project_ids).
 
     `with_rejected_continuations` is the detail read only: the withdrawn-entry
     record belongs on the report page, and the list would pay for a query whose
@@ -273,11 +400,19 @@ def _decorate(
     # Periods are attached AFTER the Lead row-trim so a Lead-scoped report's
     # periods expose only the led rows (period metadata itself is not secret).
     _attach_periods(db, reports)
+    _attach_edit_reviewers(db, reports)
+    # PM fallback: a PM may review a report that touches a project with no Head.
+    # One query for the whole page, not one per report.
+    headless: set[uuid.UUID] = set()
+    if actor.role == UserRole.project_manager:
+        headless = _headless_project_ids(
+            db, {t.project_id for r in reports for t in r.tasks}
+        )
     for r in reports:
-        r.can_review = (
-            me is not None
-            and r.employee_id != me.id
-            and any(t.project_id in reviewable for t in r.tasks)
+        is_own = me is not None and r.employee_id == me.id
+        r.can_review = not is_own and (
+            (me is not None and any(t.project_id in reviewable for t in r.tasks))
+            or any(t.project_id in headless for t in r.tasks)
         )
         # The current Project Head of one of the report's own projects may edit
         # their OWN submitted report directly — no request-edit/grant-edit
@@ -2722,14 +2857,24 @@ def correct_rejected_rework_row(
 
 # ---------- edit-access workflow -------------------------------------------
 def _assert_can_review(db: Session, actor: User, report: DailyWorkReport) -> None:
-    """Only the Project Head of one of the report's projects may grant edit
-    access. The PM has no grant-edit rights, and a user can never grant edit on
-    their own report."""
+    """The Project Head of one of the report's projects may grant edit access.
+    The PM may too, but only as the fallback when one of the report's projects
+    has no Head. A user can never grant edit on their own report."""
     me = _current_employee(db, actor)
-    if me is None or report.employee_id == me.id:
+    if me is not None and report.employee_id == me.id:
         raise AppError("forbidden", "You are not permitted to review this report.", 403)
-    if _report_in_projects(db, report.id, authz.reviewable_project_ids(db, actor)):
+    # A PM may hold a login with no employee row; the fallback (like leave
+    # review) does not require one. Head authority always does.
+    if me is not None and _report_in_projects(
+        db, report.id, authz.reviewable_project_ids(db, actor)
+    ):
         return
+    if actor.role == UserRole.project_manager:
+        project_ids = set(db.execute(
+            select(WorkReportTask.project_id).where(WorkReportTask.report_id == report.id)
+        ).scalars().all())
+        if _headless_project_ids(db, project_ids):
+            return
     raise AppError("forbidden", "You are not permitted to review this report.", 403)
 
 
@@ -2764,8 +2909,9 @@ def request_edit_work_report(
 def grant_edit_work_report(
     db: Session, actor: User, report_id: uuid.UUID
 ) -> DailyWorkReport:
-    """The Project Head grants an edit request — reopens the report so the
-    author can edit and resubmit. Uses the editable 'granted' state."""
+    """The Project Head (or the PM, when a project on the report has no Head)
+    grants an edit request — reopens the report so the author can edit and
+    resubmit. Uses the editable 'granted' state."""
     report = _fetch(db, report_id)
     _assert_can_review(db, actor, report)
     if report.status != WorkReportStatus.submitted:

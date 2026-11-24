@@ -434,6 +434,14 @@ class RejectedContinuationOut(BaseModel):
     decided_at: datetime | None = None
 
 
+class EditReviewerOut(BaseModel):
+    """Who a pending edit request is waiting on. role: 'head' (a Project Head
+    of one of the report's projects) or 'reporting_pm' (the author's reporting
+    PM, the fallback for a project with no Head)."""
+    role: Literal["head", "reporting_pm"]
+    name: str
+
+
 class WorkReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -474,6 +482,10 @@ class WorkReportOut(BaseModel):
     review_note: str | None = None
     edit_requested_at: datetime | None = None
     edit_request_note: str | None = None
+    # Who a pending edit request is waiting on, resolved live (set in service
+    # _attach_edit_reviewers). Empty when there is no pending request, or when
+    # it falls to every PM because the author has no reporting PM.
+    edit_reviewers: list[EditReviewerOut] = []
     # Per-actor: True when the current user may grant edit access on this report
     # — the Project Head of one of the report's projects. Set in service.
     can_review: bool = False

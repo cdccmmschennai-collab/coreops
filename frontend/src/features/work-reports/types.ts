@@ -26,7 +26,17 @@ export type WorkReport = Omit<
    * employee later edits stays "auto" - see isAutoReport in report-origin.ts.
    */
   origin?: ReportOrigin | null;
+  /**
+   * Who a pending edit request is waiting on (backend WorkReportOut.edit_reviewers),
+   * resolved live so a Head change shows on the next read. Empty when the
+   * request falls to every PM. Declared here for the same reason as `origin`.
+   */
+  edit_reviewers?: EditReviewer[];
 };
+export interface EditReviewer {
+  role: "head" | "reporting_pm";
+  name: string;
+}
 /** Report origin values the backend can serve (models.py ReportOrigin). */
 export type ReportOrigin = "employee" | "auto";
 /**
