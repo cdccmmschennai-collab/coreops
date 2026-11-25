@@ -19,7 +19,13 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: env.productName,
+  // Each top-level route segment's layout.tsx sets its own `title`, rendered
+  // through this template as "CoreOps | Attendance". Pages without one fall
+  // back to the bare product name.
+  title: {
+    default: env.productName,
+    template: `${env.productName} | %s`,
+  },
   description: "Workforce Management System",
 };
 
